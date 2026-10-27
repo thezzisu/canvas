@@ -95,6 +95,7 @@ export function createApp(
     store.removeSession(getCookie(c, "canvas_session") ?? "");
     deleteCookie(c, "canvas_session", { path: "/" });
     await terminals.closeAll();
+    providers.closeStatusObservers();
     return c.json({ ok: true });
   });
   const source = (id: string) => {
@@ -131,12 +132,14 @@ export function createApp(
     });
     providers.validateSource({ ...s, id });
     await terminals.closeSource(id);
+    providers.disposeStatusSource(id);
     return c.json(store.put("source", s));
   });
   app.delete("/api/sources/:id", async (c) => {
     const id = c.req.param("id");
     source(id);
     await terminals.closeSource(id);
+    providers.disposeStatusSource(id);
     store.remove("source", id);
     return c.json({ ok: true });
   });

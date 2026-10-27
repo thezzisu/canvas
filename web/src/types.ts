@@ -11,7 +11,26 @@ export interface Source {
   tmuxSocket?: string
   herdrSession?: string
 }
-export interface WindowResource { id: string; name: string }
+export type ProgramStatus = 'error' | 'attention' | 'working' | 'done' | 'idle' | 'unknown'
+export type StatusSource = 'herdr' | 'osc9' | 'osc7501' | 'none'
+export interface PaneResource {
+  id: string
+  name: string
+  active: boolean
+  status: ProgramStatus
+  statusSource: StatusSource
+  nativeStatus?: string
+  agent?: string
+  progress?: number
+}
+export interface WindowResource {
+  id: string
+  name: string
+  status?: ProgramStatus
+  statusSource?: StatusSource
+  nativeStatus?: string
+  panes?: PaneResource[]
+}
 export interface SpaceResource { id: string; name: string; windows: WindowResource[] }
 export interface SourceResource {
   id: string
@@ -43,6 +62,8 @@ export interface TerminalData {
   width: number
   height: number
   available: boolean
+  status: ProgramStatus
+  panes: PaneResource[]
   overview: boolean
   focus: boolean
   onAction: (action: string, id: string) => void

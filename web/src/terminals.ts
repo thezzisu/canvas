@@ -5,14 +5,46 @@ export type TerminalStatus = { status: 'connecting' | 'connected' | 'disconnecte
 interface Session {
   term: Terminal
   fit: FitAddon
+  surface: HTMLDivElement
+  host?: HTMLElement
   socket?: WebSocket
   opened: boolean
   state: TerminalStatus
   listeners: Set<(state: TerminalStatus) => void>
-  lastSize: string
   resource: { sourceId: string; spaceId: string; windowId: string }
 }
 const sessions = new Map<string, Session>()
+let mouseOwner: Session | undefined
+let mouseCoordinatesInstalled = false
+const mouseEvents = ['mousedown', 'mousemove', 'mouseup', 'wheel'] as const
+function normalizeMouseCoordinates(event: MouseEvent) {
+  const target = event.target
+  const pointed = target instanceof Node
+    ? [...sessions.values()].find(session => session.term.element?.contains(target))
+    : undefined
+  if (event.type === 'mousemove' && event.buttons === 0 && !pointed) mouseOwner = undefined
+  if (event.type === 'mousedown') mouseOwner = pointed
+  const session = event.type === 'mousemove' || event.type === 'mouseup' ? mouseOwner || pointed : pointed
+  if (event.type === 'mouseup') mouseOwner = undefined
+  const screen = session?.term.element?.querySelector<HTMLElement>('.xterm-screen')
+  if (!screen?.isConnected) return
+  const rect = screen.getBoundingClientRect()
+  if (!rect.width || !rect.height) return
+  // xterm 6 measures cells in untransformed CSS pixels. Normalize at its input
+  // boundary for both canvas zoom and the native-window projection. Document
+  // capture also covers selection/native mouse drags outside the screen.
+  Object.defineProperties(event, {
+    clientX: { configurable: true, value: rect.left + (event.clientX - rect.left) * screen.offsetWidth / rect.width },
+    clientY: { configurable: true, value: rect.top + (event.clientY - rect.top) * screen.offsetHeight / rect.height },
+  })
+}
+function releaseMouseOwner() { mouseOwner = undefined }
+function installMouseCoordinates() {
+  if (mouseCoordinatesInstalled) return
+  for (const event of mouseEvents) document.addEventListener(event, normalizeMouseCoordinates, true)
+  window.addEventListener('blur', releaseMouseOwner)
+  mouseCoordinatesInstalled = true
+}
 const key = (sourceId: string, spaceId: string, windowId: string) => `${sourceId}\u0000${spaceId}\u0000${windowId}`
 function setState(session: Session, state: TerminalStatus) {
   session.state = state
@@ -23,7 +55,6 @@ function connect(session: Session) {
   url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
   for (const [name, value] of Object.entries(session.resource)) url.searchParams.set(name, value)
   setState(session, { status: 'connecting' })
-  session.lastSize = ''
   const socket = new WebSocket(url)
   socket.binaryType = 'arraybuffer'
   session.socket = socket
@@ -40,40 +71,65 @@ function connect(session: Session) {
         if (message.type === 'output') session.term.write(message.data)
         else if (message.type === 'status') {
           setState(session, { status: message.status === 'closed' || message.status === 'error' ? 'disconnected' : message.status, error: message.error, readOnly: message.readOnly })
-          if (message.status === 'connected' && !message.readOnly) { session.lastSize = ''; resize(session) }
         }
         else if (message.type === 'resize' && Number.isInteger(message.cols) && Number.isInteger(message.rows)) {
           session.term.resize(message.cols, message.rows)
-          session.lastSize = `${message.cols}x${message.rows}`
+          requestAnimationFrame(() => present(session))
         }
         else if (message.type === 'error') setState(session, { status: 'disconnected', error: message.error || message.message })
         else if (message.type === 'exit') setState(session, { status: 'disconnected', error: message.message || '终端连接已结束' })
       } catch { session.term.write(event.data) }
     }
   }
-  socket.onerror = () => setState(session, { status: 'disconnected', error: '终端连接失败，请重连或检查连接配置' })
+  socket.onerror = () => {
+    if (session.socket === socket) setState(session, { status: 'disconnected', error: '终端连接失败' })
+  }
   socket.onclose = () => {
     if (session.socket === socket) setState(session, { status: 'disconnected', error: session.state.error })
   }
 }
-function resize(session: Session) {
-  if (!session.opened || session.state.readOnly || session.state.status !== 'connected') return
-  try { session.fit.fit() } catch { return }
-  const { cols, rows } = session.term
-  const size = `${cols}x${rows}`
-  if (cols > 1 && rows > 1 && size !== session.lastSize && session.socket?.readyState === WebSocket.OPEN) {
-    session.socket.send(JSON.stringify({ type: 'resize', cols, rows }))
-    session.lastSize = size
+function availableSize(host: HTMLElement) {
+  const style = getComputedStyle(host)
+  return {
+    width: host.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+    height: host.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom),
   }
+}
+/** A view is a scaled projection of the shared native window, not its size owner. */
+function present(session: Session) {
+  if (!session.host?.isConnected || !session.opened) return
+  const screen = session.term.element?.querySelector<HTMLElement>('.xterm-screen')
+  if (!screen?.offsetWidth || !screen.offsetHeight) return
+  const available = availableSize(session.host)
+  // The viewport's scrollbar belongs beside the terminal cells. Keep its space
+  // even when hidden so output/scrollback never alters the native geometry.
+  const width = screen.offsetWidth + 14, height = screen.offsetHeight
+  const scale = Math.min(available.width / width, available.height / height)
+  if (!(scale > 0)) return
+  Object.assign(session.surface.style, { width: `${width}px`, height: `${height}px`, transform: `scale(${scale})` })
+}
+function resize(session: Session) {
+  if (!session.host?.isConnected || !session.opened || session.state.status !== 'connected') return
+  claimFocus(session)
+  const available = availableSize(session.host)
+  Object.assign(session.surface.style, { width: `${available.width}px`, height: `${available.height}px`, transform: 'none' })
+  const proposed = session.fit.proposeDimensions()
+  if (proposed && session.socket?.readyState === WebSocket.OPEN) {
+    const cols = Math.max(20, Math.min(500, proposed.cols)), rows = Math.max(5, Math.min(200, proposed.rows))
+    if (cols !== session.term.cols || rows !== session.term.rows) {
+      session.term.resize(cols, rows)
+      session.socket.send(JSON.stringify({ type: 'resize', cols, rows }))
+    }
+  }
+  present(session)
 }
 function claimFocus(session: Session) {
   if (session.socket?.readyState !== WebSocket.OPEN || session.state.status !== 'connected') return
   session.socket.send(JSON.stringify({ type: 'focus' }))
   setState(session, { ...session.state, readOnly: false })
-  session.lastSize = ''
-  resize(session)
 }
 export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void) {
+  installMouseCoordinates()
   const id = key(resource.sourceId, resource.spaceId, resource.windowId)
   let session = sessions.get(id)
   if (!session) {
@@ -88,7 +144,10 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
-    session = { term, fit, opened: false, state: { status: 'connecting' }, listeners: new Set(), lastSize: '', resource }
+    const surface = document.createElement('div')
+    surface.className = 'terminal-surface'
+    Object.assign(surface.style, { transformOrigin: 'top left', width: '100%', height: '100%' })
+    session = { term, fit, surface, opened: false, state: { status: 'connecting' }, listeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
     const current = session
     function sendInput(data: string) {
       // onData includes terminal query replies; passive viewers must never
@@ -108,32 +167,38 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     })
     sessions.set(id, session)
   }
+  session.host = host
+  host.appendChild(session.surface)
   if (!session.opened) {
-    session.term.open(host); session.opened = true
+    session.term.open(session.surface); session.opened = true
     const current = session
     session.term.textarea?.addEventListener('focus', () => claimFocus(current))
     session.term.textarea?.addEventListener('paste', () => claimFocus(current), { capture: true })
   }
-  else if (session.term.element) host.appendChild(session.term.element)
   session.listeners.add(listener)
   listener(session.state)
   if (!session.socket || session.socket.readyState === WebSocket.CLOSED) { session.term.reset(); connect(session) }
   const current = session
-  const observer = new ResizeObserver(() => resize(current))
+  const observer = new ResizeObserver(() => present(current))
   observer.observe(host)
-  requestAnimationFrame(() => resize(current))
+  requestAnimationFrame(() => present(current))
   return {
     focus() { claimFocus(current); current.term.focus() },
+    resize() { resize(current) },
     reconnect() {
       current.socket?.close()
       current.socket = undefined
       current.term.reset()
       connect(current)
     },
-    dispose() { observer.disconnect(); current.listeners.delete(listener) },
+    dispose() { observer.disconnect(); current.listeners.delete(listener); if (current.host === host) current.host = undefined },
   }
 }
 export function clearTerminals() {
   for (const session of sessions.values()) { session.socket?.close(); session.term.dispose() }
   sessions.clear()
+  for (const event of mouseEvents) document.removeEventListener(event, normalizeMouseCoordinates, true)
+  window.removeEventListener('blur', releaseMouseOwner)
+  mouseCoordinatesInstalled = false
+  mouseOwner = undefined
 }

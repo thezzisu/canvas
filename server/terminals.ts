@@ -81,8 +81,13 @@ class LiveTerminal {
       cwd: process.env.HOME,
       env: { ...safeEnv(), ...handle.env },
     });
+    let connected = false;
     this.proc.onData((data) => {
       if (this.closed) return;
+      if (!connected) {
+        connected = true;
+        handle.connected?.();
+      }
       const bytes = Buffer.byteLength(data);
       this.pendingBytes += bytes;
       if (this.pendingBytes > 256 * 1024 && !this.paused) {

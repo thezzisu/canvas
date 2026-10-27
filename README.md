@@ -53,8 +53,10 @@ herdr executable. See `thezzisu/herdr`, branch `canvas-bare`.
   with sources grouped by machine.
 - Add a window to another canvas to create a reference, not another terminal.
 - Drag a card's header to move it. Resize a card to resize its native window.
-  Zooming the canvas only changes the visual scale.
-- The focused view controls input and terminal size; other views share its output.
+  Switching canvases, entering focus view and zooming only change the visual
+  scale; they never resize the native terminal.
+- Explicitly focusing a terminal claims input. Only an explicit card resize
+  changes native dimensions; all references share that same screen.
 - Removing a card only removes that reference. Closing a native window ends its
   processes and requires an explicit confirmation.
 - tmux uses a temporary `__canvas_` session linked to the selected window. The
@@ -64,6 +66,33 @@ herdr executable. See `thezzisu/herdr`, branch `canvas-bare`.
 - Reconnecting replays the retained terminal screen. Existing programs stay in
   the provider when Canvas disconnects. Dead window references remain visible
   so they can be removed or replaced deliberately.
+
+## Program status
+
+Each window shows the highest-priority pane state: error, attention, working,
+done, idle, then unknown. Pane indicators retain the native pane ID and show
+individual states. Unknown stays neutral; Canvas never infers an agent state
+from a prompt, title or output text.
+
+Herdr uses its native `agent_status`; `blocked` means attention and `done` means
+completed work that has not yet been seen. tmux exposes OSC 9;4 progress through
+`pane_pb_state` on versions that support it: normal/indeterminate mean working,
+paused means attention, and error means error. Hidden progress is unknown.
+
+Opened tmux windows also accept passive
+[OSC 7501 reports](https://www.superlogical.com/rex/docs/build/program-status).
+Canvas observes the existing bare-window helper with a control client that does
+not contribute dimensions or send terminal input. It does not attach to original
+sessions, replace `pipe-pane`, or install persistent hooks. Reports are scoped to
+the native pane; child records, clear, full reset and OSC 133 prompt lifetime are
+handled independently for each pane. After a valid OSC 7501 report, OSC 9;4 is
+ignored for that pane until a full terminal reset.
+
+Only reports emitted after the window opens are available; reconnecting or
+restarting Canvas loses this in-memory status history. Capability queries (`?`)
+are not answered, so programs that require negotiation must be configured to
+emit reports directly. This is passive report display, not full OSC 7501
+terminal capability negotiation.
 
 ## Development
 

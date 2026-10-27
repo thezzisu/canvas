@@ -84,8 +84,17 @@ test("herdr adapter displays a complete bare tab, accepts input and resizes", as
       { length: screen.buffer.active.length },
       (_, i) => screen.buffer.active.getLine(i)?.translateToString(true) ?? "",
     ).join("\n");
-  const secondScreen = new headless.Terminal({cols:90,rows:25,allowProposedApi:true});
-  const secondText = () => Array.from({length:secondScreen.buffer.active.length},(_,i)=>secondScreen.buffer.active.getLine(i)?.translateToString(true)??"").join("\n");
+  const secondScreen = new headless.Terminal({
+    cols: 90,
+    rows: 25,
+    allowProposedApi: true,
+  });
+  const secondText = () =>
+    Array.from(
+      { length: secondScreen.buffer.active.length },
+      (_, i) =>
+        secondScreen.buffer.active.getLine(i)?.translateToString(true) ?? "",
+    ).join("\n");
   const waitFor = async (
     check: () => boolean | Promise<boolean>,
     message: string,
@@ -113,6 +122,47 @@ test("herdr adapter displays a complete bare tab, accepts input and resizes", as
       (p: { tab_id: string }) => p.tab_id === window.id,
     );
     cli("pane", "split", pane.pane_id, "--direction", "right");
+    data = snapshot();
+    const nativePanes = data.panes.filter(
+      (p: { tab_id: string }) => p.tab_id === window.id,
+    );
+    cli(
+      "pane",
+      "report-agent",
+      nativePanes[0].pane_id,
+      "--source",
+      "canvas-test",
+      "--agent",
+      "fixture",
+      "--state",
+      "working",
+    );
+    cli(
+      "pane",
+      "report-agent",
+      nativePanes[1].pane_id,
+      "--source",
+      "canvas-test",
+      "--agent",
+      "fixture",
+      "--state",
+      "blocked",
+    );
+    const statusWindow = (await listResources(source)).spaces
+      .find((s) => s.id === space.id)!
+      .windows.find((w) => w.id === window.id)!;
+    assert.equal(statusWindow.panes.length, 2);
+    assert.equal(
+      statusWindow.panes.find((p) => p.id === nativePanes[0].pane_id)!.status,
+      "working",
+    );
+    assert.equal(
+      statusWindow.panes.find((p) => p.id === nativePanes[1].pane_id)!.status,
+      "attention",
+    );
+    assert.equal(statusWindow.status, "attention");
+    assert.equal(statusWindow.statusSource, "herdr");
+
     await createWindow(source, space.id, "Other tab");
     const other = (await listResources(source)).spaces
       .find((s) => s.id === space.id)!
@@ -159,16 +209,37 @@ test("herdr adapter displays a complete bare tab, accepts input and resizes", as
         .length,
       2,
     );
-    secondCommand = await openTerminal(source,space.id,other.id,90,25);
-    secondTerminal = pty.spawn(secondCommand.file,secondCommand.args,{cols:90,rows:25,name:"xterm-256color",cwd:root,env:{...env,...secondCommand.env}});
-    secondTerminal.onData(chunk=>secondScreen.write(chunk));
-    await waitFor(()=>secondText().includes("sh-"),"second bare tab produced no shell frame");
+    secondCommand = await openTerminal(source, space.id, other.id, 90, 25);
+    secondTerminal = pty.spawn(secondCommand.file, secondCommand.args, {
+      cols: 90,
+      rows: 25,
+      name: "xterm-256color",
+      cwd: root,
+      env: { ...env, ...secondCommand.env },
+    });
+    secondTerminal.onData((chunk) => secondScreen.write(chunk));
+    await waitFor(
+      () => secondText().includes("sh-"),
+      "second bare tab produced no shell frame",
+    );
     secondTerminal.write("printf 'SECOND_TAB_%s\\n' ONLY\r");
-    await waitFor(()=>secondText().includes("SECOND_TAB_ONLY"),"second bare tab input did not reach its window");
+    await waitFor(
+      () => secondText().includes("SECOND_TAB_ONLY"),
+      "second bare tab input did not reach its window",
+    );
     terminal.write("printf 'FIRST_TAB_%s\\n' ONLY\r");
-    await waitFor(()=>screenText().includes("FIRST_TAB_ONLY"),"first bare tab lost its pinned input target");
-    assert.ok(!screenText().includes("SECOND_TAB_ONLY"),"second tab output leaked to first");
-    assert.ok(!secondText().includes("FIRST_TAB_ONLY"),"first tab output leaked to second");
+    await waitFor(
+      () => screenText().includes("FIRST_TAB_ONLY"),
+      "first bare tab lost its pinned input target",
+    );
+    assert.ok(
+      !screenText().includes("SECOND_TAB_ONLY"),
+      "second tab output leaked to first",
+    );
+    assert.ok(
+      !secondText().includes("FIRST_TAB_ONLY"),
+      "first tab output leaked to second",
+    );
     await renameSpace(source, space.id, "Renamed space");
     await renameWindow(source, space.id, window.id, "Renamed tab");
     space = (await listResources(source)).spaces.find(

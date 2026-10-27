@@ -9,6 +9,7 @@ import { Store, type Source } from "./state.ts";
 import { createApp, type Account } from "./app.ts";
 import { TerminalManager } from "./terminals.ts";
 import { sessionCookie } from "./auth.ts";
+import { closeStatusObservers } from "./providers.ts";
 const dataDir =
   process.env.CANVAS_DATA_DIR ?? join(homedir(), ".local/share/canvas");
 const accountFile = join(dataDir, "auth.json");
@@ -28,8 +29,9 @@ app.use("*", async (c, next) => {
   c.header("Referrer-Policy", "same-origin");
   return next();
 });
-app.use("*", serveStatic({ root: resolve("dist/web") }));
-app.get("*", serveStatic({ path: resolve("dist/web/index.html") }));
+const staticDir = resolve(process.env.CANVAS_STATIC_DIR ?? "dist/web");
+app.use("*", serveStatic({ root: staticDir }));
+app.get("*", serveStatic({ path: join(staticDir, "index.html") }));
 const server = createServer(getRequestListener(app.fetch));
 const wss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
 const socketSessions = new WeakMap<import("ws").WebSocket, string>();
@@ -103,6 +105,7 @@ async function stop() {
   if (stopping) return;
   stopping = true;
   clearInterval(heartbeat);
+  closeStatusObservers();
   await terminals.closeAll();
   wss.close();
   server.close(() => {
