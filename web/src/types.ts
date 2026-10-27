@@ -68,4 +68,5 @@ export interface TerminalData {
   focus: boolean
   onAction: (action: string, id: string) => void
   onResize: (id: string, width: number, height: number, x?: number, y?: number) => void
+  onGeometry: (sourceId: string, windowId: string, ratio: number, insetX: number, insetY: number) => void
 }

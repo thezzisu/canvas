@@ -52,6 +52,10 @@ herdr executable. See `thezzisu/herdr`, branch `canvas-bare`.
 - The first canvas is the live overview. Spaces run vertically, windows horizontally,
   with sources grouped by machine.
 - Add a window to another canvas to create a reference, not another terminal.
+- A card has one title: the native window name. Its status dot opens pane
+  details; source context is available in the title tooltip.
+- Cards follow the native terminal's aspect ratio. Width determines the display
+  scale and height follows, keeping every pane visible without distortion.
 - Drag a card's header to move it. Resize a card to resize its native window.
   Switching canvases, entering focus view and zooming only change the visual
   scale; they never resize the native terminal.

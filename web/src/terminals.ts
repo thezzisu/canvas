@@ -2,6 +2,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 
 export type TerminalStatus = { status: 'connecting' | 'connected' | 'disconnected'; error?: string; readOnly?: boolean }
+export interface TerminalGeometry { width: number; height: number; cols: number; rows: number }
 interface Session {
   term: Terminal
   fit: FitAddon
@@ -11,9 +12,11 @@ interface Session {
   opened: boolean
   state: TerminalStatus
   listeners: Set<(state: TerminalStatus) => void>
+  geometryListeners: Set<(geometry: TerminalGeometry) => void>
   resource: { sourceId: string; spaceId: string; windowId: string }
 }
 const sessions = new Map<string, Session>()
+const scrollbarWidth = 6
 let mouseOwner: Session | undefined
 let mouseCoordinatesInstalled = false
 const mouseEvents = ['mousedown', 'mousemove', 'mouseup', 'wheel'] as const
@@ -103,7 +106,10 @@ function present(session: Session) {
   const available = availableSize(session.host)
   // The viewport's scrollbar belongs beside the terminal cells. Keep its space
   // even when hidden so output/scrollback never alters the native geometry.
-  const width = screen.offsetWidth + 14, height = screen.offsetHeight
+  const width = screen.offsetWidth + scrollbarWidth, height = screen.offsetHeight
+  if (session.state.status === 'connected') {
+    for (const listener of session.geometryListeners) listener({ width, height, cols: session.term.cols, rows: session.term.rows })
+  }
   const scale = Math.min(available.width / width, available.height / height)
   if (!(scale > 0)) return
   Object.assign(session.surface.style, { width: `${width}px`, height: `${height}px`, transform: `scale(${scale})` })
@@ -128,7 +134,7 @@ function claimFocus(session: Session) {
   session.socket.send(JSON.stringify({ type: 'focus' }))
   setState(session, { ...session.state, readOnly: false })
 }
-export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void) {
+export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, onGeometry?: (geometry: TerminalGeometry) => void) {
   installMouseCoordinates()
   const id = key(resource.sourceId, resource.spaceId, resource.windowId)
   let session = sessions.get(id)
@@ -137,8 +143,9 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       cursorBlink: true,
       fontSize: 12,
       fontFamily: '"JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace',
-      lineHeight: 1.16,
+      lineHeight: 1,
       scrollback: 5000,
+      overviewRuler: { width: scrollbarWidth },
       allowProposedApi: false,
       theme: { background: '#111317', foreground: '#d5d7dd', cursor: '#e8b183', selectionBackground: '#415168', black: '#20242b', red: '#f08080', green: '#9ecb8f', yellow: '#e5c285', blue: '#8daed7', magenta: '#c7a0df', cyan: '#8fc5c4', white: '#d5d7dd', brightBlack: '#66707f', brightWhite: '#f6f6f7' },
     })
@@ -147,7 +154,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     const surface = document.createElement('div')
     surface.className = 'terminal-surface'
     Object.assign(surface.style, { transformOrigin: 'top left', width: '100%', height: '100%' })
-    session = { term, fit, surface, opened: false, state: { status: 'connecting' }, listeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
+    session = { term, fit, surface, opened: false, state: { status: 'connecting' }, listeners: new Set(), geometryListeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
     const current = session
     function sendInput(data: string) {
       // onData includes terminal query replies; passive viewers must never
@@ -176,6 +183,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     session.term.textarea?.addEventListener('paste', () => claimFocus(current), { capture: true })
   }
   session.listeners.add(listener)
+  if (onGeometry) session.geometryListeners.add(onGeometry)
   listener(session.state)
   if (!session.socket || session.socket.readyState === WebSocket.CLOSED) { session.term.reset(); connect(session) }
   const current = session
@@ -191,7 +199,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       current.term.reset()
       connect(current)
     },
-    dispose() { observer.disconnect(); current.listeners.delete(listener); if (current.host === host) current.host = undefined },
+    dispose() { observer.disconnect(); current.listeners.delete(listener); if (onGeometry) current.geometryListeners.delete(onGeometry); if (current.host === host) current.host = undefined },
   }
 }
 export function clearTerminals() {

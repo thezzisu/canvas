@@ -106,6 +106,44 @@ test("herdr adapter displays a complete bare tab, accepts input and resizes", as
     assert.fail(`${message}: ${screenText()}`);
   };
   const snapshot = () => JSON.parse(cli("api", "snapshot")).result.snapshot;
+  const assertSplitGeometry = async (
+    tabId: string,
+    cols: number,
+    rows: number,
+  ) => {
+    await waitFor(() => {
+      const layout = snapshot().layouts.find(
+        (item: { tab_id: string }) => item.tab_id === tabId,
+      );
+      if (!layout || layout.area.width !== cols || layout.area.height !== rows)
+        return false;
+      const panes = [...layout.panes].sort((a, b) => a.rect.x - b.rect.x);
+      return (
+        panes.length === 2 &&
+        panes[0].rect.x === 0 &&
+        panes[0].rect.width === panes[1].rect.x &&
+        panes[1].rect.x + panes[1].rect.width === cols &&
+        panes.every((pane) => pane.rect.y === 0 && pane.rect.height === rows)
+      );
+    }, "split panes did not cover the complete native viewport");
+    await waitFor(() => {
+      const top =
+        screen.buffer.active.getLine(0)?.translateToString(false, 0, cols) ??
+        "";
+      const bottom =
+        screen.buffer.active
+          .getLine(rows - 1)
+          ?.translateToString(false, 0, cols) ?? "";
+      return (
+        top.startsWith("┌") &&
+        top.endsWith("┐") &&
+        top.length === cols &&
+        bottom.startsWith("└") &&
+        bottom.endsWith("┘") &&
+        bottom.length === cols
+      );
+    }, "bare tab frame did not reach every edge of the native viewport");
+  };
   try {
     await waitFor(
       async () => (await listResources(source)).status === "online",
@@ -183,6 +221,7 @@ test("herdr adapter displays a complete bare tab, accepts input and resizes", as
       () => screenText().includes("sh-"),
       "bare herdr client produced no shell frame",
     );
+    await assertSplitGeometry(window.id, 90, 25);
     terminal.write("printf 'HERDR_NATIVE_%s\\n' OK\r");
     await waitFor(
       () => screenText().includes("HERDR_NATIVE_OK"),
@@ -209,6 +248,13 @@ test("herdr adapter displays a complete bare tab, accepts input and resizes", as
         .length,
       2,
     );
+    await assertSplitGeometry(window.id, 112, 32);
+    screen.resize(70, 18);
+    terminal.resize(70, 18);
+    await assertSplitGeometry(window.id, 70, 18);
+    screen.resize(112, 32);
+    terminal.resize(112, 32);
+    await assertSplitGeometry(window.id, 112, 32);
     secondCommand = await openTerminal(source, space.id, other.id, 90, 25);
     secondTerminal = pty.spawn(secondCommand.file, secondCommand.args, {
       cols: 90,
