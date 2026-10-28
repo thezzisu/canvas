@@ -9,7 +9,15 @@ import { Store, type Source } from "./state.ts";
 import { createApp, type Account } from "./app.ts";
 import { TerminalManager } from "./terminals.ts";
 import { sessionCookie } from "./auth.ts";
-import { closeStatusObservers, closeProviderConnections } from "./providers.ts";
+import {
+  closeStatusObservers,
+  closeProviderConnections,
+  prepareOpenBridge,
+  writeRemoteBridgeRegistry,
+  installCanvasHelper,
+  listResources,
+} from "./providers.ts";
+import { OpenDownloadService } from "./open-download.ts";
 const dataDir =
   process.env.CANVAS_DATA_DIR ?? join(homedir(), ".local/share/canvas");
 const accountFile = join(dataDir, "auth.json");
@@ -20,8 +28,24 @@ if (!existsSync(accountFile))
 const account: Account = JSON.parse(readFileSync(accountFile, "utf8"));
 const store = new Store(join(dataDir, "canvas.db"));
 const terminals = new TerminalManager();
+const helperBytes = readFileSync(new URL("../cli/canvas", import.meta.url));
+const socketSessions = new WeakMap<import("ws").WebSocket, string>();
+const downloads = new OpenDownloadService({
+  prepare: prepareOpenBridge,
+  publishRemote: writeRemoteBridgeRegistry,
+  installHelper: (source) => installCanvasHelper(source, helperBytes),
+  resources: listResources,
+  recipient: async (sourceId, windowId) => {
+    const recipient = await terminals.downloadRecipient(sourceId, windowId);
+    const socket = recipient?.socket;
+    const sessionId = socket && socketSessions.get(socket);
+    return socket && sessionId ? { socket, sessionId, isCurrent: recipient!.isCurrent } : undefined;
+  },
+});
 const app = createApp(store, account, terminals, {
   secureCookie: process.env.CANVAS_SECURE_COOKIE === "1",
+  openDownload: (ticket, session) => downloads.open(ticket, session),
+  closeOpenBridge: (sourceId) => downloads.closeSource(sourceId),
 });
 app.get("/api/*", (c) => c.json({ error: "Not found" }, 404));
 app.use("*", async (c, next) => {
@@ -35,7 +59,6 @@ app.get("*", serveStatic({ path: join(staticDir, "index.html") }));
 const server = createServer(getRequestListener(app.fetch));
 const wss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
 let stopping = false;
-const socketSessions = new WeakMap<import("ws").WebSocket, string>();
 store.on("sessions", () => {
   for (const ws of wss.clients)
     if (!store.hasSession(socketSessions.get(ws) ?? "")) {
@@ -95,8 +118,8 @@ server.on("upgrade", (request, socket, head) => {
     socketSessions.set(ws, sessionCookie(request.headers.cookie));
     ws.on("error", () => ws.close());
     ws.send(JSON.stringify({ type: "status", status: "connecting" }));
-    void terminals
-      .connect(source, { sourceId, spaceId, windowId }, ws)
+    void terminals.connect(source, { sourceId, spaceId, windowId }, ws)
+      .then(() => downloads.ensureSource(source).catch(() => {}))
       .catch((error) => {
         if (ws.readyState === 1) {
           ws.send(
@@ -122,6 +145,7 @@ async function stop() {
   clearInterval(heartbeat);
   closeStatusObservers();
   await terminals.closeAll();
+  await downloads.closeAll();
   await closeProviderConnections();
   store.emit("close");
   wss.close();

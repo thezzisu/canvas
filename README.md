@@ -57,6 +57,24 @@ Tmux attach passes native file descriptors, so it cannot use a byte-only SSH
 socket tunnel. Canvas runs the remote stock tmux client through an SSH PTY.
 No custom remote tmux installation is required.
 
+## Download a file
+
+Run `canvas open <path>` in a connected terminal. Canvas streams the file from
+that machine and downloads it in the browser tab that currently controls the
+native window. The path is read on the terminal's host; the Canvas server never
+opens a path supplied by terminal output. Regular files, Unicode names and
+large files are supported. Python 3 is required on the terminal host. Canvas
+installs its helper at `~/.local/bin/canvas` when that source first connects,
+without replacing a different existing `canvas` command. Keep `~/.local/bin`
+in the terminal's PATH.
+
+Multiple canvases and browser tabs on one Canvas Server share the same native
+window controller; only its current controller receives the download. SSH
+sources use a private reverse Unix-socket forward and an owner-only registry.
+If separate Canvas Server instances register the same native terminal, the
+helper refuses the ambiguous request instead of sending the file to multiple
+browsers. No custom herdr server or global SSH configuration is required.
+
 ## Window behavior
 
 - The first canvas is the live overview. Spaces run vertically, windows horizontally,

@@ -1,7 +1,7 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSocketTunnels, ensureSocketTunnel } from "./ssh-tunnels.ts";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, open, readFile, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Source } from "./state.ts";
@@ -304,7 +304,11 @@ function sshOptions(source: Source, tty = false): string[] {
   return [...options, "--", ssh.destination];
 }
 
-function socketTunnelIdentity(source: Source, paths: string[]): string {
+function socketTunnelIdentity(
+  source: Source,
+  paths: string[],
+  reverse: Record<string, { remotePath: string; localPath: string }> = {},
+): string {
   return createHash("sha256")
     .update(
       JSON.stringify([
@@ -313,19 +317,28 @@ function socketTunnelIdentity(source: Source, paths: string[]): string {
         source.sshIdentityFile,
         source.sshKnownHostsFile,
         paths,
+        Object.entries(reverse).sort(([a], [b]) => a.localeCompare(b)),
       ]),
     )
     .digest("hex");
 }
 
-function tunnelRequest(source: Source, endpoints: Record<string, string>) {
+function tunnelRequest(
+  source: Source,
+  endpoints: Record<string, string>,
+  reverse?: Record<string, { remotePath: string; localPath: string }>,
+  cleanupRemote?: () => Promise<void>,
+  lifecycleSourceId = source.id,
+) {
   const ssh = sshOptions(source);
   return {
-    sourceId: source.id,
-    key: socketTunnelIdentity(source, Object.values(endpoints)),
+    sourceId: lifecycleSourceId,
+    key: socketTunnelIdentity(source, Object.values(endpoints), reverse),
     sshArgs: ssh,
     env: commandEnvironment(),
     discover: async () => endpoints,
+    ...(reverse ? { reverse } : {}),
+    ...(cleanupRemote ? { cleanupRemote } : {}),
   };
 }
 
@@ -350,6 +363,298 @@ async function remoteHerdrSockets(source: Source): Promise<[string, string]> {
   )
     throw new Error("Unexpected remote herdr socket paths");
   return [session.socket_path, join(session.session_dir, "herdr-client.sock")];
+}
+
+async function sourceSocketEndpoints(source: Source): Promise<{
+  nativeSocket: string;
+  forward: Record<string, string>;
+}> {
+  if (source.type === "herdr") {
+    const [apiSocket, clientSocket] = await remoteHerdrSockets(source);
+    return {
+      nativeSocket: await canonicalSocketPath(source, apiSocket),
+      forward: { "herdr.sock": apiSocket, "herdr-client.sock": clientSocket },
+    };
+  }
+  const socket = (await run(source, ["display-message", "-p", "#{socket_path}"])).trim();
+  if (!socket.startsWith("/")) throw new Error("tmux did not report an absolute socket path");
+  return { nativeSocket: await canonicalSocketPath(source, socket), forward: {} };
+}
+
+async function canonicalSocketPath(source: Source, socketPath: string): Promise<string> {
+  if (!socketPath.startsWith("/") || /[:\x00-\x1f\x7f]/u.test(socketPath))
+    throw new Error("Native socket path is invalid");
+  const canonical = source.transport === "local"
+    ? await realpath(socketPath)
+    : (await runRemoteShell(source, `realpath ${shellQuote(socketPath)}`)).trim();
+  if (!canonical.startsWith("/") || /[:\x00-\x1f\x7f]/u.test(canonical))
+    throw new Error("Native socket path is invalid");
+  return canonical;
+}
+
+async function runRemoteShell(source: Source, command: string): Promise<string> {
+  if (source.transport !== "ssh") throw new Error("Remote shell is only available for SSH sources");
+  return await execute({ file: "ssh", args: [...sshOptions(source), command] }, source.type);
+}
+
+async function runRemoteShellWithInput(source: Source, command: string, input: Buffer | string): Promise<string> {
+  if (source.transport !== "ssh") throw new Error("Remote shell is only available for SSH sources");
+  const child = spawn("ssh", [...sshOptions(source), command], {
+    env: commandEnvironment(),
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stdout = "", stderr = "", settled = false;
+  let resolve!: (value: string) => void;
+  let reject!: (reason: Error) => void;
+  const result = new Promise<string>((ok, fail) => { resolve = ok; reject = fail; });
+  const finish = (error?: Error) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    if (error) reject(error);
+    else resolve(stdout.trimEnd());
+  };
+  const timer = setTimeout(() => {
+    child.kill("SIGTERM");
+    finish(new Error("SSH registry command timed out"));
+  }, COMMAND_TIMEOUT);
+  timer.unref();
+  child.stdout?.on("data", (chunk: Buffer) => {
+    stdout = `${stdout}${chunk.toString("utf8")}`.slice(-64 * 1024);
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderr = `${stderr}${chunk.toString("utf8")}`.slice(-1200);
+  });
+  child.once("error", error => finish(error));
+  child.stdin?.once("error", error => finish(error));
+  child.once("close", code => {
+    if (code === 0) finish();
+    else finish(new Error(stderr.trim() || `SSH registry command exited with code ${code}`));
+  });
+  child.stdin?.end(input);
+  return await result;
+}
+
+export async function nativeSocketForSource(source: Source): Promise<string> {
+  validateSource(source);
+  return (await sourceSocketEndpoints(source)).nativeSocket;
+}
+
+export interface OpenBridgeRecord {
+  version: 1;
+  provider: Source["type"];
+  nativeSocket: string;
+  socket: string;
+  secret: string;
+}
+
+const bridgeRegistryPython = String.raw`import hashlib,json,os,pathlib,secrets,stat,sys
+os.umask(0o077)
+record=json.loads(sys.stdin.buffer.read())
+base=pathlib.Path.home()/'.local/state/canvas/bridges'
+base.mkdir(mode=0o700,parents=True,exist_ok=True)
+info=base.lstat()
+if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077: raise SystemExit('Canvas bridge registry directory is not private')
+key=hashlib.sha256((record['provider']+'\0'+record['nativeSocket']+'\0'+record['secret']).encode()).hexdigest()
+target=base/(key+'.json')
+body=(json.dumps(record,separators=(',',':'))+'\n').encode()
+if sys.argv[1]=='remove':
+ try: info=target.lstat()
+ except FileNotFoundError: info=None
+ if info is not None:
+  if not stat.S_ISREG(info.st_mode) or target.is_symlink(): raise SystemExit('Canvas bridge registry changed; leaving it untouched')
+  if target.read_bytes()!=body: raise SystemExit('Canvas bridge registry changed; leaving it untouched')
+  target.unlink()
+ print(str(target)); raise SystemExit(0)
+try: info=target.lstat()
+except FileNotFoundError: info=None
+if info is not None:
+ if not stat.S_ISREG(info.st_mode) or target.is_symlink(): raise SystemExit('Canvas bridge registry key collision')
+ if target.read_bytes()==body: print(str(target)); raise SystemExit(0)
+ raise SystemExit('Canvas bridge registry key collision')
+temporary=base/('.'+key+'.'+secrets.token_hex(8)+'.tmp')
+fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+try:
+ with os.fdopen(fd,'wb') as handle:
+  handle.write(body);handle.flush();os.fsync(handle.fileno())
+ os.link(temporary,target)
+finally:
+ temporary.unlink(missing_ok=True)
+directory=os.open(base,os.O_RDONLY)
+try: os.fsync(directory)
+finally: os.close(directory)
+print(str(target))`;
+
+function validateBridgeRecord(source: Source, record: OpenBridgeRecord): void {
+  if (record.version !== 1 || record.provider !== source.type ||
+      !record.nativeSocket.startsWith("/") || !record.socket.startsWith("/") ||
+      /[:\x00-\x1f\x7f]/u.test(record.nativeSocket + record.socket) ||
+      record.secret.length < 32 || record.secret.length > 256 || /[^A-Za-z0-9_-]/u.test(record.secret))
+    throw new Error("Invalid Canvas bridge registry record");
+}
+
+export async function writeRemoteBridgeRegistry(
+  source: Source,
+  record: OpenBridgeRecord,
+): Promise<() => Promise<void>> {
+  validateSource(source);
+  if (source.transport !== "ssh") throw new Error("Remote bridge registry requires an SSH source");
+  validateBridgeRecord(source, record);
+  const expected = JSON.stringify(record);
+  const python = `python3 -c ${shellQuote(bridgeRegistryPython)}`;
+  await runRemoteShellWithInput(source, `${python} write`, expected);
+  let cleaned = false;
+  return async () => {
+    if (cleaned) return;
+    await runRemoteShellWithInput(source, `${python} remove`, expected);
+    cleaned = true;
+  };
+}
+
+const helperInstallPython = String.raw`import hashlib,os,pathlib,secrets,stat,sys
+expected=sys.argv[1]
+payload=sys.stdin.buffer.read()
+if hashlib.sha256(payload).hexdigest()!=expected: raise SystemExit('Canvas helper checksum mismatch')
+directory=pathlib.Path.home()/'.local/bin'
+directory.mkdir(mode=0o700,parents=True,exist_ok=True)
+info=directory.lstat()
+if not stat.S_ISDIR(info.st_mode): raise SystemExit('Canvas helper install path is not a directory')
+target=directory/'canvas'
+marker=directory/'.canvas-managed-sha256'
+def atomic_marker():
+ temporary=directory/('.canvas-marker.'+secrets.token_hex(12)+'.tmp')
+ fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+ try:
+  with os.fdopen(fd,'w') as handle: handle.write(expected+'\n');handle.flush();os.fsync(handle.fileno())
+  os.replace(temporary,marker)
+ finally: temporary.unlink(missing_ok=True)
+def install_owned():
+ temporary=directory/('.canvas.'+secrets.token_hex(12)+'.tmp')
+ fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o755)
+ try:
+  with os.fdopen(fd,'wb') as handle: handle.write(payload);handle.flush();os.fsync(handle.fileno())
+  os.replace(temporary,target)
+ finally: temporary.unlink(missing_ok=True)
+def verify_or_upgrade():
+ info=target.lstat()
+ if not stat.S_ISREG(info.st_mode) or target.is_symlink(): raise SystemExit('Canvas helper target is not a regular file')
+ current=hashlib.sha256(target.read_bytes()).hexdigest()
+ if current!=expected:
+  try: owned=marker.read_text().strip()
+  except FileNotFoundError: owned=None
+  if owned!=current: raise SystemExit('A different canvas helper already exists; refusing to overwrite it')
+  install_owned()
+ os.chmod(target,0o755)
+ atomic_marker()
+try:
+ verify_or_upgrade(); print(str(target)); raise SystemExit(0)
+except FileNotFoundError: pass
+install_owned()
+os.chmod(target,0o755)
+atomic_marker()
+directory_fd=os.open(directory,os.O_RDONLY)
+try: os.fsync(directory_fd)
+finally: os.close(directory_fd)
+print(str(target))`;
+
+async function installLocalHelper(bytes: Buffer, expectedHash: string): Promise<void> {
+  const home = process.env.HOME;
+  if (!home) throw new Error("HOME is required to install the Canvas helper");
+  const directory = join(home, ".local", "bin");
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const directoryInfo = await lstat(directory);
+  if (!directoryInfo.isDirectory()) throw new Error("Canvas helper install path is not a directory");
+  const target = join(directory, "canvas");
+  const marker = join(directory, ".canvas-managed-sha256");
+  const atomicWrite = async (destination: string, bytes: Buffer, mode: number) => {
+    const temporary = join(directory, `.canvas.${randomUUID().replaceAll("-", "")}.tmp`);
+    await writeFile(temporary, bytes, { flag: "wx", mode });
+    try { await rename(temporary, destination); }
+    finally { await unlink(temporary).catch(() => {}); }
+  };
+  const verifyExisting = async () => {
+    const info = await lstat(target);
+    if (!info.isFile()) throw new Error("Canvas helper target is not a regular file");
+    const current = await readFile(target);
+    const currentHash = createHash("sha256").update(current).digest("hex");
+    if (currentHash !== expectedHash) {
+      let managedHash = "";
+      try {
+        const markerInfo = await lstat(marker);
+        if (markerInfo.isFile()) managedHash = (await readFile(marker, "utf8")).trim();
+      } catch {}
+      if (managedHash !== currentHash)
+        throw new Error("A different canvas helper already exists; refusing to overwrite it");
+      await atomicWrite(target, bytes, 0o755);
+    }
+    await chmod(target, 0o755);
+    await atomicWrite(marker, Buffer.from(expectedHash + "\n"), 0o600);
+  };
+  try { await verifyExisting(); return; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  await atomicWrite(target, bytes, 0o755);
+  await atomicWrite(marker, Buffer.from(expectedHash + "\n"), 0o600);
+  const directoryHandle = await open(directory, "r");
+  try { await directoryHandle.sync(); } finally { await directoryHandle.close(); }
+}
+
+export async function installCanvasHelper(source: Source, helperBytes: Buffer): Promise<void> {
+  validateSource(source);
+  if (!Buffer.isBuffer(helperBytes) || helperBytes.length === 0 || helperBytes.length > 8 * 1024 * 1024)
+    throw new Error("Canvas helper size is invalid");
+  const expectedHash = createHash("sha256").update(helperBytes).digest("hex");
+  if (source.transport === "local") return await installLocalHelper(helperBytes, expectedHash);
+  const command = `python3 -c ${shellQuote(helperInstallPython)} ${expectedHash}`;
+  await runRemoteShellWithInput(source, command, helperBytes);
+}
+
+export async function prepareOpenBridge(
+  source: Source,
+  localUnixSocket: string,
+): Promise<{ nativeSocket: string; remoteSocket?: string; cleanup(): Promise<void> }> {
+  validateSource(source);
+  if (!localUnixSocket.startsWith("/") || /[:\x00-\x1f\x7f]/u.test(localUnixSocket))
+    throw new Error("Local bridge socket path is invalid");
+  const endpoints = await sourceSocketEndpoints(source);
+  if (source.transport !== "ssh") return { nativeSocket: endpoints.nativeSocket, cleanup: async () => {} };
+
+  const prefix = createHash("sha256").update(source.id).digest("hex").slice(0, 12);
+  const remoteDirectory = `/tmp/canvas-bridge-${prefix}-${randomUUID().replaceAll("-", "")}`;
+  const remoteSocket = join(remoteDirectory, "open.sock");
+  await runRemoteShell(source, `umask 077 && mkdir -m 700 -- ${shellQuote(remoteDirectory)}`);
+  const cleanupRemote = async () => {
+    await runRemoteShell(source, `rmdir -- ${shellQuote(remoteDirectory)}`);
+  };
+  try {
+    const tunnel = await ensureSocketTunnel(tunnelRequest(
+      source,
+      {},
+      { "open.sock": { remotePath: remoteSocket, localPath: localUnixSocket } },
+      cleanupRemote,
+      `${source.id}:canvas-open`,
+    ));
+    try {
+      await runRemoteShell(source,
+        `i=0; while [ "$i" -lt 400 ]; do if [ -S ${shellQuote(remoteSocket)} ]; then exit 0; fi; i=$((i+1)); sleep 0.025; done; exit 1`,
+      );
+    } catch (error) {
+      await tunnel.close();
+      throw error;
+    }
+    let cleaned = false;
+    return {
+      nativeSocket: endpoints.nativeSocket,
+      remoteSocket: tunnel.remoteSockets["open.sock"],
+      async cleanup() {
+        if (cleaned) return;
+        cleaned = true;
+        await tunnel.close();
+      },
+    };
+  } catch (error) {
+    await cleanupRemote().catch(() => {});
+    throw error;
+  }
 }
 
 /** Minimal named environment for provider commands; never forwards server secrets. */

@@ -1,19 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
-import { createServer } from "node:net";
+import { createConnection, createServer } from "node:net";
 import { promisify } from "node:util";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import * as pty from "node-pty";
 import {
@@ -23,6 +25,10 @@ import {
   closeWindow,
   listResources,
   openTerminal,
+  installCanvasHelper,
+  nativeSocketForSource,
+  prepareOpenBridge,
+  writeRemoteBridgeRegistry,
   closeProviderConnections,
   NativeGeometryConflictError,
   parseSshTarget,
@@ -63,6 +69,57 @@ test("SSH arguments reject credentials, options and shell metacharacters", () =>
     }),
     value,
   );
+});
+
+test("native socket discovery returns tmux's canonical socket path", async (t) => {
+  try { execFileSync("tmux", ["-V"], { stdio: "ignore" }); }
+  catch { t.skip("tmux is not installed"); return; }
+  const root = mkdtempSync(join(tmpdir(), "canvas-native-socket-"));
+  const socket = join(root, "tmux.sock");
+  const tmux = (...args: string[]) => execFileSync("tmux", ["-S", socket, ...args], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+  }).trimEnd();
+  const source: Source = { id: "native-socket", name: "Socket", type: "tmux", transport: "local", tmuxSocket: socket };
+  try {
+    tmux("-f", "/dev/null", "new-session", "-d", "-s", "socket-test");
+    const expected = execFileSync("realpath", [socket], { encoding: "utf8" }).trim();
+    assert.equal(await nativeSocketForSource(source), expected);
+    assert.equal(await nativeSocketForSource({ ...source, id: "alias" }), expected);
+  } finally {
+    try { tmux("kill-server"); } catch { /* fixture already stopped */ }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Canvas helper installation is atomic, idempotent, upgrades its managed version and preserves unrelated commands", async () => {
+  const root = mkdtempSync(join(tmpdir(), "canvas-helper-install-")), previousHome = process.env.HOME;
+  process.env.HOME = root;
+  const source: Source = { id: "helper-install", name: "Helper", type: "tmux", transport: "local" };
+  const helper = Buffer.from("#!/bin/sh\nprintf 'canvas helper\\n'\n");
+  const target = join(root, ".local", "bin", "canvas");
+  try {
+    await installCanvasHelper(source, helper);
+    assert.deepEqual(readFileSync(target), helper);
+    assert.equal(statSync(target).mode & 0o777, 0o755);
+    await installCanvasHelper(source, helper);
+    assert.deepEqual(readFileSync(target), helper);
+    const upgraded = Buffer.from("#!/bin/sh\nprintf 'updated helper\\n'\n");
+    await installCanvasHelper(source, upgraded);
+    assert.deepEqual(readFileSync(target), upgraded);
+    assert.equal(statSync(target).mode & 0o777, 0o755);
+    const otherHome = join(root, "other-home"); mkdirSync(otherHome);
+    const previousHome = process.env.HOME; process.env.HOME = otherHome;
+    try {
+      mkdirSync(join(otherHome, ".local/bin"), { recursive: true });
+      writeFileSync(join(otherHome, ".local/bin/canvas"), "unrelated command");
+      await assert.rejects(installCanvasHelper(source, helper), /refusing to overwrite/u);
+      assert.equal(readFileSync(join(otherHome, ".local/bin/canvas"), "utf8"), "unrelated command");
+    } finally { if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome; }
+    await assert.rejects(installCanvasHelper(source, Buffer.alloc(8 * 1024 * 1024 + 1)), /size is invalid/u);
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("remote clients resolve user installs without login rc and preserve exact arguments", () => {
@@ -326,14 +383,17 @@ const cp = require('node:child_process');
 const args = process.argv.slice(2);
 if (args.includes('-O')) process.exit(0);
 if (!args.includes('-N')) {
-  const result = cp.spawnSync('/bin/sh', ['-c', args.at(-1)], {
-    encoding:'utf8', env:{PATH:${JSON.stringify(root)},HOME:${JSON.stringify(root)}}
+  const remoteCommand=args.at(-1), input=remoteCommand.startsWith('python3 -c ')?fs.readFileSync(0):undefined;
+  const result = cp.spawnSync('/bin/sh', ['-c', remoteCommand], {
+    encoding:'utf8', input, env:{PATH:${JSON.stringify(root)},HOME:${JSON.stringify(root)}}
   });
+  if(result.status) process.stderr.write('synthetic remote command failed ('+result.status+'): '+result.stderr+' '+result.stdout);
   process.stdout.write(result.stdout || ''); process.stderr.write(result.stderr || '');
   process.exit(result.status || 0);
 }
 fs.appendFileSync(${JSON.stringify(forwards)}, String(process.pid) + '\\n');
 const sockets = new Set();
+const reverseListeners = [];
 for (let index = 0; index < args.length; index++) {
   if (args[index] !== '-L') continue;
   const value=args[++index], split=value.indexOf(':');
@@ -345,12 +405,25 @@ for (let index = 0; index < args.length; index++) {
     incoming.on('close',()=>sockets.delete(incoming)); outgoing.on('close',()=>sockets.delete(outgoing));
   }).listen(value.slice(0,split));
 }
-process.on('SIGTERM',()=>{ for(const socket of sockets) socket.destroy(); process.exit(0); });
+for (let index=0; index<args.length; index++) {
+  if(args[index]!=='-R') continue;
+  const value=args[++index], split=value.indexOf(':'), remote=value.slice(0,split), local=value.slice(split+1);
+  const listener=net.createServer(incoming=>{
+    const outgoing=net.createConnection(local); sockets.add(incoming);sockets.add(outgoing);
+    incoming.pipe(outgoing);outgoing.pipe(incoming);
+    incoming.on('error',()=>outgoing.destroy());outgoing.on('error',()=>incoming.destroy());
+    incoming.on('close',()=>sockets.delete(incoming));outgoing.on('close',()=>sockets.delete(outgoing));
+  });
+  listener.listen(remote);reverseListeners.push(listener);
+}
+process.on('SIGTERM',()=>{ for(const socket of sockets) socket.destroy(); for(const listener of reverseListeners) listener.close(); process.exit(0); });
 `,
       { mode: 0o700 },
     );
     symlinkSync("/usr/bin/env", join(root, "env"));
     symlinkSync("/bin/sh", join(root, "sh"));
+    for (const [name, binary] of [["realpath", "/usr/bin/realpath"], ["mkdir", "/bin/mkdir"], ["rmdir", "/bin/rmdir"], ["sleep", "/bin/sleep"], ["python3", "/usr/bin/python3"]])
+      symlinkSync(binary, join(root, name));
     writeFileSync(
       join(root, "herdr"),
       `#!${process.execPath}
@@ -363,6 +436,9 @@ else { console.error('Remote bare client must never be needed'); process.exit(1)
 `,
       { mode: 0o700 },
     );
+    process.env.PATH = root;
+    const nativeSocket = await nativeSocketForSource(source);
+    assert.equal(nativeSocket, execFileSync("realpath", [join(remoteDir, "herdr.sock")], { encoding: "utf8" }).trim());
     writeFileSync(
       localClient,
       `#!${process.execPath}
@@ -382,7 +458,6 @@ for(const key of ['HERDR_SOCKET_PATH','HERDR_CLIENT_SOCKET_PATH']) {
 `,
       { mode: 0o700 },
     );
-    process.env.PATH = root;
     process.env.CANVAS_HERDR_BINARY = localClient;
     [first, second] = await Promise.all([
       openTerminal(source, "space", "tab", 100, 30),
@@ -417,6 +492,30 @@ for(const key of ['HERDR_SOCKET_PATH','HERDR_CLIENT_SOCKET_PATH']) {
       ).length,
       2,
     );
+
+    const localBridgeSocket = join(root, "open.sock"), bridgeServer = createServer(socket => socket.on("data", data => socket.write(Buffer.concat([Buffer.from("download:"), Buffer.isBuffer(data) ? data : Buffer.from(data)]))));
+    await new Promise<void>(resolve => bridgeServer.listen(localBridgeSocket, resolve));
+    const bridge = await prepareOpenBridge(source, localBridgeSocket);
+    assert.equal(bridge.nativeSocket, nativeSocket);
+    assert.ok(bridge.remoteSocket?.startsWith("/tmp/canvas-bridge-"));
+    await closeProviderConnections(source.id);
+    assert.equal(bridge.remoteSocket && existsSync(dirname(bridge.remoteSocket)), true, "idle provider cleanup keeps the Canvas download forward alive");
+    const fetched = await new Promise<string>((resolve, reject) => {
+      const connection = createConnection(bridge.remoteSocket!);
+      connection.once("connect", () => connection.write("ticket"));
+      connection.once("data", data => { connection.destroy(); resolve(data.toString()); });
+      connection.once("error", reject);
+    });
+    assert.equal(fetched, "download:ticket");
+    const record = { version: 1 as const, provider: "herdr" as const, nativeSocket, socket: bridge.remoteSocket!, secret: randomUUID().replaceAll("-", "").repeat(2) };
+    const removeRecord = await writeRemoteBridgeRegistry(source, record);
+    const registryDirectory = join(root, ".local/state/canvas/bridges"), registryName = readdirSync(registryDirectory)[0]!;
+    assert.equal(statSync(join(registryDirectory, registryName)).mode & 0o777, 0o600);
+    await removeRecord();
+    assert.equal(readdirSync(registryDirectory).length, 0);
+    await bridge.cleanup();
+    assert.equal(existsSync(dirname(bridge.remoteSocket!)), false);
+    await new Promise<void>(resolve => bridgeServer.close(() => resolve()));
   } finally {
     await first?.cleanup();
     await second?.cleanup();

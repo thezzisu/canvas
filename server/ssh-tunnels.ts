@@ -5,12 +5,19 @@ import { join } from "node:path";
 
 export interface SocketTunnel {
   sockets: Record<string, string>;
+  remoteSockets: Record<string, string>;
   alive(): boolean;
+  close(): Promise<void>;
 }
 
 interface ManagedTunnel extends SocketTunnel {
   directory: string;
-  close(): Promise<void>;
+}
+
+interface TunnelEntry {
+  sourceId: string;
+  closing: boolean;
+  promise: Promise<ManagedTunnel>;
 }
 
 interface TunnelRequest {
@@ -20,16 +27,11 @@ interface TunnelRequest {
   sshArgs: string[];
   env: NodeJS.ProcessEnv;
   discover(): Promise<Record<string, string>>;
+  reverse?: Record<string, { remotePath: string; localPath: string }>;
+  cleanupRemote?(): Promise<void>;
 }
 
-const tunnels = new Map<
-  string,
-  {
-    sourceId: string;
-    closing: boolean;
-    promise: Promise<ManagedTunnel>;
-  }
->();
+const tunnels = new Map<string, TunnelEntry>();
 
 function checkSocketPath(path: string): void {
   if (!path.startsWith("/") || /[:\x00-\x1f\x7f]/u.test(path))
@@ -39,11 +41,19 @@ function checkSocketPath(path: string): void {
 async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
   const remote = await request.discover();
   const entries = Object.entries(remote);
-  if (!entries.length) throw new Error("No remote Unix socket was found");
+  const reverse = Object.entries(request.reverse || {});
+  if (!entries.length && !reverse.length)
+    throw new Error("No Unix socket forwarding was requested");
   for (const [name, path] of entries) {
     if (!/^[a-z][a-z0-9-]*\.sock$/u.test(name))
       throw new Error("Invalid forwarded socket name");
     checkSocketPath(path);
+  }
+  for (const [name, endpoint] of reverse) {
+    if (!/^[a-z][a-z0-9-]*\.sock$/u.test(name))
+      throw new Error("Invalid reverse socket name");
+    checkSocketPath(endpoint.remotePath);
+    checkSocketPath(endpoint.localPath);
   }
   // Unix socket names are short on both Linux and macOS. mkdtemp creates an
   // owner-only directory; no global SSH configuration or existing socket changes.
@@ -57,6 +67,13 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
     "-L",
     `${sockets[name]}:${remotePath}`,
   ]);
+  const reverseForwards = reverse.flatMap(([, endpoint]) => [
+    "-R",
+    `${endpoint.remotePath}:${endpoint.localPath}`,
+  ]);
+  const remoteSockets = Object.fromEntries(
+    reverse.map(([name, endpoint]) => [name, endpoint.remotePath]),
+  );
   const args = [
     "-N",
     "-T",
@@ -69,6 +86,7 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
     "-o",
     "StreamLocalBindUnlink=no",
     ...forwards,
+    ...reverseForwards,
     ...request.sshArgs,
   ];
   let stopped = false;
@@ -89,6 +107,16 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
     await Promise.all(
       Object.values(sockets).map((path) => rm(path, { force: true })),
     );
+    await Promise.all(Object.values(request.reverse || {}).map(async ({ localPath }) => {
+      try {
+        if (!(await lstat(localPath)).isSocket())
+          throw new Error("Local reverse forwarding endpoint is not a socket");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT")
+          throw new Error("Local reverse forwarding endpoint is unavailable");
+        throw error;
+      }
+    }));
     if (stopped) throw new Error("SSH socket forwarding closed");
     const proc = (child = spawn("ssh", args, {
       env: request.env,
@@ -137,6 +165,7 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
       await terminate();
       await reconnecting;
       await rm(directory, { recursive: true, force: true });
+      await request.cleanupRemote?.().catch(() => {});
     })());
   try {
     await connect();
@@ -162,7 +191,7 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
     })();
     // Reuse the same local socket paths across SSH reconnection so existing
     // native clients can reconnect without changing their endpoint identity.
-    return { sockets, directory, alive: () => !stopped, close };
+    return { sockets, remoteSockets, directory, alive: () => !stopped, close };
   } catch (error) {
     await close();
     throw error;
@@ -176,11 +205,21 @@ export async function ensureSocketTunnel(
   while (true) {
     let entry = tunnels.get(request.key);
     if (!entry) {
-      entry = {
+      const created: TunnelEntry = {
         sourceId: request.sourceId,
         closing: false,
-        promise: startTunnel(request),
+        promise: Promise.resolve(undefined as never),
       };
+      created.promise = startTunnel(request).then((tunnel) => {
+        const close = tunnel.close;
+        tunnel.close = async () => {
+          if (tunnels.get(request.key) === created) tunnels.delete(request.key);
+          created.closing = true;
+          await close();
+        };
+        return tunnel;
+      });
+      entry = created;
       tunnels.set(request.key, entry);
     }
     let tunnel: ManagedTunnel;

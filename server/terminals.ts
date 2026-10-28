@@ -191,6 +191,11 @@ class LiveTerminal {
   private canRender(ws: WebSocket) {
     return this.rendered.has(ws) && (!this.maximized || this.maximized.owner === ws);
   }
+  downloadRecipient(): WebSocket | undefined {
+    const ws = this.controller;
+    return ws && ws.readyState === 1 && this.clients.has(ws) &&
+      (!this.maximized || this.maximized.owner === ws) ? ws : undefined;
+  }
   private presentation(ws: WebSocket) {
     json(ws, {
       type: "presentation",
@@ -418,6 +423,14 @@ export class TerminalManager {
       terminal.idle = setTimeout(() => void terminal.close(), 20_000);
       terminal.idle.unref();
     }
+  }
+  async downloadRecipient(sourceId: string, windowId: string): Promise<{ socket: WebSocket; isCurrent(): boolean } | undefined> {
+    const pending = this.entries.get(`${sourceId}/${windowId}`);
+    if (!pending) return;
+    const terminal = await pending.catch(() => undefined);
+    const socket = terminal?.downloadRecipient();
+    if (!terminal || !socket) return;
+    return { socket, isCurrent: () => terminal.downloadRecipient() === socket };
   }
   async closeSource(sourceId: string) {
     this.closingSources.add(sourceId);

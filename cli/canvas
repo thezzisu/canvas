@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Send a file to the Canvas browser currently controlling this terminal."""
+
+import argparse
+import json
+import os
+import socket
+import stat
+import sys
+
+
+class CanvasError(Exception):
+    pass
+
+
+def terminal_identities():
+    # Herdr removes inherited TMUX/TMUX_PANE when launching its panes. When
+    # both are present, tmux is inner. Prefer its Canvas source when registered;
+    # otherwise the enclosing herdr view is still the visible terminal.
+    identities = []
+    tmux = os.environ.get("TMUX", "")
+    tmux_pane = os.environ.get("TMUX_PANE", "")
+    if tmux and tmux_pane:
+        parts = tmux.rsplit(",", 2)
+        if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+            native_socket = parts[0]
+            if os.path.isabs(native_socket) and tmux_pane.startswith("%") and tmux_pane[1:].isdigit():
+                identities.append(("tmux", os.path.realpath(native_socket), tmux_pane))
+    native_socket = os.environ.get("HERDR_SOCKET_PATH", "")
+    pane = os.environ.get("HERDR_PANE_ID", "")
+    if native_socket and pane and os.path.isabs(native_socket) and len(pane) <= 256:
+        if all(ord(char) >= 32 and ord(char) != 127 for char in pane):
+            identities.append(("herdr", os.path.realpath(native_socket), pane))
+    if not identities:
+        raise CanvasError("run this command inside a connected herdr or tmux pane")
+    return identities
+
+
+def registry_entries(provider, native_socket):
+    directory = os.environ.get("CANVAS_BRIDGE_REGISTRY_DIR") or os.path.expanduser(
+        "~/.local/state/canvas/bridges"
+    )
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        parent = os.open(directory, flags | getattr(os, "O_DIRECTORY", 0))
+    except OSError:
+        return []
+    entries = []
+    try:
+        info = os.fstat(parent)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            return []
+        for name in os.listdir(parent):
+            if not name.endswith(".json"):
+                continue
+            try:
+                fd = os.open(name, flags | os.O_NONBLOCK, dir_fd=parent)
+                with os.fdopen(fd, "rb") as record:
+                    info = os.fstat(record.fileno())
+                    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                            or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 16384):
+                        continue
+                    entry = json.loads(record.read(16385))
+                if not isinstance(entry, dict) or entry.get("version") != 1 or entry.get("provider") != provider:
+                    continue
+                registered_socket = entry.get("nativeSocket")
+                endpoint = entry.get("socket")
+                secret = entry.get("secret")
+                if not isinstance(registered_socket, str) or not os.path.isabs(registered_socket) or os.path.realpath(registered_socket) != native_socket:
+                    continue
+                if not isinstance(endpoint, str) or not os.path.isabs(endpoint) or "\0" in endpoint:
+                    continue
+                if not isinstance(secret, str) or not 16 <= len(secret) <= 256:
+                    continue
+                endpoint_stat = os.stat(endpoint, follow_symlinks=False)
+                if (not stat.S_ISSOCK(endpoint_stat.st_mode) or endpoint_stat.st_uid != os.getuid()):
+                    continue
+                entries.append((info.st_mtime_ns, entry))
+            except (OSError, ValueError, UnicodeError):
+                continue
+    finally:
+        os.close(parent)
+    # Duplicate records for one endpoint can occur during credential rotation.
+    entries.sort(key=lambda item: item[0], reverse=True)
+    seen = set()
+    result = []
+    for _, entry in entries:
+        if entry["socket"] not in seen:
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            probe.settimeout(0.5)
+            try:
+                probe.connect(entry["socket"])
+            except OSError:
+                probe.close()
+                continue
+            probe.close()
+            seen.add(entry["socket"])
+            result.append(entry)
+    if len(result) > 1:
+        raise CanvasError("multiple Canvas connections match this terminal")
+    return result
+
+
+def response(connection):
+    line = bytearray()
+    while len(line) <= 8192:
+        chunk = connection.recv(1)
+        if not chunk:
+            raise CanvasError("download connection closed")
+        if chunk == b"\n":
+            try:
+                result = json.loads(line)
+            except (ValueError, UnicodeError):
+                break
+            if isinstance(result, dict) and result.get("ok") is True:
+                return
+            # Server errors must not turn into terminal controls or print a
+            # reflected request, which includes the private bridge credential.
+            raise CanvasError("Canvas could not accept this download")
+        line.extend(chunk)
+    raise CanvasError("invalid download response")
+
+
+def open_file(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            os.close(fd)
+            raise CanvasError("choose a regular file")
+        file = os.fdopen(fd, "rb")
+    except OSError as error:
+        if isinstance(error, FileNotFoundError):
+            raise CanvasError("file not found") from None
+        raise CanvasError("cannot read this file") from None
+    with file:
+        entries = []
+        for provider, native_socket, pane in terminal_identities():
+            matches = registry_entries(provider, native_socket)
+            if matches:
+                entries = [(entry, provider, native_socket, pane) for entry in matches]
+                break
+        if not entries:
+            raise CanvasError("no Canvas connection for this terminal")
+        connection = None
+        for entry, provider, native_socket, pane in entries:
+            candidate = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            candidate.settimeout(30)
+            try:
+                candidate.connect(entry["socket"])
+                header = {
+                    "version": 1,
+                    "secret": entry["secret"],
+                    "provider": provider,
+                    "nativeSocket": native_socket,
+                    "paneId": pane,
+                    "filename": os.path.basename(os.path.abspath(path)),
+                    "size": info.st_size,
+                }
+                encoded = json.dumps(header, ensure_ascii=True, separators=(",", ":")).encode("ascii") + b"\n"
+                if len(encoded) > 16384:
+                    raise CanvasError("download request is too long")
+                candidate.sendall(encoded)
+                response(candidate)
+                connection = candidate
+                break
+            except (OSError, CanvasError):
+                candidate.close()
+        if connection is None:
+            raise CanvasError("no Canvas tab is accepting files from this terminal")
+        # Acknowledgement fixes the destination. Never retry a transfer after
+        # this point: a lost final response must not download the same file twice.
+        with connection:
+            connection.settimeout(None)
+            remaining = info.st_size
+            while remaining:
+                data = file.read(min(65536, remaining))
+                if not data:
+                    raise CanvasError("file changed during transfer")
+                connection.sendall(data)
+                remaining -= len(data)
+            connection.shutdown(socket.SHUT_WR)
+            response(connection)
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="canvas", description="Download a file in the active Canvas browser.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    command = commands.add_parser("open", help="download a file")
+    command.add_argument("path", help="file to download")
+    arguments = parser.parse_args()
+    try:
+        open_file(arguments.path)
+    except CanvasError as error:
+        print("canvas: " + str(error), file=sys.stderr)
+        return 1
+    except (OSError, ValueError):
+        print("canvas: file transfer failed", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("canvas: cancelled", file=sys.stderr)
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

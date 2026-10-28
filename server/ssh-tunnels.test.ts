@@ -56,6 +56,7 @@ const net = require('node:net');
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({pid:process.pid,args}) + '\\n');
 const listeners = [];
+const reverseListeners = [];
 const connections = new Set();
 for (let index = 0; index < args.length; index++) {
   if (args[index] !== '-L') continue;
@@ -73,9 +74,25 @@ for (let index = 0; index < args.length; index++) {
   });
   listener.listen(local); listeners.push(listener);
 }
+for (let index = 0; index < args.length; index++) {
+  if (args[index] !== '-R') continue;
+  const spec = args[++index], split = spec.indexOf(':');
+  const remote = spec.slice(0, split), local = spec.slice(split + 1);
+  const listener = net.createServer((incoming) => {
+    const outgoing = net.createConnection(local);
+    connections.add(incoming); connections.add(outgoing);
+    incoming.pipe(outgoing); outgoing.pipe(incoming);
+    incoming.on('error',()=>outgoing.destroy());
+    outgoing.on('error',()=>incoming.destroy());
+    incoming.on('close',()=>connections.delete(incoming));
+    outgoing.on('close',()=>connections.delete(outgoing));
+  });
+  listener.listen(remote); reverseListeners.push(listener);
+}
 process.on('SIGTERM', () => {
   for (const socket of connections) socket.destroy();
   for (const listener of listeners) listener.close();
+  for (const listener of reverseListeners) listener.close();
   process.exit(0);
 });
 `,
@@ -179,6 +196,39 @@ test("closing one source does not disconnect another source tunnel", async () =>
     await closeSocketTunnels("source-b");
     assert.equal(second.alive(), false);
   } finally {
+    await setup.close();
+  }
+});
+
+test("SSH reverse socket forwarding shares local and remote endpoints and cleans only its tunnel", async () => {
+  const setup = await fixture();
+  const localPath = join(setup.root, "bridge.sock"), remotePath = join(setup.root, "remote-bridge.sock");
+  const bridgeServer = createServer(socket => socket.on("data", data => socket.write(Buffer.from(`download:${data}`))));
+  await new Promise<void>(resolve => bridgeServer.listen(localPath, resolve));
+  let remoteCleanup = 0;
+  try {
+    const request = {
+      ...setup.request,
+      key: `${setup.request.key}-reverse`,
+      reverse: { "open.sock": { remotePath, localPath } },
+      cleanupRemote: async () => { remoteCleanup++; },
+    };
+    const tunnel = await ensureSocketTunnel(request);
+    assert.equal(tunnel.remoteSockets["open.sock"], remotePath);
+    assert.equal(await echo(remotePath, "ticket"), "download:ticket");
+    const starts = (await readFile(setup.log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    const matching = starts.at(-1).args;
+    assert.ok(matching.includes("-L"));
+    assert.ok(matching.includes("-R"));
+    assert.ok(matching.includes(`${remotePath}:${localPath}`));
+    assert.ok(matching.includes("StreamLocalBindUnlink=no"));
+    await tunnel.close();
+    assert.equal(tunnel.alive(), false);
+    assert.equal(remoteCleanup, 1);
+    await assert.rejects(stat(setup.root).then(() => echo(remotePath, "closed")), /ENOENT|ECONNREFUSED/u);
+  } finally {
+    await closeSocketTunnels();
+    await new Promise<void>(resolve => bridgeServer.close(() => resolve()));
     await setup.close();
   }
 });

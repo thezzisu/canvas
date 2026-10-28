@@ -117,6 +117,18 @@ function connect(session: Session) {
           else session.term.write('', update)
         }
         else if (message.type === 'output') session.term.write(message.data)
+        else if (message.type === 'download' && typeof message.url === 'string' && typeof message.filename === 'string') {
+          const url = new URL(message.url, location.href)
+          if (url.origin === location.origin && url.pathname.startsWith('/api/downloads/')) {
+            const anchor = document.createElement('a')
+            anchor.href = url.href
+            anchor.download = message.filename
+            anchor.hidden = true
+            document.body.append(anchor)
+            anchor.click()
+            anchor.remove()
+          }
+        }
         else if (message.type === 'status') {
           setState(session, { ...session.state, status: message.status === 'closed' || message.status === 'error' ? 'disconnected' : message.status, error: message.error, readOnly: message.readOnly })
           schedulePresentation(session)

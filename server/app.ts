@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { Readable } from "node:stream";
 import { bodyLimit } from "hono/body-limit";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -60,11 +61,21 @@ const notePatchSchema = z.object({
 const isBackgroundUpload = (method: string, path: string) =>
   method === "PUT" && /^\/api\/canvases\/[^/]+\/background$/.test(path);
 export type Account = { username: string; passwordHash: string };
+export interface DownloadResponse {
+  body: Readable;
+  size: number;
+  filename: string;
+  headers: Record<string, string>;
+}
 export function createApp(
   store: Store,
   account: Account,
   terminals: TerminalManager,
-  options: { secureCookie?: boolean } = {},
+  options: {
+    secureCookie?: boolean;
+    openDownload?: (ticket: string, sessionId: string) => DownloadResponse | undefined;
+    closeOpenBridge?: (sourceId: string) => Promise<void>;
+  } = {},
 ) {
   const app = new Hono();
   const attempts = new Map<string, { count: number; until: number }>();
@@ -110,6 +121,14 @@ export function createApp(
       username: account.username,
     }),
   );
+  app.get("/api/downloads/:ticket", (c) => {
+    const download = options.openDownload?.(
+      c.req.param("ticket"),
+      getCookie(c, "canvas_session") ?? "",
+    );
+    if (!download) return c.json({ error: "Download expired" }, 404);
+    return c.newResponse(Readable.toWeb(download.body) as ReadableStream, 200, download.headers);
+  });
   app.post("/api/login", async (c) => {
     const input = z
       .object({ username: z.string().max(200), password: z.string().max(1024) })
@@ -255,6 +274,7 @@ export function createApp(
     providers.validateSource({ ...s, id });
     if ((Object.keys(s) as Array<keyof Source>).some(key => key !== "id" && key !== "name" && s[key] !== previous[key])) {
       await terminals.closeSource(id);
+      await options.closeOpenBridge?.(id);
       providers.disposeStatusSource(id);
       await providers.closeProviderConnections(id);
     }
@@ -264,6 +284,7 @@ export function createApp(
     const id = c.req.param("id");
     source(id);
     await terminals.closeSource(id);
+    await options.closeOpenBridge?.(id);
     providers.disposeStatusSource(id);
     await providers.closeProviderConnections(id);
     store.remove("source", id);
