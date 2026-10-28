@@ -2,7 +2,7 @@
 
 A single-account workspace for all your herdr and tmux windows. The overview
 arranges machines, spaces and windows automatically. Create additional canvases
-to keep selected windows together in a draggable, zoomable workspace.
+to keep selected windows and notes together in a draggable, zoomable workspace.
 
 Canvas renders native clients through PTYs. Existing pane layouts, terminal
 applications and mouse interactions are handled by herdr/tmux.
@@ -38,17 +38,24 @@ Add a source from the connections panel:
 - **tmux / local:** use the default server or specify a tmux socket name or absolute path.
 - **herdr / local:** select a named session and the fork's executable path.
 - **SSH:** use an SSH config alias, `user@host`, or `ssh://user@host:port`.
-  With no executable override, Canvas looks for its dedicated herdr client at
-  `~/.local/share/canvas/bin/herdr`, then checks PATH and common user install
-  directories. Explicit executable paths take precedence. The selected provider
-  executable must exist on the destination. Key-based
+  With no executable override, Canvas checks PATH and common user install
+  directories for the ordinary provider executable on the destination. Explicit
+  executable paths take precedence. Key-based
   authentication and verified host keys are required. Optional identity and
   known-hosts file paths are resolved on the Canvas server.
 
 Herdr uses the unmodified upstream server and a small client-only fork for
-`tab attach <id> --bare`. Point the source's executable field at the fork client;
-keep your normal upstream server executable. No extra server APIs or protocol
-capabilities are required. See `thezzisu/herdr`, branch `canvas-bare`.
+`tab attach <id> --bare`. For a local source, select the fork client in the
+executable field. For SSH sources, set `CANVAS_HERDR_BINARY` to that client on
+the Canvas server (defaults to `herdr` on PATH). Canvas forwards the remote
+API and client Unix sockets over SSH, then runs the bare client locally. The
+source's executable field still refers to the ordinary remote herdr CLI used
+for discovery and resource operations. Remote machines need no fork or server
+changes. See `thezzisu/herdr`, branch `canvas-bare`.
+
+Tmux attach passes native file descriptors, so it cannot use a byte-only SSH
+socket tunnel. Canvas runs the remote stock tmux client through an SSH PTY.
+No custom remote tmux installation is required.
 
 ## Window behavior
 
@@ -84,6 +91,13 @@ capabilities are required. See `thezzisu/herdr`, branch `canvas-bare`.
 - Reconnecting replays the retained terminal screen. Existing programs stay in
   the provider when Canvas disconnects. Dead window references remain visible
   so they can be removed or replaced deliberately.
+
+## Notes
+
+Custom canvases support plaintext notes with a title, five colors, drag, resize
+and collapse. Notes save automatically and synchronize across browsers; layout
+and content edits are saved independently. The grid button toggles position
+snapping. Overview keeps its automatic window layout and does not accept notes.
 
 ## Canvas backgrounds
 

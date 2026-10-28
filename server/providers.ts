@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { closeSocketTunnels, ensureSocketTunnel } from "./ssh-tunnels.ts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -112,6 +113,15 @@ const active = new Set<{
   windowId: string;
   cleanup(): Promise<void>;
 }>();
+const preparing = new Map<string, number>();
+
+async function releaseIdleConnections(sourceId: string): Promise<void> {
+  if (
+    !preparing.has(sourceId) &&
+    ![...active].some((item) => item.sourceId === sourceId)
+  )
+    await closeProviderConnections(sourceId);
+}
 
 /** Quotes one argument for the remote POSIX login shell; never concatenate raw input. */
 export function shellQuote(value: string): string {
@@ -193,19 +203,11 @@ export function validateSource(source: Source): void {
     throw new Error("Binary must be an executable name or path");
 }
 
-// SSH does not normally run an interactive/login shell, so user-installed
-// clients may be absent from PATH. Do not source shell configuration to find
-// them: it can print startup text or start an interactive program. Arguments
-// remain positional throughout this script, including paths containing spaces.
+// SSH does not normally run an interactive/login shell. Resolve only the
+// selected remote executable without loading shell startup files.
 const REMOTE_CLIENT = `
 program=$1
 shift
-if [ "$program" = herdr ] && [ -n "\${HOME:-}" ]; then
-  candidate="$HOME/.local/share/canvas/bin/herdr"
-  if [ -f "$candidate" ] && [ -x "$candidate" ]; then
-    exec "$candidate" "$@"
-  fi
-fi
 candidate=$(command -v "$program" 2>/dev/null) || candidate=
 if [ -n "$candidate" ]; then
   exec "$candidate" "$@"
@@ -243,28 +245,6 @@ export function sourceCommand(
       : ["--session", source.herdrSession || "default"];
   if (source.transport === "local")
     return { file: binary, args: [...base, ...args] };
-  const ssh = parseSshTarget(source.target!);
-  const options = [
-    tty ? "-tt" : "-T",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "StrictHostKeyChecking=yes",
-    "-o",
-    "ConnectTimeout=8",
-    "-o",
-    "ServerAliveInterval=10",
-    "-o",
-    "ServerAliveCountMax=3",
-  ];
-  if (ssh.port) options.push("-p", ssh.port);
-  if (source.sshIdentityFile)
-    options.push("-i", source.sshIdentityFile, "-o", "IdentitiesOnly=yes");
-  if (source.sshKnownHostsFile)
-    options.push(
-      "-o",
-      `UserKnownHostsFile=${shellQuote(source.sshKnownHostsFile)}`,
-    );
   // Clear inherited nesting variables on the destination too. env -u is supported
   // by both GNU and BSD env, unlike shell-specific unset syntax.
   const remote = [
@@ -292,12 +272,84 @@ export function sourceCommand(
   return {
     file: "ssh",
     args: [
-      ...options,
-      "--",
-      ssh.destination,
+      ...sshOptions(source, tty),
       `exec ${remote.map(shellQuote).join(" ")}`,
     ],
   };
+}
+
+function sshOptions(source: Source, tty = false): string[] {
+  const ssh = parseSshTarget(source.target!);
+  const options = [
+    tty ? "-tt" : "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "StrictHostKeyChecking=yes",
+    "-o",
+    "ConnectTimeout=8",
+    "-o",
+    "ServerAliveInterval=10",
+    "-o",
+    "ServerAliveCountMax=3",
+  ];
+  if (ssh.port) options.push("-p", ssh.port);
+  if (source.sshIdentityFile)
+    options.push("-i", source.sshIdentityFile, "-o", "IdentitiesOnly=yes");
+  if (source.sshKnownHostsFile)
+    options.push(
+      "-o",
+      `UserKnownHostsFile="${source.sshKnownHostsFile.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`,
+    );
+  return [...options, "--", ssh.destination];
+}
+
+function socketTunnelIdentity(source: Source, paths: string[]): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        source.id,
+        source.target,
+        source.sshIdentityFile,
+        source.sshKnownHostsFile,
+        paths,
+      ]),
+    )
+    .digest("hex");
+}
+
+function tunnelRequest(source: Source, endpoints: Record<string, string>) {
+  const ssh = sshOptions(source);
+  return {
+    sourceId: source.id,
+    key: socketTunnelIdentity(source, Object.values(endpoints)),
+    sshArgs: ssh,
+    env: commandEnvironment(),
+    discover: async () => endpoints,
+  };
+}
+
+function localHerdrClient(source: Source): string {
+  if (source.transport === "local" && source.binary) return source.binary;
+  return process.env.CANVAS_HERDR_BINARY || "herdr";
+}
+
+async function remoteHerdrSockets(source: Source): Promise<[string, string]> {
+  const response = JSON.parse(await run(source, ["session", "list", "--json"]));
+  if (!response || !Array.isArray(response.sessions))
+    throw new Error("Unexpected remote herdr session list");
+  const requested = source.herdrSession || "default";
+  const session = response.sessions.find(
+    (item: { name?: string } | null) => item?.name === requested,
+  );
+  if (session?.running !== true)
+    throw new Error(`Remote herdr session '${requested}' is not running`);
+  if (
+    typeof session.socket_path !== "string" ||
+    typeof session.session_dir !== "string"
+  )
+    throw new Error("Unexpected remote herdr socket paths");
+  return [session.socket_path, join(session.session_dir, "herdr-client.sock")];
 }
 
 /** Minimal named environment for provider commands; never forwards server secrets. */
@@ -396,6 +448,7 @@ export async function closeProviderConnections(
     if (!pool.sources.size) closing.push(closeSshPool(pool));
   }
   await Promise.all(closing);
+  await closeSocketTunnels(sourceId);
   if (!sourceId && sshPoolRoot) {
     const directory = await sshPoolRoot;
     sshPoolRoot = undefined;
@@ -432,13 +485,14 @@ async function run(source: Source, args: string[]): Promise<string> {
 async function execute(
   command: { file: string; args: string[] },
   type: Source["type"],
+  env = commandEnvironment(),
 ): Promise<string> {
   return await new Promise((resolve, reject) => {
     execFile(
       command.file,
       command.args,
       {
-        env: commandEnvironment(),
+        env,
         timeout: COMMAND_TIMEOUT,
         maxBuffer: 4 * 1024 * 1024,
         encoding: "utf8",
@@ -822,36 +876,106 @@ export async function openTerminal(
   cols: number,
   rows: number,
 ): Promise<TerminalCommand> {
+  preparing.set(source.id, (preparing.get(source.id) || 0) + 1);
+  try {
+    return await prepareTerminal(source, spaceId, windowId, cols, rows);
+  } finally {
+    const count = preparing.get(source.id)! - 1;
+    if (count) preparing.set(source.id, count);
+    else preparing.delete(source.id);
+    await releaseIdleConnections(source.id);
+  }
+}
+
+async function prepareTerminal(
+  source: Source,
+  spaceId: string,
+  windowId: string,
+  cols: number,
+  rows: number,
+): Promise<TerminalCommand> {
   dimensions(cols, rows);
   await requireResource(source, spaceId, windowId);
   if (source.type === "herdr") {
-    let supported = false;
-    try {
-      const capabilities = JSON.parse(
-        await run(source, ["canvas-capabilities"]),
+    let clientFile: string;
+    let clientArgs: string[];
+    let clientEnv: Record<string, string> = {
+      TERM: "xterm-256color",
+      COLORTERM: "truecolor",
+    };
+    if (source.transport === "ssh") {
+      const localClient = localHerdrClient(source);
+      let capabilities: { bare_tab?: boolean };
+      try {
+        capabilities = JSON.parse(
+          await execute(
+            {
+              file: localClient,
+              args: ["canvas-capabilities"],
+            },
+            "herdr",
+          ),
+        );
+      } catch {
+        throw new Error(
+          "The local Canvas herdr client is unavailable or lacks bare-tab support; configure CANVAS_HERDR_BINARY on the Canvas server",
+        );
+      }
+      if (capabilities.bare_tab !== true)
+        throw new Error(
+          "The local Canvas herdr client lacks bare-tab support; configure CANVAS_HERDR_BINARY on the Canvas server",
+        );
+      // The remote machine supplies only the official server sockets. The
+      // Canvas fork remains a local client and receives both sockets over SSH.
+      const [apiSocket, clientSocket] = await remoteHerdrSockets(source);
+      const tunnel = await ensureSocketTunnel(
+        tunnelRequest(source, {
+          "herdr.sock": apiSocket,
+          "herdr-client.sock": clientSocket,
+        }),
       );
-      supported = capabilities.bare_tab === true;
-    } catch (error) {
-      // Older upstream clients do not expose the bare-tab command. Preserve
-      // network/execution failures instead of misreporting them as a version
-      // mismatch.
-      if (
-        !(error instanceof SyntaxError) &&
-        !(
-          error instanceof Error &&
-          /(?:unrecognized subcommand|unrecognized command|unexpected argument|unknown command)[^\n]*canvas-capabilities/u.test(
-            error.message,
+      clientFile = localClient;
+      clientArgs = ["tab", "attach", windowId, "--bare"];
+      clientEnv = {
+        ...clientEnv,
+        HERDR_SOCKET_PATH: tunnel.sockets["herdr.sock"]!,
+        HERDR_CLIENT_SOCKET_PATH: tunnel.sockets["herdr-client.sock"]!,
+        // Match upstream remote attach: remote files are not local files and
+        // handshakes may take longer than a local Unix socket round trip.
+        HERDR_REMOTE_KEYBINDINGS: "local",
+      };
+    } else {
+      let supported = false;
+      try {
+        const capabilities = JSON.parse(
+          await run(source, ["canvas-capabilities"]),
+        );
+        supported = capabilities.bare_tab === true;
+      } catch (error) {
+        if (
+          !(error instanceof SyntaxError) &&
+          !(
+            error instanceof Error &&
+            /(?:unrecognized subcommand|unrecognized command|unexpected argument|unknown command)[^\n]*canvas-capabilities/u.test(
+              error.message,
+            )
           )
         )
-      )
-        throw error;
-    }
-    if (!supported) {
-      throw new Error(
-        source.transport === "ssh"
-          ? "This remote herdr client does not support bare tabs. Update the Canvas herdr client at ~/.local/share/canvas/bin/herdr on that machine, or set the connection executable to its full path."
-          : "Select the current Canvas herdr fork executable; this client does not support bare tabs.",
-      );
+          throw error;
+      }
+      if (!supported)
+        throw new Error(
+          "Select the current Canvas herdr fork executable; this client does not support bare tabs.",
+        );
+      clientFile = source.binary || source.type;
+      clientArgs = [
+        "--session",
+        source.herdrSession || "default",
+        "tab",
+        "attach",
+        windowId,
+        "--bare",
+      ];
     }
     let closed = false;
     const handle = { sourceId: source.id, spaceId, windowId, cleanup };
@@ -859,13 +983,13 @@ export async function openTerminal(
       if (closed) return;
       closed = true;
       active.delete(handle);
-      if (![...active].some((item) => item.sourceId === source.id))
-        await closeProviderConnections(source.id);
+      await releaseIdleConnections(source.id);
     }
     active.add(handle);
     return {
-      ...sourceCommand(source, ["tab", "attach", windowId, "--bare"], true),
-      env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
+      file: clientFile,
+      args: clientArgs,
+      env: clientEnv,
       geometryMode: "client",
       // This describes our PTY, not an authoritative native tab size. The
       // unmodified herdr server retains its ordinary client geometry rules.
@@ -1121,8 +1245,7 @@ export async function openTerminal(
   let initialSize = await readSize();
   const handle = { sourceId: source.id, spaceId, windowId, cleanup };
   async function releaseSourceConnections() {
-    if (![...active].some((item) => item.sourceId === source.id))
-      await closeProviderConnections(source.id);
+    await releaseIdleConnections(source.id);
   }
   async function cleanup(): Promise<void> {
     if (closed) return;

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { verifyPassword } from "./auth.ts";
 import {
@@ -9,6 +9,9 @@ import {
   sourceSchema,
   canvasSchema,
   itemSchema,
+  nodeLayoutSchema,
+  noteNodeSchema,
+  noteColorSchema,
   type Source,
   type Canvas,
 } from "./state.ts";
@@ -34,7 +37,7 @@ const layoutSchema = z
   .object({
     nodes: z
       .array(
-        itemSchema
+        nodeLayoutSchema
           .pick({ id: true, x: true, y: true, width: true, height: true })
           .partial()
           .required({ id: true }),
@@ -42,6 +45,18 @@ const layoutSchema = z
       .max(500),
   })
   .strict();
+const noteCreateSchema = noteNodeSchema.omit({ id: true, type: true }).extend({
+  x: nodeLayoutSchema.shape.x.default(80),
+  y: nodeLayoutSchema.shape.y.default(80),
+  width: nodeLayoutSchema.shape.width.default(320),
+  height: nodeLayoutSchema.shape.height.default(240),
+});
+const notePatchSchema = z.object({
+  title: z.string().max(200).optional(),
+  content: z.string().max(200_000).optional(),
+  color: noteColorSchema.optional(),
+  minimized: z.boolean().optional(),
+}).strict();
 const isBackgroundUpload = (method: string, path: string) =>
   method === "PUT" && /^\/api\/canvases\/[^/]+\/background$/.test(path);
 export type Account = { username: string; passwordHash: string };
@@ -297,14 +312,38 @@ export function createApp(
         !canvas.nodes.some(
           (existing) =>
             existing.id === node.id ||
-            (existing.sourceId === node.sourceId &&
-              existing.windowId === node.windowId),
+            (existing.type !== "note" && node.type !== "note" &&
+              existing.sourceId === node.sourceId && existing.windowId === node.windowId),
         )
       )
         canvas.nodes.push(node);
     return c.json(
       store.canvasView(store.put("canvas", canvasSchema.parse(canvas))),
     );
+  });
+  app.post("/api/canvases/:id/notes", async (c) => {
+    const id = c.req.param("id");
+    if (id === "overview") return c.json({ error: "Overview is read-only" }, 403);
+    const value = noteCreateSchema.parse(await c.req.json());
+    const canvas = store.get<Canvas>("canvas", id);
+    if (!canvas) return c.json({ error: "Canvas not found" }, 404);
+    const note = {
+      id: randomUUID(), type: "note" as const,
+      ...value,
+    };
+    canvas.nodes.push(note);
+    return c.json(store.canvasView(store.put("canvas", canvasSchema.parse(canvas))), 201);
+  });
+  app.patch("/api/canvases/:id/notes/:node", async (c) => {
+    const id = c.req.param("id"), nodeId = c.req.param("node");
+    if (id === "overview") return c.json({ error: "Overview is read-only" }, 403);
+    const patch = notePatchSchema.parse(await c.req.json());
+    const canvas = store.get<Canvas>("canvas", id);
+    if (!canvas) return c.json({ error: "Canvas not found" }, 404);
+    const node = canvas.nodes.find((item) => item.id === nodeId);
+    if (!node || node.type !== "note") return c.json({ error: "Note not found" }, 404);
+    Object.assign(node, patch);
+    return c.json(store.canvasView(store.put("canvas", canvasSchema.parse(canvas))));
   });
   app.patch("/api/canvases/:id/layout", async (c) => {
     const id = c.req.param("id");

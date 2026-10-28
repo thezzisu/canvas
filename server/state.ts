@@ -24,23 +24,35 @@ export const sourceSchema = z
     "SSH target is required",
   );
 export type Source = z.infer<typeof sourceSchema> & { id: string };
-export const itemSchema = z
-  .object({
-    id: z.string().max(150),
-    sourceId: z.string().uuid(),
-    spaceId: z.string().max(300),
-    windowId: z.string().max(300),
-    x: z.number().finite().min(-1e7).max(1e7),
-    y: z.number().finite().min(-1e7).max(1e7),
-    width: z.number().min(240).max(4000),
-    height: z.number().min(160).max(3000),
-  })
-  .strict();
+export const nodeLayoutSchema = z.object({
+  id: z.string().min(1).max(150),
+  x: z.number().finite().min(-1e7).max(1e7),
+  y: z.number().finite().min(-1e7).max(1e7),
+  width: z.number().min(240).max(4000),
+  height: z.number().min(160).max(3000),
+}).strict();
+export const terminalNodeSchema = nodeLayoutSchema.extend({
+  // Existing saved canvases omit type; they remain terminal nodes.
+  type: z.literal("terminal").optional(),
+  sourceId: z.string().uuid(),
+  spaceId: z.string().max(300),
+  windowId: z.string().max(300),
+}).strict();
+export const noteColorSchema = z.enum(["yellow", "blue", "green", "pink", "neutral"]);
+export const noteNodeSchema = nodeLayoutSchema.extend({
+  type: z.literal("note"),
+  title: z.string().max(200).default("便签"),
+  content: z.string().max(200_000).default(""),
+  color: noteColorSchema.default("yellow"),
+  minimized: z.boolean().default(false),
+}).strict();
+export const itemSchema = z.union([terminalNodeSchema, noteNodeSchema]);
 export const canvasSchema = z
   .object({
     id: z.string().uuid().optional(),
     name: z.string().trim().min(1).max(100),
     nodes: z.array(itemSchema).max(500).default([]),
+    snapToGrid: z.boolean().optional(),
   })
   .strict();
 export type Canvas = z.infer<typeof canvasSchema> & { id: string };

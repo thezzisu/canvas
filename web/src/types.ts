@@ -41,17 +41,30 @@ export interface SourceResource {
   error?: string
   spaces: SpaceResource[]
 }
-export interface CanvasNode {
+export interface NodeLayout {
   id: string
-  sourceId: string
-  spaceId: string
-  windowId: string
   x: number
   y: number
   width: number
   height: number
 }
-export interface Canvas { id: string; name: string; nodes: CanvasNode[]; background?: { url: string; opacity: number } | null }
+export interface TerminalCanvasNode extends NodeLayout {
+  type?: 'terminal'
+  sourceId: string
+  spaceId: string
+  windowId: string
+}
+export type NoteColor = 'yellow' | 'blue' | 'green' | 'pink' | 'neutral'
+export interface NoteCanvasNode extends NodeLayout {
+  type: 'note'
+  title: string
+  content: string
+  color: NoteColor
+  minimized: boolean
+}
+export type CanvasNode = TerminalCanvasNode | NoteCanvasNode
+export type NotePatch = Partial<Pick<NoteCanvasNode, 'title' | 'content' | 'color' | 'minimized'>>
+export interface Canvas { id: string; name: string; nodes: CanvasNode[]; snapToGrid?: boolean; background?: { url: string; opacity: number } | null }
 export interface SharedState { instanceId: string; revision: number; sources: Source[]; canvases: Canvas[]; overviewBackground: Canvas['background'] }
 export interface TerminalData {
   sourceId: string
@@ -71,4 +84,11 @@ export interface TerminalData {
   onResize: (id: string, width: number, height: number, x?: number, y?: number) => void
   onLayoutStart: () => void
   onGeometry: (sourceId: string, windowId: string, ratio: number, insetX: number, insetY: number) => void
+}
+export interface NoteData extends NoteCanvasNode {
+  onResize: (id: string, width: number, height: number, x?: number, y?: number) => void
+  onLayoutStart: () => void
+  onChange: (id: string, patch: NotePatch) => void
+  onFlush: () => void
+  onAction: (action: string, id: string) => void
 }
