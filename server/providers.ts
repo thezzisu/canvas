@@ -46,7 +46,6 @@ export interface NativeSize {
   token: string;
   policy?: string;
   effectivePolicy?: string;
-  bootId?: string;
   revision?: number;
   operationId?: string;
   recoveredFromToken?: string;
@@ -85,6 +84,8 @@ export interface TerminalCommand {
   args: string[];
   env?: Record<string, string>;
   cleanup(): Promise<void>;
+  /** Client viewport geometry follows the provider's ordinary attach semantics. */
+  geometryMode?: "client";
   initialSize?: NativeSize;
   readSize?(fresh?: boolean): Promise<NativeSize>;
   resize?(
@@ -388,9 +389,6 @@ async function closeSshPool(pool: SshCommandPool): Promise<void> {
 export async function closeProviderConnections(
   sourceId?: string,
 ): Promise<void> {
-  for (const [key, cache] of herdrGeometryCaches)
-    if (!sourceId || cache.sourceId === sourceId)
-      herdrGeometryCaches.delete(key);
   const closing: Promise<void>[] = [];
   for (const pool of sshPools.values()) {
     if (sourceId) pool.sources.delete(sourceId);
@@ -407,41 +405,30 @@ export async function closeProviderConnections(
 
 async function run(source: Source, args: string[]): Promise<string> {
   const command = sourceCommand(source, args);
-  const mutatesHerdr =
-    source.type === "herdr" &&
-    !(
-      args[0] === "canvas-capabilities" ||
-      (args[0] === "api" && args[1] === "snapshot") ||
-      (args[0] === "tab" && ["geometry", "geometries"].includes(args[1]!))
+  if (source.transport === "ssh") {
+    let pool = await shortCommandPool(source);
+    while (pool.closing) pool = await shortCommandPool(source);
+    command.args.unshift(
+      "-o",
+      "ControlMaster=auto",
+      "-o",
+      "ControlPersist=30",
+      "-o",
+      `ControlPath=${pool.path}`,
     );
-  if (mutatesHerdr) herdrGeometryCaches.delete(JSON.stringify(source));
-  try {
-    if (source.transport === "ssh") {
-      let pool = await shortCommandPool(source);
-      while (pool.closing) pool = await shortCommandPool(source);
-      command.args.unshift(
-        "-o",
-        "ControlMaster=auto",
-        "-o",
-        "ControlPersist=30",
-        "-o",
-        `ControlPath=${pool.path}`,
-      );
-      // Short commands share a connection and four slots. PTYs and persistent
-      // control observers use sourceCommand directly and never consume this pool.
-      const lane = pool.nextLane++ % pool.lanes.length;
-      const task = pool.lanes[lane]!.then(() => execute(command, source.type));
-      pool.lanes[lane] = task.then(
-        () => {},
-        () => {},
-      );
-      return await task;
-    }
-    return await execute(command, source.type);
-  } finally {
-    if (mutatesHerdr) herdrGeometryCaches.delete(JSON.stringify(source));
+    // Short commands share a connection and four slots. PTYs and persistent
+    // control observers use sourceCommand directly and never consume this pool.
+    const lane = pool.nextLane++ % pool.lanes.length;
+    const task = pool.lanes[lane]!.then(() => execute(command, source.type));
+    pool.lanes[lane] = task.then(
+      () => {},
+      () => {},
+    );
+    return await task;
   }
+  return await execute(command, source.type);
 }
+
 async function execute(
   command: { file: string; args: string[] },
   type: Source["type"],
@@ -464,90 +451,6 @@ async function execute(
       },
     );
   });
-}
-
-interface HerdrGeometryCache {
-  sourceId: string;
-  expires: number;
-  values?: Map<string, NativeSize>;
-  pending?: Promise<Map<string, NativeSize>>;
-}
-const herdrGeometryCaches = new Map<string, HerdrGeometryCache>();
-function herdrGeometry(value: any): NativeSize {
-  if (
-    !value ||
-    typeof value.boot_id !== "string" ||
-    !Number.isSafeInteger(value.revision) ||
-    !Number.isInteger(value.cols) ||
-    !Number.isInteger(value.rows) ||
-    value.cols < 1 ||
-    value.rows < 1
-  )
-    throw new Error(
-      "Update the herdr server to support passive Canvas windows",
-    );
-  return {
-    cols: value.cols,
-    rows: value.rows,
-    bootId: value.boot_id,
-    revision: value.revision,
-    token: `${value.boot_id}:${value.revision}:${value.cols}:${value.rows}`,
-    ...(typeof value.operation_id === "string"
-      ? { operationId: value.operation_id }
-      : {}),
-  };
-}
-
-/** One shared snapshot per source, regardless of its number of visible windows. */
-export async function readHerdrSize(
-  source: Source,
-  windowId: string,
-  fresh = false,
-): Promise<NativeSize> {
-  const key = JSON.stringify(source);
-  let cache = herdrGeometryCaches.get(key);
-  if (!cache) {
-    cache = { sourceId: source.id, expires: 0 };
-    herdrGeometryCaches.set(key, cache);
-  }
-  if (fresh) {
-    if (cache.pending) await cache.pending;
-    cache.expires = 0;
-  }
-  if (cache.values && cache.expires > Date.now()) {
-    const value = cache.values.get(windowId);
-    if (value) return value;
-    // A newly-created tab may appear before the next shared sampling interval.
-    cache.expires = 0;
-  }
-  const currentCache = cache;
-  if (!currentCache.pending)
-    currentCache.pending = (async () => {
-      const response = JSON.parse(await run(source, ["tab", "geometries"]));
-      if (response.error)
-        throw new Error(
-          `herdr: ${response.error.message || "Native geometry request failed"}`,
-        );
-      const list = response.result?.geometries;
-      if (!Array.isArray(list))
-        throw new Error(
-          "Update the herdr server to support geometry snapshots",
-        );
-      const values = new Map<string, NativeSize>();
-      for (const item of list) {
-        if (typeof item.tab_id !== "string")
-          throw new Error("Unexpected herdr tab geometry");
-        values.set(item.tab_id, herdrGeometry(item.geometry));
-      }
-      currentCache.values = values;
-      currentCache.expires = Date.now() + 500;
-      return values;
-    })().finally(() => {
-      currentCache.pending = undefined;
-    });
-  const value = (await currentCache.pending).get(windowId);
-  if (!value) throw new Error("The herdr tab no longer exists");
-  return value;
 }
 
 function name(value: string): string {
@@ -927,8 +830,7 @@ export async function openTerminal(
       const capabilities = JSON.parse(
         await run(source, ["canvas-capabilities"]),
       );
-      supported =
-        capabilities.bare_tab === true && capabilities.follow_size === true;
+      supported = capabilities.bare_tab === true;
     } catch (error) {
       // Older upstream clients do not expose the bare-tab command. Preserve
       // network/execution failures instead of misreporting them as a version
@@ -947,141 +849,31 @@ export async function openTerminal(
     if (!supported) {
       throw new Error(
         source.transport === "ssh"
-          ? "This remote herdr client does not support bare tabs with passive geometry. Update the Canvas herdr client at ~/.local/share/canvas/bin/herdr on that machine, or set the connection executable to its full path."
-          : "Select the current Canvas herdr fork executable; this client does not support bare tabs with passive geometry.",
+          ? "This remote herdr client does not support bare tabs. Update the Canvas herdr client at ~/.local/share/canvas/bin/herdr on that machine, or set the connection executable to its full path."
+          : "Select the current Canvas herdr fork executable; this client does not support bare tabs.",
       );
-    }
-    function geometry(response: string): NativeSize {
-      const parsed = JSON.parse(response);
-      if (parsed.error)
-        throw new Error(
-          `herdr: ${parsed.error.message || "Native geometry request failed"}`,
-        );
-      const value = parsed.result?.geometry ?? parsed.geometry;
-      return herdrGeometry(value);
-    }
-    let pendingWrite: PendingGeometryWrite | undefined;
-    const readSize = async (fresh = false) => {
-      const current = await readHerdrSize(source, windowId, fresh);
-      if (pendingWrite?.ambiguous && current.operationId === pendingWrite.id) {
-        if (owned) owned.token = current.token;
-        return { ...current, recoveredFromToken: pendingWrite.before.token };
-      }
-      return current;
-    };
-    const initialSize = await readSize();
-    let owned: { before: NativeSize; token: string } | undefined;
-    async function restoreSize(
-      before: NativeSize,
-      expectedToken: string,
-    ): Promise<NativeSize> {
-      const current = await readSize(true);
-      if (current.token !== expectedToken) {
-        owned = undefined;
-        pendingWrite = undefined;
-        return current;
-      }
-      const restored = geometry(
-        await run(source, [
-          "tab",
-          "resize",
-          windowId,
-          "--cols",
-          String(before.cols),
-          "--rows",
-          String(before.rows),
-          "--expected-revision",
-          String(current.revision),
-          "--expected-boot-id",
-          current.bootId!,
-        ]),
-      );
-      owned = undefined;
-      pendingWrite = undefined;
-      return restored;
     }
     let closed = false;
     const handle = { sourceId: source.id, spaceId, windowId, cleanup };
     async function cleanup() {
       if (closed) return;
       closed = true;
-      if (pendingWrite?.ambiguous) await readSize(true).catch(() => {});
-      if (owned) await restoreSize(owned.before, owned.token).catch(() => {});
       active.delete(handle);
       if (![...active].some((item) => item.sourceId === source.id))
         await closeProviderConnections(source.id);
     }
     active.add(handle);
     return {
-      ...sourceCommand(
-        source,
-        ["tab", "attach", windowId, "--bare", "--follow-size"],
-        true,
-      ),
+      ...sourceCommand(source, ["tab", "attach", windowId, "--bare"], true),
       env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
-      initialSize,
-      readSize,
-      restoreSize,
-      async resize(newCols, newRows, expectedToken) {
-        dimensions(newCols, newRows);
-        if (closed) throw new Error("Terminal is closed");
-        const before = await readSize(true);
-        if (expectedToken !== undefined && before.token !== expectedToken)
-          throw new NativeGeometryConflictError();
-        if (!owned || owned.token !== before.token)
-          owned = { before, token: before.token };
-        const operation: PendingGeometryWrite = {
-          id: randomUUID(),
-          before,
-          ambiguous: false,
-        };
-        pendingWrite = operation;
-        let current: NativeSize;
-        try {
-          const response = await run(source, [
-            "tab",
-            "resize",
-            windowId,
-            "--cols",
-            String(newCols),
-            "--rows",
-            String(newRows),
-            "--expected-revision",
-            String(before.revision),
-            "--expected-boot-id",
-            before.bootId!,
-            "--operation-id",
-            operation.id,
-          ]);
-          const parsed = JSON.parse(response);
-          if ((parsed.result ?? parsed).applied === false)
-            throw new NativeGeometryConflictError();
-          current = geometry(response);
-          if (current.operationId !== operation.id)
-            throw new NativeGeometryConflictError();
-        } catch (error) {
-          if (error instanceof NativeGeometryConflictError) {
-            pendingWrite = undefined;
-            owned = undefined;
-            throw error;
-          }
-          operation.ambiguous = true;
-          current = await recoverGeometryWrite(
-            () => readSize(true),
-            operation,
-            error,
-          );
-        }
-        if (owned) owned.token = current.token;
-        return current;
-      },
-      async commitSize() {
-        owned = undefined;
-        pendingWrite = undefined;
-      },
+      geometryMode: "client",
+      // This describes our PTY, not an authoritative native tab size. The
+      // unmodified herdr server retains its ordinary client geometry rules.
+      initialSize: { cols, rows, token: "0" },
       cleanup,
     };
   }
+
   const window = nativeId(windowId, "@");
   const generation = windowId.split(":")[0]!;
   const helper = `${HELPER_PREFIX}${INSTANCE}_${randomUUID().replaceAll("-", "").slice(0, 10)}`;

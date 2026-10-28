@@ -3,7 +3,12 @@ import headless from "@xterm/headless";
 import serialize from "@xterm/addon-serialize";
 import type { WebSocket } from "ws";
 import type { Source } from "./state.ts";
-import { openTerminal, type NativeSize } from "./providers.ts";
+import {
+  openTerminal,
+  NativeGeometryConflictError,
+  type NativeSize,
+  type TerminalCommand,
+} from "./providers.ts";
 import { GeometryController } from "./geometry.ts";
 const { Terminal } = headless;
 const { SerializeAddon } = serialize;
@@ -84,7 +89,7 @@ class LiveTerminal {
       env: { ...safeEnv(), ...handle.env },
     });
     this.geometry = new GeometryController(
-      handle,
+      handle.geometryMode === "client" ? this.clientViewport(handle) : handle,
       handle.initialSize ?? { cols, rows, token: "initial" },
       (size) => this.adoptGeometry(size),
       (_lease, reason) => {
@@ -147,6 +152,34 @@ class LiveTerminal {
         });
     });
     this.proc.onExit(() => void this.close());
+  }
+  private clientViewport(handle: TerminalCommand): TerminalCommand {
+    // The upstream herdr server owns native arbitration. These tokens describe
+    // only our attached client's viewport, never native geometry or ownership.
+    let revision = 0;
+    const read = (): NativeSize => ({
+      cols: this.cols,
+      rows: this.rows,
+      token: String(revision),
+    });
+    const resize = async (cols: number, rows: number, expected?: string) => {
+      if (expected !== undefined && expected !== read().token)
+        throw new NativeGeometryConflictError();
+      if (cols !== this.cols || rows !== this.rows) {
+        this.adoptGeometry({ cols, rows, token: String(revision + 1) });
+        revision++;
+      }
+      return read();
+    };
+    return {
+      ...handle,
+      readSize: async () => read(),
+      resize,
+      restoreSize: async (before, expected) =>
+        expected === read().token
+          ? resize(before.cols, before.rows, expected)
+          : read(),
+    };
   }
   async join(ws: WebSocket) {
     clearTimeout(this.idle);
@@ -224,8 +257,8 @@ class LiveTerminal {
     if (this.cols === size.cols && this.rows === size.rows) return;
     this.cols = size.cols;
     this.rows = size.rows;
-    // Follow confirmed geometry. During tmux restore the provider also calls
-    // this under its temporary manual policy before restoring automatic sizing.
+    // For native geometry providers this follows a confirmed size. For herdr
+    // this resizes only its client PTY; the upstream server arbitrates panes.
     this.proc.resize(size.cols, size.rows);
     this.emulator.resize(size.cols, size.rows);
     for (const ws of this.clients)

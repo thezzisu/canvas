@@ -45,12 +45,10 @@ Add a source from the connections panel:
   authentication and verified host keys are required. Optional identity and
   known-hosts file paths are resolved on the Canvas server.
 
-Herdr needs the current Canvas fork on both client and server for
-`tab attach <id> --bare --follow-size` and native geometry queries. Ordinary
-v0.9.3 generation-1 clients remain compatible with the fork's server. Point the
-source's executable field at the fork; an existing server can transfer its live
-panes with `server live-handoff --import-exe /absolute/path/to/new/herdr`.
-See `thezzisu/herdr`, branch `canvas-bare`.
+Herdr uses the unmodified upstream server and a small client-only fork for
+`tab attach <id> --bare`. Point the source's executable field at the fork client;
+keep your normal upstream server executable. No extra server APIs or protocol
+capabilities are required. See `thezzisu/herdr`, branch `canvas-bare`.
 
 ## Window behavior
 
@@ -59,17 +57,22 @@ See `thezzisu/herdr`, branch `canvas-bare`.
 - Add a window to another canvas to create a reference, not another terminal.
 - A card has one title: the native window name. Its status dot opens pane
   details; source context is available in the title tooltip.
-- Cards follow the native terminal's aspect ratio. Width determines the display
+- Cards follow the attached client's aspect ratio. Width determines the display
   scale and height follows, keeping every pane visible without distortion.
-- Overview follows native dimensions and has no card resize handles. Switching
-  canvases and zooming preserve the native terminal's size.
+- Overview has no card resize handles. Switching canvases and zooming preserve
+  the attached client's viewport without reconnecting it. tmux views follow
+  native dimensions; herdr uses its ordinary native attach rules.
 - Drag a custom canvas card's header to move it; explicitly resizing the card
   changes its native window's dimensions.
-- Focus fills the viewport by resizing the real terminal at normal font size.
-  Leaving focus restores its previous size unless an external client or explicit
-  resize has taken control. External native dimensions always flow back to every
-  view. Each window has one focus owner; focusing it in another browser closes
-  the previous browser's focus view.
+- Focus fills the viewport by resizing the attached PTY at normal font size.
+  Each window has one focus owner; focusing it in another browser closes the
+  previous browser's focus view. Leaving focus restores that client's viewport.
+- tmux follows external native dimensions and restores the original window size
+  only while Canvas still owns its geometry. Herdr's unmodified server decides
+  which native client controls pane sizes. Canvas does not override that decision
+  or claim atomic native restoration: external resize may leave Canvas's client
+  viewport unchanged until native interaction transfers control. Initial attach
+  can resize native tabs according to herdr's existing rules.
 - Explicitly focusing a terminal claims input. Merely opening another viewer
   preserves input ownership; all references share the same native screen.
 - Removing a card only removes that reference. Closing a native window ends its
@@ -125,8 +128,10 @@ terminal capability negotiation.
 
 Run `npm run server` and `npm run dev` in separate terminals. Vite proxies the
 API and WebSocket to port 3010. Run `npm run typecheck`, `npm test`, and
-`npm run build` before shipping. Native tests use isolated synthetic sockets. Set `CANVAS_TEST_HERDR_BINARY` to
-the fork executable to include its real PTY integration test.
+`npm run build` before shipping. Native tests use isolated synthetic sockets.
+Set `CANVAS_TEST_HERDR_BINARY` to the bare client and
+`CANVAS_TEST_HERDR_SERVER_BINARY` to a separate, unmodified upstream server
+executable for herdr compatibility tests.
 
 Canvas's free-layout interaction was informed by SecFlow's canvas. The application
 is independent of SecFlow's workspace, authentication and task systems.

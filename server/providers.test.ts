@@ -21,7 +21,6 @@ import {
   closeWindow,
   listResources,
   openTerminal,
-  readHerdrSize,
   closeProviderConnections,
   NativeGeometryConflictError,
   parseSshTarget,
@@ -217,72 +216,65 @@ test("herdr capability checks distinguish old clients from connection failures",
   }
 });
 
-test("herdr geometry sampling batches windows, expires external changes and invalidates writes", async () => {
-  const root = mkdtempSync(join(tmpdir(), "canvas-herdr-batch-"));
+test("herdr uses only client bare-tab capability and ordinary attach commands", async () => {
+  const root = mkdtempSync(join(tmpdir(), "canvas-herdr-client-"));
   const binary = join(root, "herdr");
-  const count = join(root, "reads");
-  const state = join(root, "geometry.json");
-  writeFileSync(count, "");
-  writeFileSync(state, JSON.stringify({ cols: 100, revision: 1 }));
+  const requests = join(root, "requests");
+  const snapshot = {
+    workspaces: [{ workspace_id: "space", label: "Space" }],
+    tabs: [{ workspace_id: "space", tab_id: "tab", label: "Window" }],
+  };
   writeFileSync(
     binary,
-    `#!/usr/bin/env node
+    `#!${process.execPath}
 const fs = require('node:fs');
 const args = process.argv.slice(4);
-const statePath = ${JSON.stringify(state)}, countPath = ${JSON.stringify(count)};
-if (args[0] === 'tab' && args[1] === 'geometries') {
-  fs.appendFileSync(countPath, 'read\\n');
-  setTimeout(() => {
-    const value = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-    console.log(JSON.stringify({ result: { geometries: Array.from({length: 14}, (_, i) => ({
-      tab_id: 'tab-' + i, geometry: { boot_id: 'fixture', rows: 30, ...value }
-    })) } }));
-  }, 40);
-} else if (args[0] === 'workspace' && args[1] === 'create') {
-  fs.writeFileSync(statePath, JSON.stringify({ cols: 130, revision: 2 }));
-  console.log('{}');
-} else process.exit(2);
+fs.appendFileSync(${JSON.stringify(requests)}, JSON.stringify(args) + '\\n');
+if (args[0] === 'canvas-capabilities') console.log('{"bare_tab":true}');
+else if (args[0] === 'api' && args[1] === 'snapshot') console.log(${JSON.stringify(JSON.stringify(snapshot))});
+else { console.error('Forbidden server extension: ' + args.join(' ')); process.exit(1); }
 `,
     { mode: 0o700 },
   );
   const source: Source = {
-    id: "batch-test",
-    name: "Batch",
+    id: "client-test",
+    name: "Client",
     type: "herdr",
     transport: "local",
     binary,
   };
-  const reads = () =>
-    String(readFileSync(count, "utf8").split("\n").filter(Boolean).length);
-  const batch = () =>
-    Promise.all(
-      Array.from({ length: 14 }, (_, i) => readHerdrSize(source, `tab-${i}`)),
-    );
+  let command: Awaited<ReturnType<typeof openTerminal>> | undefined;
   try {
-    assert.ok((await batch()).every((value) => value.cols === 100));
-    assert.equal(
-      reads(),
-      "1",
-      "14 windows did not share the same in-flight request",
+    command = await openTerminal(source, "space", "tab", 110, 35);
+    assert.equal(command.geometryMode, "client");
+    assert.deepEqual(command.initialSize, {
+      cols: 110,
+      rows: 35,
+      token: "0",
+    });
+    assert.deepEqual(command.args, [
+      "--session",
+      "default",
+      "tab",
+      "attach",
+      "tab",
+      "--bare",
+    ]);
+    assert.equal(command.readSize, undefined);
+    assert.equal(command.resize, undefined);
+    assert.equal(command.restoreSize, undefined);
+    assert.equal(command.watchSize, undefined);
+    await command.cleanup();
+    await command.cleanup();
+    assert.deepEqual(
+      readFileSync(requests, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+      [["api", "snapshot"], ["canvas-capabilities"]],
     );
-    await batch();
-    assert.equal(reads(), "1", "fresh snapshot was not reused");
-    await createSpace(source, "New");
-    assert.ok((await batch()).every((value) => value.cols === 130));
-    assert.equal(reads(), "2", "write did not invalidate the shared snapshot");
-    writeFileSync(state, JSON.stringify({ cols: 140, revision: 3 }));
-    await new Promise((resolve) => setTimeout(resolve, 510));
-    assert.ok((await batch()).every((value) => value.cols === 140));
-    assert.equal(
-      reads(),
-      "3",
-      "external changes did not refresh the next sampling interval",
-    );
-    await closeProviderConnections(source.id);
-    await batch();
-    assert.equal(reads(), "4", "source cleanup retained its geometry cache");
   } finally {
-    await closeProviderConnections(source.id);
+    await command?.cleanup();
     rmSync(root, { recursive: true, force: true });
   }
 });
