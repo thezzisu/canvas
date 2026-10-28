@@ -52,6 +52,7 @@ export interface CanvasNode {
   height: number
 }
 export interface Canvas { id: string; name: string; nodes: CanvasNode[]; background?: { url: string; opacity: number } | null }
+export interface SharedState { instanceId: string; revision: number; sources: Source[]; canvases: Canvas[]; overviewBackground: Canvas['background'] }
 export interface TerminalData {
   sourceId: string
   spaceId: string
@@ -68,5 +69,6 @@ export interface TerminalData {
   focus: boolean
   onAction: (action: string, id: string) => void
   onResize: (id: string, width: number, height: number, x?: number, y?: number) => void
+  onLayoutStart: () => void
   onGeometry: (sourceId: string, windowId: string, ratio: number, insetX: number, insetY: number) => void
 }

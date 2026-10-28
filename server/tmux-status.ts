@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import type { StatusDetails, ProgramStatus } from "./status.ts";
 
 // OSC 7501 revision 0.4. Passive reports only: capability queries are not answered.
@@ -236,6 +237,14 @@ interface WindowObserver {
   line: Buffer;
   droppingLine: boolean;
   stopping: boolean;
+  nativeWindow: string;
+  geometry?: { cols: number; rows: number };
+  geometryRevision: number;
+  onGeometry?: () => void;
+  barriers: Map<
+    string,
+    { resolve(): void; timer: ReturnType<typeof setTimeout> }
+  >;
 }
 interface Command {
   file: string;
@@ -253,6 +262,7 @@ export function observeTmuxWindow(
   windowId: string,
   command: Command,
   env: NodeJS.ProcessEnv,
+  geometry?: { initial: { cols: number; rows: number }; changed(): void },
 ): () => void {
   let windows = sources.get(sourceId);
   if (!windows) sources.set(sourceId, (windows = new Map()));
@@ -265,6 +275,11 @@ export function observeTmuxWindow(
     line: Buffer.alloc(0),
     droppingLine: false,
     stopping: false,
+    nativeWindow: windowId.slice(windowId.indexOf(":") + 1),
+    geometry: geometry?.initial,
+    geometryRevision: 0,
+    onGeometry: geometry?.changed,
+    barriers: new Map(),
   };
   windows.set(windowId, observer);
   child.stdout.on("data", (chunk: Buffer) => receiveControl(observer, chunk));
@@ -278,6 +293,9 @@ export function observeTmuxWindow(
       sources.delete(sourceId);
   };
   child.on("error", cleanup);
+  // A native observer may exit while a geometry barrier is being written.
+  // Stream errors are separate from ChildProcess errors and must be drained.
+  child.stdin.on("error", cleanup);
   child.on("exit", cleanup);
   return cleanup;
 }
@@ -299,6 +317,27 @@ function receiveControl(observer: WindowObserver, chunk: Buffer): void {
     if (end < 0) break;
     if (end - start <= MAX_CONTROL_LINE) {
       const line = bytes.subarray(start, end).toString("latin1");
+      const barrier = observer.barriers.get(line);
+      if (barrier) {
+        clearTimeout(barrier.timer);
+        observer.barriers.delete(line);
+        barrier.resolve();
+      }
+      const layout = /^%layout-change (@\d+) [0-9a-f]+,(\d+)x(\d+),/u.exec(
+        line,
+      );
+      if (layout?.[1] === observer.nativeWindow) {
+        const cols = Number(layout[2]),
+          rows = Number(layout[3]);
+        if (
+          observer.geometry?.cols !== cols ||
+          observer.geometry?.rows !== rows
+        ) {
+          observer.geometry = { cols, rows };
+          observer.geometryRevision++;
+          observer.onGeometry?.();
+        }
+      }
       // Without pause-after, tmux emits %output. Preserve bytes across packets.
       const output = /^%output (%\d+) (.*)$/u.exec(line);
       if (output) {
@@ -324,10 +363,46 @@ function receiveControl(observer: WindowObserver, chunk: Buffer): void {
 function stopObserver(observer: WindowObserver): void {
   if (observer.stopping) return;
   observer.stopping = true;
+  for (const barrier of observer.barriers.values()) {
+    clearTimeout(barrier.timer);
+    barrier.resolve();
+  }
+  observer.barriers.clear();
   // EOF detaches the native control client without sending terminal input.
-  observer.process.stdin.end();
+  if (
+    !observer.process.stdin.destroyed &&
+    !observer.process.stdin.writableEnded
+  )
+    observer.process.stdin.end();
   const timer = setTimeout(() => observer.process.kill(), 1500);
   timer.unref();
+}
+
+/** Drain events already queued by native commands before issuing a geometry token. */
+export async function tmuxGeometryRevision(
+  sourceId: string,
+  windowId: string,
+): Promise<number> {
+  const observer = sources.get(sourceId)?.get(windowId);
+  if (!observer || observer.stopping) return 0;
+  if (observer.process.stdin.destroyed || observer.process.stdin.writableEnded)
+    return observer.geometryRevision;
+  await new Promise<void>((resolve) => {
+    const marker = `__canvas_geometry_${randomUUID().replaceAll("-", "")}__`;
+    const timer = setTimeout(() => {
+      observer.barriers.delete(marker);
+      resolve();
+    }, 1500);
+    timer.unref();
+    observer.barriers.set(marker, { resolve, timer });
+    observer.process.stdin.write(`display-message -p ${marker}\n`, (error) => {
+      if (!error) return;
+      clearTimeout(timer);
+      observer.barriers.delete(marker);
+      resolve();
+    });
+  });
+  return observer.geometryRevision;
 }
 
 export function tmuxProgramStatus(

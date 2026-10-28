@@ -85,11 +85,21 @@ test("shared native terminals serialize screen to late viewers and keep last res
       "late viewer received no serialized screen",
     );
     assert.ok(
+      second.received.some(
+        (data) =>
+          typeof data === "string" && JSON.parse(data).readOnly === true,
+      ),
+      "opening a viewer must not steal input ownership",
+    );
+    second.command({ type: "focus" });
+    assert.ok(
       first.received.some(
         (data) =>
           typeof data === "string" && JSON.parse(data).readOnly === true,
       ),
     );
+    first.readyState = 2;
+    first.command({ type: "focus" });
     first.command({ type: "input", data: "printf 'BLOCKED_%s\\n' INPUT\r" });
     second.command({ type: "input", data: "printf 'ALLOWED_%s\\n' INPUT\r" });
     await waitFor(
@@ -116,6 +126,10 @@ test("shared native terminals serialize screen to late viewers and keep last res
     second.command({ type: "input", data: "seq 1 40000\r" });
     await new Promise((resolve) => setTimeout(resolve, 60));
     await manager.closeAll();
+    await assert.rejects(
+      manager.connect(source, target, new Client().socket),
+      /service is closing/,
+    );
     assert.equal(manager.entries.size, 0);
     assert.equal(tmux("list-sessions", "-F", "#{session_name}"), "shared");
   } finally {

@@ -9,7 +9,7 @@ import BackgroundDialog from './components/BackgroundDialog.vue'
 import { api, segment, uuid, write } from './api'
 import { clearTerminals } from './terminals'
 import { statusColor, statusLabel } from './status'
-import type { Canvas, CanvasNode, Source, SourceResource, TerminalData } from './types'
+import type { Canvas, CanvasNode, SharedState, Source, SourceResource, TerminalData } from './types'
 
 const { fitView, zoomIn, zoomOut, setViewport, getViewport, getNodesInitialized } = useVueFlow()
 const ready = ref(false)
@@ -23,6 +23,7 @@ const success = ref('')
 const sources = ref<Source[]>([])
 const resources = ref<SourceResource[]>([])
 const canvases = ref<Canvas[]>([])
+const overviewBackground = ref<Canvas['background']>(null)
 const activeId = ref('overview')
 const nodes = shallowRef<Node[]>([])
 const graphKey = ref(0)
@@ -52,6 +53,11 @@ let geometryFrame = 0
 const saveState = ref('')
 let refreshTimer: ReturnType<typeof setInterval>
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
+type LayoutPatch = Partial<Pick<CanvasNode, 'x' | 'y' | 'width' | 'height'>>
+const pendingLayouts = new Map<string, Map<string, LayoutPatch>>()
+let layoutGesture = ''
+let latestState: SharedState | undefined
+let stateEvents: EventSource | undefined
 let noticeTimer: ReturnType<typeof setTimeout>
 let resourceSignature = ''
 let resourceLayoutSignature = ''
@@ -66,14 +72,8 @@ const windowCount = computed(() => allWindows.value.length)
 const onlineCount = computed(() => resources.value.filter(source => !source.error && !['offline', 'error', 'disconnected'].includes(source.status)).length)
 const filteredWindows = computed(() => allWindows.value.filter(item => `${item.source.name} ${item.space.name} ${item.window.name}`.toLowerCase().includes(addSearch.value.toLowerCase())))
 const modalOpen = computed(() => sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || windowMenu.value || backgroundCanvas.value)
-const currentBackground = computed(() => isOverview.value ? null : currentCanvas.value?.background)
+const currentBackground = computed(() => isOverview.value ? overviewBackground.value : currentCanvas.value?.background)
 const canvasCounts = computed(() => isOverview.value ? `${sources.value.length} 个连接 · ${windowCount.value} 个窗口` : `${currentCanvas.value?.nodes.length || 0} 个窗口`)
-const focusedDimensions = computed(() => {
-  const geometry = focused.value && windowGeometry.get(`${focused.value.sourceId}/${focused.value.windowId}`)
-  if (!geometry) return focusedSize
-  const width = Math.min(focusedSize.width, (focusedSize.height - geometry.insetY) / geometry.ratio + geometry.insetX)
-  return { width, height: (width - geometry.insetX) * geometry.ratio + geometry.insetY }
-})
 
 function windowHeight(node: Pick<CanvasNode, 'sourceId' | 'windowId' | 'width' | 'height'>) {
   const geometry = windowGeometry.get(`${node.sourceId}/${node.windowId}`)
@@ -89,6 +89,7 @@ function recordGeometry(sourceId: string, windowId: string, ratio: number, inset
   // or changes the shared PTY's rows and columns.
   cancelAnimationFrame(geometryFrame)
   geometryFrame = requestAnimationFrame(() => {
+    if (layoutGesture) return
     if (isOverview.value) rebuildNodes()
     else nodes.value = nodes.value.map(node => {
       if (node.type !== 'terminal') return node
@@ -111,7 +112,7 @@ function resourceFor(node: CanvasNode) {
 function terminalData(node: CanvasNode, overview = false): TerminalData {
   const found = resourceFor(node)
   const sourceConfig = sources.value.find(source => source.id === node.sourceId)
-  return { ...node, name: found.window?.name || '已关闭的窗口', subtitle: `${found.source?.name || sourceConfig?.name || '未知连接'} / ${found.space?.name || 'space'}`, type: found.source?.type || sourceConfig?.type || 'tmux', available: !!found.window && !found.source?.error, status: found.window?.status || 'unknown', panes: found.window?.panes || [], overview, focus: false, onAction: terminalAction, onResize: resizeNode, onGeometry: recordGeometry }
+  return { ...node, name: found.window?.name || '已关闭的窗口', subtitle: `${found.source?.name || sourceConfig?.name || '未知连接'} / ${found.space?.name || 'space'}`, type: found.source?.type || sourceConfig?.type || 'tmux', available: !!found.window && !found.source?.error, status: found.window?.status || 'unknown', panes: found.window?.panes || [], overview, focus: false, onAction: terminalAction, onResize: resizeNode, onLayoutStart: layoutStarted, onGeometry: recordGeometry }
 }
 function terminalFlowNode(node: CanvasNode, overview = false): Node {
   node = { ...node, height: windowHeight(node) }
@@ -143,7 +144,51 @@ function overviewNodes(): Node[] {
   }
   return result
 }
-function rebuildNodes() { nodes.value = isOverview.value ? overviewNodes() : (currentCanvas.value?.nodes || []).map(node => terminalFlowNode(node)) }
+function rebuildNodes() {
+  const previous = new Map(nodes.value.map(node => [node.id, node as Node & { selected?: boolean }]))
+  nodes.value = (isOverview.value ? overviewNodes() : (currentCanvas.value?.nodes || []).map(node => terminalFlowNode(node))).map(node => ({ ...node, selected: previous.get(node.id)?.selected }))
+}
+function applySharedState(state: SharedState) {
+  if (latestState?.instanceId === state.instanceId && state.revision < latestState.revision) return
+  latestState = state
+  const sourceChanged = JSON.stringify(sources.value) !== JSON.stringify(state.sources)
+  const previousNodes = JSON.stringify(currentCanvas.value?.nodes)
+  sources.value = state.sources
+  overviewBackground.value = state.overviewBackground
+  canvases.value = state.canvases.map(canvas => ({ ...canvas, nodes: (canvas.nodes || []).map(node => ({ ...node, ...pendingLayouts.get(canvas.id)?.get(node.id) })) }))
+  for (const [id, timer] of saveTimers) if (!canvases.value.some(canvas => canvas.id === id)) { clearTimeout(timer); saveTimers.delete(id); pendingLayouts.delete(id) }
+  for (const id of pendingLayouts.keys()) if (!canvases.value.some(canvas => canvas.id === id)) pendingLayouts.delete(id)
+  if (!isOverview.value && !currentCanvas.value) switchCanvas('overview')
+  else {
+    if (!isOverview.value && focused.value && !currentCanvas.value?.nodes.some(node => node.id === focused.value?.id)) void closeFocus()
+    if (!layoutGesture && previousNodes !== JSON.stringify(currentCanvas.value?.nodes)) rebuildNodes()
+  }
+  if (backgroundCanvas.value && backgroundCanvas.value.id !== 'overview' && !canvases.value.some(canvas => canvas.id === backgroundCanvas.value?.id)) backgroundCanvas.value = null
+  if (sourceChanged) {
+    resources.value = resources.value.filter(resource => sources.value.some(source => source.id === resource.id))
+    if (focused.value && !sources.value.some(source => source.id === focused.value?.sourceId)) focused.value = null
+    resourceSignature = ''; resourceLayoutSignature = ''
+    if (isOverview.value && !layoutGesture) rebuildNodes()
+    void refreshResources(true)
+  }
+}
+async function syncState() {
+  const previous = latestState
+  const state = await api<SharedState>('/api/state')
+  if (latestState !== previous && latestState?.instanceId !== state.instanceId) return
+  applySharedState(state)
+}
+function stopStateEvents() { stateEvents?.close(); stateEvents = undefined }
+function startStateEvents() {
+  stopStateEvents()
+  const events = new EventSource('/api/events')
+  stateEvents = events
+  events.addEventListener('state', event => {
+    if (events !== stateEvents) return
+    try { applySharedState(JSON.parse((event as MessageEvent).data)) } catch { /* A reconnect sends a complete snapshot. */ }
+  })
+  events.addEventListener('unauthorized', unauthorized)
+}
 async function restoreViewport() {
   const id = activeId.value
   const request = ++viewportRequest
@@ -179,7 +224,7 @@ async function refreshResources(silent = false): Promise<void> {
         }))
         resources.value = body.sources
         resourceSignature = signature
-        if (layoutSignature !== resourceLayoutSignature) rebuildNodes()
+        if (layoutSignature !== resourceLayoutSignature) { if (!layoutGesture) rebuildNodes() }
         else {
           // Status updates must preserve the current drag, selection and card geometry.
           const updated = new Map((isOverview.value ? overviewNodes() : (currentCanvas.value?.nodes || []).map(node => terminalFlowNode(node))).map(node => [node.id, node.data]))
@@ -194,12 +239,11 @@ async function refreshResources(silent = false): Promise<void> {
   return resourceRequest
 }
 async function load() {
-  const state = await api<{ sources: Source[]; canvases: Canvas[] }>('/api/state')
-  sources.value = state.sources
-  canvases.value = state.canvases.map(canvas => ({ ...canvas, nodes: canvas.nodes || [] }))
+  await syncState()
   await refreshResources()
   rebuildNodes()
   await restoreViewport()
+  startStateEvents()
 }
 async function login() {
   busy.value = true; loginError.value = ''
@@ -207,14 +251,12 @@ async function login() {
   catch (reason) { loginError.value = reason instanceof Error ? reason.message : '登录失败' }
   finally { busy.value = false }
 }
-async function logout() { await write('/api/logout', 'POST'); authenticated.value = false; clearTerminals() }
-function unauthorized() { authenticated.value = false; clearTerminals() }
-watch(activeId, async () => { focused.value = null; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
+async function logout() { await write('/api/logout', 'POST'); unauthorized() }
+function unauthorized() { stopStateEvents(); for (const timer of saveTimers.values()) clearTimeout(timer); saveTimers.clear(); pendingLayouts.clear(); authenticated.value = false; focused.value = null; latestState = undefined; clearTerminals() }
+watch(activeId, async () => { layoutGesture = ''; focused.value = null; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
 function switchCanvas(id: string) { saveViewport(); activeId.value = id }
-function backgroundSaved(updated: Canvas) {
-  const canvas = canvases.value.find(item => item.id === updated.id)
-  if (canvas) canvas.background = updated.background
-}
+function backgroundSaved(_updated: Canvas) { void syncState().catch(showError) }
+function openBackground() { canvasMenu.value = false; backgroundCanvas.value = isOverview.value ? { id: 'overview', name: '总览', nodes: [], background: overviewBackground.value } : currentCanvas.value || null }
 function closeBackgroundDialog() {
   backgroundCanvas.value = null
   void nextTick(() => canvasMenuElement.value?.querySelector<HTMLButtonElement>('.canvas-menu-trigger')?.focus())
@@ -231,11 +273,10 @@ async function submitCanvas() {
   try {
     if (canvasDraft.id) {
       await write(`/api/canvases/${segment(canvasDraft.id)}`, 'PATCH', { name: canvasDraft.name.trim() })
-      const canvas = canvases.value.find(item => item.id === canvasDraft.id)
-      if (canvas) canvas.name = canvasDraft.name.trim()
+      await syncState()
     } else {
       const canvas = await write<Canvas>('/api/canvases', 'POST', { name: canvasDraft.name.trim(), nodes: [] })
-      canvases.value.push({ ...canvas, nodes: canvas.nodes || [] }); switchCanvas(canvas.id)
+      await syncState(); switchCanvas(canvas.id)
     }
     canvasDialog.value = false
   } catch (reason) { dialogError.value = reason instanceof Error ? reason.message : String(reason) }
@@ -244,7 +285,7 @@ async function submitCanvas() {
 function deleteCanvas() {
   const canvas = currentCanvas.value
   if (!canvas) return
-  actionDialog.value = { title: `删除「${canvas.name}」`, description: '删除画布，保留终端窗口。', value: '', danger: true, button: '删除画布', submit: async () => { clearTimeout(saveTimers.get(canvas.id)); saveTimers.delete(canvas.id); await write(`/api/canvases/${segment(canvas.id)}`, 'DELETE'); canvases.value = canvases.value.filter(item => item.id !== canvas.id); switchCanvas('overview') } }
+  actionDialog.value = { title: `删除「${canvas.name}」`, description: '删除画布，保留终端窗口。', value: '', danger: true, button: '删除画布', submit: async () => { clearTimeout(saveTimers.get(canvas.id)); saveTimers.delete(canvas.id); pendingLayouts.delete(canvas.id); await write(`/api/canvases/${segment(canvas.id)}`, 'DELETE'); await syncState(); switchCanvas('overview') } }
 }
 function openSource(source?: Source) {
   Object.assign(sourceDraft, { id: '', name: '', type: 'tmux', transport: 'local', target: '', binary: '', tmuxSocket: '', herdrSession: '', sshIdentityFile: '', sshKnownHostsFile: '' }, source || {})
@@ -256,15 +297,15 @@ async function submitSource() {
     const body = { ...sourceDraft, name: sourceDraft.name.trim(), target: sourceDraft.target?.trim() }
     if (body.transport === 'ssh' && !body.target) throw new Error('请输入 SSH 地址')
     if (body.id) {
-      const source = await write<Source>(`/api/sources/${segment(body.id)}`, 'PATCH', body)
-      sources.value = sources.value.map(item => item.id === body.id ? source : item)
-    } else { const { id, ...newSource } = body; sources.value.push(await write<Source>('/api/sources', 'POST', newSource)) }
+      await write<Source>(`/api/sources/${segment(body.id)}`, 'PATCH', body)
+    } else { const { id, ...newSource } = body; await write<Source>('/api/sources', 'POST', newSource) }
+    await syncState()
     sourceDialog.value = false; resourceSignature = ''; await refreshResources(); await restoreViewport(); notify('连接已保存')
   } catch (reason) { dialogError.value = reason instanceof Error ? reason.message : String(reason) }
   finally { busy.value = false }
 }
 function deleteSource(source: Source) {
-  actionDialog.value = { title: `移除「${source.name}」`, description: '移除连接，保留运行中的会话。', value: '', danger: true, button: '移除连接', submit: async () => { await write(`/api/sources/${segment(source.id)}`, 'DELETE'); sources.value = sources.value.filter(item => item.id !== source.id); await refreshResources() } }
+  actionDialog.value = { title: `移除「${source.name}」`, description: '移除连接，保留运行中的会话。', value: '', danger: true, button: '移除连接', submit: async () => { await write(`/api/sources/${segment(source.id)}`, 'DELETE'); await syncState(); await refreshResources() } }
 }
 function basePath(sourceId: string) { return `/api/sources/${segment(sourceId)}` }
 function spaceAction(source: SourceResource, spaceId: string | undefined, operation: 'create' | 'rename' | 'close') {
@@ -296,12 +337,21 @@ function terminalAction(action: string, id: string) {
   const node = getCanvasNode(id) || focused.value
   if (!node) return
   if (action === 'add') openAdd(node)
-  else if (action === 'remove') { if (currentCanvas.value) currentCanvas.value.nodes = currentCanvas.value.nodes.filter(item => item.id !== id); rebuildNodes(); scheduleSave() }
+  else if (action === 'remove') void removeNode(id)
   else if (action === 'focus') { saveViewport(); focused.value = node }
   else if (action === 'unfocus') void closeFocus()
   else if (action === 'menu') windowMenu.value = { node, name: resourceFor(node).window?.name || '窗口' }
 }
 async function closeFocus() { focused.value = null; graphKey.value++; await nextTick(); await restoreViewport() }
+async function removeNode(id: string) {
+  const canvas = currentCanvas.value
+  if (!canvas) return
+  try {
+    await write(`/api/canvases/${segment(canvas.id)}/nodes/${segment(id)}`, 'DELETE')
+    pendingLayouts.get(canvas.id)?.delete(id)
+    await syncState()
+  } catch (reason) { showError(reason) }
+}
 function openAdd(node?: CanvasNode) {
   addTarget.value = currentCanvas.value?.id || canvases.value[0]?.id || ''
   selectedWindows.value = node ? [`${node.sourceId}/${node.spaceId}/${node.windowId}`] : []
@@ -312,14 +362,16 @@ async function submitAdd() {
   busy.value = true; dialogError.value = ''
   try {
     let canvas = canvases.value.find(item => item.id === addTarget.value)
-    if (!canvas) { canvas = await write<Canvas>('/api/canvases', 'POST', { name: '我的画布', nodes: [] }); canvas.nodes ||= []; canvases.value.push(canvas) }
+    if (!canvas) { canvas = await write<Canvas>('/api/canvases', 'POST', { name: '我的画布', nodes: [] }); canvas.nodes ||= [] }
     let index = canvas.nodes.length
     const chosen = allWindows.value.filter(item => selectedWindows.value.includes(item.key))
+    const additions: CanvasNode[] = []
     for (const item of chosen) {
       if (canvas.nodes.some(node => node.sourceId === item.source.id && node.windowId === item.window.id)) continue
-      canvas.nodes.push({ id: uuid(), sourceId: item.source.id, spaceId: item.space.id, windowId: item.window.id, x: (index % 3) * 580, y: Math.floor(index / 3) * 390, width: 552, height: 352 }); index++
+      additions.push({ id: uuid(), sourceId: item.source.id, spaceId: item.space.id, windowId: item.window.id, x: (index % 3) * 580, y: Math.floor(index / 3) * 390, width: 552, height: 352 }); index++
     }
-    await write(`/api/canvases/${segment(canvas.id)}`, 'PATCH', { nodes: canvas.nodes })
+    await write(`/api/canvases/${segment(canvas.id)}/nodes`, 'POST', { nodes: additions })
+    await syncState()
     addDialog.value = false; switchCanvas(canvas.id); rebuildNodes(); void fitView({ padding: .15, maxZoom: 1, duration: 200 }); notify(`已加入「${canvas.name}」`)
   } catch (reason) { dialogError.value = reason instanceof Error ? reason.message : String(reason) }
   finally { busy.value = false }
@@ -330,17 +382,40 @@ function scheduleSave() {
   clearTimeout(saveTimers.get(canvas.id)); saveState.value = '正在保存…'
   saveTimers.set(canvas.id, setTimeout(async () => {
     saveTimers.delete(canvas.id)
-    try { await write(`/api/canvases/${segment(canvas.id)}`, 'PATCH', { nodes: canvas.nodes }); if (activeId.value === canvas.id) saveState.value = '已保存' }
+    const batch = new Map(pendingLayouts.get(canvas.id))
+    if (!batch.size) return
+    try {
+      await write(`/api/canvases/${segment(canvas.id)}/layout`, 'PATCH', { nodes: [...batch].map(([id, patch]) => ({ id, ...patch })) })
+      const pending = pendingLayouts.get(canvas.id)
+      for (const [id, patch] of batch) if (pending?.get(id) === patch) pending.delete(id)
+      if (!pending?.size) pendingLayouts.delete(canvas.id)
+      await syncState()
+      if (activeId.value === canvas.id) saveState.value = '已保存'
+    }
     catch (reason) { if (activeId.value === canvas.id) saveState.value = '保存失败'; showError(reason) }
   }, 450))
 }
+function layoutStarted() { layoutGesture = activeId.value }
+function editLayout(id: string, patch: LayoutPatch) {
+  const canvas = currentCanvas.value
+  const node = canvas?.nodes.find(item => item.id === id)
+  if (!canvas || !node) return
+  const pending = pendingLayouts.get(canvas.id) || new Map<string, LayoutPatch>()
+  pending.set(id, { ...pending.get(id), ...patch })
+  pendingLayouts.set(canvas.id, pending)
+  Object.assign(node, patch)
+  scheduleSave()
+}
 function dragStopped(event: { node: Node }) {
-  const node = currentCanvas.value?.nodes.find(item => item.id === event.node.id)
-  if (node) { node.x = event.node.position.x; node.y = event.node.position.y; scheduleSave() }
+  layoutGesture = ''
+  editLayout(event.node.id, { x: event.node.position.x, y: event.node.position.y })
+  rebuildNodes()
 }
 function resizeNode(id: string, width: number, height: number, x?: number, y?: number) {
+  layoutGesture = ''
   const node = currentCanvas.value?.nodes.find(item => item.id === id)
-  if (node) { node.width = Math.round(width); node.height = Math.max(160, Math.min(3000, Math.round(windowHeight({ ...node, height })))); if (x !== undefined) node.x = x; if (y !== undefined) node.y = y; rebuildNodes(); scheduleSave() }
+  if (node) editLayout(id, { width: Math.round(width), height: Math.max(160, Math.min(3000, Math.round(windowHeight({ ...node, width, height })))), ...(x === undefined ? {} : { x }), ...(y === undefined ? {} : { y }) })
+  rebuildNodes()
 }
 function keydown(event: KeyboardEvent) {
   if (backgroundCanvas.value) return
@@ -367,7 +442,7 @@ onMounted(async () => {
   finally { ready.value = true }
   refreshTimer = setInterval(() => { void refreshResources(true) }, 2000)
 })
-onBeforeUnmount(() => { cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); document.removeEventListener('pointerdown', outsideCanvasMenu) })
+onBeforeUnmount(() => { stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); document.removeEventListener('pointerdown', outsideCanvasMenu) })
 </script>
 
 <template>
@@ -401,21 +476,21 @@ onBeforeUnmount(() => { cancelAnimationFrame(geometryFrame); clearInterval(refre
         <div class="header-context"><div class="breadcrumb"><h1 :title="currentName">{{ currentName }}</h1></div><span class="header-counts">{{ canvasCounts }}</span><button class="icon-button refresh-button" :title="refreshedAt ? `刷新 · ${refreshedAt} 更新` : '刷新'" aria-label="刷新" :disabled="loading" @click="refreshResources()"><Icon name="refresh" :size="14" :class="{ spinning: loading }" /></button></div>
         <div class="header-actions">
           <span v-if="!isOverview && saveState" class="save-state" :title="saveState" :aria-label="saveState"><span v-if="saveState === '正在保存…'" class="spinner" /><Icon v-else :name="saveState === '已保存' ? 'check' : 'info'" :size="13" /></span>
-          <div v-if="!isOverview" ref="canvasMenuElement" class="canvas-menu-wrap"><button class="icon-button canvas-menu-trigger" title="画布设置" aria-label="画布设置" :aria-expanded="canvasMenu" aria-controls="canvas-menu" @click="toggleCanvasMenu"><Icon name="more" :size="17" /></button><div v-if="canvasMenu" id="canvas-menu" class="canvas-menu"><button @click="canvasMenu = false; backgroundCanvas = currentCanvas || null"><Icon name="image" :size="15" />背景图片</button><button @click="canvasMenu = false; openCanvasDialog(currentCanvas)"><Icon name="edit" :size="15" />重命名画布</button><button class="danger-text" @click="canvasMenu = false; deleteCanvas()"><Icon name="trash" :size="15" />删除画布</button></div></div>
+          <div ref="canvasMenuElement" class="canvas-menu-wrap"><button class="icon-button canvas-menu-trigger" title="画布设置" aria-label="画布设置" :aria-expanded="canvasMenu" aria-controls="canvas-menu" @click="toggleCanvasMenu"><Icon name="more" :size="17" /></button><div v-if="canvasMenu" id="canvas-menu" class="canvas-menu"><button @click="openBackground"><Icon name="image" :size="15" />背景图片</button><button v-if="!isOverview" @click="canvasMenu = false; openCanvasDialog(currentCanvas)"><Icon name="edit" :size="15" />重命名画布</button><button v-if="!isOverview" class="danger-text" @click="canvasMenu = false; deleteCanvas()"><Icon name="trash" :size="15" />删除画布</button></div></div>
           <button class="button subtle" title="连接" aria-label="连接" @click="sourcePanel = true"><Icon name="server" :size="15" />连接</button>
           <button v-if="isOverview" class="button primary" title="添加连接" aria-label="添加连接" @click="openSource()"><Icon name="plus" :size="15" />添加连接</button><button v-else class="button primary" title="加入窗口" aria-label="加入窗口" @click="openAdd()"><Icon name="plus" :size="15" />加入窗口</button>
         </div>
       </header>
       <div class="graph-wrap" :class="{ 'has-background': currentBackground }">
         <img v-if="currentBackground" class="canvas-background" :src="currentBackground.url" :style="{ opacity: currentBackground.opacity }" alt="" aria-hidden="true" />
-        <VueFlow v-if="nodes.length && !focused" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview" :zoom-on-double-click="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="true" :prevent-scrolling="true" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><MiniMap :pannable="true" :zoomable="true" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
+        <VueFlow v-if="nodes.length && !focused" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview" :zoom-on-double-click="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="true" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><MiniMap :pannable="true" :zoomable="true" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
         <div v-if="!nodes.length && isOverview" class="empty-state"><Icon name="server" :size="32" /><h2>{{ sources.length ? '暂无窗口' : '暂无连接' }}</h2><button class="button primary" @click="sources.length ? sourcePanel = true : openSource()"><Icon :name="sources.length ? 'server' : 'plus'" :size="17" />{{ sources.length ? '连接' : '添加连接' }}</button></div>
         <div v-if="!nodes.length && !isOverview" class="empty-state"><Icon name="canvas" :size="32" /><h2>暂无窗口</h2><button class="button primary" @click="openAdd()"><Icon name="plus" :size="17" />加入窗口</button></div>
         <div v-if="nodes.length && !focused" class="canvas-toolbar"><button title="缩小" aria-label="缩小" @click="zoomOut({ duration: 150 })"><Icon name="minus" :size="17" /></button><button title="适合画布" aria-label="适合画布" @click="fitView({ padding: .14, maxZoom: 1, duration: 200 })"><Icon name="expand" :size="17" /></button><button title="放大" aria-label="放大" @click="zoomIn({ duration: 150 })"><Icon name="plus" :size="17" /></button></div>
       </div>
     </main>
     <Transition name="slide"><aside v-if="sourcePanel" class="source-panel"><header><div><h2>连接与窗口</h2></div><button class="icon-button" aria-label="关闭连接面板" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />添加连接</button><div class="source-panel-content"><div v-for="source in sources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small>{{ source.type }} · {{ source.transport === 'local' ? '本机' : source.target }}</small></span></button><button class="icon-button" title="编辑连接" aria-label="编辑连接" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" title="移除连接" aria-label="移除连接" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><div v-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" title="新建窗口" aria-label="新建窗口" @click="windowAction({ id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="plus" :size="14" /></button><button class="icon-button" title="重命名 Space" aria-label="重命名 Space" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" title="关闭 Space" aria-label="关闭 Space" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :class="`program-${window.status || 'unknown'}`" :title="statusLabel(window.status)" /><span>{{ window.name }}</span><button class="icon-button" title="加入画布" aria-label="加入画布" @click="openAdd({ id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 })"><Icon name="plus" :size="14" /></button><button class="icon-button" title="窗口操作" aria-label="窗口操作" @click="windowMenu = { name: window.name, node: { id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" @click="spaceAction(resources.find(item => item.id === source.id) || { ...source, host: '', status: '', spaces: [] }, undefined, 'create')"><Icon name="plus" :size="14" />新建 {{ source.type === 'tmux' ? 'session' : 'space' }}</button></template></div><p v-if="!sources.length" class="panel-empty">暂无连接</p></div></aside></Transition>
-    <div v-if="focused" class="focus-overlay"><TerminalNode :id="focused.id" :data="{ ...terminalData(focused, true), ...focusedDimensions, overview: true, focus: true }" /></div>
+    <div v-if="focused" class="focus-overlay"><TerminalNode :id="focused.id" :data="{ ...terminalData(focused, true), ...focusedSize, overview: true, focus: true }" /></div>
     <BackgroundDialog v-if="backgroundCanvas" :canvas="backgroundCanvas" @close="closeBackgroundDialog" @saved="backgroundSaved" />
     <div v-if="modalOpen && !backgroundCanvas" class="modal-backdrop" @click.self="!busy && (sourceDialog = false, canvasDialog = false, actionDialog = null, addDialog = false, windowMenu = null)">
       <section v-if="sourceDialog" class="modal source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title"><header><div><h2 id="source-title">{{ sourceDraft.id ? '编辑连接' : '添加连接' }}</h2></div><button class="icon-button" aria-label="关闭对话框" @click="sourceDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitSource"><div class="type-options"><button v-for="type in (['tmux', 'herdr'] as const)" :key="type" type="button" :class="{ selected: sourceDraft.type === type }" @click="sourceDraft.type = type"><strong>{{ type }}</strong><Icon v-if="sourceDraft.type === type" name="check" :size="16" /></button></div><label>连接名称<input v-model="sourceDraft.name" name="sourceName" required placeholder="例如：开发机器" /></label><div class="segmented-control"><button type="button" :class="{ selected: sourceDraft.transport === 'local' }" @click="sourceDraft.transport = 'local'"><Icon name="server" :size="15" />本机</button><button type="button" :class="{ selected: sourceDraft.transport === 'ssh' }" @click="sourceDraft.transport = 'ssh'"><Icon name="globe" :size="15" />远程 SSH</button></div><label v-if="sourceDraft.transport === 'ssh'">SSH 地址<input v-model="sourceDraft.target" name="target" placeholder="ssh://user@hostname:22" :required="sourceDraft.transport === 'ssh'" /></label><label v-if="sourceDraft.type === 'tmux'">Socket 名称或路径 <span class="optional">可选</span><input v-model="sourceDraft.tmuxSocket" name="tmuxSocket" placeholder="default" /></label><label v-else>herdr session <span class="optional">可选</span><input v-model="sourceDraft.herdrSession" name="herdrSession" placeholder="default" /></label><details><summary>高级设置</summary><template v-if="sourceDraft.transport === 'ssh'"><label>SSH 私钥路径（Server） <span class="optional">可选</span><input v-model="sourceDraft.sshIdentityFile" name="sshIdentityFile" placeholder="/path/to/id_ed25519" /></label><label>SSH known_hosts 路径（Server） <span class="optional">可选</span><input v-model="sourceDraft.sshKnownHostsFile" name="sshKnownHostsFile" placeholder="/path/to/known_hosts" /></label></template><label>程序路径（目标机器） <span class="optional">可选</span><input v-model="sourceDraft.binary" name="binary" :placeholder="sourceDraft.type" /></label></details><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="sourceDialog = false">取消</button><button class="button primary" type="submit" :disabled="busy"><span v-if="busy" class="spinner" />{{ busy ? '保存中…' : '保存' }}</button></footer></form></section>

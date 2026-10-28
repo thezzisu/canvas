@@ -8,6 +8,7 @@ import {
   Store,
   sourceSchema,
   canvasSchema,
+  itemSchema,
   type Source,
   type Canvas,
 } from "./state.ts";
@@ -25,6 +26,21 @@ const nameSchema = z
   .strict();
 const opacitySchema = z.number().finite().min(0).max(1);
 const backgroundOpacitySchema = z.object({ opacity: opacitySchema }).strict();
+const nodeListSchema = z
+  .object({ nodes: z.array(itemSchema).max(500) })
+  .strict();
+const layoutSchema = z
+  .object({
+    nodes: z
+      .array(
+        itemSchema
+          .pick({ id: true, x: true, y: true, width: true, height: true })
+          .partial()
+          .required({ id: true }),
+      )
+      .max(500),
+  })
+  .strict();
 const isBackgroundUpload = (method: string, path: string) =>
   method === "PUT" && /^\/api\/canvases\/[^/]+\/background$/.test(path);
 export type Account = { username: string; passwordHash: string };
@@ -117,8 +133,6 @@ export function createApp(
   app.post("/api/logout", async (c) => {
     store.removeSession(getCookie(c, "canvas_session") ?? "");
     deleteCookie(c, "canvas_session", { path: "/" });
-    await terminals.closeAll();
-    providers.closeStatusObservers();
     return c.json({ ok: true });
   });
   const source = (id: string) => {
@@ -126,14 +140,80 @@ export function createApp(
     if (!result) throw new Error("Source not found");
     return result;
   };
-  app.get("/api/state", (c) =>
-    c.json({
-      sources: store.list<Source>("source"),
-      canvases: store
-        .list<Canvas>("canvas")
-        .map((canvas) => store.canvasView(canvas)),
-    }),
-  );
+  app.get("/api/state", (c) => c.json(store.snapshot()));
+  app.get("/api/events", (c) => {
+    const session = getCookie(c, "canvas_session") ?? "";
+    const encoder = new TextEncoder();
+    let controller: ReadableStreamDefaultController<Uint8Array>;
+    let pending: string | undefined;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let closed = false;
+    const flush = () => {
+      if (!closed && pending && (controller.desiredSize ?? 0) > 0) {
+        controller.enqueue(encoder.encode(pending));
+        pending = undefined;
+      }
+    };
+    const close = (unauthorized = false) => {
+      if (closed) return;
+      closed = true;
+      clearInterval(heartbeat);
+      store.off("change", publish);
+      store.off("sessions", checkSession);
+      store.off("close", stopped);
+      c.req.raw.signal.removeEventListener("abort", aborted);
+      try {
+        if (unauthorized)
+          controller.enqueue(
+            encoder.encode("event: unauthorized\ndata: {}\n\n"),
+          );
+        controller.close();
+      } catch {
+        /* A disconnected reader is already closed. */
+      }
+    };
+    const checkSession = () => {
+      if (!store.hasSession(session)) {
+        close(true);
+        return false;
+      }
+      return true;
+    };
+    const publish = () => {
+      if (closed || !checkSession()) return;
+      const snapshot = store.snapshot();
+      // Keep only the latest snapshot when a browser is temporarily slow.
+      pending = `event: state\nid: ${snapshot.instanceId}:${snapshot.revision}\ndata: ${JSON.stringify(snapshot)}\n\n`;
+      flush();
+    };
+    const stopped = () => close();
+    const aborted = () => close();
+    const stream = new ReadableStream<Uint8Array>({
+      start(value) {
+        controller = value;
+        store.on("change", publish);
+        store.on("sessions", checkSession);
+        store.on("close", stopped);
+        c.req.raw.signal.addEventListener("abort", aborted, { once: true });
+        if (c.req.raw.signal.aborted) {
+          close();
+          return;
+        }
+        heartbeat = setInterval(() => {
+          if (!closed && checkSession() && (controller.desiredSize ?? 0) > 0)
+            controller.enqueue(encoder.encode(": keepalive\n\n"));
+        }, 15_000);
+        heartbeat.unref();
+        publish();
+      },
+      pull: flush,
+      cancel: () => close(),
+    });
+    c.header("Content-Type", "text/event-stream");
+    c.header("X-Accel-Buffering", "no");
+    c.header("Connection", "keep-alive");
+    return c.body(stream);
+  });
   app.get("/api/resources", async (c) =>
     c.json({
       sources: await Promise.all(
@@ -149,15 +229,19 @@ export function createApp(
   });
   app.patch("/api/sources/:id", async (c) => {
     const id = c.req.param("id");
-    source(id);
+    const patch = await c.req.json();
+    const previous = source(id);
     const s = sourceSchema.parse({
-      ...source(id),
-      ...(await c.req.json()),
+      ...previous,
+      ...patch,
       id,
     });
     providers.validateSource({ ...s, id });
-    await terminals.closeSource(id);
-    providers.disposeStatusSource(id);
+    if ((Object.keys(s) as Array<keyof Source>).some(key => key !== "id" && key !== "name" && s[key] !== previous[key])) {
+      await terminals.closeSource(id);
+      providers.disposeStatusSource(id);
+      await providers.closeProviderConnections(id);
+    }
     return c.json(store.put("source", s));
   });
   app.delete("/api/sources/:id", async (c) => {
@@ -165,6 +249,7 @@ export function createApp(
     source(id);
     await terminals.closeSource(id);
     providers.disposeStatusSource(id);
+    await providers.closeProviderConnections(id);
     store.remove("source", id);
     return c.json({ ok: true });
   });
@@ -199,10 +284,56 @@ export function createApp(
     store.remove("canvas", c.req.param("id"));
     return c.json({ ok: true });
   });
-  app.put("/api/canvases/:id/background", async (c) => {
+  app.post("/api/canvases/:id/nodes", async (c) => {
     const id = c.req.param("id");
     if (id === "overview")
       return c.json({ error: "Overview is read-only" }, 403);
+    const { nodes } = nodeListSchema.parse(await c.req.json());
+    const canvas = store.get<Canvas>("canvas", id);
+    if (!canvas) return c.json({ error: "Canvas not found" }, 404);
+    for (const node of nodes)
+      if (
+        !canvas.nodes.some(
+          (existing) =>
+            existing.id === node.id ||
+            (existing.sourceId === node.sourceId &&
+              existing.windowId === node.windowId),
+        )
+      )
+        canvas.nodes.push(node);
+    return c.json(
+      store.canvasView(store.put("canvas", canvasSchema.parse(canvas))),
+    );
+  });
+  app.patch("/api/canvases/:id/layout", async (c) => {
+    const id = c.req.param("id");
+    if (id === "overview")
+      return c.json({ error: "Overview is read-only" }, 403);
+    const { nodes } = layoutSchema.parse(await c.req.json());
+    const canvas = store.get<Canvas>("canvas", id);
+    if (!canvas) return c.json({ error: "Canvas not found" }, 404);
+    const changes = new Map(nodes.map((node) => [node.id, node]));
+    canvas.nodes = canvas.nodes.map((node) => ({
+      ...node,
+      ...changes.get(node.id),
+    }));
+    return c.json(
+      store.canvasView(store.put("canvas", canvasSchema.parse(canvas))),
+    );
+  });
+  app.delete("/api/canvases/:id/nodes/:node", (c) => {
+    const id = c.req.param("id");
+    if (id === "overview")
+      return c.json({ error: "Overview is read-only" }, 403);
+    const canvas = store.get<Canvas>("canvas", id);
+    if (!canvas) return c.json({ error: "Canvas not found" }, 404);
+    canvas.nodes = canvas.nodes.filter(
+      (node) => node.id !== c.req.param("node"),
+    );
+    return c.json(store.canvasView(store.put("canvas", canvas)));
+  });
+  app.put("/api/canvases/:id/background", async (c) => {
+    const id = c.req.param("id");
     if (!store.get<Canvas>("canvas", id))
       return c.json({ error: "Canvas not found" }, 404);
     const rawOpacity = c.req.query("opacity");
@@ -234,8 +365,6 @@ export function createApp(
   });
   app.patch("/api/canvases/:id/background", async (c) => {
     const id = c.req.param("id");
-    if (id === "overview")
-      return c.json({ error: "Overview is read-only" }, 403);
     const canvas = store.get<Canvas>("canvas", id);
     if (!canvas) return c.json({ error: "Canvas not found" }, 404);
     const { opacity } = backgroundOpacitySchema.parse(await c.req.json());
@@ -246,8 +375,6 @@ export function createApp(
   });
   app.delete("/api/canvases/:id/background", (c) => {
     const id = c.req.param("id");
-    if (id === "overview")
-      return c.json({ error: "Overview is read-only" }, 403);
     const canvas = store.get<Canvas>("canvas", id);
     if (!canvas) return c.json({ error: "Canvas not found" }, 404);
     store.removeCanvasBackground(id);

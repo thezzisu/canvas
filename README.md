@@ -25,7 +25,7 @@ registration or role system. The password is stored as a salted scrypt hash.
 `CANVAS_DATA_DIR` selects the private runtime directory (default
 `~/.local/share/canvas`). `CANVAS_HOST` and `CANVAS_PORT` select the listener;
 the default listener is loopback. For remote access use an SSH tunnel or a TLS
-reverse proxy with WebSocket support. Behind TLS termination, set
+reverse proxy with WebSocket and unbuffered server-sent event support. Behind TLS termination, set
 `CANVAS_SECURE_COOKIE=1` and preserve the original Host header. The browser and
 API must share an origin.
 Protect this account as you would your SSH session: terminal access can run
@@ -45,10 +45,12 @@ Add a source from the connections panel:
   authentication and verified host keys are required. Optional identity and
   known-hosts file paths are resolved on the Canvas server.
 
-Herdr needs the custom client's `tab attach <id> --bare` capability. The fork's
-server protocol remains compatible with the v0.9.3 generation-1 endpoint; point
-the source's binary field at the built fork, without replacing your installed
-herdr executable. See `thezzisu/herdr`, branch `canvas-bare`.
+Herdr needs the current Canvas fork on both client and server for
+`tab attach <id> --bare --follow-size` and native geometry queries. Ordinary
+v0.9.3 generation-1 clients remain compatible with the fork's server. Point the
+source's executable field at the fork; an existing server can transfer its live
+panes with `server live-handoff --import-exe /absolute/path/to/new/herdr`.
+See `thezzisu/herdr`, branch `canvas-bare`.
 
 ## Window behavior
 
@@ -59,11 +61,17 @@ herdr executable. See `thezzisu/herdr`, branch `canvas-bare`.
   details; source context is available in the title tooltip.
 - Cards follow the native terminal's aspect ratio. Width determines the display
   scale and height follows, keeping every pane visible without distortion.
-- Drag a card's header to move it. Resize a card to resize its native window.
-  Switching canvases, entering focus view and zooming only change the visual
-  scale; they never resize the native terminal.
-- Explicitly focusing a terminal claims input. Only an explicit card resize
-  changes native dimensions; all references share that same screen.
+- Overview follows native dimensions and has no card resize handles. Switching
+  canvases and zooming preserve the native terminal's size.
+- Drag a custom canvas card's header to move it; explicitly resizing the card
+  changes its native window's dimensions.
+- Focus fills the viewport by resizing the real terminal at normal font size.
+  Leaving focus restores its previous size unless an external client or explicit
+  resize has taken control. External native dimensions always flow back to every
+  view. Each window has one focus owner; focusing it in another browser closes
+  the previous browser's focus view.
+- Explicitly focusing a terminal claims input. Merely opening another viewer
+  preserves input ownership; all references share the same native screen.
 - Removing a card only removes that reference. Closing a native window ends its
   processes and requires an explicit confirmation.
 - tmux uses a temporary `__canvas_` session linked to the selected window. The
@@ -76,12 +84,15 @@ herdr executable. See `thezzisu/herdr`, branch `canvas-bare`.
 
 ## Canvas backgrounds
 
-Overview is the first item in the canvas list and is read-only. Other canvases
-can have independent backgrounds: open canvas settings, choose Background image,
+Overview is the first item in the canvas list; its name and layout are fixed.
+Every canvas, including Overview, can have an independent background: open canvas settings, choose Background image,
 upload a PNG/JPEG/WebP, and adjust opacity. Preview and Cancel do not alter the
 saved canvas. Images are stored on the server, require authentication, and remain
 independent when switching or reloading canvases. Uploads are limited to 8 MiB
 and 16 megapixels and are normalized to WebP without embedded metadata.
+Backgrounds, connections, canvas names, window references and saved positions
+synchronize across authenticated browsers. Logging out ends only that login
+session's connections.
 
 ## Program status
 

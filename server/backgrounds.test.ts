@@ -365,7 +365,7 @@ test("upload limits cover bytes, decompressed pixels and ordinary API bodies", a
   assert.equal(f.store.canvasView(f.canvas).background, null);
 });
 
-test("re-encoding strips JPEG metadata and accepts WebP; overview is immutable", async (t) => {
+test("re-encoding strips JPEG metadata and accepts WebP; overview only allows background edits", async (t) => {
   const f = fixture(t);
   const jpeg = await sharp(await png())
     .withExif({ IFD0: { Artist: "fixture metadata" } })
@@ -386,19 +386,47 @@ test("re-encoding strips JPEG metadata and accepts WebP; overview is immutable",
       .status,
     200,
   );
-  assert.equal((await f.upload(await png(), "", {}, "overview")).status, 403);
-  for (const suffix of ["", "/background"]) {
-    assert.equal(
-      (await f.request(`/api/canvases/overview${suffix}`, "PATCH", "{}"))
-        .status,
-      403,
-    );
-    assert.equal(
-      (await f.request(`/api/canvases/overview${suffix}`, "DELETE", "{}"))
-        .status,
-      403,
-    );
-  }
+  const overview = await f.upload(await png(), "?opacity=0.5", {}, "overview");
+  assert.equal(overview.status, 200);
+  const overviewCanvas = (await overview.json()) as CanvasView;
+  assert.equal(overviewCanvas.id, "overview");
+  const state = (await (await f.request("/api/state")).json()) as {
+    canvases: CanvasView[];
+    overviewBackground: CanvasView["background"];
+  };
+  assert.equal(state.canvases.length, 2);
+  assert.deepEqual(state.overviewBackground, overviewCanvas.background);
+  f.reopen();
+  assert.deepEqual(
+    f.store.snapshot().overviewBackground,
+    overviewCanvas.background,
+  );
+  assert.equal(
+    (
+      await f.request(
+        "/api/canvases/overview/background",
+        "PATCH",
+        '{"opacity":0.2}',
+      )
+    ).status,
+    200,
+  );
+  assert.equal(f.store.snapshot().overviewBackground?.opacity, 0.2);
+  assert.equal(
+    (await f.request("/api/canvases/overview/background", "DELETE", "{}"))
+      .status,
+    200,
+  );
+  assert.equal(f.store.snapshot().overviewBackground, null);
+  assert.equal(
+    (await f.request("/api/canvases/overview", "PATCH", '{"name":"Changed"}'))
+      .status,
+    403,
+  );
+  assert.equal(
+    (await f.request("/api/canvases/overview", "DELETE", "{}")).status,
+    403,
+  );
   assert.equal(
     (
       await f.request(

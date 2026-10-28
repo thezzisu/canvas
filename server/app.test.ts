@@ -106,7 +106,7 @@ test("authentication, CSRF rejection and persistent canvas CRUD", async () => {
       400,
     );
     assert.equal((await call("/api/logout", "POST", {}, cookie)).status, 200);
-    assert.equal(closed, 1);
+    assert.equal(closed, 0, "logout must preserve other sessions' terminals");
     assert.equal(
       (await call("/api/state", "GET", undefined, cookie)).status,
       401,

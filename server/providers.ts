@@ -1,12 +1,15 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { hostname } from "node:os";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { hostname, tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Source } from "./state.ts";
 import {
   observeTmuxWindow,
   pruneTmuxStatus,
   tmuxProgramStatus,
   disposeStatusSource,
+  tmuxGeometryRevision,
 } from "./tmux-status.ts";
 export { disposeStatusSource, closeStatusObservers } from "./tmux-status.ts";
 import {
@@ -37,12 +40,65 @@ export interface SourceResource {
   error?: string;
   spaces: SpaceResource[];
 }
+export interface NativeSize {
+  cols: number;
+  rows: number;
+  token: string;
+  policy?: string;
+  effectivePolicy?: string;
+  bootId?: string;
+  revision?: number;
+  operationId?: string;
+  recoveredFromToken?: string;
+}
+export class NativeGeometryConflictError extends Error {
+  constructor() {
+    super("Native window size changed while resizing");
+    this.name = "NativeGeometryConflictError";
+  }
+}
+interface PendingGeometryWrite {
+  id: string;
+  before: NativeSize;
+  ambiguous: boolean;
+}
+async function recoverGeometryWrite(
+  read: () => Promise<NativeSize>,
+  pending: PendingGeometryWrite,
+  failure: unknown,
+): Promise<NativeSize> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const current = await read();
+      if (current.operationId === pending.id) return current;
+      if (current.token !== pending.before.token)
+        throw new NativeGeometryConflictError();
+    } catch (error) {
+      if (error instanceof NativeGeometryConflictError) throw error;
+    }
+    if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  throw failure;
+}
 export interface TerminalCommand {
   file: string;
   args: string[];
   env?: Record<string, string>;
   cleanup(): Promise<void>;
-  resize?(cols: number, rows: number): Promise<void>;
+  initialSize?: NativeSize;
+  readSize?(fresh?: boolean): Promise<NativeSize>;
+  resize?(
+    cols: number,
+    rows: number,
+    expectedToken?: string,
+  ): Promise<NativeSize>;
+  commitSize?(): Promise<void>;
+  restoreSize?(
+    before: NativeSize,
+    expectedToken: string,
+    prepare?: (size: NativeSize) => Promise<void>,
+  ): Promise<NativeSize>;
+  watchSize?(listener: () => void): () => void;
   connected?(): void;
 }
 
@@ -269,8 +325,127 @@ function commandEnvironment(): NodeJS.ProcessEnv {
   return env;
 }
 
+interface SshCommandPool {
+  closing: boolean;
+  key: string;
+  path: string;
+  controlArgs: string[];
+  sources: Set<string>;
+  lanes: Promise<void>[];
+  nextLane: number;
+}
+const sshPools = new Map<string, SshCommandPool>();
+let sshPoolRoot: Promise<string> | undefined;
+async function shortCommandPool(source: Source): Promise<SshCommandPool> {
+  const key = createHash("sha256")
+    .update(
+      JSON.stringify([
+        source.target,
+        source.sshIdentityFile,
+        source.sshKnownHostsFile,
+      ]),
+    )
+    .digest("hex");
+  const directory = await (sshPoolRoot ??= mkdtemp(
+    join(tmpdir(), `canvas-ssh-${process.pid}-`),
+  ));
+  let pool = sshPools.get(key);
+  if (!pool) {
+    const command = sourceCommand(source, []);
+    pool = {
+      closing: false,
+      key,
+      path: join(directory, randomUUID().replaceAll("-", "")),
+      controlArgs: command.args.slice(0, -1),
+      sources: new Set(),
+      lanes: Array.from({ length: 4 }, () => Promise.resolve()),
+      nextLane: 0,
+    };
+    sshPools.set(key, pool);
+  }
+  pool.sources.add(source.id);
+  return pool;
+}
+async function closeSshPool(pool: SshCommandPool): Promise<void> {
+  pool.closing = true;
+  if (sshPools.get(pool.key) === pool) sshPools.delete(pool.key);
+  await Promise.all(pool.lanes);
+  await new Promise<void>((resolve) => {
+    execFile(
+      "ssh",
+      ["-S", pool.path, "-O", "exit", ...pool.controlArgs],
+      {
+        env: commandEnvironment(),
+        timeout: 3000,
+        maxBuffer: 64 * 1024,
+      },
+      () => resolve(),
+    );
+  });
+}
+
+/** Close only Canvas-owned multiplexers; no workstation SSH configuration changes. */
+export async function closeProviderConnections(
+  sourceId?: string,
+): Promise<void> {
+  for (const [key, cache] of herdrGeometryCaches)
+    if (!sourceId || cache.sourceId === sourceId)
+      herdrGeometryCaches.delete(key);
+  const closing: Promise<void>[] = [];
+  for (const pool of sshPools.values()) {
+    if (sourceId) pool.sources.delete(sourceId);
+    else pool.sources.clear();
+    if (!pool.sources.size) closing.push(closeSshPool(pool));
+  }
+  await Promise.all(closing);
+  if (!sourceId && sshPoolRoot) {
+    const directory = await sshPoolRoot;
+    sshPoolRoot = undefined;
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 async function run(source: Source, args: string[]): Promise<string> {
   const command = sourceCommand(source, args);
+  const mutatesHerdr =
+    source.type === "herdr" &&
+    !(
+      args[0] === "canvas-capabilities" ||
+      (args[0] === "api" && args[1] === "snapshot") ||
+      (args[0] === "tab" && ["geometry", "geometries"].includes(args[1]!))
+    );
+  if (mutatesHerdr) herdrGeometryCaches.delete(JSON.stringify(source));
+  try {
+    if (source.transport === "ssh") {
+      let pool = await shortCommandPool(source);
+      while (pool.closing) pool = await shortCommandPool(source);
+      command.args.unshift(
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        "ControlPersist=30",
+        "-o",
+        `ControlPath=${pool.path}`,
+      );
+      // Short commands share a connection and four slots. PTYs and persistent
+      // control observers use sourceCommand directly and never consume this pool.
+      const lane = pool.nextLane++ % pool.lanes.length;
+      const task = pool.lanes[lane]!.then(() => execute(command, source.type));
+      pool.lanes[lane] = task.then(
+        () => {},
+        () => {},
+      );
+      return await task;
+    }
+    return await execute(command, source.type);
+  } finally {
+    if (mutatesHerdr) herdrGeometryCaches.delete(JSON.stringify(source));
+  }
+}
+async function execute(
+  command: { file: string; args: string[] },
+  type: Source["type"],
+): Promise<string> {
   return await new Promise((resolve, reject) => {
     execFile(
       command.file,
@@ -284,11 +459,95 @@ async function run(source: Source, args: string[]): Promise<string> {
       (error, stdout, stderr) => {
         if (error) {
           const detail = stderr.trim().slice(0, 1200) || error.message;
-          reject(new Error(`${source.type}: ${detail}`));
+          reject(new Error(`${type}: ${detail}`));
         } else resolve(stdout.trimEnd());
       },
     );
   });
+}
+
+interface HerdrGeometryCache {
+  sourceId: string;
+  expires: number;
+  values?: Map<string, NativeSize>;
+  pending?: Promise<Map<string, NativeSize>>;
+}
+const herdrGeometryCaches = new Map<string, HerdrGeometryCache>();
+function herdrGeometry(value: any): NativeSize {
+  if (
+    !value ||
+    typeof value.boot_id !== "string" ||
+    !Number.isSafeInteger(value.revision) ||
+    !Number.isInteger(value.cols) ||
+    !Number.isInteger(value.rows) ||
+    value.cols < 1 ||
+    value.rows < 1
+  )
+    throw new Error(
+      "Update the herdr server to support passive Canvas windows",
+    );
+  return {
+    cols: value.cols,
+    rows: value.rows,
+    bootId: value.boot_id,
+    revision: value.revision,
+    token: `${value.boot_id}:${value.revision}:${value.cols}:${value.rows}`,
+    ...(typeof value.operation_id === "string"
+      ? { operationId: value.operation_id }
+      : {}),
+  };
+}
+
+/** One shared snapshot per source, regardless of its number of visible windows. */
+export async function readHerdrSize(
+  source: Source,
+  windowId: string,
+  fresh = false,
+): Promise<NativeSize> {
+  const key = JSON.stringify(source);
+  let cache = herdrGeometryCaches.get(key);
+  if (!cache) {
+    cache = { sourceId: source.id, expires: 0 };
+    herdrGeometryCaches.set(key, cache);
+  }
+  if (fresh) {
+    if (cache.pending) await cache.pending;
+    cache.expires = 0;
+  }
+  if (cache.values && cache.expires > Date.now()) {
+    const value = cache.values.get(windowId);
+    if (value) return value;
+    // A newly-created tab may appear before the next shared sampling interval.
+    cache.expires = 0;
+  }
+  const currentCache = cache;
+  if (!currentCache.pending)
+    currentCache.pending = (async () => {
+      const response = JSON.parse(await run(source, ["tab", "geometries"]));
+      if (response.error)
+        throw new Error(
+          `herdr: ${response.error.message || "Native geometry request failed"}`,
+        );
+      const list = response.result?.geometries;
+      if (!Array.isArray(list))
+        throw new Error(
+          "Update the herdr server to support geometry snapshots",
+        );
+      const values = new Map<string, NativeSize>();
+      for (const item of list) {
+        if (typeof item.tab_id !== "string")
+          throw new Error("Unexpected herdr tab geometry");
+        values.set(item.tab_id, herdrGeometry(item.geometry));
+      }
+      currentCache.values = values;
+      currentCache.expires = Date.now() + 500;
+      return values;
+    })().finally(() => {
+      currentCache.pending = undefined;
+    });
+  const value = (await currentCache.pending).get(windowId);
+  if (!value) throw new Error("The herdr tab no longer exists");
+  return value;
 }
 
 function name(value: string): string {
@@ -668,7 +927,8 @@ export async function openTerminal(
       const capabilities = JSON.parse(
         await run(source, ["canvas-capabilities"]),
       );
-      supported = capabilities.bare_tab === true && capabilities.version === 1;
+      supported =
+        capabilities.bare_tab === true && capabilities.follow_size === true;
     } catch (error) {
       // Older upstream clients do not expose the bare-tab command. Preserve
       // network/execution failures instead of misreporting them as a version
@@ -687,37 +947,401 @@ export async function openTerminal(
     if (!supported) {
       throw new Error(
         source.transport === "ssh"
-          ? "This remote herdr client does not support bare tabs. Install the Canvas herdr client at ~/.local/share/canvas/bin/herdr on that machine, or set the connection executable to its full path."
-          : "Select the Canvas herdr fork executable; this client does not support bare tabs.",
+          ? "This remote herdr client does not support bare tabs with passive geometry. Update the Canvas herdr client at ~/.local/share/canvas/bin/herdr on that machine, or set the connection executable to its full path."
+          : "Select the current Canvas herdr fork executable; this client does not support bare tabs with passive geometry.",
       );
     }
+    function geometry(response: string): NativeSize {
+      const parsed = JSON.parse(response);
+      if (parsed.error)
+        throw new Error(
+          `herdr: ${parsed.error.message || "Native geometry request failed"}`,
+        );
+      const value = parsed.result?.geometry ?? parsed.geometry;
+      return herdrGeometry(value);
+    }
+    let pendingWrite: PendingGeometryWrite | undefined;
+    const readSize = async (fresh = false) => {
+      const current = await readHerdrSize(source, windowId, fresh);
+      if (pendingWrite?.ambiguous && current.operationId === pendingWrite.id) {
+        if (owned) owned.token = current.token;
+        return { ...current, recoveredFromToken: pendingWrite.before.token };
+      }
+      return current;
+    };
+    const initialSize = await readSize();
+    let owned: { before: NativeSize; token: string } | undefined;
+    async function restoreSize(
+      before: NativeSize,
+      expectedToken: string,
+    ): Promise<NativeSize> {
+      const current = await readSize(true);
+      if (current.token !== expectedToken) {
+        owned = undefined;
+        pendingWrite = undefined;
+        return current;
+      }
+      const restored = geometry(
+        await run(source, [
+          "tab",
+          "resize",
+          windowId,
+          "--cols",
+          String(before.cols),
+          "--rows",
+          String(before.rows),
+          "--expected-revision",
+          String(current.revision),
+          "--expected-boot-id",
+          current.bootId!,
+        ]),
+      );
+      owned = undefined;
+      pendingWrite = undefined;
+      return restored;
+    }
+    let closed = false;
+    const handle = { sourceId: source.id, spaceId, windowId, cleanup };
+    async function cleanup() {
+      if (closed) return;
+      closed = true;
+      if (pendingWrite?.ambiguous) await readSize(true).catch(() => {});
+      if (owned) await restoreSize(owned.before, owned.token).catch(() => {});
+      active.delete(handle);
+      if (![...active].some((item) => item.sourceId === source.id))
+        await closeProviderConnections(source.id);
+    }
+    active.add(handle);
     return {
-      ...sourceCommand(source, ["tab", "attach", windowId, "--bare"], true),
+      ...sourceCommand(
+        source,
+        ["tab", "attach", windowId, "--bare", "--follow-size"],
+        true,
+      ),
       env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
-      async cleanup() {},
+      initialSize,
+      readSize,
+      restoreSize,
+      async resize(newCols, newRows, expectedToken) {
+        dimensions(newCols, newRows);
+        if (closed) throw new Error("Terminal is closed");
+        const before = await readSize(true);
+        if (expectedToken !== undefined && before.token !== expectedToken)
+          throw new NativeGeometryConflictError();
+        if (!owned || owned.token !== before.token)
+          owned = { before, token: before.token };
+        const operation: PendingGeometryWrite = {
+          id: randomUUID(),
+          before,
+          ambiguous: false,
+        };
+        pendingWrite = operation;
+        let current: NativeSize;
+        try {
+          const response = await run(source, [
+            "tab",
+            "resize",
+            windowId,
+            "--cols",
+            String(newCols),
+            "--rows",
+            String(newRows),
+            "--expected-revision",
+            String(before.revision),
+            "--expected-boot-id",
+            before.bootId!,
+            "--operation-id",
+            operation.id,
+          ]);
+          const parsed = JSON.parse(response);
+          if ((parsed.result ?? parsed).applied === false)
+            throw new NativeGeometryConflictError();
+          current = geometry(response);
+          if (current.operationId !== operation.id)
+            throw new NativeGeometryConflictError();
+        } catch (error) {
+          if (error instanceof NativeGeometryConflictError) {
+            pendingWrite = undefined;
+            owned = undefined;
+            throw error;
+          }
+          operation.ambiguous = true;
+          current = await recoverGeometryWrite(
+            () => readSize(true),
+            operation,
+            error,
+          );
+        }
+        if (owned) owned.token = current.token;
+        return current;
+      },
+      async commitSize() {
+        owned = undefined;
+        pendingWrite = undefined;
+      },
+      cleanup,
     };
   }
   const window = nativeId(windowId, "@");
   const generation = windowId.split(":")[0]!;
   const helper = `${HELPER_PREFIX}${INSTANCE}_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
   let exactHelper = helper;
-  // Preserve an explicitly configured policy, including the distinction between
-  // a per-window value and an inherited global default.
-  const previousPolicy = await run(source, [
-    "show-options",
-    "-w",
-    "-t",
-    window,
-    "window-size",
-  ]);
   let closed = false;
   let stopStatusObserver: (() => void) | undefined;
   let busy = false;
   let timer: ReturnType<typeof setInterval> | undefined;
+  const sizeListeners = new Set<() => void>();
+  let ownedSize: { before: NativeSize; token: string } | undefined;
+  let pendingWrite: PendingGeometryWrite | undefined;
+  const revisionOption = `@canvas_geometry_${helper.slice(HELPER_PREFIX.length)}`;
+  const receiptOption = `${revisionOption}_receipt`;
+  const receiptRevisionOption = `${revisionOption}_receipt_revision`;
+  const writerOption = `${revisionOption}_writer`;
+  const requestOption = `${revisionOption}_request`;
+  const nativeOptions = [
+    revisionOption,
+    receiptOption,
+    receiptRevisionOption,
+    writerOption,
+    requestOption,
+  ];
+  const hookIndex = Number.parseInt(
+    randomUUID().replaceAll("-", "").slice(0, 7),
+    16,
+  );
+  const geometryHooks: { scope: string[]; name: string }[] = [];
+  let detachCleanup = "";
+  function nativeCondition(current: NativeSize): string {
+    return `#{&&:#{==:#{${revisionOption}},${current.revision}},#{&&:#{==:#{window_width},${current.cols}},#{&&:#{==:#{window_height},${current.rows}},#{==:#{window-size},${current.effectivePolicy}}}}}`;
+  }
+  function receiptCondition(operationId: string): string {
+    return `#{&&:#{==:#{${receiptOption}},${operationId}},#{&&:#{==:#{${receiptRevisionOption}},#{${revisionOption}}},#{&&:#{==:#{${requestOption}},#{window_width}x#{window_height}},#{==:#{window-size},manual}}}}`;
+  }
+  function nativeRestore(before: NativeSize): string {
+    return `resize-window -t ${window} -x ${before.cols} -y ${before.rows} ; ${nativePolicy(before)}`;
+  }
+  function nativePolicy(before: NativeSize): string {
+    return before.policy
+      ? `set-option -w -t ${window} window-size ${before.policy.split(" ").at(-1)}`
+      : `set-option -w -u -t ${window} window-size`;
+  }
+  function nativeHookCleanup(): string {
+    return geometryHooks
+      .map(
+        ({ scope, name }) =>
+          `set-hook ${scope.join(" ")} -u ${name}[${hookIndex}]`,
+      )
+      .concat(
+        nativeOptions.map(
+          (option) => `set-option -w -u -t ${window} ${option}`,
+        ),
+      )
+      .join(" ; ");
+  }
+  async function updateDetachHook(
+    current?: NativeSize,
+    operationId?: string,
+  ): Promise<void> {
+    if (!detachCleanup) return;
+    const guard = operationId
+      ? receiptCondition(operationId)
+      : current
+        ? nativeCondition(current)
+        : undefined;
+    const restore =
+      guard && ownedSize
+        ? `if-shell -F -t ${window} ${shellQuote(guard)} ${shellQuote(nativeRestore(ownedSize.before))} ; `
+        : "";
+    await run(source, [
+      "set-hook",
+      "-t",
+      exactHelper,
+      "client-detached",
+      `if-shell -F -t ${exactHelper} '#{==:#{session_attached},0}' ${shellQuote(`${restore}${nativeHookCleanup()} ; ${detachCleanup}`)}`,
+    ]);
+    for (const hook of geometryHooks.filter(
+      (item) => item.name === "client-resized",
+    ))
+      await run(source, [
+        "set-hook",
+        ...hook.scope,
+        `${hook.name}[${hookIndex}]`,
+        geometryHookCommand(hook.name, guard),
+      ]);
+  }
+  function geometryHookCommand(hookName: string, guard?: string): string {
+    const counter = `set-option -w -F -t ${window} ${revisionOption} '#{e|+:#{${revisionOption}},1}'`;
+    const clearReceipt = `set-option -w -u -t ${window} ${receiptOption}`;
+    const stampReceipt = `set-option -w -F -t ${window} ${receiptRevisionOption} '#{${revisionOption}}'`;
+    let action = `${counter} ; ${clearReceipt}`;
+    let condition = `#{==:#{window_id},${window}}`;
+    if (hookName === "after-resize-window")
+      action = `${counter} ; if-shell -F '#{==:#{hook_flag_t_0},#{${writerOption}}}' ${shellQuote(stampReceipt)} ${shellQuote(clearReceipt)}`;
+    if (hookName === "window-resized") {
+      const ownResize = `#{&&:#{==:#{${requestOption}},#{window_width}x#{window_height}},#{&&:#{==:#{window-size},manual},#{==:#{${receiptRevisionOption}},#{e|-:#{${revisionOption}},1}}}}`;
+      action = `${counter} ; if-shell -F ${shellQuote(ownResize)} ${shellQuote(stampReceipt)} ${shellQuote(clearReceipt)}`;
+    }
+    if (hookName === "after-set-option") {
+      // tmux exposes the original option name to after-command hooks. Track
+      // window-size (including its unambiguous abbreviations), while plugin
+      // metadata, colors and other options must not end a geometry lease.
+      condition = `#{&&:${condition},#{m:window-si*,#{hook_argument_0}}}`;
+    }
+    if (hookName === "client-resized") {
+      condition = `#{&&:${condition},#{!=:#{session_id},${exactHelper}}}`;
+      if (guard && ownedSize && ownedSize.before.effectivePolicy !== "manual")
+        action = `if-shell -F -t ${window} ${shellQuote(guard)} ${shellQuote(nativePolicy(ownedSize.before))} ; ${counter} ; ${clearReceipt}`;
+    }
+    return `if-shell -F ${shellQuote(condition)} ${shellQuote(action)}`;
+  }
+  async function readSize(): Promise<NativeSize> {
+    // The event stream wakes viewers promptly; a native hook counter also keeps
+    // rapid A→B→A changes that tmux coalesces into a single layout notification.
+    let revision = await tmuxGeometryRevision(source.id, windowId);
+    for (let attempt = 0; ; attempt++) {
+      const response = await run(source, [
+        "display-message",
+        "-p",
+        "-t",
+        window,
+        `#{pid}.#{start_time}:#{window_width}:#{window_height}:#{window-size}:#{${revisionOption}}:#{${receiptOption}}:#{${receiptRevisionOption}}:#{${requestOption}}`,
+        ";",
+        "show-options",
+        "-w",
+        "-t",
+        window,
+        "window-size",
+      ]);
+      const [values, policy = ""] = response.split("\n");
+      const [
+        nativeGeneration,
+        width,
+        height,
+        effectivePolicy,
+        counter,
+        operationId,
+        receiptRevision,
+        receiptSize,
+      ] = values!.split(":");
+      if (nativeGeneration !== generation)
+        throw new Error("The tmux server restarted");
+      const cols = Number(width),
+        rows = Number(height);
+      if (
+        !Number.isInteger(cols) ||
+        !Number.isInteger(rows) ||
+        cols < 1 ||
+        rows < 1
+      )
+        throw new Error("Unexpected tmux window geometry");
+      const nextRevision = await tmuxGeometryRevision(source.id, windowId);
+      if (revision !== nextRevision && attempt < 3) {
+        revision = nextRevision;
+        continue;
+      }
+      const token = JSON.stringify([
+        cols,
+        rows,
+        policy,
+        effectivePolicy,
+        counter || "0",
+      ]);
+      const received =
+        !!operationId &&
+        receiptRevision === counter &&
+        receiptSize === `${width}x${height}` &&
+        effectivePolicy === "manual";
+      const current: NativeSize = {
+        cols,
+        rows,
+        policy,
+        effectivePolicy,
+        revision: Number(counter || 0),
+        token,
+        ...(received ? { operationId } : {}),
+      };
+      if (
+        pendingWrite?.ambiguous &&
+        received &&
+        operationId === pendingWrite.id
+      ) {
+        if (ownedSize) ownedSize.token = current.token;
+        current.recoveredFromToken = pendingWrite.before.token;
+      }
+      return current;
+    }
+  }
+  async function restoreSize(
+    before: NativeSize,
+    expectedToken: string,
+    prepare?: (size: NativeSize) => Promise<void>,
+  ): Promise<NativeSize> {
+    const current = await readSize();
+    if (current.token !== expectedToken) {
+      ownedSize = undefined;
+      pendingWrite = undefined;
+      await updateDetachHook();
+      return current;
+    }
+    if (prepare) {
+      // With no other client tmux falls back even to ignore-size clients. Move
+      // our native PTY while manual sizing still protects the shared window,
+      // then restore the old automatic policy after tmux sees its new viewport.
+      await prepare(before);
+      for (let attempt = 0; attempt < 50; attempt++) {
+        const clients = (
+          await run(source, [
+            "list-clients",
+            "-t",
+            exactHelper,
+            "-F",
+            "#{client_control_mode}:#{client_width}:#{client_height}",
+          ])
+        ).split("\n");
+        const native = clients.filter((line) => line.startsWith("0:"));
+        if (
+          !native.length ||
+          native.every((line) => line === `0:${before.cols}:${before.rows}`)
+        )
+          break;
+        if (attempt === 49)
+          throw new Error(
+            "Native terminal did not acknowledge its restored viewport",
+          );
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+    // Keep the compare and mutation in tmux's own command queue. An external
+    // native resize between our read and this command always wins.
+    await run(source, [
+      "if-shell",
+      "-F",
+      "-t",
+      window,
+      nativeCondition(current),
+      nativeRestore(before),
+    ]);
+    ownedSize = undefined;
+    pendingWrite = undefined;
+    await updateDetachHook();
+    return await readSize();
+  }
+  let initialSize = await readSize();
   const handle = { sourceId: source.id, spaceId, windowId, cleanup };
+  async function releaseSourceConnections() {
+    if (![...active].some((item) => item.sourceId === source.id))
+      await closeProviderConnections(source.id);
+  }
   async function cleanup(): Promise<void> {
     if (closed) return;
     closed = true;
+    if (pendingWrite?.ambiguous) await readSize().catch(() => {});
+    if (ownedSize) {
+      // A fallback close has no PTY callback. Remove our clients before restoring
+      // an automatic policy so tmux cannot reuse their focused viewport.
+      await run(source, ["detach-client", "-s", exactHelper]).catch(() => {});
+      await restoreSize(ownedSize.before, ownedSize.token).catch(() => {});
+    }
     stopStatusObserver?.();
     if (timer) clearInterval(timer);
     active.delete(handle);
@@ -729,11 +1353,25 @@ export async function openTerminal(
           "-p",
           "#{pid}.#{start_time}",
         ])) !== generation
-      )
+      ) {
+        await releaseSourceConnections();
         return;
+      }
     } catch {
+      await releaseSourceConnections();
       return;
     }
+    for (const hook of geometryHooks)
+      await run(source, [
+        "set-hook",
+        ...hook.scope,
+        "-u",
+        `${hook.name}[${hookIndex}]`,
+      ]).catch(() => {});
+    for (const option of nativeOptions)
+      await run(source, ["set-option", "-w", "-u", "-t", window, option]).catch(
+        () => {},
+      );
     // Do not kill any extra windows a native client or external tool may have
     // created in this helper. Preserve those as a visible ordinary session.
     try {
@@ -782,37 +1420,7 @@ export async function openTerminal(
     } catch {
       /* The session/server may already have exited. */
     }
-    try {
-      const currentPolicy = await run(source, [
-        "show-options",
-        "-w",
-        "-t",
-        window,
-        "window-size",
-      ]);
-      if (currentPolicy === "window-size manual") {
-        if (previousPolicy)
-          await run(source, [
-            "set-option",
-            "-w",
-            "-t",
-            window,
-            "window-size",
-            previousPolicy.split(" ").at(-1)!,
-          ]);
-        else
-          await run(source, [
-            "set-option",
-            "-w",
-            "-u",
-            "-t",
-            window,
-            "window-size",
-          ]);
-      }
-    } catch {
-      /* The original window may already have exited. */
-    }
+    await releaseSourceConnections();
   }
   try {
     exactHelper = await run(source, [
@@ -824,14 +1432,11 @@ export async function openTerminal(
       "-s",
       helper,
       "-x",
-      String(cols),
+      String(initialSize.cols),
       "-y",
-      String(rows),
+      String(initialSize.rows),
       "exec sleep 86400",
     ]);
-    const restorePolicy = previousPolicy
-      ? `set-option -w -t ${window} window-size ${previousPolicy.split(" ").at(-1)}`
-      : `set-option -w -u -t ${window} window-size`;
     const preserveSession = [
       "@canvas-helper",
       "prefix",
@@ -846,10 +1451,7 @@ export async function openTerminal(
         `rename-session -t ${exactHelper} canvas-detached-${helper.slice(-10)}`,
       )
       .join(" ; ");
-    const nativeDetachCleanup = `if-shell -F -t ${window} '#{==:#{window-size},manual}' ${shellQuote(restorePolicy)} ; if-shell -F -t ${exactHelper} '#{&&:#{==:#{session_windows},1},#{==:#{window_id},${window}}}' ${shellQuote(`kill-session -t ${exactHelper}`)} ${shellQuote(preserveSession)}`;
-    // A passive control client can disconnect while the native terminal stays
-    // attached. Its departure must not close the shared bare view.
-    const detachHook = `if-shell -F -t ${exactHelper} '#{==:#{session_attached},0}' ${shellQuote(nativeDetachCleanup)}`;
+    detachCleanup = `if-shell -F -t ${exactHelper} '#{&&:#{==:#{session_windows},1},#{==:#{window_id},${window}}}' ${shellQuote(`kill-session -t ${exactHelper}`)} ${shellQuote(preserveSession)}`;
     await run(source, [
       "set-option",
       "-t",
@@ -893,22 +1495,54 @@ export async function openTerminal(
       window,
       "-t",
       `${exactHelper}:0`,
-      ";",
-      "set-hook",
-      "-t",
-      exactHelper,
-      "client-detached",
-      detachHook,
     ]);
-    await run(source, [
-      "resize-window",
-      "-t",
-      window,
-      "-x",
-      String(cols),
-      "-y",
-      String(rows),
-    ]);
+    await run(source, ["set-option", "-w", "-t", window, revisionOption, "0"]);
+    const linkedSessions = (
+      await run(source, [
+        "list-windows",
+        "-a",
+        "-F",
+        "#{window_id}:#{session_id}",
+      ])
+    )
+      .split("\n")
+      .filter((line) => line.startsWith(`${window}:`))
+      .map((line) => line.split(":")[1]!);
+    for (const hookName of [
+      "window-resized",
+      "after-resize-window",
+      "after-set-option",
+      "client-resized",
+    ]) {
+      const scopes = [["-g"]];
+      // Add to an existing local array only when it already shadows the global
+      // array. Creating a new local array would hide the user's inherited hooks.
+      for (const scope of [
+        ["-w", "-t", window],
+        ...linkedSessions.map((id) => ["-t", id]),
+      ])
+        if (await run(source, ["show-options", ...scope, hookName]))
+          scopes.push(scope);
+      for (const scope of scopes) {
+        const existing = await run(source, [
+          "show-options",
+          ...scope,
+          hookName,
+        ]);
+        if (existing.includes(`[${hookIndex}]`))
+          throw new Error("Native hook slot is already in use");
+        const command = geometryHookCommand(hookName);
+        await run(source, [
+          "set-hook",
+          ...scope,
+          `${hookName}[${hookIndex}]`,
+          command,
+        ]);
+        geometryHooks.push({ scope, name: hookName });
+      }
+    }
+    await updateDetachHook();
+    initialSize = await readSize();
     active.add(handle);
     // If the original session/link is removed outside Canvas, our auxiliary
     // reference must not keep that window alive indefinitely.
@@ -930,8 +1564,24 @@ export async function openTerminal(
     }, 2500);
     timer.unref();
     return {
-      ...sourceCommand(source, ["attach-session", "-t", exactHelper], true),
+      ...sourceCommand(
+        source,
+        ["attach-session", "-f", "ignore-size", "-t", exactHelper],
+        true,
+      ),
       env: { TERM: "xterm-256color", COLORTERM: "truecolor" },
+      initialSize,
+      readSize,
+      restoreSize,
+      async commitSize() {
+        ownedSize = undefined;
+        pendingWrite = undefined;
+        await updateDetachHook();
+      },
+      watchSize(listener) {
+        sizeListeners.add(listener);
+        return () => sizeListeners.delete(listener);
+      },
       cleanup,
       connected() {
         if (!closed && !stopStatusObserver)
@@ -948,20 +1598,68 @@ export async function openTerminal(
               exactHelper,
             ]),
             commandEnvironment(),
+            {
+              initial: initialSize,
+              changed: () => {
+                for (const listener of sizeListeners) listener();
+              },
+            },
           );
       },
-      async resize(newCols, newRows) {
+      async resize(newCols, newRows, expectedToken) {
         dimensions(newCols, newRows);
-        if (!closed)
-          await run(source, [
-            "resize-window",
+        if (closed) throw new Error("Terminal is closed");
+        const before = await readSize();
+        if (expectedToken !== undefined && before.token !== expectedToken)
+          throw new NativeGeometryConflictError();
+        if (!ownedSize || ownedSize.token !== before.token)
+          ownedSize = { before, token: before.token };
+        const conflict = "__canvas_native_geometry_changed__";
+        const operation: PendingGeometryWrite = {
+          id: randomUUID(),
+          before,
+          ambiguous: false,
+        };
+        pendingWrite = operation;
+        let current: NativeSize;
+        try {
+          await updateDetachHook(undefined, operation.id);
+          // tmux uses the last repeated target and exposes every original value
+          // in its after-command hook. The first target is a write receipt nonce;
+          // the final target keeps normal window and user-hook resolution intact.
+          const ownWrite = [
+            `set-option -w -t ${window} ${writerOption} '${operation.id}'`,
+            `set-option -w -t ${window} ${requestOption} '${newCols}x${newRows}'`,
+            `set-option -w -t ${window} ${receiptOption} '${operation.id}'`,
+            `resize-window -t '${operation.id}' -t ${window} -x ${newCols} -y ${newRows}`,
+          ].join(" ; ");
+          const response = await run(source, [
+            "if-shell",
+            "-F",
             "-t",
             window,
-            "-x",
-            String(newCols),
-            "-y",
-            String(newRows),
+            nativeCondition(before),
+            ownWrite,
+            `display-message -p ${conflict}`,
           ]);
+          if (response.includes(conflict))
+            throw new NativeGeometryConflictError();
+          current = await readSize();
+          if (current.operationId !== operation.id)
+            throw new NativeGeometryConflictError();
+        } catch (error) {
+          if (error instanceof NativeGeometryConflictError) {
+            pendingWrite = undefined;
+            ownedSize = undefined;
+            await updateDetachHook();
+            throw error;
+          }
+          operation.ambiguous = true;
+          current = await recoverGeometryWrite(readSize, operation, error);
+        }
+        if (ownedSize) ownedSize.token = current.token;
+        await updateDetachHook(current);
+        return current;
       },
     };
   } catch (error) {

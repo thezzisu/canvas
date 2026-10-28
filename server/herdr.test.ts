@@ -15,6 +15,7 @@ import {
   closeWindow,
   listResources,
   openTerminal,
+  NativeGeometryConflictError,
   type Source,
 } from "./providers.ts";
 
@@ -72,6 +73,7 @@ test("herdr adapter displays a complete bare tab, accepts input and resizes", as
   });
   let terminal: pty.IPty | undefined;
   let secondTerminal: pty.IPty | undefined;
+  let externalTerminal: pty.IPty | undefined;
   let command: Awaited<ReturnType<typeof openTerminal>> | undefined;
   let secondCommand: Awaited<ReturnType<typeof openTerminal>> | undefined;
   const screen = new headless.Terminal({
@@ -106,25 +108,16 @@ test("herdr adapter displays a complete bare tab, accepts input and resizes", as
     assert.fail(`${message}: ${screenText()}`);
   };
   const snapshot = () => JSON.parse(cli("api", "snapshot")).result.snapshot;
+  const nativeGeometry = (tabId: string) =>
+    JSON.parse(cli("tab", "geometry", tabId)).result.geometry;
   const assertSplitGeometry = async (
     tabId: string,
     cols: number,
     rows: number,
   ) => {
     await waitFor(() => {
-      const layout = snapshot().layouts.find(
-        (item: { tab_id: string }) => item.tab_id === tabId,
-      );
-      if (!layout || layout.area.width !== cols || layout.area.height !== rows)
-        return false;
-      const panes = [...layout.panes].sort((a, b) => a.rect.x - b.rect.x);
-      return (
-        panes.length === 2 &&
-        panes[0].rect.x === 0 &&
-        panes[0].rect.width === panes[1].rect.x &&
-        panes[1].rect.x + panes[1].rect.width === cols &&
-        panes.every((pane) => pane.rect.y === 0 && pane.rect.height === rows)
-      );
+      const geometry = nativeGeometry(tabId);
+      return geometry.cols === cols && geometry.rows === rows;
     }, "split panes did not cover the complete native viewport");
     await waitFor(() => {
       const top =
@@ -207,6 +200,7 @@ test("herdr adapter displays a complete bare tab, accepts input and resizes", as
       .windows.find((w) => w.name === "Other tab")!;
     cli("tab", "focus", other.id);
     command = await openTerminal(source, space.id, window.id, 90, 25);
+    const originalGeometry = await command.readSize!();
     terminal = pty.spawn(command.file, command.args, {
       cols: 90,
       rows: 25,
@@ -221,6 +215,13 @@ test("herdr adapter displays a complete bare tab, accepts input and resizes", as
       () => screenText().includes("sh-"),
       "bare herdr client produced no shell frame",
     );
+    assert.equal(
+      (await command.readSize!()).token,
+      originalGeometry.token,
+      "opening the passive view changed native geometry",
+    );
+    await command.resize!(90, 25);
+    await command.commitSize!();
     await assertSplitGeometry(window.id, 90, 25);
     terminal.write("printf 'HERDR_NATIVE_%s\\n' OK\r");
     await waitFor(
@@ -229,17 +230,18 @@ test("herdr adapter displays a complete bare tab, accepts input and resizes", as
     );
     screen.resize(112, 32);
     terminal.resize(112, 32);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(
+      nativeGeometry(window.id).cols,
+      90,
+      "passive PTY resize changed native geometry",
+    );
+    await command.resize!(112, 32);
+    await command.commitSize!();
     await waitFor(
       () =>
-        snapshot().layouts.some(
-          (layout: {
-            tab_id: string;
-            area: { width: number; height: number };
-          }) =>
-            layout.tab_id === window.id &&
-            layout.area.width === 112 &&
-            layout.area.height === 32,
-        ),
+        nativeGeometry(window.id).cols === 112 &&
+        nativeGeometry(window.id).rows === 32,
       "bare herdr tab did not resize to full viewport",
     );
     data = snapshot();
@@ -251,11 +253,17 @@ test("herdr adapter displays a complete bare tab, accepts input and resizes", as
     await assertSplitGeometry(window.id, 112, 32);
     screen.resize(70, 18);
     terminal.resize(70, 18);
+    await command.resize!(70, 18);
+    await command.commitSize!();
     await assertSplitGeometry(window.id, 70, 18);
     screen.resize(112, 32);
     terminal.resize(112, 32);
+    await command.resize!(112, 32);
+    await command.commitSize!();
     await assertSplitGeometry(window.id, 112, 32);
     secondCommand = await openTerminal(source, space.id, other.id, 90, 25);
+    await secondCommand.resize!(90, 25);
+    await secondCommand.commitSize!();
     secondTerminal = pty.spawn(secondCommand.file, secondCommand.args, {
       cols: 90,
       rows: 25,
@@ -286,6 +294,116 @@ test("herdr adapter displays a complete bare tab, accepts input and resizes", as
       !secondText().includes("FIRST_TAB_ONLY"),
       "first tab output leaked to second",
     );
+    externalTerminal = pty.spawn(
+      binary,
+      ["--session", session, "tab", "attach", window.id, "--bare"],
+      {
+        cols: 100,
+        rows: 28,
+        name: "xterm-256color",
+        cwd: root,
+        env,
+      },
+    );
+    externalTerminal.onData(() => {});
+    await waitFor(
+      () =>
+        nativeGeometry(window.id).cols === 100 &&
+        nativeGeometry(window.id).rows === 28,
+      "external native client did not control tab geometry",
+    );
+    const externalBeforeInput = await command.readSize!();
+    terminal.write("printf 'PASSIVE_INPUT_%s\\n' OK\r");
+    await waitFor(
+      () => screenText().includes("PASSIVE_INPUT_OK"),
+      "passive view input did not reach its pane",
+    );
+    assert.equal(
+      (await command.readSize!()).token,
+      externalBeforeInput.token,
+      "passive input stole geometry from the native client",
+    );
+    const focused = await command.resize!(150, 45, externalBeforeInput.token);
+    externalTerminal.resize(130, 38);
+    await waitFor(
+      () =>
+        nativeGeometry(window.id).cols === 130 &&
+        nativeGeometry(window.id).rows === 38,
+      "external native resize did not take over focused geometry",
+    );
+    const external = await command.restoreSize!(
+      externalBeforeInput,
+      focused.token,
+    );
+    assert.equal(
+      `${external.cols}x${external.rows}`,
+      "130x38",
+      "collapse overwrote newer external geometry",
+    );
+    const next = await command.resize!(150, 45, external.token);
+    cli("tab", "resize", window.id, "--cols", "140", "--rows", "40");
+    cli("tab", "resize", window.id, "--cols", "150", "--rows", "45");
+    assert.notEqual(
+      (await command.readSize!()).token,
+      next.token,
+      "A→B→A native geometry changes lost their revision",
+    );
+    await command.restoreSize!(external, next.token);
+    assert.equal(nativeGeometry(window.id).cols, 150);
+    const receiptWrapper = join(root, "herdr-response-loss");
+    const receiptArmed = join(root, "receipt-armed");
+    writeFileSync(
+      receiptWrapper,
+      `#!${process.execPath}
+const fs=require('node:fs'),cp=require('node:child_process');
+const args=process.argv.slice(2), armed=${JSON.stringify(receiptArmed)}, real=${JSON.stringify(binary)};
+const result=cp.spawnSync(real,args,{encoding:'utf8'});
+if (result.status===0 && args.includes('--operation-id') && fs.existsSync(armed)) {
+ const mode=fs.readFileSync(armed,'utf8');fs.unlinkSync(armed);
+ if (mode==='external') { const external=args.slice(0,args.indexOf('--expected-revision'));cp.execFileSync(real,external,{stdio:'ignore'}); }
+ process.stderr.write('synthetic response loss after native resize');process.exit(75);
+}
+process.stdout.write(result.stdout||'');process.stderr.write(result.stderr||'');process.exit(result.status??1);
+`,
+      { mode: 0o700 },
+    );
+    const receiptCommand = await openTerminal(
+      { ...source, id: "herdr-receipt", binary: receiptWrapper },
+      space.id,
+      other.id,
+      90,
+      25,
+    );
+    try {
+      const receiptBaseline = await receiptCommand.readSize!(true);
+      writeFileSync(receiptArmed, "drop");
+      const recovered = await receiptCommand.resize!(
+        140,
+        40,
+        receiptBaseline.token,
+      );
+      assert.equal(recovered.recoveredFromToken, receiptBaseline.token);
+      assert.ok(recovered.operationId);
+      const restoredReceipt = await receiptCommand.restoreSize!(
+        receiptBaseline,
+        recovered.token,
+      );
+      assert.equal(
+        `${restoredReceipt.cols}x${restoredReceipt.rows}`,
+        `${receiptBaseline.cols}x${receiptBaseline.rows}`,
+      );
+      const receiptExternalBaseline = await receiptCommand.readSize!(true);
+      writeFileSync(receiptArmed, "external");
+      await assert.rejects(
+        receiptCommand.resize!(140, 40, receiptExternalBaseline.token),
+        NativeGeometryConflictError,
+      );
+      const receiptExternal = await receiptCommand.readSize!(true);
+      assert.equal(`${receiptExternal.cols}x${receiptExternal.rows}`, "140x40");
+      assert.equal(receiptExternal.recoveredFromToken, undefined);
+    } finally {
+      await receiptCommand.cleanup();
+    }
     await renameSpace(source, space.id, "Renamed space");
     await renameWindow(source, space.id, window.id, "Renamed tab");
     space = (await listResources(source)).spaces.find(
@@ -304,6 +422,7 @@ test("herdr adapter displays a complete bare tab, accepts input and resizes", as
   } finally {
     terminal?.kill();
     secondTerminal?.kill();
+    externalTerminal?.kill();
     await command?.cleanup();
     await secondCommand?.cleanup();
     try {

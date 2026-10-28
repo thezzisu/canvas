@@ -9,7 +9,7 @@ import { Store, type Source } from "./state.ts";
 import { createApp, type Account } from "./app.ts";
 import { TerminalManager } from "./terminals.ts";
 import { sessionCookie } from "./auth.ts";
-import { closeStatusObservers } from "./providers.ts";
+import { closeStatusObservers, closeProviderConnections } from "./providers.ts";
 const dataDir =
   process.env.CANVAS_DATA_DIR ?? join(homedir(), ".local/share/canvas");
 const accountFile = join(dataDir, "auth.json");
@@ -34,11 +34,20 @@ app.use("*", serveStatic({ root: staticDir }));
 app.get("*", serveStatic({ path: join(staticDir, "index.html") }));
 const server = createServer(getRequestListener(app.fetch));
 const wss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
+let stopping = false;
 const socketSessions = new WeakMap<import("ws").WebSocket, string>();
+store.on("sessions", () => {
+  for (const ws of wss.clients)
+    if (!store.hasSession(socketSessions.get(ws) ?? "")) {
+      ws.close(1008, "Session expired");
+      ws.terminate();
+    }
+});
 const heartbeat = setInterval(() => {
   for (const ws of wss.clients) {
     if (!store.hasSession(socketSessions.get(ws) ?? "")) {
       ws.close(1008, "Session expired");
+      ws.terminate();
       continue;
     }
     if (ws.readyState === 1) ws.ping();
@@ -46,6 +55,13 @@ const heartbeat = setInterval(() => {
 }, 30_000);
 heartbeat.unref();
 server.on("upgrade", (request, socket, head) => {
+  if (stopping) {
+    socket.write(
+      "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n",
+    );
+    socket.destroy();
+    return;
+  }
   const origin = request.headers.origin;
   let sameOrigin = false;
   try {
@@ -100,13 +116,14 @@ const host = process.env.CANVAS_HOST ?? "127.0.0.1",
 server.listen(port, host, () =>
   console.log(`Canvas listening on http://${host}:${port}`),
 );
-let stopping = false;
 async function stop() {
   if (stopping) return;
   stopping = true;
   clearInterval(heartbeat);
   closeStatusObservers();
   await terminals.closeAll();
+  await closeProviderConnections();
+  store.emit("close");
   wss.close();
   server.close(() => {
     store.close();

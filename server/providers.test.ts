@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -20,6 +21,9 @@ import {
   closeWindow,
   listResources,
   openTerminal,
+  readHerdrSize,
+  closeProviderConnections,
+  NativeGeometryConflictError,
   parseSshTarget,
   renameSpace,
   renameWindow,
@@ -209,6 +213,290 @@ test("herdr capability checks distinguish old clients from connection failures",
       );
     }
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("herdr geometry sampling batches windows, expires external changes and invalidates writes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "canvas-herdr-batch-"));
+  const binary = join(root, "herdr");
+  const count = join(root, "reads");
+  const state = join(root, "geometry.json");
+  writeFileSync(count, "");
+  writeFileSync(state, JSON.stringify({ cols: 100, revision: 1 }));
+  writeFileSync(
+    binary,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(4);
+const statePath = ${JSON.stringify(state)}, countPath = ${JSON.stringify(count)};
+if (args[0] === 'tab' && args[1] === 'geometries') {
+  fs.appendFileSync(countPath, 'read\\n');
+  setTimeout(() => {
+    const value = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    console.log(JSON.stringify({ result: { geometries: Array.from({length: 14}, (_, i) => ({
+      tab_id: 'tab-' + i, geometry: { boot_id: 'fixture', rows: 30, ...value }
+    })) } }));
+  }, 40);
+} else if (args[0] === 'workspace' && args[1] === 'create') {
+  fs.writeFileSync(statePath, JSON.stringify({ cols: 130, revision: 2 }));
+  console.log('{}');
+} else process.exit(2);
+`,
+    { mode: 0o700 },
+  );
+  const source: Source = {
+    id: "batch-test",
+    name: "Batch",
+    type: "herdr",
+    transport: "local",
+    binary,
+  };
+  const reads = () =>
+    String(readFileSync(count, "utf8").split("\n").filter(Boolean).length);
+  const batch = () =>
+    Promise.all(
+      Array.from({ length: 14 }, (_, i) => readHerdrSize(source, `tab-${i}`)),
+    );
+  try {
+    assert.ok((await batch()).every((value) => value.cols === 100));
+    assert.equal(
+      reads(),
+      "1",
+      "14 windows did not share the same in-flight request",
+    );
+    await batch();
+    assert.equal(reads(), "1", "fresh snapshot was not reused");
+    await createSpace(source, "New");
+    assert.ok((await batch()).every((value) => value.cols === 130));
+    assert.equal(reads(), "2", "write did not invalidate the shared snapshot");
+    writeFileSync(state, JSON.stringify({ cols: 140, revision: 3 }));
+    await new Promise((resolve) => setTimeout(resolve, 510));
+    assert.ok((await batch()).every((value) => value.cols === 140));
+    assert.equal(
+      reads(),
+      "3",
+      "external changes did not refresh the next sampling interval",
+    );
+    await closeProviderConnections(source.id);
+    await batch();
+    assert.equal(reads(), "4", "source cleanup retained its geometry cache");
+  } finally {
+    await closeProviderConnections(source.id);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("tmux failed PTY preparation retains recovery until native cleanup", async (t) => {
+  try {
+    execFileSync("tmux", ["-V"], { stdio: "ignore" });
+  } catch {
+    t.skip("tmux is not installed");
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), "canvas-restore-failure-"));
+  const socket = join(root, "socket");
+  const source: Source = {
+    id: "restore-failure",
+    name: "Restore",
+    type: "tmux",
+    transport: "local",
+    tmuxSocket: socket,
+  };
+  const tmux = (...args: string[]) =>
+    execFileSync("tmux", ["-S", socket, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trimEnd();
+  let terminal: pty.IPty | undefined;
+  let command: Awaited<ReturnType<typeof openTerminal>> | undefined;
+  try {
+    tmux(
+      "-f",
+      "/dev/null",
+      "new-session",
+      "-d",
+      "-s",
+      "native",
+      "-x",
+      "101",
+      "-y",
+      "31",
+    );
+    const space = (await listResources(source)).spaces[0]!;
+    const windowId = space.windows[0]!.id;
+    const window = windowId.split(":")[1]!;
+    command = await openTerminal(source, space.id, windowId, 101, 31);
+    terminal = pty.spawn(command.file, command.args, {
+      name: "xterm-256color",
+      cols: 101,
+      rows: 31,
+      env: { PATH: process.env.PATH!, HOME: root, TERM: "xterm-256color" },
+    });
+    await new Promise<void>((resolve) => terminal!.onData(() => resolve()));
+    const before = await command.readSize!();
+    const focused = await command.resize!(150, 48, before.token);
+    terminal.resize(150, 48);
+    await assert.rejects(
+      command.restoreSize!(before, focused.token, async () => {
+        throw new Error("PTY has exited");
+      }),
+      /PTY has exited/u,
+    );
+    await command.cleanup();
+    assert.equal(
+      tmux(
+        "display-message",
+        "-p",
+        "-t",
+        window,
+        "#{window_width}x#{window_height}",
+      ),
+      "101x31",
+    );
+    assert.equal(
+      tmux("show-options", "-w", "-t", window, "window-size"),
+      before.policy,
+    );
+    assert.equal(tmux("list-sessions", "-F", "#{session_name}"), "native");
+    assert.ok(
+      !tmux("show-options", "-w", "-t", window).includes("@canvas_geometry_"),
+    );
+  } finally {
+    terminal?.kill();
+    await command?.cleanup();
+    try {
+      tmux("kill-server");
+    } catch {
+      /* Already stopped. */
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("tmux native receipts recover lost resize responses without claiming external writes", async (t) => {
+  try {
+    execFileSync("tmux", ["-V"], { stdio: "ignore" });
+  } catch {
+    t.skip("tmux is not installed");
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), "canvas-resize-receipt-"));
+  const socket = join(root, "socket"),
+    binary = join(root, "tmux"),
+    armed = join(root, "armed"),
+    blocked = join(root, "blocked");
+  const realTmux = execFileSync("sh", ["-c", "command -v tmux"], {
+    encoding: "utf8",
+  }).trim();
+  const tmux = (...args: string[]) =>
+    execFileSync(realTmux, ["-S", socket, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trimEnd();
+  writeFileSync(
+    binary,
+    `#!${process.execPath}
+const fs=require('node:fs'),cp=require('node:child_process');
+const args=process.argv.slice(2), armed=${JSON.stringify(armed)}, blocked=${JSON.stringify(blocked)}, real=${JSON.stringify(realTmux)};
+if (fs.existsSync(blocked) && args.includes('display-message')) { process.stderr.write('synthetic read outage'); process.exit(75); }
+const result=cp.spawnSync(real,args,{encoding:'utf8'});
+const ownWrite=args.includes('if-shell') && args.some(arg=>arg.includes("_writer ") && arg.includes("resize-window -t "));
+if (result.status===0 && ownWrite && fs.existsSync(armed)) {
+ const mode=fs.readFileSync(armed,'utf8'); fs.unlinkSync(armed);
+ if(mode==='blocked') fs.writeFileSync(blocked,'blocked');
+ if(mode==='external') cp.execFileSync(real,['-S',${JSON.stringify(socket)},'resize-window','-t','@0','-x','150','-y','45']);
+ process.stderr.write('synthetic resize response loss'); process.exit(75);
+}
+process.stdout.write(result.stdout||'');process.stderr.write(result.stderr||'');process.exit(result.status??1);
+`,
+    { mode: 0o700 },
+  );
+  const source: Source = {
+    id: "receipt",
+    name: "Receipt",
+    type: "tmux",
+    transport: "local",
+    tmuxSocket: socket,
+    binary,
+  };
+  let command: Awaited<ReturnType<typeof openTerminal>> | undefined;
+  try {
+    tmux(
+      "-f",
+      "/dev/null",
+      "new-session",
+      "-d",
+      "-s",
+      "native",
+      "-x",
+      "101",
+      "-y",
+      "31",
+    );
+    const space = (await listResources(source)).spaces[0]!;
+    command = await openTerminal(
+      source,
+      space.id,
+      space.windows[0]!.id,
+      101,
+      31,
+    );
+    const baseline = await command.readSize!();
+    writeFileSync(armed, "drop");
+    const recovered = await command.resize!(150, 45, baseline.token);
+    assert.equal(recovered.recoveredFromToken, baseline.token);
+    assert.ok(recovered.operationId);
+    const restored = await command.restoreSize!(baseline, recovered.token);
+    assert.equal(`${restored.cols}x${restored.rows}`, "101x31");
+
+    const second = await command.readSize!();
+    writeFileSync(armed, "blocked");
+    await assert.rejects(
+      command.resize!(150, 45, second.token),
+      (error) =>
+        error instanceof Error &&
+        !(error instanceof NativeGeometryConflictError),
+    );
+    rmSync(blocked);
+    const deferred = await command.readSize!();
+    assert.equal(
+      deferred.recoveredFromToken,
+      second.token,
+      "recovery after outage lost exact write attribution",
+    );
+    await command.restoreSize!(second, deferred.token);
+
+    const third = await command.readSize!();
+    writeFileSync(armed, "external");
+    await assert.rejects(
+      command.resize!(150, 45, third.token),
+      NativeGeometryConflictError,
+    );
+    const external = await command.readSize!();
+    assert.equal(`${external.cols}x${external.rows}`, "150x45");
+    assert.equal(
+      external.recoveredFromToken,
+      undefined,
+      "matching external dimensions were mistaken for our write",
+    );
+    await command.cleanup();
+    assert.equal(
+      tmux(
+        "display-message",
+        "-p",
+        "-t",
+        "@0",
+        "#{window_width}x#{window_height}",
+      ),
+      "150x45",
+    );
+  } finally {
+    rmSync(blocked, { force: true });
+    await command?.cleanup();
+    try {
+      tmux("kill-server");
+    } catch {}
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -551,5 +839,377 @@ test("tmux named sockets and abrupt native client exit clean the helper", async 
     } catch {
       /* Already stopped. */
     }
+  }
+});
+
+test("tmux passive views follow native size and temporary resize never overwrites an external owner", async (t) => {
+  try {
+    execFileSync("tmux", ["-V"], { stdio: "ignore" });
+  } catch {
+    t.skip("tmux is not installed");
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), "canvas-native-size-"));
+  const socket = join(root, "socket");
+  const source: Source = {
+    id: "geometry",
+    name: "Geometry",
+    type: "tmux",
+    transport: "local",
+    tmuxSocket: socket,
+  };
+  const tmux = (...args: string[]) =>
+    execFileSync("tmux", ["-S", socket, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trimEnd();
+  let terminal: pty.IPty | undefined;
+  let command: Awaited<ReturnType<typeof openTerminal>> | undefined;
+  let externalTerminal: pty.IPty | undefined;
+  const waitFor = async (check: () => boolean, message: string) => {
+    for (let i = 0; i < 150; i++) {
+      if (check()) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.fail(message);
+  };
+  try {
+    tmux(
+      "-f",
+      "/dev/null",
+      "new-session",
+      "-d",
+      "-s",
+      "native",
+      "-x",
+      "101",
+      "-y",
+      "31",
+    );
+    tmux(
+      "set-hook",
+      "-g",
+      "window-resized[17]",
+      "set-option -g @existing-global-fired yes",
+    );
+    tmux(
+      "set-hook",
+      "-w",
+      "-t",
+      "@0",
+      "after-resize-window[29]",
+      "set-option -w -t @0 @existing-window-fired yes",
+    );
+    const globalHooks = tmux("show-options", "-g", "window-resized");
+    const windowHooks = tmux(
+      "show-options",
+      "-w",
+      "-t",
+      "@0",
+      "after-resize-window",
+    );
+    const space = (await listResources(source)).spaces[0]!;
+    const windowId = space.windows[0]!.id;
+    const window = windowId.split(":")[1]!;
+    const nativeGeometry = () =>
+      tmux(
+        "display-message",
+        "-p",
+        "-t",
+        window,
+        "#{window_width}x#{window_height}",
+      );
+    const beforePolicy = tmux(
+      "show-options",
+      "-w",
+      "-t",
+      window,
+      "window-size",
+    );
+    command = await openTerminal(source, space.id, windowId, 90, 25);
+    assert.equal(
+      nativeGeometry(),
+      "101x31",
+      "opening a passive view resized the original window",
+    );
+    assert.equal(
+      tmux("show-options", "-w", "-t", window, "window-size"),
+      beforePolicy,
+    );
+    assert.equal(command.initialSize!.cols, 101);
+    assert.equal(command.initialSize!.rows, 31);
+    terminal = pty.spawn(command.file, command.args, {
+      name: "xterm-256color",
+      cols: command.initialSize!.cols,
+      rows: command.initialSize!.rows,
+      env: { PATH: process.env.PATH!, HOME: root, TERM: "xterm-256color" },
+    });
+    let attached = false;
+    terminal.onData(() => {
+      if (attached) return;
+      attached = true;
+      command!.connected?.();
+    });
+    await waitFor(() => attached, "native view did not attach");
+    await command.readSize!();
+    assert.equal(
+      nativeGeometry(),
+      "101x31",
+      "the passive PTY participated in native size negotiation",
+    );
+    const automaticBaseline = await command.readSize!();
+    const automaticFocus = await command.resize!(
+      150,
+      48,
+      automaticBaseline.token,
+    );
+    terminal.resize(150, 48);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const automaticRestore = await command.restoreSize!(
+      automaticBaseline,
+      automaticFocus.token,
+      async (size) => {
+        terminal!.resize(size.cols, size.rows);
+      },
+    );
+    assert.equal(
+      `${automaticRestore.cols}x${automaticRestore.rows}`,
+      "101x31",
+      "restoring automatic policy reused the focused PTY dimensions",
+    );
+    const raceBaseline = await command.readSize!();
+    const raceFocus = await command.resize!(150, 48, raceBaseline.token);
+    terminal.resize(150, 48);
+    const raceRestored = await command.restoreSize!(
+      raceBaseline,
+      raceFocus.token,
+      async (size) => {
+        terminal!.resize(size.cols, size.rows);
+        tmux("resize-window", "-t", window, "-x", "143", "-y", "43");
+      },
+    );
+    assert.equal(
+      `${raceRestored.cols}x${raceRestored.rows}`,
+      "143x43",
+      "external takeover during preparation lost the atomic restore guard",
+    );
+    let notifications = 0;
+    command.watchSize!(() => notifications++);
+    tmux("resize-window", "-t", window, "-x", "108", "-y", "38");
+    const baseline = await command.readSize!();
+    assert.equal(baseline.cols, 108);
+    assert.equal(baseline.rows, 38);
+    await waitFor(
+      () => notifications > 0,
+      "external native geometry emitted no notification",
+    );
+    terminal.resize(108, 38);
+    const focused = await command.resize!(160, 50);
+    assert.equal(
+      (await command.readSize!()).token,
+      focused.token,
+      "own late events invalidated the resize token",
+    );
+    tmux(
+      "set-option",
+      "-w",
+      "-t",
+      window,
+      "@unrelated-plugin-state",
+      "updated",
+    );
+    tmux("set-option", "-t", "native", "status-style", "bg=blue");
+    tmux("set-window-option", "-t", window, "window-style", "fg=green");
+    assert.equal(
+      (await command.readSize!()).token,
+      focused.token,
+      "unrelated option changes ended the focused geometry lease",
+    );
+    const restored = await command.restoreSize!(baseline, focused.token);
+    assert.equal(`${restored.cols}x${restored.rows}`, "108x38");
+    assert.equal(restored.policy, baseline.policy);
+
+    const next = await command.resize!(160, 50);
+    tmux(
+      "resize-window",
+      "-t",
+      window,
+      "-x",
+      "145",
+      "-y",
+      "45",
+      ";",
+      "resize-window",
+      "-t",
+      window,
+      "-x",
+      "160",
+      "-y",
+      "50",
+    );
+    const bounced = await command.readSize!();
+    assert.equal(`${bounced.cols}x${bounced.rows}`, "160x50");
+    assert.notEqual(
+      bounced.token,
+      next.token,
+      "A→B→A native resize was lost between polls",
+    );
+    await command.restoreSize!(baseline, next.token, async () => {
+      assert.fail("external takeover must not prepare an old PTY size");
+    });
+    assert.equal(
+      nativeGeometry(),
+      "160x50",
+      "restore overwrote a newer external size",
+    );
+    const sameSizePolicyBaseline = await command.readSize!();
+    const sameSizePolicyFocus = await command.resize!(
+      160,
+      50,
+      sameSizePolicyBaseline.token,
+    );
+    tmux("set-option", "-w", "-t", window, "window-size", "manual");
+    const sameSizePolicy = await command.readSize!();
+    assert.equal(`${sameSizePolicy.cols}x${sameSizePolicy.rows}`, "160x50");
+    assert.notEqual(
+      sameSizePolicy.token,
+      sameSizePolicyFocus.token,
+      "same-size policy writes lost ownership invalidation",
+    );
+    await command.restoreSize!(
+      sameSizePolicyBaseline,
+      sameSizePolicyFocus.token,
+    );
+
+    // A real client's resize must take back control even though resize-window
+    // temporarily selected tmux's manual sizing policy for the focused view.
+    tmux("set-option", "-w", "-u", "-t", window, "window-size");
+    externalTerminal = pty.spawn(
+      "tmux",
+      ["-S", socket, "attach-session", "-t", "native"],
+      {
+        name: "xterm-256color",
+        cols: 120,
+        rows: 40,
+        env: { PATH: process.env.PATH!, HOME: root, TERM: "xterm-256color" },
+      },
+    );
+    externalTerminal.onData(() => {});
+    await waitFor(
+      () => nativeGeometry() === "120x39",
+      "native external client did not establish its viewport",
+    );
+    const externalBaseline = await command.readSize!();
+    const externalFocus = await command.resize!(
+      160,
+      50,
+      externalBaseline.token,
+    );
+    externalTerminal.resize(135, 45);
+    await waitFor(
+      () => nativeGeometry() === "135x44",
+      "native external client resize was blocked by the temporary manual policy",
+    );
+    const externalTakeover = await command.readSize!();
+    assert.notEqual(externalTakeover.token, externalFocus.token);
+    assert.equal(
+      externalTakeover.effectivePolicy,
+      externalBaseline.effectivePolicy,
+    );
+    await command.restoreSize!(externalBaseline, externalFocus.token);
+    assert.equal(
+      nativeGeometry(),
+      "135x44",
+      "collapse overwrote the external native client's new viewport",
+    );
+    const nativeRaceBaseline = await command.readSize!();
+    const nativeRaceFocus = await command.resize!(
+      160,
+      50,
+      nativeRaceBaseline.token,
+    );
+    terminal.resize(160, 50);
+    const nativeRaceRestored = await command.restoreSize!(
+      nativeRaceBaseline,
+      nativeRaceFocus.token,
+      async (size) => {
+        terminal!.resize(size.cols, size.rows);
+        externalTerminal!.resize(140, 46);
+        await waitFor(
+          () => nativeGeometry() === "140x45",
+          "external native client could not take over during collapse",
+        );
+      },
+    );
+    assert.equal(
+      `${nativeRaceRestored.cols}x${nativeRaceRestored.rows}`,
+      "140x45",
+    );
+
+    const policyBaseline = await command.readSize!();
+    const policyFocus = await command.resize!(170, 55);
+    tmux("set-option", "-w", "-t", window, "window-size", "largest");
+    const external = await command.readSize!();
+    assert.notEqual(external.token, policyFocus.token);
+    await command.restoreSize!(policyBaseline, policyFocus.token);
+    assert.equal(
+      tmux("show-options", "-w", "-t", window, "window-size"),
+      "window-size largest",
+    );
+    await command.cleanup();
+    assert.equal(
+      tmux("show-options", "-w", "-t", window, "window-size"),
+      "window-size largest",
+      "detach replaced external sizing policy",
+    );
+    assert.equal(
+      tmux("show-options", "-g", "window-resized"),
+      globalHooks,
+      "existing global hooks changed",
+    );
+    assert.equal(
+      tmux("show-options", "-w", "-t", window, "after-resize-window"),
+      windowHooks,
+      "existing window hooks changed",
+    );
+    assert.equal(
+      tmux("show-options", "-g", "@existing-global-fired"),
+      "@existing-global-fired yes",
+      "inherited hooks stopped running",
+    );
+    assert.equal(
+      tmux("show-options", "-w", "-t", window, "@existing-window-fired"),
+      "@existing-window-fired yes",
+      "local hooks stopped running",
+    );
+    assert.ok(
+      !tmux("show-options", "-w", "-t", window).includes("@canvas_geometry_"),
+    );
+    const persistent = await openTerminal(source, space.id, windowId, 90, 25);
+    try {
+      await persistent.resize!(175, 55);
+      await persistent.commitSize!();
+    } finally {
+      await persistent.cleanup();
+    }
+    assert.equal(
+      nativeGeometry(),
+      "175x55",
+      "cleanup restored a deliberately committed window size",
+    );
+    assert.equal(
+      tmux("show-options", "-w", "-t", window, "window-size"),
+      "window-size manual",
+    );
+  } finally {
+    externalTerminal?.kill();
+    terminal?.kill();
+    await command?.cleanup();
+    try {
+      tmux("kill-server");
+    } catch {
+      /* Already stopped. */
+    }
+    rmSync(root, { recursive: true, force: true });
   }
 });

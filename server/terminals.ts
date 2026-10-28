@@ -3,7 +3,8 @@ import headless from "@xterm/headless";
 import serialize from "@xterm/addon-serialize";
 import type { WebSocket } from "ws";
 import type { Source } from "./state.ts";
-import { openTerminal } from "./providers.ts";
+import { openTerminal, type NativeSize } from "./providers.ts";
+import { GeometryController } from "./geometry.ts";
 const { Terminal } = headless;
 const { SerializeAddon } = serialize;
 export type TerminalTarget = {
@@ -50,9 +51,10 @@ class LiveTerminal {
   queue: Promise<void> = Promise.resolve();
   pendingBytes = 0;
   paused = false;
-  requestedSize?: { cols: number; rows: number };
-  resizing = false;
-  resizeTask?: Promise<void>;
+  geometry: GeometryController<WebSocket>;
+  geometryTimer?: ReturnType<typeof setInterval>;
+  unwatchGeometry?: () => void;
+  closing?: Promise<void>;
   closed = false;
   cols: number;
   rows: number;
@@ -81,6 +83,28 @@ class LiveTerminal {
       cwd: process.env.HOME,
       env: { ...safeEnv(), ...handle.env },
     });
+    this.geometry = new GeometryController(
+      handle,
+      handle.initialSize ?? { cols, rows, token: "initial" },
+      (size) => this.adoptGeometry(size),
+      (_lease, reason) => {
+        for (const ws of this.clients)
+          json(ws, {
+            ...this.geometry.state(ws),
+            ...(reason ? { reason } : {}),
+          });
+      },
+      (owner, error) => {
+        const message =
+          error instanceof Error ? error.message : "Terminal resize failed";
+        if (owner) json(owner, { type: "geometry-error", error: message });
+      },
+    );
+    this.unwatchGeometry = handle.watchSize?.(() => this.geometry.poll());
+    if (handle.readSize) {
+      this.geometryTimer = setInterval(() => this.geometry.poll(), 500);
+      this.geometryTimer.unref();
+    }
     let connected = false;
     this.proc.onData((data) => {
       if (this.closed) return;
@@ -131,17 +155,44 @@ class LiveTerminal {
       json(ws, { type: "resize", cols: this.cols, rows: this.rows });
       ws.send(Buffer.from(this.serializer.serialize(), "utf8"));
       this.clients.add(ws);
-      this.controller = ws;
+      if (!this.controller) this.controller = ws;
       this.status();
+      json(ws, this.geometry.state(ws));
     });
     await this.queue;
     ws.on("message", (data, isBinary) => {
+      if (this.closed || ws.readyState !== 1 || !this.clients.has(ws)) return;
       if (isBinary || Buffer.byteLength(data.toString()) > 128 * 1024) return;
       try {
         const msg = JSON.parse(data.toString());
         if (msg.type === "focus") {
           this.controller = ws;
           this.status();
+          return;
+        }
+        const size = {
+          cols: clamp(msg.cols, 20, 500, this.cols),
+          rows: clamp(msg.rows, 5, 200, this.rows),
+        };
+        if (
+          msg.type === "focus-resize-begin" &&
+          typeof msg.token === "string" &&
+          msg.token.length <= 100
+        ) {
+          this.controller = ws;
+          this.status();
+          this.geometry.begin(ws, msg.token, size);
+          return;
+        }
+        if (
+          msg.type === "focus-resize-update" &&
+          typeof msg.token === "string"
+        ) {
+          this.geometry.update(ws, msg.token, size);
+          return;
+        }
+        if (msg.type === "focus-resize-end" && typeof msg.token === "string") {
+          void this.geometry.end(ws, msg.token);
           return;
         }
         if (this.controller !== ws) return;
@@ -151,19 +202,7 @@ class LiveTerminal {
           msg.data.length <= 64 * 1024
         )
           this.proc.write(msg.data);
-        if (msg.type === "resize") {
-          const cols = clamp(msg.cols, 20, 500, this.cols),
-            rows = clamp(msg.rows, 5, 200, this.rows);
-          if (cols === this.cols && rows === this.rows) return;
-          this.cols = cols;
-          this.rows = rows;
-          this.proc.resize(cols, rows);
-          this.emulator.resize(cols, rows);
-          this.requestedSize = { cols, rows };
-          if (!this.resizing) this.resizeTask = this.applySize();
-          for (const client of this.clients)
-            json(client, { type: "resize", cols, rows });
-        }
+        if (msg.type === "resize") this.geometry.persistent(ws, size);
       } catch {
         /* Malformed messages cannot become terminal commands. */
       }
@@ -171,6 +210,7 @@ class LiveTerminal {
     ws.once("close", () => {
       this.clients.delete(ws);
       if (this.closed) return;
+      void this.geometry.end(ws);
       if (this.controller === ws)
         this.controller = this.clients.values().next().value;
       this.status();
@@ -180,31 +220,16 @@ class LiveTerminal {
       }
     });
   }
-  async applySize() {
-    if (this.resizing || this.closed) return;
-    this.resizing = true;
-    try {
-      while (this.requestedSize && !this.closed) {
-        const size = this.requestedSize;
-        this.requestedSize = undefined;
-        try {
-          await this.handle.resize?.(size.cols, size.rows);
-        } catch (error) {
-          if (!this.closed)
-            for (const ws of this.clients)
-              json(ws, {
-                type: "status",
-                status: "error",
-                error:
-                  error instanceof Error
-                    ? error.message
-                    : "Terminal resize failed",
-              });
-        }
-      }
-    } finally {
-      this.resizing = false;
-    }
+  adoptGeometry(size: NativeSize) {
+    if (this.cols === size.cols && this.rows === size.rows) return;
+    this.cols = size.cols;
+    this.rows = size.rows;
+    // Follow confirmed geometry. During tmux restore the provider also calls
+    // this under its temporary manual policy before restoring automatic sizing.
+    this.proc.resize(size.cols, size.rows);
+    this.emulator.resize(size.cols, size.rows);
+    for (const ws of this.clients)
+      json(ws, { type: "resize", cols: size.cols, rows: size.rows });
   }
   status() {
     for (const ws of this.clients)
@@ -214,29 +239,37 @@ class LiveTerminal {
         readOnly: this.controller !== ws,
       });
   }
-  async close() {
-    if (this.closed) return;
+  close(): Promise<void> {
+    if (this.closing) return this.closing;
     this.closed = true;
     clearTimeout(this.idle);
-    for (const ws of this.clients) {
-      json(ws, { type: "status", status: "closed" });
-      ws.close(1000, "Terminal detached");
-    }
-    this.clients.clear();
-    try {
-      this.proc.kill();
-    } catch {}
-    await this.resizeTask?.catch(() => {});
-    await this.handle.cleanup().catch(() => {});
-    // Complete already accepted parser writes before disposing its buffer.
-    // New queued callbacks see closed and return without touching the emulator.
-    void this.queue.finally(() => this.emulator.dispose()).catch(() => {});
-    this.onClose();
+    clearInterval(this.geometryTimer);
+    this.unwatchGeometry?.();
+    this.closing = (async () => {
+      // Restore temporary focus while the native client and observer still exist.
+      await this.geometry.close();
+      for (const ws of this.clients) {
+        json(ws, { type: "status", status: "closed" });
+        ws.close(1000, "Terminal detached");
+      }
+      this.clients.clear();
+      try {
+        this.proc.kill();
+      } catch {}
+      await this.handle.cleanup().catch(() => {});
+      void this.queue.finally(() => this.emulator.dispose()).catch(() => {});
+      this.onClose();
+    })();
+    return this.closing;
   }
 }
 export class TerminalManager {
   entries = new Map<string, Promise<LiveTerminal>>();
+  private stopped = false;
+  private closingSources = new Set<string>();
   async connect(source: Source, target: TerminalTarget, ws: WebSocket) {
+    if (this.stopped || this.closingSources.has(source.id))
+      throw new Error("Terminal service is closing");
     const key = `${source.id}/${target.windowId}`;
     if (!this.entries.has(key)) {
       if (this.entries.size >= 100)
@@ -250,8 +283,13 @@ export class TerminalManager {
           30,
         );
         try {
-          return new LiveTerminal(key, source.id, handle, 100, 30, () =>
-            this.entries.delete(key),
+          return new LiveTerminal(
+            key,
+            source.id,
+            handle,
+            handle.initialSize?.cols ?? 100,
+            handle.initialSize?.rows ?? 30,
+            () => this.entries.delete(key),
           );
         } catch (error) {
           await handle.cleanup();
@@ -271,14 +309,20 @@ export class TerminalManager {
     }
   }
   async closeSource(sourceId: string) {
-    await Promise.all(
-      [...this.entries.values()].map(async (p) => {
-        const t = await p.catch(() => undefined);
-        if (t?.sourceId === sourceId) await t.close();
-      }),
-    );
+    this.closingSources.add(sourceId);
+    try {
+      await Promise.all(
+        [...this.entries.values()].map(async (p) => {
+          const t = await p.catch(() => undefined);
+          if (t?.sourceId === sourceId) await t.close();
+        }),
+      );
+    } finally {
+      this.closingSources.delete(sourceId);
+    }
   }
   async closeAll() {
+    this.stopped = true;
     await Promise.all(
       [...this.entries.values()].map(async (p) =>
         (await p.catch(() => undefined))?.close(),

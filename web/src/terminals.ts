@@ -1,13 +1,23 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { uuid } from './api'
 
-export type TerminalStatus = { status: 'connecting' | 'connected' | 'disconnected'; error?: string; readOnly?: boolean }
+export type TerminalStatus = {
+  status: 'connecting' | 'connected' | 'disconnected'
+  error?: string
+  readOnly?: boolean
+  focusResize?: { active: boolean; owned: boolean; reason?: string }
+}
 export interface TerminalGeometry { width: number; height: number; cols: number; rows: number }
+interface FocusResize { token: string; suspended: boolean; requested?: { cols: number; rows: number } }
 interface Session {
   term: Terminal
   fit: FitAddon
   surface: HTMLDivElement
   host?: HTMLElement
+  magnified: boolean
+  focusResize?: FocusResize
+  presentationFrame?: number
   socket?: WebSocket
   opened: boolean
   state: TerminalStatus
@@ -53,6 +63,14 @@ function setState(session: Session, state: TerminalStatus) {
   session.state = state
   session.listeners.forEach(listener => listener(state))
 }
+function schedulePresentation(session: Session) {
+  if (session.presentationFrame !== undefined) return
+  session.presentationFrame = requestAnimationFrame(() => {
+    session.presentationFrame = undefined
+    updateFocusSize(session)
+    present(session)
+  })
+}
 function connect(session: Session) {
   const url = new URL('/api/terminal', location.href)
   url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -73,11 +91,23 @@ function connect(session: Session) {
         const message = JSON.parse(event.data)
         if (message.type === 'output') session.term.write(message.data)
         else if (message.type === 'status') {
-          setState(session, { status: message.status === 'closed' || message.status === 'error' ? 'disconnected' : message.status, error: message.error, readOnly: message.readOnly })
+          setState(session, { ...session.state, status: message.status === 'closed' || message.status === 'error' ? 'disconnected' : message.status, error: message.error, readOnly: message.readOnly })
+          schedulePresentation(session)
         }
         else if (message.type === 'resize' && Number.isInteger(message.cols) && Number.isInteger(message.rows)) {
           session.term.resize(message.cols, message.rows)
-          requestAnimationFrame(() => present(session))
+          schedulePresentation(session)
+        }
+        else if (message.type === 'focus-resize') {
+          const request = session.focusResize
+          if (!request) return
+          // A competing view's token can revoke our request, but a late ended
+          // acknowledgement from an older request must not end the new one.
+          const revoked = !message.owned && ['external-resize', 'superseded', 'unavailable'].includes(message.reason)
+          if (message.token !== request.token && !revoked) return
+          request.suspended = message.owned !== true
+          setState(session, { ...session.state, focusResize: { active: message.active === true, owned: message.owned === true, reason: message.reason } })
+          schedulePresentation(session)
         }
         else if (message.type === 'error') setState(session, { status: 'disconnected', error: message.error || message.message })
         else if (message.type === 'exit') setState(session, { status: 'disconnected', error: message.message || '终端连接已结束' })
@@ -110,18 +140,57 @@ function present(session: Session) {
   if (session.state.status === 'connected') {
     for (const listener of session.geometryListeners) listener({ width, height, cols: session.term.cols, rows: session.term.rows })
   }
-  const scale = Math.min(available.width / width, available.height / height)
+  const scale = session.magnified ? 1 : Math.min(available.width / width, available.height / height)
   if (!(scale > 0)) return
-  Object.assign(session.surface.style, { width: `${width}px`, height: `${height}px`, transform: `scale(${scale})` })
+  Object.assign(session.surface.style, { width: `${width}px`, height: `${height}px`, transform: session.magnified ? 'none' : `scale(${scale})` })
 }
-function resize(session: Session) {
-  if (!session.host?.isConnected || !session.opened || session.state.status !== 'connected') return
-  claimFocus(session)
+function proposedSize(session: Session) {
+  if (!session.host?.isConnected || !session.opened) return
   const available = availableSize(session.host)
+  if (session.magnified) {
+    // The previous grid may overflow while the viewport is shrinking. Its
+    // temporary scrollbars must not make us request an unnecessarily small
+    // grid, then grow it again after the scrollbars disappear.
+    const style = getComputedStyle(session.host)
+    available.width = session.host.offsetWidth - parseFloat(style.borderLeftWidth) - parseFloat(style.borderRightWidth) - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+    available.height = session.host.offsetHeight - parseFloat(style.borderTopWidth) - parseFloat(style.borderBottomWidth) - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)
+  }
+  if (!(available.width > 0 && available.height > 0)) return
   Object.assign(session.surface.style, { width: `${available.width}px`, height: `${available.height}px`, transform: 'none' })
   const proposed = session.fit.proposeDimensions()
+  if (proposed && Number.isFinite(proposed.cols) && Number.isFinite(proposed.rows)) return {
+    cols: Math.max(20, Math.min(500, proposed.cols)),
+    rows: Math.max(5, Math.min(200, proposed.rows)),
+  }
+}
+function updateFocusSize(session: Session) {
+  if (!session.magnified || session.focusResize?.suspended || session.state.status !== 'connected' || session.socket?.readyState !== WebSocket.OPEN) return
+  const proposed = proposedSize(session)
+  if (!proposed) return
+  if (!session.focusResize) {
+    session.focusResize = { token: uuid(), suspended: false, requested: proposed }
+    claimFocus(session)
+    session.socket.send(JSON.stringify({ type: 'focus-resize-begin', token: session.focusResize.token, ...proposed }))
+    return
+  }
+  const request = session.focusResize
+  if (proposed.cols === request.requested?.cols && proposed.rows === request.requested?.rows) return
+  request.requested = proposed
+  session.socket.send(JSON.stringify({ type: 'focus-resize-update', token: request.token, ...proposed }))
+}
+function endFocusSize(session: Session) {
+  const request = session.focusResize
+  if (!request) return
+  session.focusResize = undefined
+  if (session.socket?.readyState === WebSocket.OPEN) session.socket.send(JSON.stringify({ type: 'focus-resize-end', token: request.token }))
+  setState(session, { ...session.state, focusResize: undefined })
+}
+function resize(session: Session) {
+  if (session.magnified || session.state.status !== 'connected') return
+  const proposed = proposedSize(session)
   if (proposed && session.socket?.readyState === WebSocket.OPEN) {
-    const cols = Math.max(20, Math.min(500, proposed.cols)), rows = Math.max(5, Math.min(200, proposed.rows))
+    claimFocus(session)
+    const { cols, rows } = proposed
     if (cols !== session.term.cols || rows !== session.term.rows) {
       session.term.resize(cols, rows)
       session.socket.send(JSON.stringify({ type: 'resize', cols, rows }))
@@ -134,7 +203,7 @@ function claimFocus(session: Session) {
   session.socket.send(JSON.stringify({ type: 'focus' }))
   setState(session, { ...session.state, readOnly: false })
 }
-export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, onGeometry?: (geometry: TerminalGeometry) => void) {
+export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, onGeometry?: (geometry: TerminalGeometry) => void, options: { magnified?: boolean } = {}) {
   installMouseCoordinates()
   const id = key(resource.sourceId, resource.spaceId, resource.windowId)
   let session = sessions.get(id)
@@ -154,7 +223,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     const surface = document.createElement('div')
     surface.className = 'terminal-surface'
     Object.assign(surface.style, { transformOrigin: 'top left', width: '100%', height: '100%' })
-    session = { term, fit, surface, opened: false, state: { status: 'connecting' }, listeners: new Set(), geometryListeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
+    session = { term, fit, surface, opened: false, magnified: false, state: { status: 'connecting' }, listeners: new Set(), geometryListeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
     const current = session
     function sendInput(data: string) {
       // onData includes terminal query replies; passive viewers must never
@@ -174,7 +243,11 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     })
     sessions.set(id, session)
   }
+  // Vue may mount a replacement host before disposing the old component. Only
+  // the current host owns its presentation and temporary size request.
+  if (session.host !== host) endFocusSize(session)
   session.host = host
+  session.magnified = options.magnified === true
   host.appendChild(session.surface)
   if (!session.opened) {
     session.term.open(session.surface); session.opened = true
@@ -187,23 +260,38 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   listener(session.state)
   if (!session.socket || session.socket.readyState === WebSocket.CLOSED) { session.term.reset(); connect(session) }
   const current = session
-  const observer = new ResizeObserver(() => present(current))
+  const observer = new ResizeObserver(() => { if (current.host === host) schedulePresentation(current) })
   observer.observe(host)
-  requestAnimationFrame(() => present(current))
+  schedulePresentation(current)
   return {
     focus() { claimFocus(current); current.term.focus() },
     resize() { resize(current) },
     reconnect() {
+      endFocusSize(current)
       current.socket?.close()
       current.socket = undefined
       current.term.reset()
       connect(current)
     },
-    dispose() { observer.disconnect(); current.listeners.delete(listener); if (onGeometry) current.geometryListeners.delete(onGeometry); if (current.host === host) current.host = undefined },
+    dispose() {
+      observer.disconnect()
+      current.listeners.delete(listener)
+      if (onGeometry) current.geometryListeners.delete(onGeometry)
+      if (current.host === host) {
+        endFocusSize(current)
+        current.host = undefined
+        current.magnified = false
+      }
+    },
   }
 }
 export function clearTerminals() {
-  for (const session of sessions.values()) { session.socket?.close(); session.term.dispose() }
+  for (const session of sessions.values()) {
+    endFocusSize(session)
+    if (session.presentationFrame !== undefined) cancelAnimationFrame(session.presentationFrame)
+    session.socket?.close()
+    session.term.dispose()
+  }
   sessions.clear()
   for (const event of mouseEvents) document.removeEventListener(event, normalizeMouseCoordinates, true)
   window.removeEventListener('blur', releaseMouseOwner)
