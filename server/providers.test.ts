@@ -248,6 +248,22 @@ test("Canvas helper installation rejects changed helpers, unsafe modes and symli
   }
 });
 
+test("Canvas helper accepts owner-managed group-writable parent directories without changing their permissions", async () => {
+  const root = mkdtempSync(join(tmpdir(), "canvas-helper-parent-mode-")), previousHome = process.env.HOME;
+  process.env.HOME = root;
+  const parents = [join(root, ".local"), join(root, ".local/bin"), join(root, ".local/state")];
+  try {
+    for (const directory of parents) { mkdirSync(directory, { recursive: true }); chmodSync(directory, 0o775); }
+    await installCanvasHelper({ id: "parent-mode", name: "Fixture", type: "tmux", transport: "local" }, Buffer.from("#!/bin/sh\nexit 0\n"));
+    for (const directory of parents) assert.equal(statSync(directory).mode & 0o777, 0o775);
+    assert.equal(statSync(join(root, ".local/state/canvas")).mode & 0o777, 0o700);
+    assert.equal(statSync(join(root, ".local/bin/canvas")).mode & 0o777, 0o755);
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("remote clients resolve user installs without login rc and preserve exact arguments", () => {
   const root = mkdtempSync(join(tmpdir(), "canvas-remote-client-"));
   const home = join(root, "home with 'quotes' and $variables");

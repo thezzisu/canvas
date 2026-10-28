@@ -523,7 +523,7 @@ flags=os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK
 refusal='Canvas helper path is unsafe; refusing to overwrite it'
 def owned(info,directory=False,private=False):
  if info.st_uid!=uid or (not stat.S_ISDIR(info.st_mode) if directory else not stat.S_ISREG(info.st_mode)): raise SystemExit(refusal)
- if info.st_mode & (0o077 if private else 0o022): raise SystemExit(refusal)
+ if info.st_mode & (0o077 if private else 0o002 if directory else 0o022): raise SystemExit(refusal)
  if private and stat.S_IMODE(info.st_mode)!=(0o700 if directory else 0o600): raise SystemExit(refusal)
  if private and not directory and info.st_nlink!=1: raise SystemExit(refusal)
 def directory(parent,name,private=False):
