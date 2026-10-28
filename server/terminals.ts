@@ -57,6 +57,7 @@ class LiveTerminal {
   private maximized?: { owner: WebSocket; token: string };
   private presentationRevision = 0;
   controller?: WebSocket;
+  private downloadController?: WebSocket;
   idle?: ReturnType<typeof setTimeout>;
   queue: Promise<void> = Promise.resolve();
   pendingBytes = 0;
@@ -192,8 +193,8 @@ class LiveTerminal {
     return this.rendered.has(ws) && (!this.maximized || this.maximized.owner === ws);
   }
   downloadRecipient(): WebSocket | undefined {
-    const ws = this.controller;
-    return ws && ws.readyState === 1 && this.clients.has(ws) &&
+    const ws = this.downloadController;
+    return ws && ws === this.controller && ws.readyState === 1 && this.clients.has(ws) &&
       (!this.maximized || this.maximized.owner === ws) ? ws : undefined;
   }
   private presentation(ws: WebSocket) {
@@ -231,6 +232,7 @@ class LiveTerminal {
     this.presentationRevision++;
     this.maximized = { owner: ws, token };
     this.controller = ws;
+    this.downloadController = ws;
     for (const client of this.clients) {
       if (client !== ws) {
         this.rendered.delete(client);
@@ -273,6 +275,7 @@ class LiveTerminal {
         if (msg.type === "focus") {
           if (this.maximized && this.maximized.owner !== ws) return;
           this.controller = ws;
+          this.downloadController = ws;
           this.status();
           return;
         }
@@ -321,6 +324,7 @@ class LiveTerminal {
     });
     ws.once("close", () => {
       this.clients.delete(ws);
+      if (this.downloadController === ws) this.downloadController = undefined;
       this.rendered.delete(ws);
       if (this.closed) return;
       if (this.maximized?.owner === ws) void this.releaseMaximized(ws);

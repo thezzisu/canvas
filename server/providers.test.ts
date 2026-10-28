@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { createConnection, createServer } from "node:net";
 import { promisify } from "node:util";
 import {
   existsSync,
+  chmodSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -16,7 +18,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import * as pty from "node-pty";
 import {
   createSpace,
@@ -116,6 +118,130 @@ test("Canvas helper installation is atomic, idempotent, upgrades its managed ver
       assert.equal(readFileSync(join(otherHome, ".local/bin/canvas"), "utf8"), "unrelated command");
     } finally { if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome; }
     await assert.rejects(installCanvasHelper(source, Buffer.alloc(8 * 1024 * 1024 + 1)), /size is invalid/u);
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Canvas helper installers serialize concurrent installs and reject an older managed version", async () => {
+  const root = mkdtempSync(join(tmpdir(), "canvas-helper-concurrent-")), previousHome = process.env.HOME;
+  process.env.HOME = root;
+  const source: Source = { id: "helper-concurrent", name: "Helper", type: "tmux", transport: "local" };
+  const initial = Buffer.from("#!/bin/sh\nprintf initial\n"), upgraded = Buffer.from("#!/bin/sh\nprintf upgraded\n");
+  const target = join(root, ".local/bin/canvas"), marker = join(root, ".local/bin/.canvas-managed-sha256");
+  try {
+    await Promise.all(Array.from({ length: 12 }, () => installCanvasHelper(source, initial)));
+    assert.deepEqual(readFileSync(target), initial);
+    await Promise.all(Array.from({ length: 12 }, () => installCanvasHelper(source, upgraded)));
+    assert.deepEqual(readFileSync(target), upgraded);
+    await assert.rejects(installCanvasHelper(source, initial), /previously replaced/u);
+    assert.deepEqual(readFileSync(target), upgraded);
+    const record = JSON.parse(readFileSync(marker, "utf8"));
+    assert.equal(record.current, createHash("sha256").update(upgraded).digest("hex"));
+    assert.equal(record.pending, undefined);
+    assert.equal(statSync(join(root, ".local/state/canvas/helper-install.lock")).mode & 0o777, 0o600);
+    assert(readdirSync(join(root, ".local/bin")).every(name => !name.endsWith(".tmp")));
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Canvas helper installation preserves a command created while waiting for its lock", async () => {
+  const root = mkdtempSync(join(tmpdir(), "canvas-helper-lock-")), previousHome = process.env.HOME;
+  process.env.HOME = root;
+  const source: Source = { id: "helper-lock", name: "Helper", type: "tmux", transport: "local" };
+  const state = join(root, ".local/state/canvas"), bin = join(root, ".local/bin");
+  mkdirSync(state, { recursive: true, mode: 0o700 }); mkdirSync(bin, { mode: 0o700 });
+  const locker = spawn("python3", ["-u", "-c", "import fcntl,os,sys; fd=os.open(sys.argv[1],os.O_CREAT|os.O_RDWR,0o600); fcntl.flock(fd,fcntl.LOCK_EX); print('locked',flush=True); sys.stdin.read()", join(state, "helper-install.lock")], { stdio: ["pipe", "pipe", "ignore"] });
+  try {
+    await new Promise<void>((resolve, reject) => { locker.once("error", reject); locker.stdout.once("data", () => resolve()); });
+    const result = installCanvasHelper(source, Buffer.from("#!/bin/sh\nprintf canvas\n"));
+    // This write is independent of Canvas. A queued installer must read it only
+    // after obtaining the lock and may never replace the new user command.
+    writeFileSync(join(bin, "canvas"), "unrelated concurrently created command", { mode: 0o755 });
+    locker.stdin.end();
+    await assert.rejects(result, /refusing to overwrite/u);
+    assert.equal(readFileSync(join(bin, "canvas"), "utf8"), "unrelated concurrently created command");
+  } finally {
+    locker.kill();
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Canvas helper installation recovers both pending marker crash points and legacy ownership", async () => {
+  const root = mkdtempSync(join(tmpdir(), "canvas-helper-recovery-")), previousHome = process.env.HOME;
+  const source: Source = { id: "helper-recovery", name: "Helper", type: "tmux", transport: "local" };
+  const before = Buffer.from("#!/bin/sh\nprintf before\n"), after = Buffer.from("#!/bin/sh\nprintf after\n");
+  const hash = (value: Buffer) => createHash("sha256").update(value).digest("hex");
+  try {
+    for (const point of ["before-target", "after-target", "initial-link", "legacy"]) {
+      const home = join(root, point); mkdirSync(home); process.env.HOME = home;
+      const bin = join(home, ".local/bin"); mkdirSync(bin, { recursive: true, mode: 0o700 });
+      writeFileSync(join(bin, "canvas"), point === "after-target" || point === "initial-link" ? after : before, { mode: 0o755 });
+      if (point === "initial-link") linkSync(join(bin, "canvas"), join(bin, ".canvas.interrupted.tmp"));
+      writeFileSync(join(bin, ".canvas-managed-sha256"), point === "legacy" ? `${hash(before)}\n` : JSON.stringify({ version: 1, current: point === "initial-link" ? null : hash(before), pending: hash(after), history: [] }), { mode: 0o600 });
+      await installCanvasHelper(source, after);
+      assert.deepEqual(readFileSync(join(bin, "canvas")), after);
+      const record = JSON.parse(readFileSync(join(bin, ".canvas-managed-sha256"), "utf8"));
+      assert.equal(record.current, hash(after)); assert.equal(record.pending, undefined);
+      if (point !== "initial-link") assert(record.history.includes(hash(before)));
+    }
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Canvas helper installation uses the same managed transaction over SSH", async () => {
+  const root = mkdtempSync(join(tmpdir(), "canvas-helper-ssh-")), previousHome = process.env.HOME, previousPath = process.env.PATH;
+  const home = join(root, "home ' with spaces"), path = join(root, "tools"); mkdirSync(home); mkdirSync(path);
+  process.env.HOME = home; process.env.PATH = `${path}:${previousPath || "/usr/bin:/bin"}`;
+  // Execute the exact generated remote shell command in an isolated local home.
+  // No SSH connection, agent configuration or login rc is involved in this test.
+  writeFileSync(join(path, "ssh"), '#!/bin/sh\nfor argument do command=$argument; done\nexec /bin/sh -c "$command"\n', { mode: 0o755 });
+  const source: Source = { id: "helper-ssh", name: "Helper", type: "tmux", transport: "ssh", target: "fixture.invalid" };
+  const before = Buffer.from("#!/bin/sh\nprintf before\n"), after = Buffer.from("#!/bin/sh\nprintf after\n");
+  try {
+    await installCanvasHelper(source, before);
+    await installCanvasHelper(source, after);
+    assert.deepEqual(readFileSync(join(home, ".local/bin/canvas")), after);
+    await assert.rejects(installCanvasHelper(source, before), /previously replaced/u);
+    writeFileSync(join(home, ".local/bin/canvas"), "user edit");
+    await assert.rejects(installCanvasHelper(source, after), /refusing to overwrite/u);
+    assert.equal(readFileSync(join(home, ".local/bin/canvas"), "utf8"), "user edit");
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Canvas helper installation rejects changed helpers, unsafe modes and symlinked paths", async () => {
+  const root = mkdtempSync(join(tmpdir(), "canvas-helper-protection-")), previousHome = process.env.HOME;
+  const source: Source = { id: "helper-protection", name: "Helper", type: "tmux", transport: "local" };
+  const before = Buffer.from("#!/bin/sh\nprintf before\n"), after = Buffer.from("#!/bin/sh\nprintf after\n");
+  try {
+    for (const attack of ["modified", "target-link", "marker-link", "lock-link", "directory-link", "writable-bin", "writable-target", "writable-marker"]) {
+      const home = join(root, attack); mkdirSync(home); process.env.HOME = home;
+      await installCanvasHelper(source, before);
+      const bin = join(home, ".local/bin"), target = join(bin, "canvas"), marker = join(bin, ".canvas-managed-sha256"), victim = join(home, "untouched");
+      writeFileSync(victim, "untouched", { mode: 0o600 });
+      if (attack === "modified") writeFileSync(target, "my modified command");
+      if (attack === "target-link" || attack === "marker-link" || attack === "lock-link") {
+        const path = attack === "target-link" ? target : attack === "marker-link" ? marker : join(home, ".local/state/canvas/helper-install.lock");
+        rmSync(path); symlinkSync(victim, path);
+      }
+      if (attack === "directory-link") { rmSync(bin, { recursive: true }); mkdirSync(join(home, "other-bin")); symlinkSync(join(home, "other-bin"), bin); }
+      if (attack === "writable-bin") chmodSync(bin, 0o777);
+      if (attack === "writable-target") chmodSync(target, 0o777);
+      if (attack === "writable-marker") chmodSync(marker, 0o644);
+      await assert.rejects(installCanvasHelper(source, after));
+      assert.equal(readFileSync(victim, "utf8"), "untouched");
+      if (attack === "modified") assert.equal(readFileSync(target, "utf8"), "my modified command");
+    }
   } finally {
     if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
     rmSync(root, { recursive: true, force: true });

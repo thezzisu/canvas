@@ -53,7 +53,12 @@ async function fixture() {
     `#!${process.execPath}
 const fs = require('node:fs');
 const net = require('node:net');
+const cp = require('node:child_process');
 const args = process.argv.slice(2);
+if(!args.includes('-N')) {
+  const result=cp.spawnSync('/bin/sh',['-c',args.at(-1)],{encoding:'utf8',env:{...process.env,PATH:'/usr/bin:/bin'}});
+  process.stdout.write(result.stdout||'');process.stderr.write(result.stderr||'');process.exit(result.status??1);
+}
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({pid:process.pid,args}) + '\\n');
 const listeners = [];
 const reverseListeners = [];
@@ -222,6 +227,10 @@ test("SSH reverse socket forwarding shares local and remote endpoints and cleans
     assert.ok(matching.includes("-R"));
     assert.ok(matching.includes(`${remotePath}:${localPath}`));
     assert.ok(matching.includes("StreamLocalBindUnlink=no"));
+    process.kill(starts.at(-1).pid, "SIGKILL");
+    await waitFor(() => echo(remotePath, "after reconnect"), value => value === "download:after reconnect");
+    assert.equal(await ensureSocketTunnel(request), tunnel, "reconnect retains the published reverse endpoint");
+    assert.equal((await readFile(setup.log, "utf8")).trim().split("\n").length, 2);
     await tunnel.close();
     assert.equal(tunnel.alive(), false);
     assert.equal(remoteCleanup, 1);
@@ -231,6 +240,19 @@ test("SSH reverse socket forwarding shares local and remote endpoints and cleans
     await new Promise<void>(resolve => bridgeServer.close(() => resolve()));
     await setup.close();
   }
+});
+
+test("reverse forwarding rejects an existing socket without replacing or removing it", async () => {
+  const setup = await fixture();
+  try {
+    const remotePath = join(setup.root, "remote.sock");
+    await assert.rejects(ensureSocketTunnel({
+      ...setup.request,
+      key: `${setup.request.key}-collision`,
+      reverse: { "open.sock": { remotePath, localPath: remotePath } },
+    }), /Reverse socket was replaced/u);
+    assert.equal(await echo(remotePath, "untouched"), "untouched");
+  } finally { await setup.close(); }
 });
 
 test("closing during endpoint discovery cancels that open without resurrecting its tunnel", async () => {

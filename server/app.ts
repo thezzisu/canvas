@@ -122,6 +122,7 @@ export function createApp(
     }),
   );
   app.get("/api/downloads/:ticket", (c) => {
+    if (c.req.method !== "GET") return c.body(null, 405);
     const download = options.openDownload?.(
       c.req.param("ticket"),
       getCookie(c, "canvas_session") ?? "",

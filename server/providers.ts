@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSocketTunnels, ensureSocketTunnel } from "./ssh-tunnels.ts";
-import { chmod, lstat, mkdir, mkdtemp, open, readFile, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Source } from "./state.ts";
@@ -511,91 +511,124 @@ export async function writeRemoteBridgeRegistry(
   };
 }
 
-const helperInstallPython = String.raw`import hashlib,os,pathlib,secrets,stat,sys
+// The same locked transaction runs locally and over SSH. The pending hash is
+// durable before a target replacement, so interruption can never orphan ownership.
+const helperInstallPython = String.raw`import fcntl,hashlib,json,os,re,secrets,stat,sys
+os.umask(0o077)
 expected=sys.argv[1]
-payload=sys.stdin.buffer.read()
-if hashlib.sha256(payload).hexdigest()!=expected: raise SystemExit('Canvas helper checksum mismatch')
-directory=pathlib.Path.home()/'.local/bin'
-directory.mkdir(mode=0o700,parents=True,exist_ok=True)
-info=directory.lstat()
-if not stat.S_ISDIR(info.st_mode): raise SystemExit('Canvas helper install path is not a directory')
-target=directory/'canvas'
-marker=directory/'.canvas-managed-sha256'
-def atomic_marker():
- temporary=directory/('.canvas-marker.'+secrets.token_hex(12)+'.tmp')
- fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
- try:
-  with os.fdopen(fd,'w') as handle: handle.write(expected+'\n');handle.flush();os.fsync(handle.fileno())
-  os.replace(temporary,marker)
- finally: temporary.unlink(missing_ok=True)
-def install_owned():
- temporary=directory/('.canvas.'+secrets.token_hex(12)+'.tmp')
- fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o755)
- try:
-  with os.fdopen(fd,'wb') as handle: handle.write(payload);handle.flush();os.fsync(handle.fileno())
-  os.replace(temporary,target)
- finally: temporary.unlink(missing_ok=True)
-def verify_or_upgrade():
- info=target.lstat()
- if not stat.S_ISREG(info.st_mode) or target.is_symlink(): raise SystemExit('Canvas helper target is not a regular file')
- current=hashlib.sha256(target.read_bytes()).hexdigest()
- if current!=expected:
-  try: owned=marker.read_text().strip()
-  except FileNotFoundError: owned=None
-  if owned!=current: raise SystemExit('A different canvas helper already exists; refusing to overwrite it')
-  install_owned()
- os.chmod(target,0o755)
- atomic_marker()
+payload=sys.stdin.buffer.read(8*1024*1024+1)
+if not payload or len(payload)>8*1024*1024 or hashlib.sha256(payload).hexdigest()!=expected: raise SystemExit('Canvas helper checksum mismatch')
+uid=os.getuid()
+flags=os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK
+refusal='Canvas helper path is unsafe; refusing to overwrite it'
+def owned(info,directory=False,private=False):
+ if info.st_uid!=uid or (not stat.S_ISDIR(info.st_mode) if directory else not stat.S_ISREG(info.st_mode)): raise SystemExit(refusal)
+ if info.st_mode & (0o077 if private else 0o022): raise SystemExit(refusal)
+ if private and stat.S_IMODE(info.st_mode)!=(0o700 if directory else 0o600): raise SystemExit(refusal)
+ if private and not directory and info.st_nlink!=1: raise SystemExit(refusal)
+def directory(parent,name,private=False):
+ try: os.mkdir(name,0o700,dir_fd=parent)
+ except FileExistsError: pass
+ fd=os.open(name,flags|os.O_DIRECTORY,dir_fd=parent)
+ owned(os.fstat(fd),True,private)
+ return fd
+home=os.environ.get('HOME')
+if not home or not os.path.isabs(home): raise SystemExit('HOME is required to install the Canvas helper')
+root=os.open(home,flags|os.O_DIRECTORY)
+owned(os.fstat(root),True)
+local=directory(root,'.local')
+state=directory(directory(local,'state'),'canvas',True)
+bin=directory(local,'bin')
+lock=os.open('helper-install.lock',os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW|os.O_NONBLOCK,0o600,dir_fd=state)
+owned(os.fstat(lock),private=True)
+fcntl.flock(lock,fcntl.LOCK_EX)
+locked=os.stat('helper-install.lock',dir_fd=state,follow_symlinks=False)
+if (locked.st_dev,locked.st_ino)!=(os.fstat(lock).st_dev,os.fstat(lock).st_ino): raise SystemExit(refusal)
+marker='.canvas-managed-sha256'
+def read(name,private=False):
+ try: fd=os.open(name,flags,dir_fd=bin)
+ except FileNotFoundError: return None,None
+ with os.fdopen(fd,'rb') as stream:
+  info=os.fstat(stream.fileno());owned(info,private=private)
+  if info.st_size>(65536 if private else 8*1024*1024): raise SystemExit(refusal)
+  return stream.read(),info
+def temporary(body,mode):
+ name='.canvas.'+secrets.token_hex(16)+'.tmp'
+ fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,mode,dir_fd=bin)
+ with os.fdopen(fd,'wb') as stream:
+  stream.write(body);stream.flush();os.fchmod(stream.fileno(),mode);os.fsync(stream.fileno())
+ return name
+def write_marker(value):
+ # Check every replacement; an existing symlink or unowned marker is never adopted.
+ read(marker,True)
+ name=temporary((json.dumps(value,separators=(',',':'))+'\n').encode(),0o600)
+ try: os.replace(name,marker,src_dir_fd=bin,dst_dir_fd=bin);os.fsync(bin)
+ finally:
+  try: os.unlink(name,dir_fd=bin)
+  except FileNotFoundError: pass
+current_body,current_info=read('canvas')
+current=hashlib.sha256(current_body).hexdigest() if current_body is not None else None
+marker_body,_=read(marker,True)
+managed=None
+if marker_body is not None:
+ raw=marker_body.decode('ascii').strip()
+ if re.fullmatch('[a-f0-9]{64}',raw): managed={'version':1,'current':raw,'history':[]}
+ else:
+  try: managed=json.loads(raw)
+  except ValueError: raise SystemExit(refusal)
+  if not isinstance(managed,dict) or managed.get('version')!=1: raise SystemExit(refusal)
+  for key in ('current','pending'):
+   value=managed.get(key)
+   if value is not None and (not isinstance(value,str) or not re.fullmatch('[a-f0-9]{64}',value)): raise SystemExit(refusal)
+  history=managed.get('history')
+  if not isinstance(history,list) or len(history)>256 or any(not isinstance(value,str) or not re.fullmatch('[a-f0-9]{64}',value) for value in history): raise SystemExit(refusal)
+if managed and managed.get('pending')==current and current is not None:
+ history=managed['history'][:]
+ if managed.get('current') and managed['current']!=current and managed['current'] not in history: history.append(managed['current'])
+ managed={'version':1,'current':current,'history':history[-256:]};write_marker(managed)
+if current is not None and current!=expected and (not managed or managed.get('current')!=current): raise SystemExit('A different canvas helper already exists; refusing to overwrite it')
+if managed and current!=expected and expected in managed['history']: raise SystemExit('A previously replaced Canvas helper cannot overwrite the current version')
+if current==expected:
+ if current_info.st_mode & 0o111 != 0o111: raise SystemExit('Canvas helper is not executable; leaving it untouched')
+ write_marker({'version':1,'current':current,'history':managed['history'] if managed else []})
+ raise SystemExit(0)
+history=managed['history'][:] if managed else []
+write_marker({'version':1,'current':current,'pending':expected,'history':history})
+name=temporary(payload,0o755)
 try:
- verify_or_upgrade(); print(str(target)); raise SystemExit(0)
-except FileNotFoundError: pass
-install_owned()
-os.chmod(target,0o755)
-atomic_marker()
-directory_fd=os.open(directory,os.O_RDONLY)
-try: os.fsync(directory_fd)
-finally: os.close(directory_fd)
-print(str(target))`;
+ # Refresh the identity immediately before publication. The lock serializes all
+ # Canvas writers; the initial hard link also protects against unrelated writers.
+ fresh,fresh_info=read('canvas')
+ if current_info is None:
+  os.link(name,'canvas',src_dir_fd=bin,dst_dir_fd=bin,follow_symlinks=False)
+ else:
+  if fresh_info is None or (fresh_info.st_dev,fresh_info.st_ino)!=(current_info.st_dev,current_info.st_ino) or hashlib.sha256(fresh).hexdigest()!=current: raise SystemExit(refusal)
+  os.replace(name,'canvas',src_dir_fd=bin,dst_dir_fd=bin)
+ os.fsync(bin)
+finally:
+ try: os.unlink(name,dir_fd=bin)
+ except FileNotFoundError: pass
+if current and current not in history: history.append(current)
+write_marker({'version':1,'current':expected,'history':history[-256:]})`;
 
 async function installLocalHelper(bytes: Buffer, expectedHash: string): Promise<void> {
-  const home = process.env.HOME;
-  if (!home) throw new Error("HOME is required to install the Canvas helper");
-  const directory = join(home, ".local", "bin");
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const directoryInfo = await lstat(directory);
-  if (!directoryInfo.isDirectory()) throw new Error("Canvas helper install path is not a directory");
-  const target = join(directory, "canvas");
-  const marker = join(directory, ".canvas-managed-sha256");
-  const atomicWrite = async (destination: string, bytes: Buffer, mode: number) => {
-    const temporary = join(directory, `.canvas.${randomUUID().replaceAll("-", "")}.tmp`);
-    await writeFile(temporary, bytes, { flag: "wx", mode });
-    try { await rename(temporary, destination); }
-    finally { await unlink(temporary).catch(() => {}); }
-  };
-  const verifyExisting = async () => {
-    const info = await lstat(target);
-    if (!info.isFile()) throw new Error("Canvas helper target is not a regular file");
-    const current = await readFile(target);
-    const currentHash = createHash("sha256").update(current).digest("hex");
-    if (currentHash !== expectedHash) {
-      let managedHash = "";
-      try {
-        const markerInfo = await lstat(marker);
-        if (markerInfo.isFile()) managedHash = (await readFile(marker, "utf8")).trim();
-      } catch {}
-      if (managedHash !== currentHash)
-        throw new Error("A different canvas helper already exists; refusing to overwrite it");
-      await atomicWrite(target, bytes, 0o755);
-    }
-    await chmod(target, 0o755);
-    await atomicWrite(marker, Buffer.from(expectedHash + "\n"), 0o600);
-  };
-  try { await verifyExisting(); return; }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  await atomicWrite(target, bytes, 0o755);
-  await atomicWrite(marker, Buffer.from(expectedHash + "\n"), 0o600);
-  const directoryHandle = await open(directory, "r");
-  try { await directoryHandle.sync(); } finally { await directoryHandle.close(); }
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("python3", ["-c", helperInstallPython, expectedHash], {
+      env: commandEnvironment(), stdio: ["pipe", "ignore", "pipe"],
+    });
+    let stderr = "";
+    const timer = setTimeout(() => child.kill("SIGTERM"), COMMAND_TIMEOUT);
+    timer.unref();
+    child.stderr.on("data", (data: Buffer) => { stderr = (stderr + data.toString("utf8")).slice(-1200); });
+    child.once("error", error => { clearTimeout(timer); reject(error); });
+    child.stdin.once("error", () => {});
+    child.once("close", code => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(stderr.trim() || "Canvas helper installation failed"));
+    });
+    child.stdin.end(bytes);
+  });
 }
 
 export async function installCanvasHelper(source: Source, helperBytes: Buffer): Promise<void> {

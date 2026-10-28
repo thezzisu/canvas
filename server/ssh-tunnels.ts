@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, lstat, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,6 +38,62 @@ function checkSocketPath(path: string): void {
     throw new Error("Unsupported remote Unix socket path");
 }
 
+// OpenSSH leaves reverse Unix socket names behind when its channel exits.
+// Only remove an inode previously observed in our private endpoint directory,
+// and only after its listener has gone away. Never replace another listener.
+const reverseSocketPython = String.raw`import errno,json,os,socket,stat,sys
+operation=sys.argv[1]
+entries=json.loads(sys.argv[2])
+result={}
+for path,expected in entries.items():
+ parent=os.lstat(os.path.dirname(path))
+ if not stat.S_ISDIR(parent.st_mode) or parent.st_uid!=os.getuid() or parent.st_mode&0o077:
+  raise SystemExit('Reverse socket directory is not private')
+ try: info=os.lstat(path)
+ except FileNotFoundError:
+  if operation=='ready': raise SystemExit('Reverse socket is not ready')
+  continue
+ if not stat.S_ISSOCK(info.st_mode) or info.st_uid!=os.getuid(): raise SystemExit('Reverse socket path is not owned by Canvas')
+ identity=str(info.st_dev)+':'+str(info.st_ino)
+ if operation=='ready':
+  result[path]=identity; continue
+ if expected!=identity: raise SystemExit('Reverse socket was replaced; leaving it untouched')
+ connection=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+ connection.settimeout(0.2)
+ try:
+  connection.connect(path)
+ except OSError as error:
+  if error.errno not in (errno.ECONNREFUSED,errno.ENOENT): raise
+ else:
+  raise SystemExit('Previous reverse socket listener is still active')
+ finally:
+  connection.close()
+ try: current=os.lstat(path)
+ except FileNotFoundError: continue
+ if (current.st_dev,current.st_ino)!=(info.st_dev,info.st_ino): raise SystemExit('Reverse socket changed during cleanup')
+ os.unlink(path)
+print(json.dumps(result))`;
+
+function shellArgument(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+async function remoteSocketState(
+  request: TunnelRequest,
+  operation: "prepare" | "ready" | "clean",
+  identities: Record<string, string | null>,
+): Promise<Record<string, string>> {
+  return await new Promise((resolve, reject) => {
+    const command = ["python3", "-c", reverseSocketPython, operation, JSON.stringify(identities)].map(shellArgument).join(" ");
+    execFile("ssh", [...request.sshArgs, command], {
+      env: request.env, timeout: 8000, maxBuffer: 64 * 1024, encoding: "utf8",
+    }, (error, stdout, stderr) => {
+      if (error) { reject(new Error(stderr.trim().slice(-1200) || "Reverse socket inspection failed")); return; }
+      try { resolve(JSON.parse(stdout)); } catch { reject(new Error("Invalid reverse socket inspection response")); }
+    });
+  });
+}
+
 async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
   const remote = await request.discover();
   const entries = Object.entries(remote);
@@ -74,6 +130,7 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
   const remoteSockets = Object.fromEntries(
     reverse.map(([name, endpoint]) => [name, endpoint.remotePath]),
   );
+  const reverseIdentities: Record<string, string | null> = Object.fromEntries(reverse.map(([, endpoint]) => [endpoint.remotePath, null]));
   const args = [
     "-N",
     "-T",
@@ -117,6 +174,7 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
         throw error;
       }
     }));
+    if (reverse.length) await remoteSocketState(request, "prepare", reverseIdentities);
     if (stopped) throw new Error("SSH socket forwarding closed");
     const proc = (child = spawn("ssh", args, {
       env: request.env,
@@ -137,7 +195,7 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
       failure = `${failure ?? ""}${data.toString("utf8")}`.slice(-1200);
     });
     const deadline = Date.now() + 12_000;
-    while (true) {
+    try { while (true) {
       if (exited) throw new Error(failure?.trim() || "SSH forwarding stopped");
       if (stopped) throw new Error("SSH socket forwarding closed");
       const ready = await Promise.all(
@@ -149,13 +207,22 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
           }
         }),
       );
-      if (ready.every(Boolean)) return;
+      let reverseReady = !reverse.length;
+      if (reverse.length) {
+        try {
+          Object.assign(reverseIdentities, await remoteSocketState(request, "ready", reverseIdentities));
+          reverseReady = true;
+        } catch {
+          // Remote bind follows SSH authentication and may not exist yet.
+        }
+      }
+      if (ready.every(Boolean) && reverseReady && !exited && !stopped) return;
       if (Date.now() >= deadline) {
         await terminate();
         throw new Error("SSH socket forwarding timed out");
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
-    }
+    } } catch (error) { await terminate(); throw error; }
   }
   const close = () =>
     (closing ??= (async () => {
@@ -165,7 +232,17 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
       await terminate();
       await reconnecting;
       await rm(directory, { recursive: true, force: true });
-      await request.cleanupRemote?.().catch(() => {});
+      if (reverse.length) {
+        const deadline = Date.now() + 3000;
+        while (true) {
+          try { await remoteSocketState(request, "clean", reverseIdentities); break; }
+          catch (error) {
+            if (Date.now() >= deadline) throw error;
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
+        }
+      }
+      await request.cleanupRemote?.();
     })());
   try {
     await connect();

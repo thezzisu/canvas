@@ -116,6 +116,7 @@ server.on("upgrade", (request, socket, head) => {
   }
   wss.handleUpgrade(request, socket, head, (ws) => {
     socketSessions.set(ws, sessionCookie(request.headers.cookie));
+    ws.once("close", downloads.retainSource(sourceId));
     ws.on("error", () => ws.close());
     ws.send(JSON.stringify({ type: "status", status: "connecting" }));
     void terminals.connect(source, { sourceId, spaceId, windowId }, ws)

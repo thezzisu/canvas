@@ -28,6 +28,53 @@ class Client extends EventEmitter {
   }
 }
 
+test("file downloads require explicit interaction and never follow passive controller fallback", async (t) => {
+  try { execFileSync("tmux", ["-V"], { stdio: "ignore" }); }
+  catch { t.skip("tmux is not installed"); return; }
+  const root = mkdtempSync(join(tmpdir(), "canvas-download-owner-")), socket = join(root, "socket");
+  const source: Source = { id: "download-owner", name: "Download owner", type: "tmux", transport: "local", tmuxSocket: socket };
+  const manager = new TerminalManager(), first = new Client(), second = new Client(), reconnected = new Client();
+  const tmux = (...args: string[]) => execFileSync("tmux", ["-S", socket, ...args], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+  }).trimEnd();
+  try {
+    tmux("-f", "/dev/null", "new-session", "-d", "-s", "download-owner", "-x", "100", "-y", "30");
+    const space = (await listResources(source)).spaces[0]!, windowId = space.windows[0]!.id;
+    const target = { sourceId: source.id, spaceId: space.id, windowId };
+    await manager.connect(source, target, first.socket);
+    await manager.connect(source, target, second.socket);
+    assert.equal(await manager.downloadRecipient(source.id, windowId), undefined, "opening viewers alone selected a file recipient");
+
+    second.command({ type: "focus" });
+    const secondRecipient = await manager.downloadRecipient(source.id, windowId);
+    assert.equal(secondRecipient?.socket, second.socket);
+    assert.equal(secondRecipient?.isCurrent(), true);
+    first.command({ type: "focus" });
+    assert.equal(secondRecipient?.isCurrent(), false, "an in-flight recipient snapshot survived another viewer taking control");
+    assert.equal((await manager.downloadRecipient(source.id, windowId))?.socket, first.socket);
+
+    first.close();
+    assert.equal(await manager.downloadRecipient(source.id, windowId), undefined, "controller fallback inherited file delivery without a fresh interaction");
+    await manager.connect(source, target, reconnected.socket);
+    assert.equal(await manager.downloadRecipient(source.id, windowId), undefined, "reconnecting a browser automatically reclaimed file delivery");
+    second.command({ type: "focus" });
+    assert.equal((await manager.downloadRecipient(source.id, windowId))?.socket, second.socket);
+
+    reconnected.command({ type: "focus-resize-begin", token: "fixture-download-maximized", cols: 100, rows: 30 });
+    const maximizedRecipient = await manager.downloadRecipient(source.id, windowId);
+    assert.equal(maximizedRecipient?.socket, reconnected.socket, "maximizing a window did not count as explicit interaction");
+    second.command({ type: "focus" });
+    assert.equal(maximizedRecipient?.isCurrent(), true, "a paused viewer stole the maximized window's file recipient");
+    reconnected.close();
+    assert.equal(maximizedRecipient?.isCurrent(), false);
+    assert.equal(await manager.downloadRecipient(source.id, windowId), undefined, "closing the maximized recipient handed files to a passive viewer");
+  } finally {
+    await manager.closeAll();
+    try { tmux("kill-server"); } catch { /* fixture already stopped */ }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("one native window has one maximized view, pauses other streams and resumes complete current snapshots", async () => {
   const root = mkdtempSync(join(tmpdir(), "canvas-presentation-")), socket = join(root, "socket");
   const source: Source = { id: "presentation", name: "Presentation", type: "tmux", transport: "local", tmuxSocket: socket };

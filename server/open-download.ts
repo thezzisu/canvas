@@ -30,6 +30,7 @@ export interface DownloadRecipient {
 export interface OpenDownloadOptions {
   registryDirectory?: string;
   socketDirectory?: string;
+  idleTimeoutMs?: number;
   prepare(source: Source, localSocket: string): Promise<PreparedOpenBridge>;
   publishRemote?(source: Source, record: RegistryRecord): Promise<() => Promise<void>>;
   installHelper?(source: Source): Promise<void>;
@@ -73,6 +74,7 @@ function jsonLine(value: unknown) {
 
 function safeFilename(value: unknown): string | undefined {
   if (typeof value !== "string" || !value || Buffer.byteLength(value) > 255) return;
+  if (Buffer.from(value, "utf8").toString("utf8") !== value) return;
   if (value === "." || value === ".." || /[/\\\x00-\x1f\x7f]/u.test(value)) return;
   return value;
 }
@@ -89,6 +91,8 @@ export class OpenDownloadService {
   private bridges = new Map<string, Bridge>();
   private preparing = new Map<string, { signature: string; promise: Promise<void> }>();
   private closing = new Map<string, Promise<void>>();
+  private users = new Map<string, number>();
+  private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private tickets = new Map<string, DownloadTicket>();
   private stopping = false;
   private readonly registryDirectory: string;
@@ -99,6 +103,27 @@ export class OpenDownloadService {
     this.socketDirectory = options.socketDirectory ?? tmpdir();
   }
 
+  retainSource(sourceId: string): () => void {
+    clearTimeout(this.idleTimers.get(sourceId));
+    this.idleTimers.delete(sourceId);
+    this.users.set(sourceId, (this.users.get(sourceId) || 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const count = Math.max(0, (this.users.get(sourceId) || 0) - 1);
+      if (count) { this.users.set(sourceId, count); return; }
+      this.users.delete(sourceId);
+      if (this.stopping) return;
+      const timer = setTimeout(() => {
+        this.idleTimers.delete(sourceId);
+        if (!this.users.has(sourceId)) void this.closeSource(sourceId);
+      }, this.options.idleTimeoutMs ?? 20_000);
+      timer.unref();
+      this.idleTimers.set(sourceId, timer);
+    };
+  }
+
   async ensureSource(source: Source): Promise<void> {
     if (this.stopping) throw new Error("File transfer service is stopping");
     const signature = JSON.stringify(source);
@@ -106,8 +131,8 @@ export class OpenDownloadService {
     if (closing) { await closing; return await this.ensureSource(source); }
     const pending = this.preparing.get(source.id);
     if (pending) {
+      if (pending.signature === signature) return await pending.promise;
       await pending.promise.catch(() => {});
-      if (pending.signature === signature && this.bridges.get(source.id)?.signature === signature) return;
       return await this.ensureSource(source);
     }
     const current = this.bridges.get(source.id);
@@ -135,7 +160,7 @@ export class OpenDownloadService {
       sockets.add(socket);
       socket.once("close", () => sockets.delete(socket));
       socket.on("error", () => socket.destroy());
-      void this.accept(source, secret, socket);
+      this.accept(source, secret, socket);
     });
     try {
       await new Promise<void>((resolve, reject) => {
@@ -168,6 +193,7 @@ export class OpenDownloadService {
       if (this.bridges.get(source.id)?.root === root) this.bridges.delete(source.id);
       await cleanupRegistry().catch(() => {});
       if (prepared) await prepared.cleanup().catch(() => {});
+      for (const socket of sockets) socket.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve())).catch(() => {});
       await rm(root, { recursive: true, force: true });
       throw error;
@@ -191,7 +217,7 @@ export class OpenDownloadService {
     };
   }
 
-  private async accept(source: Source, secret: string, socket: Socket): Promise<void> {
+  private accept(source: Source, secret: string, socket: Socket): void {
     socket.pause();
     socket.setTimeout(HANDSHAKE_TIMEOUT, () => socket.destroy());
     let bytes = Buffer.alloc(0);
@@ -206,12 +232,13 @@ export class OpenDownloadService {
       }
       headerReceived = true;
       socket.off("data", readHeader);
+      socket.pause();
       const line = bytes.subarray(0, end);
       if (end + 1 !== bytes.length || end + 1 > MAX_HEADER) {
         socket.end(rejected);
         return;
       }
-      void this.acceptHeader(source, secret, socket, line);
+      void this.acceptHeader(source, secret, socket, line).catch(() => socket.destroy());
     };
     socket.on("data", readHeader);
     socket.resume();
@@ -221,6 +248,7 @@ export class OpenDownloadService {
     let header: Record<string, unknown>;
     try { header = JSON.parse(line.toString("utf8")); }
     catch { socket.end(rejected); return; }
+    if (!header || typeof header !== "object" || Array.isArray(header)) { socket.end(rejected); return; }
     const givenSecret = typeof header.secret === "string" ? Buffer.from(header.secret) : Buffer.alloc(0);
     const expectedSecret = Buffer.from(secret);
     if (givenSecret.length !== expectedSecret.length || !timingSafeEqual(givenSecret, expectedSecret)) {
@@ -258,9 +286,14 @@ export class OpenDownloadService {
       removeCloseListener: () => {},
     };
     pending.timer.unref();
-    const onClose = () => this.cancelTicket(ticket);
+    const onClose = () => { this.cancelTicket(ticket); socket.destroy(); };
+    const onHelperClose = () => this.cancelTicket(ticket);
     recipient.socket.once("close", onClose);
-    pending.removeCloseListener = () => recipient.socket.off("close", onClose);
+    socket.once("close", onHelperClose);
+    pending.removeCloseListener = () => {
+      recipient.socket.off("close", onClose);
+      socket.off("close", onHelperClose);
+    };
     this.tickets.set(ticket, pending);
     socket.setTimeout(0);
     socket.pause();
@@ -286,7 +319,6 @@ export class OpenDownloadService {
     if (!ticket || ticket.sessionId !== sessionId || ticket.socket.destroyed) return;
     this.tickets.delete(ticketId);
     clearTimeout(ticket.timer);
-    ticket.removeCloseListener();
     const socket = ticket.socket;
     socket.setTimeout(0);
     const body = new Transform({
@@ -302,8 +334,17 @@ export class OpenDownloadService {
       },
     });
     let received = 0;
+    const onError = (error: Error) => body.destroy(error);
+    const onClose = () => {
+      if (!socket.readableEnded) body.destroy(new Error("File transfer connection closed"));
+    };
+    socket.once("error", onError);
+    socket.once("close", onClose);
     socket.pipe(body);
     body.once("close", () => {
+      ticket.removeCloseListener();
+      socket.off("error", onError);
+      socket.off("close", onClose);
       if (!body.readableEnded) socket.destroy();
     });
     body.once("error", () => socket.destroy());
@@ -314,7 +355,6 @@ export class OpenDownloadService {
       headers: {
         "Cache-Control": "no-store",
         "Content-Disposition": contentDisposition(ticket.filename),
-        "Content-Length": String(ticket.size),
         "Content-Type": "application/octet-stream",
         "X-Content-Type-Options": "nosniff",
       },
@@ -322,6 +362,8 @@ export class OpenDownloadService {
   }
 
   async closeSource(sourceId: string): Promise<void> {
+    clearTimeout(this.idleTimers.get(sourceId));
+    this.idleTimers.delete(sourceId);
     const existing = this.closing.get(sourceId);
     if (existing) return await existing;
     const operation = (async () => {
@@ -347,6 +389,9 @@ export class OpenDownloadService {
 
   async closeAll(): Promise<void> {
     this.stopping = true;
+    for (const timer of this.idleTimers.values()) clearTimeout(timer);
+    this.idleTimers.clear();
+    this.users.clear();
     await Promise.all([...this.preparing.values()].map(({ promise }) => promise.catch(() => {})));
     await Promise.all([...this.bridges.keys()].map((id) => this.closeSource(id)));
     for (const id of this.tickets.keys()) this.cancelTicket(id);

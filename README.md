@@ -68,6 +68,10 @@ installs its helper at `~/.local/bin/canvas` when that source first connects,
 without replacing a different existing `canvas` command. Keep `~/.local/bin`
 in the terminal's PATH.
 
+Click the terminal or maximize it to choose the receiving tab. Opening a passive
+viewer does not claim downloads, and closing the controlling tab does not hand
+them to another viewer. An agent can run the helper without echoing its output.
+
 Multiple canvases and browser tabs on one Canvas Server share the same native
 window controller; only its current controller receives the download. SSH
 sources use a private reverse Unix-socket forward and an owner-only registry.
