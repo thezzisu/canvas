@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Send a file to the Canvas browser currently controlling this terminal."""
+"""Copy a file to Canvas for the browser currently controlling this terminal."""
 
 import argparse
 import json
@@ -116,12 +116,12 @@ class DownloadProgress:
             self.width = len(text)
 
     def waiting(self):
-        self.draw("Waiting for download in Canvas...")
+        self.draw("Copying to Canvas...")
 
     def update(self, transferred, size):
         fraction = transferred / size if size else 1
         filled = min(24, int(fraction * 24))
-        self.draw("[" + "=" * filled + " " * (24 - filled) + "] "
+        self.draw("Copying [" + "=" * filled + " " * (24 - filled) + "] "
                   + f"{fraction * 100:3.0f}%  {self.bytes(transferred)} / {self.bytes(size)}")
 
     @staticmethod
@@ -143,10 +143,10 @@ def rejected_response(result, started):
     # request, including the private bridge credential.
     messages = {
         "not-attached": "no browser attached to this window",
-        "cancelled": "download cancelled",
-        "not-started": "download was not started in the browser",
-        "timed-out": "download timed out",
-        "disconnected": "download connection closed",
+        "cancelled": "copy cancelled",
+        "not-started": "copy did not start",
+        "timed-out": "copy timed out",
+        "disconnected": "copy connection closed",
         "invalid-transfer": "file transfer failed",
     }
     reason = result.get("reason")
@@ -155,10 +155,10 @@ def rejected_response(result, started):
 
 
 def transfer_file(connection, file, size, progress=None, start_timeout=70, idle_timeout=65):
-    """Wait for browser acceptance, then send and read acknowledgements together.
+    """Copy to Canvas while reading the server's acknowledgements together.
 
-    The server reports bytes consumed by the browser. Socket writability alone
-    is not progress: an SSH buffer can accept data while the browser is stuck.
+    The server reports bytes written to its staging area. Socket writability
+    alone is not progress: an SSH buffer can accept data while storage is stuck.
     Timeouts measure inactivity, so a progressing large download has no total
     duration limit. Optional timeout arguments support isolated protocol tests.
     """
@@ -178,7 +178,7 @@ def transfer_file(connection, file, size, progress=None, start_timeout=70, idle_
         while True:
             wait = deadline - time.monotonic()
             if wait <= 0:
-                raise CanvasError("download timed out" if started else "download was not started in the browser")
+                raise CanvasError("copy timed out" if started else "copy did not start")
             readable, writable, _ = select.select([connection],
                 [connection] if started and not write_closed else [], [], wait)
             # Read cancellations first, including while the socket send buffer
@@ -189,27 +189,27 @@ def transfer_file(connection, file, size, progress=None, start_timeout=70, idle_
                 except BlockingIOError:
                     chunk = None
                 if chunk == b"":
-                    raise CanvasError("download connection closed")
+                    raise CanvasError("copy connection closed")
                 if chunk:
                     replies.extend(chunk)
                     while b"\n" in replies:
                         line, _, rest = replies.partition(b"\n")
                         replies = bytearray(rest)
                         if len(line) > 8192:
-                            raise CanvasError("invalid download response")
+                            raise CanvasError("invalid copy response")
                         try:
                             result = json.loads(line)
                         except (ValueError, UnicodeError):
-                            raise CanvasError("invalid download response") from None
+                            raise CanvasError("invalid copy response") from None
                         if not isinstance(result, dict):
-                            raise CanvasError("invalid download response")
+                            raise CanvasError("invalid copy response")
                         if result.get("ok") is False:
                             raise rejected_response(result, started)
                         state = result.get("state")
                         if not started:
                             if state in ("offered", "accepted") and "ok" not in result:
                                 if result.get("transferred") != 0 or result.get("size") != size:
-                                    raise CanvasError("invalid download response")
+                                    raise CanvasError("invalid copy response")
                                 if state == "accepted" and not browser_accepted:
                                     browser_accepted = True
                                     # The browser has chosen a destination but
@@ -217,10 +217,10 @@ def transfer_file(connection, file, size, progress=None, start_timeout=70, idle_
                                     deadline = time.monotonic() + min(start_timeout, 20)
                                 continue
                             if result.get("ok") is not True or state not in (None, "transferring"):
-                                raise CanvasError("invalid download response")
+                                raise CanvasError("invalid copy response")
                             reported_progress = state == "transferring"
                             if reported_progress and (result.get("transferred") != 0 or result.get("size") != size):
-                                raise CanvasError("invalid download response")
+                                raise CanvasError("invalid copy response")
                             started = True
                             deadline = time.monotonic() + idle_timeout
                             progress.update(0, size)
@@ -228,22 +228,22 @@ def transfer_file(connection, file, size, progress=None, start_timeout=70, idle_
                         if result.get("ok") is True and state in (None, "completed"):
                             if (remaining or pending or not write_closed
                                     or (state == "completed" and (result.get("transferred") != size or result.get("size") != size))):
-                                raise CanvasError("invalid download response")
+                                raise CanvasError("invalid copy response")
                             progress.update(size, size)
                             return
                         if state != "transferring" or "ok" in result:
-                            raise CanvasError("invalid download response")
+                            raise CanvasError("invalid copy response")
                         transferred = result.get("transferred")
                         if (not isinstance(transferred, int) or isinstance(transferred, bool)
                                 or transferred < acknowledged or transferred > size - remaining
                                 or result.get("size") != size):
-                            raise CanvasError("invalid download response")
+                            raise CanvasError("invalid copy response")
                         if transferred > acknowledged:
                             acknowledged = transferred
                             deadline = time.monotonic() + idle_timeout
                             progress.update(transferred, size)
                     if len(replies) > 8192:
-                        raise CanvasError("invalid download response")
+                        raise CanvasError("invalid copy response")
             if writable:
                 if not pending and remaining:
                     data = file.read(min(65536, remaining))
@@ -291,7 +291,7 @@ def open_file(path):
             raise CanvasError("no browser attached to this window")
         entry, provider, native_socket, pane = entries[0]
         # Registry discovery has already rejected ambiguous destinations. Never
-        # retry: a lost acknowledgement must not download the same file twice.
+        # retry: a lost acknowledgement must not copy the same file twice.
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(30)
             connection.connect(entry["socket"])
@@ -313,10 +313,10 @@ def open_file(path):
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="canvas", description="Download a file in the active Canvas browser.")
+    parser = argparse.ArgumentParser(prog="canvas", description="Copy a file to the active Canvas.")
     commands = parser.add_subparsers(dest="command", required=True)
-    command = commands.add_parser("open", help="download a file")
-    command.add_argument("path", help="file to download")
+    command = commands.add_parser("open", help="copy a file to Canvas")
+    command.add_argument("path", help="file to copy")
     arguments = parser.parse_args()
     try:
         open_file(arguments.path)

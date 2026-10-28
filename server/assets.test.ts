@@ -1,6 +1,6 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -8,6 +8,13 @@ import { AssetStore, sniffFile } from "./assets.ts";
 import { createApp } from "./app.ts";
 import { Store, type Canvas } from "./state.ts";
 import type { TerminalManager } from "./terminals.ts";
+import type { Readable } from "node:stream";
+
+async function streamText(stream: Readable) {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString();
+}
 
 async function waitForRemoval(path: string) {
   const deadline = Date.now() + 1000;
@@ -18,15 +25,15 @@ async function waitForRemoval(path: string) {
   assert.fail("asset bytes were not removed after their last canvas reference");
 }
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, options: { temporaryTtlMs?: number } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "canvas-assets-"));
   const store = new Store(join(dir, "canvas.db"));
-  const assets = new AssetStore(dir, store);
+  const assets = new AssetStore(dir, store, options);
   const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {
     closeAll: async () => {}, closeSource: async () => {},
   } as unknown as TerminalManager, { assets });
   store.addSession("test");
-  t.after(() => { assets.close(); store.close(); return rm(dir, { recursive: true, force: true }); });
+  t.after(async () => { await assets.close(); store.close(); await rm(dir, { recursive: true, force: true }); });
   const headers = { Host: "localhost", Cookie: "canvas_session=test", "Content-Type": "application/json" };
   const request = (path: string, method = "GET", body?: unknown, authenticated = true) => app.request(`http://localhost${path}`, {
     method,
@@ -51,7 +58,8 @@ test("file assets stream to private storage and publish metadata with a canvas c
   const upload = await f.begin("landscape.png", content.length);
   for (let offset = 0; offset < content.length; offset += 64 * 1024)
     await upload.write(content.subarray(offset, offset + 64 * 1024));
-  const asset = await upload.complete(f.context());
+  const { temporary, ...asset } = await upload.complete(f.context());
+  assert.equal(temporary, false);
   assert(asset);
   assert.deepEqual({ mime: asset.mime, preview: asset.preview, size: asset.size }, {
     mime: "image/png", preview: "image", size: content.length,
@@ -94,7 +102,8 @@ test("authenticated file routes stream previews safely and support explicit atta
   const f = await fixture(t), content = Buffer.from("private notes\n");
   const upload = await f.begin("notes.txt", content.length);
   await upload.write(content);
-  const asset = await upload.complete(f.context());
+  const { temporary, ...asset } = await upload.complete(f.context());
+  assert.equal(temporary, false);
   assert(asset);
   const path = `/api/files/${asset.id}`;
   assert.equal((await f.request(path, "GET", undefined, false)).status, 401);
@@ -118,7 +127,8 @@ test("PDF responses allow the native viewer while keeping same-origin embedding"
   const f = await fixture(t), content = Buffer.from("%PDF-1.7\n%%EOF\n");
   const upload = await f.begin("report.pdf", content.length);
   await upload.write(content);
-  const asset = await upload.complete(f.context());
+  const { temporary, ...asset } = await upload.complete(f.context());
+  assert.equal(temporary, false);
   assert(asset);
   const response = await f.request(`/api/files/${asset.id}`);
   assert.equal(response.headers.get("content-type"), "application/pdf");
@@ -132,7 +142,8 @@ test("file nodes cannot refer to missing or another canvas's asset", async t => 
   const f = await fixture(t), other = f.store.put<Canvas>("canvas", { id: randomUUID(), name: "Other", nodes: [] });
   const upload = await f.begin("report.txt", 3);
   await upload.write(Buffer.from("abc"));
-  const asset = await upload.complete(f.context());
+  const { temporary, ...asset } = await upload.complete(f.context());
+  assert.equal(temporary, false);
   assert(asset);
   assert.throws(() => f.store.put("canvas", { ...other, nodes: [{
     id: "foreign", type: "file", assetId: asset.id, x: 0, y: 0, width: 320, height: 160,
@@ -142,14 +153,15 @@ test("file nodes cannot refer to missing or another canvas's asset", async t => 
   }] }), /File asset not found in this canvas/u);
   const noAnchor = await f.begin("discard.txt", 1);
   await noAnchor.write(Buffer.from("x"));
-  assert.equal(await noAnchor.complete(f.context(f.canvas.id, "not-an-anchor")), undefined);
+  await assert.rejects(noAnchor.complete(f.context(f.canvas.id, "not-an-anchor")), /destination no longer exists/u);
   assert.deepEqual(await readdir(join(f.dir, "files")), [asset.id]);
 });
 
 test("deleting one card keeps its shared canvas asset until the last reference is removed", async t => {
   const f = await fixture(t), upload = await f.begin("shared.txt", 3);
   await upload.write(Buffer.from("abc"));
-  const asset = await upload.complete(f.context());
+  const { temporary, ...asset } = await upload.complete(f.context());
+  assert.equal(temporary, false);
   assert(asset);
   const canvas = f.store.get<Canvas>("canvas", f.canvas.id)!;
   const firstFile = canvas.nodes.find(node => node.type === "file")!;
@@ -180,7 +192,7 @@ test("abandoned and overlong uploads do not retain partial files", async t => {
   await excess.abort();
   const large = await f.begin("large.bin", 5 * 1024 * 1024 * 1024);
   await large.abort();
-  assert.deepEqual(await readdir(join(f.dir, "tmp")), []);
+  assert.deepEqual(await readdir(join(f.dir, "tmp")), ["staged"]);
   assert.deepEqual(await readdir(join(f.dir, "files")), []);
 });
 
@@ -193,23 +205,82 @@ test("aborting while completion is awaiting disk sync leaves neither a file nor 
   await failed;
   assert.deepEqual(f.store.fileAssetIds(), []);
   assert(!f.store.get<Canvas>("canvas", f.canvas.id)!.nodes.some(node => node.type === "file"));
-  assert.deepEqual(await readdir(join(f.dir, "tmp")), []);
+  assert.deepEqual(await readdir(join(f.dir, "tmp")), ["staged"]);
   assert.deepEqual(await readdir(join(f.dir, "files")), []);
 });
 
-test("overview downloads and a canvas removed during transfer do not retain files", async t => {
+test("overview uploads stage complete bytes while a removed custom canvas fails without retaining them", async t => {
   const f = await fixture(t);
   const overview = await f.begin("overview.txt", 3);
   await overview.write(Buffer.from("abc"));
-  assert.equal(await overview.complete(f.context("overview")), undefined);
+  const staged = await overview.complete(f.context("overview"));
+  assert.equal(staged.temporary, true);
+  assert.equal(await f.assets.read(staged.id), undefined, "staged files are not public persistent assets");
+  const first = await f.assets.readTemporary(staged.id);
+  assert(first);
+  assert.equal(await streamText(first.body), "abc");
+  const again = await f.assets.readTemporary(staged.id);
+  assert(again, "native download can retry the same staged bytes until expiry");
+  assert.equal(await streamText(again.body), "abc");
   const deleted = await f.begin("removed.txt", 3);
   await deleted.write(Buffer.from("abc"));
   f.store.remove("canvas", f.canvas.id);
-  assert.equal(await deleted.complete(f.context()), undefined);
+  await assert.rejects(deleted.complete(f.context()), /destination no longer exists/u);
   assert.deepEqual(f.store.fileAssetIds(), []);
   assert.equal(f.store.get("canvas", f.canvas.id), undefined);
-  assert.deepEqual(await readdir(join(f.dir, "tmp")), []);
+  assert.deepEqual(await readdir(join(f.dir, "tmp")), ["staged"]);
   assert.deepEqual(await readdir(join(f.dir, "files")), []);
+  await f.assets.discardTemporary(staged.id);
+  assert.equal(await f.assets.readTemporary(staged.id), undefined);
+  assert.deepEqual(await readdir(join(f.dir, "tmp", "staged")), []);
+});
+
+test("temporary uploads expire without interrupting a reader or deleting persistent files", async t => {
+  const f = await fixture(t, { temporaryTtlMs: 60 });
+  const permanent = await f.begin("saved.txt", 4);
+  await permanent.write(Buffer.from("kept"));
+  const asset = await permanent.complete(f.context());
+  const upload = await f.begin("temporary.txt", 6);
+  await upload.write(Buffer.from("staged"));
+  const staged = await upload.complete(f.context("overview"));
+  const read = await f.assets.readTemporary(staged.id);
+  assert(read);
+  await waitForRemoval(join(f.dir, "tmp", "staged", staged.id));
+  assert.equal(await f.assets.readTemporary(staged.id), undefined);
+  assert.equal(await streamText(read.body), "staged", "an already opened file remains readable after expiry unlinks its name");
+  assert.equal(await readFile(join(f.dir, "files", asset.id), "utf8"), "kept");
+});
+
+test("restart recovery removes only generated staged uploads and preserves committed assets", async t => {
+  const f = await fixture(t), upload = await f.begin("saved.txt", 4);
+  await upload.write(Buffer.from("kept"));
+  const asset = await upload.complete(f.context());
+  const stale = randomUUID(), partial = `${randomUUID()}.part`;
+  await writeFile(join(f.dir, "tmp", "staged", stale), "stale", { mode: 0o600 });
+  await writeFile(join(f.dir, "tmp", "staged", "unmanaged.txt"), "unmanaged", { mode: 0o600 });
+  await writeFile(join(f.dir, "tmp", partial), "partial", { mode: 0o600 });
+  const restarted = new AssetStore(f.dir, f.store);
+  try {
+    const saved = await restarted.read(asset.id);
+    assert(saved);
+    assert.equal(await streamText(saved.body), "kept");
+    assert.deepEqual(await readdir(join(f.dir, "tmp", "staged")), ["unmanaged.txt"]);
+    assert.deepEqual(await readdir(join(f.dir, "tmp")), ["staged"]);
+    assert.equal(await restarted.readTemporary(stale), undefined);
+  } finally { await restarted.close(); }
+});
+
+test("closing asset storage removes staged uploads without deleting persistent assets", async t => {
+  const f = await fixture(t), saved = await f.begin("saved.txt", 4);
+  await saved.write(Buffer.from("kept"));
+  const permanent = await saved.complete(f.context());
+  const upload = await f.begin("temporary.txt", 4);
+  await upload.write(Buffer.from("temp"));
+  const temporary = await upload.complete(f.context("overview"));
+  await f.assets.close();
+  assert.equal(await f.assets.readTemporary(temporary.id), undefined);
+  assert.deepEqual(await readdir(join(f.dir, "tmp", "staged")), []);
+  assert.equal(await readFile(join(f.dir, "files", permanent.id), "utf8"), "kept");
 });
 
 test("JavaScript and HTML extensions remain attachments even when their bytes are plain text", async t => {
@@ -217,7 +288,8 @@ test("JavaScript and HTML extensions remain attachments even when their bytes ar
   for (const extension of ["html", "svg", "js", "mjs", "cjs"]) {
     const upload = await f.begin(`sample.${extension}`, 3);
     await upload.write(Buffer.from("abc"));
-    const asset = await upload.complete(f.context());
+    const { temporary, ...asset } = await upload.complete(f.context());
+    assert.equal(temporary, false);
     assert(asset);
     assert.equal(asset.preview, "file");
     assert.equal(asset.mime, "application/octet-stream");

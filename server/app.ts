@@ -76,8 +76,8 @@ export function createApp(
   terminals: TerminalManager,
   options: {
     secureCookie?: boolean;
-    openDownload?: (ticket: string, sessionId: string, context?: DownloadContext) => Promise<DownloadResponse | undefined>;
-    downloadAction?: (ticket: string, sessionId: string, action: "accept" | "cancel", context?: DownloadContext) => DownloadProgress | undefined;
+    openDownload?: (ticket: string, sessionId: string) => Promise<DownloadResponse | undefined>;
+    downloadAction?: (ticket: string, sessionId: string, action: "prepare", context?: DownloadContext) => DownloadProgress | undefined;
     closeOpenBridge?: (sourceId: string) => Promise<void>;
     assets?: AssetStore;
   } = {},
@@ -128,20 +128,17 @@ export function createApp(
   );
   app.get("/api/downloads/:ticket", async (c) => {
     if (c.req.method !== "GET") return c.body(null, 405);
-    const context = z.object({ canvasId: z.string().uuid().optional(), anchorId: z.string().max(150).optional() })
-      .parse({ canvasId: c.req.query("canvasId"), anchorId: c.req.query("anchorId") });
     const download = await options.openDownload?.(
       c.req.param("ticket"),
       getCookie(c, "canvas_session") ?? "",
-      context,
     );
     if (!download) return c.json({ error: "Download expired" }, 404);
     return c.newResponse(Readable.toWeb(download.body) as ReadableStream, 200, download.headers);
   });
   app.post("/api/downloads/:ticket", async (c) => {
     const { action, ...context } = z.object({
-      action: z.enum(["accept", "cancel"]),
-      canvasId: z.string().uuid().optional(), anchorId: z.string().max(150).optional(),
+      action: z.literal("prepare"),
+      canvasId: z.union([z.string().uuid(), z.literal("overview")]).optional(), anchorId: z.string().max(150).optional(),
     }).strict().parse(await c.req.json());
     const progress = options.downloadAction?.(c.req.param("ticket"), getCookie(c, "canvas_session") ?? "", action, context);
     if (!progress) return c.json({ error: "Download expired" }, 404);

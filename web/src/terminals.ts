@@ -323,7 +323,9 @@ export function clearTerminals() {
   for (const session of sessions.values()) {
     endFocusSize(session)
     if (session.presentationFrame !== undefined) cancelAnimationFrame(session.presentationFrame)
-    session.socket?.close()
+    const socket = session.socket
+    session.socket = undefined
+    socket?.close()
     session.term.dispose()
   }
   sessions.clear()

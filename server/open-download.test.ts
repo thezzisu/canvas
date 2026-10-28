@@ -6,18 +6,19 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { createConnection } from "node:net";
 import { createServer, get } from "node:http";
 import { getRequestListener } from "@hono/node-server";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Source } from "./state.ts";
+import type { Source, Canvas } from "./state.ts";
 import { Store } from "./state.ts";
+import { AssetStore } from "./assets.ts";
 import { createApp } from "./app.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { OpenDownloadService, type OpenDownloadOptions } from "./open-download.ts";
 
 const helper = fileURLToPath(new URL("../cli/canvas", import.meta.url));
-const source: Source = { id: "open-source", name: "Open", type: "herdr", transport: "local" };
+const source: Source = { id: randomUUID(), name: "Open", type: "herdr", transport: "local" };
 const resources = {
   id: source.id, name: source.name, type: source.type, host: "local", status: "online" as const,
   spaces: [{ id: "space", name: "Space", windows: [{ id: "window", name: "Window", status: "unknown" as const, statusSource: "none" as const, panes: [{
@@ -28,35 +29,80 @@ const resources = {
 class FakeWebSocket extends EventEmitter {
   readyState = 1;
   messages: Record<string, unknown>[] = [];
-  send(value: string) { this.messages.push(JSON.parse(value)); }
+  onMessage?: (message: Record<string, unknown>) => void;
+  send(value: string) {
+    const message = JSON.parse(value);
+    this.messages.push(message);
+    this.onMessage?.(message);
+  }
 }
 
-async function fixture(t: TestContext, recipientAvailable = true, timeouts: Partial<Pick<OpenDownloadOptions, "decisionTimeoutMs" | "startTimeoutMs" | "progressTimeoutMs">> = {}) {
+type FixtureOptions = Partial<Pick<OpenDownloadOptions, "contextTimeoutMs" | "progressTimeoutMs">> & {
+  recipientAvailable?: boolean;
+  autoContext?: boolean;
+  customCanvas?: boolean;
+  uploadFailure?: "create" | "write" | "complete";
+};
+async function fixture(t: TestContext, options: FixtureOptions = {}) {
   const root = await mkdtemp(join(tmpdir(), "canvas-open-service-"));
   const registry = join(root, "registry"), sockets = join(root, "sockets");
   await mkdir(registry, { mode: 0o700 }); await mkdir(sockets, { mode: 0o700 });
   const nativeSocket = join(root, "herdr.sock");
   const receiver = new FakeWebSocket();
-  const sessions = new Map<FakeWebSocket, string>([[receiver, "authenticated-session"]]);
   let resourceState = resources;
   const store = new Store(join(root, "canvas.db"));
+  const assets = new AssetStore(root, store);
+  const canvas = store.put<Canvas>("canvas", { id: randomUUID(), name: "Files", nodes: [{
+    id: "anchor", sourceId: source.id, spaceId: "space", windowId: "window", x: 40, y: 50, width: 480, height: 302,
+  }] });
   store.addSession("authenticated-session"); store.addSession("other-session");
+  const observations = { uploadedBytes: 0, aborted: 0, finalized: 0 };
   const service = new OpenDownloadService({
     registryDirectory: registry,
     socketDirectory: sockets,
     idleTimeoutMs: 15,
-    ...timeouts,
+    contextTimeoutMs: options.contextTimeoutMs,
+    progressTimeoutMs: options.progressTimeoutMs,
+    createUpload: async metadata => {
+      if (options.uploadFailure === "create") throw new Error("fixture staging unavailable");
+      const upload = await assets.begin(metadata);
+      return {
+        write: async chunk => {
+          if (options.uploadFailure === "write") throw new Error("fixture staging disk full");
+          await upload.write(chunk);
+          observations.uploadedBytes += chunk.length;
+        },
+        complete: async context => {
+          if (options.uploadFailure === "complete") throw new Error("fixture staging commit failed");
+          const result = await upload.complete(context);
+          observations.finalized++;
+          return result;
+        },
+        abort: async () => { await upload.abort(); observations.aborted++; },
+      };
+    },
+    readTemporary: id => assets.readTemporary(id),
     prepare: async (_source, localSocket) => ({ nativeSocket, remoteSocket: localSocket, cleanup: async () => {} }),
     resources: async () => resourceState,
-    recipient: async () => recipientAvailable ? { socket: receiver as never, sessionId: sessions.get(receiver)!, isCurrent: () => receiver.readyState === 1 } : undefined,
+    recipient: async () => options.recipientAvailable !== false ? {
+      socket: receiver as never, sessionId: "authenticated-session", isCurrent: () => receiver.readyState === 1,
+    } : undefined,
   });
+  receiver.onMessage = message => {
+    if (message.type === "file-context" && options.autoContext !== false) queueMicrotask(() => {
+      if (receiver.readyState === 1) service.action(String(message.id), "authenticated-session", "prepare",
+        options.customCanvas ? { canvasId: canvas.id, anchorId: "anchor" } : undefined);
+    });
+  };
   await service.ensureSource(source);
   const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {} as TerminalManager, {
-    openDownload: (ticket, session, context) => service.open(ticket, session, context),
+    openDownload: (ticket, session) => service.open(ticket, session),
     downloadAction: (ticket, session, action, context) => service.action(ticket, session, action, context),
+    assets,
   });
   t.after(async () => {
     await service.closeAll();
+    await assets.close();
     store.close();
     await rm(root, { recursive: true, force: true });
   });
@@ -70,47 +116,13 @@ async function fixture(t: TestContext, recipientAvailable = true, timeouts: Part
     const timer = setTimeout(() => { child.kill(); reject(new Error("helper timed out")); }, 10_000);
     child.once("close", () => clearTimeout(timer));
   });
-  return { root, registry, sockets, nativeSocket, service, receiver, app, run, setResources(value: typeof resources) { resourceState = value } };
+  return { root, registry, sockets, nativeSocket, service, receiver, app, assets, store, canvas, observations,
+    run, setResources(value: typeof resources) { resourceState = value } };
 }
 
-async function completeDownload(f: Awaited<ReturnType<typeof fixture>>, filename: string, contents: Buffer) {
-  const file = join(f.root, filename);
-  await writeFile(file, contents);
-  const running = f.run(filename);
-  for (let i = 0; i < 150 && !f.receiver.messages.some(message => message.type === "download"); i++)
-    await new Promise(resolve => setTimeout(resolve, 20));
-  const notice = f.receiver.messages.find(message => message.type === "download");
-  assert.ok(notice, "one download notice reaches the controlling WebSocket");
-  const url = new URL(String(notice.url), "http://canvas.test");
-  const id = url.pathname.split("/").at(-1)!;
-  const wrongSession = await f.app.request(url.href, { headers: { Cookie: "canvas_session=other-session" } });
-  assert.equal(wrongSession.status, 404, "a different browser session cannot consume the ticket");
-  const accepted = await f.app.request(url.href, { method: "POST", headers: { Cookie: "canvas_session=authenticated-session", "Content-Type": "application/json" }, body: JSON.stringify({ action: "accept" }) });
-  assert.equal(accepted.status, 200);
-  const response = await f.app.request(url.href, { headers: { Cookie: "canvas_session=authenticated-session" } });
-  assert.equal(response.status, 200);
-  assert.equal(response.headers.get("content-length"), null, "completion waits for validated helper EOF");
-  assert.match(response.headers.get("content-disposition")!, /attachment/u);
-  assert.match(response.headers.get("content-disposition")!, /filename\*=UTF-8''/u);
-  assert.deepEqual(Buffer.from(await response.arrayBuffer()), contents);
-  return await running;
-}
-
-async function serveFixture(t: TestContext, f: Awaited<ReturnType<typeof fixture>>) {
-  const server = createServer(getRequestListener(f.app.fetch));
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  t.after(async () => {
-    server.closeAllConnections();
-    await new Promise<void>(resolve => server.close(() => resolve()));
-  });
-  return `http://127.0.0.1:${address.port}`;
-}
-
-async function waitFor(check: () => boolean, message: string) {
+async function waitFor(check: () => boolean | Promise<boolean>, message: string) {
   for (let i = 0; i < 150; i++) {
-    if (check()) return;
+    if (await check()) return;
     await new Promise(resolve => setTimeout(resolve, 20));
   }
   assert.fail(message);
@@ -121,183 +133,230 @@ async function sender(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, si
   const socket = createConnection(record.socket);
   socket.on("error", () => {});
   t.after(() => socket.destroy());
-  let responses = "";
-  socket.on("data", data => responses += data.toString());
-  await new Promise<void>((resolve, reject) => {
-    socket.once("connect", resolve);
-    socket.once("error", reject);
-  });
+  let replies = "";
+  socket.on("data", data => replies += data.toString());
+  await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
   socket.write(JSON.stringify({ version: 1, progress, secret: record.secret, provider: "herdr", nativeSocket: f.nativeSocket,
     paneId: "pane", filename: "file.bin", size }) + "\n");
-  await waitFor(() => f.receiver.messages.some(message => message.type === "download"), "browser received no download offer");
-  if (progress) {
-    await waitFor(() => responses.includes("\n"), "helper received no offered state");
-    assert.deepEqual(JSON.parse(responses.trim()), { state: "offered", transferred: 0, size });
-  } else assert.equal(responses, "", "legacy helper must wait for HTTP consumption before acceptance");
-  const notice = f.receiver.messages.find(message => message.type === "download");
-  assert.ok(notice);
-  return { socket, id: String(notice.id), url: String(notice.url), responses: () => responses.trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) };
+  await waitFor(() => f.receiver.messages.some(message => message.type === "file-context"), "browser received no context request");
+  const context = f.receiver.messages.find(message => message.type === "file-context")!;
+  return { socket, id: String(context.id), responses: () => replies.trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) };
 }
 
-test("canvas open streams arbitrary binary bytes only after binding a one-use browser ticket", async t => {
-  const f = await fixture(t);
-  const content = randomBytes(1024 * 1024 + 19);
-  const result = await completeDownload(f, "风景 文件.bin", content);
+async function serveFixture(t: TestContext, f: Awaited<ReturnType<typeof fixture>>) {
+  const server = createServer(getRequestListener(f.app.fetch));
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function copyFile(f: Awaited<ReturnType<typeof fixture>>, filename: string, content: Buffer) {
+  await writeFile(join(f.root, filename), content);
+  const result = await f.run(filename);
   assert.equal(result.code, 0, result.stderr);
   assert.equal(result.stderr, "");
-  assert.equal(f.receiver.messages.filter(message => message.type === "download").length, 1);
-  const ticket = String(new URL(String(f.receiver.messages[0]!.url), "http://canvas.test").pathname.split("/").at(-1));
-  assert.equal(await f.service.open(ticket, "authenticated-session"), undefined);
-  assert.equal(f.service.action(ticket, "authenticated-session", "cancel")?.state, "completed",
-    "a late cancel must not overwrite an already completed transfer");
-  assert.equal(f.service.action(ticket, "other-session", "cancel"), undefined,
-    "completed ticket state remains private to its receiving browser session");
+  return result;
+}
+
+test("overview copy succeeds before any HTTP request and stages exact retryable bytes", async t => {
+  const f = await fixture(t), content = randomBytes(1024 * 1024 + 19);
+  await copyFile(f, "风景 文件.bin", content);
+  assert.equal(f.observations.finalized, 1, "CLI completion requires committed server storage");
+  assert.equal(f.observations.uploadedBytes, content.length);
+  const notice = f.receiver.messages.find(message => message.type === "download")!;
+  assert(notice, "native download starts only after server staging completes");
+  assert.deepEqual(f.receiver.messages.map(message => message.type), ["file-context", "download"]);
+  const url = `http://canvas.test${notice.url}`;
+  assert.equal((await f.app.request(url, { headers: { Cookie: "canvas_session=other-session" } })).status, 404);
+  assert.equal((await f.app.request(url)).status, 401);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await f.app.request(url, { headers: { Cookie: "canvas_session=authenticated-session" } });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-length"), String(content.length));
+    assert.match(response.headers.get("content-disposition")!, /filename\*=UTF-8''/u);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), content);
+  }
+  assert.equal(f.service.action(String(notice.id), "authenticated-session", "prepare")?.state, "completed");
+  assert.equal(f.service.action(String(notice.id), "other-session", "prepare"), undefined);
 });
 
-test("an empty file completes a real HTTP response and helper acknowledgement", { timeout: 10_000 }, async t => {
-  const f = await fixture(t);
-  const base = await serveFixture(t, f);
-  await writeFile(join(f.root, "empty"), "");
-  const running = f.run("empty");
-  await waitFor(() => f.receiver.messages.some(message => message.type === "download"), "helper emitted no download notice");
+test("custom canvas copy adds one persistent card without starting a browser download", async t => {
+  const f = await fixture(t, { customCanvas: true }), content = Buffer.from("saved to canvas\n");
+  await copyFile(f, "report.txt", content);
+  assert.equal(f.receiver.messages.some(message => message.type === "download"), false);
+  assert.deepEqual(f.receiver.messages.map(message => message.type), ["file-context"]);
+  const canvas = f.store.canvasView(f.store.get<Canvas>("canvas", f.canvas.id)!);
+  const card = canvas.nodes.find(node => node.type === "file");
+  assert(card && card.type === "file");
+  const response = await f.app.request(`http://canvas.test/api/files/${card.assetId}?download=1`, { headers: { Cookie: "canvas_session=authenticated-session" } });
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), content);
+});
+
+test("browser context is bound once and copying never starts through a GET request", async t => {
+  const f = await fixture(t, { autoContext: false }), transfer = await sender(t, f, 4);
+  assert.equal(await f.service.open(transfer.id, "authenticated-session"), undefined);
+  assert.equal(f.service.action(transfer.id, "other-session", "prepare"), undefined);
+  assert.equal(f.observations.uploadedBytes, 0);
+  const response = await f.app.request(`http://canvas.test/api/downloads/${transfer.id}`, {
+    method: "POST", headers: { Cookie: "canvas_session=authenticated-session", "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "prepare", canvasId: f.canvas.id, anchorId: "anchor" }),
+  });
+  assert.equal(response.status, 200);
+  f.service.action(transfer.id, "authenticated-session", "prepare", undefined);
+  await waitFor(() => transfer.responses().some(reply => reply.ok === true), "copy did not start after context binding");
+  transfer.socket.end("done");
+  await waitFor(() => transfer.responses().some(reply => reply.state === "completed"), "copy did not finish");
+  assert.equal(f.receiver.messages.some(message => message.type === "download"), false);
+  assert(f.store.get<Canvas>("canvas", f.canvas.id)!.nodes.some(node => node.type === "file"));
+});
+
+test("empty files complete staging and a real native HTTP response", async t => {
+  const f = await fixture(t), base = await serveFixture(t, f);
+  await copyFile(f, "empty", Buffer.alloc(0));
   const notice = f.receiver.messages.find(message => message.type === "download")!;
   const response = await fetch(`${base}${notice.url}`, { headers: { Cookie: "canvas_session=authenticated-session", Connection: "close" } });
   assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-length"), "0");
   assert.equal((await response.arrayBuffer()).byteLength, 0);
-  const result = await running;
-  assert.equal(result.code, 0, result.stderr);
-  assert.equal(result.stderr, "");
 });
 
-test("accepting an offer does not send file bytes until the browser starts HTTP consumption", async t => {
-  const f = await fixture(t), transfer = await sender(t, f, 4);
-  assert.equal(f.service.action(transfer.id, "other-session", "accept"), undefined);
-  assert.equal(f.service.action(transfer.id, "authenticated-session", "accept")?.state, "accepted");
-  await waitFor(() => transfer.responses().some(response => response.state === "accepted"), "helper did not receive the accepted state");
-  assert(!transfer.responses().some(response => response.ok === true), "acceptance alone must not unblock file transmission");
-  const response = await f.app.request(`http://canvas.test${transfer.url}`, { headers: { Cookie: "canvas_session=authenticated-session" } });
-  const reading = response.arrayBuffer();
-  await waitFor(() => transfer.responses().some(response => response.ok === true), "HTTP consumption did not unblock the helper");
-  transfer.socket.end("done");
-  assert.equal(Buffer.from(await reading).toString(), "done");
-  await waitFor(() => transfer.responses().some(response => response.state === "completed"), "helper did not receive completion");
-});
-
-test("the browser can reject an offer and the helper exits without transferring its file", async t => {
-  const f = await fixture(t);
-  await writeFile(join(f.root, "decline.bin"), randomBytes(1024 * 1024));
-  const running = f.run("decline.bin");
-  await waitFor(() => f.receiver.messages.some(message => message.type === "download"), "browser received no offer");
-  const notice = f.receiver.messages.find(message => message.type === "download")!;
-  const response = await f.app.request(`http://canvas.test${notice.url}`, {
-    method: "POST", headers: { Cookie: "canvas_session=authenticated-session", "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "cancel" }),
-  });
-  assert.equal(response.status, 200);
-  assert.equal((await response.json()).state, "cancelled");
-  const result = await running;
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /download cancelled/u);
-  assert(!f.receiver.messages.some(message => message.state === "transferring"));
-  assert.equal(await f.service.open(String(notice.id), "authenticated-session"), undefined);
-});
-
-test("accepted downloads expire when the browser never starts its HTTP request", async t => {
-  const f = await fixture(t, true, { startTimeoutMs: 80 }), transfer = await sender(t, f, 10);
-  f.service.action(transfer.id, "authenticated-session", "accept");
-  await waitFor(() => transfer.responses().some(response => response.ok === false), "accepted download did not expire");
-  const failure = transfer.responses().at(-1);
-  assert.equal(failure.reason, "not-started");
-  assert.equal(failure.transferred, 0);
-  assert(!transfer.responses().some(response => response.ok === true));
-  assert.equal(await f.service.open(transfer.id, "authenticated-session"), undefined);
-});
-
-test("an unanswered offer expires and releases its helper", async t => {
-  const f = await fixture(t, true, { decisionTimeoutMs: 80 }), transfer = await sender(t, f, 10);
-  await waitFor(() => transfer.responses().some(response => response.ok === false), "offer did not expire");
-  assert.equal(transfer.responses().at(-1).reason, "not-started");
-  assert.equal(f.service.action(transfer.id, "authenticated-session", "accept")?.state, "failed");
-});
-
-test("a started transfer with no byte progress times out instead of hanging", async t => {
-  const f = await fixture(t, true, { progressTimeoutMs: 80 }), transfer = await sender(t, f, 10);
-  const response = await f.app.request(`http://canvas.test${transfer.url}`, { headers: { Cookie: "canvas_session=authenticated-session" } });
-  const failed = assert.rejects(response.arrayBuffer(), /File transfer timed-out/u);
-  await waitFor(() => transfer.responses().some(response => response.ok === false), "stalled transfer did not time out");
-  assert.equal(transfer.responses().at(-1).reason, "timed-out");
-  await failed;
-});
-
-test("legacy helpers receive only actual start and final acknowledgements", async t => {
-  const f = await fixture(t), transfer = await sender(t, f, 4, false);
-  f.service.action(transfer.id, "authenticated-session", "accept");
-  assert.deepEqual(transfer.responses(), []);
-  const response = await f.app.request(`http://canvas.test${transfer.url}`, { headers: { Cookie: "canvas_session=authenticated-session" } });
-  const reading = response.arrayBuffer();
-  await waitFor(() => transfer.responses().some(response => response.ok === true), "legacy helper received no acceptance");
-  transfer.socket.end("done");
-  assert.equal(Buffer.from(await reading).toString(), "done");
-  await waitFor(() => transfer.responses().length === 2, "legacy helper received no completion");
-  assert.deepEqual(transfer.responses().map(response => response.ok), [true, true]);
-});
-
-test("real HTTP downloads wait for helper EOF even after all declared bytes arrive", { timeout: 10_000 }, async t => {
-  for (const content of [Buffer.alloc(0), Buffer.from("complete payload awaiting EOF")]) {
-    const f = await fixture(t);
-    const base = await serveFixture(t, f);
-    const transfer = await sender(t, f, content.length);
-    let received = false, completed = false;
-    const reading = new Promise<Buffer>((resolve, reject) => {
-      const request = get(base + transfer.url, { headers: { Cookie: "canvas_session=authenticated-session", Connection: "close" } }, response => {
-        assert.equal(response.statusCode, 200);
-        received = true;
-        const chunks: Buffer[] = [];
-        response.on("data", chunk => chunks.push(chunk));
-        response.once("error", reject);
-        response.once("end", () => {
-          completed = true;
-          resolve(Buffer.concat(chunks));
-        });
-      });
-      request.once("error", reject);
-      t.after(() => request.destroy());
-    });
-    await waitFor(() => transfer.responses().some(response => response.ok === true), "helper was not accepted after the HTTP request");
+test("staging waits for validated helper EOF after all declared bytes arrive", async t => {
+  for (const content of [Buffer.alloc(0), Buffer.from("complete bytes awaiting EOF")]) {
+    const f = await fixture(t), transfer = await sender(t, f, content.length);
+    await waitFor(() => transfer.responses().some(reply => reply.ok === true), "copy never started");
     transfer.socket.write(content);
-    await waitFor(() => received, "HTTP download did not begin");
-    await new Promise(resolve => setTimeout(resolve, 100));
-    assert.equal(completed, false, "HTTP completed before the helper's validated EOF");
-    assert.equal(transfer.socket.destroyed, false, "HTTP completion cancelled the helper before final acknowledgement");
+    await new Promise(resolve => setTimeout(resolve, 60));
+    assert.equal(f.observations.finalized, 0);
+    assert.equal(await f.service.open(transfer.id, "authenticated-session"), undefined);
+    assert.equal(f.receiver.messages.some(message => message.type === "download"), false);
     transfer.socket.end();
-    assert.deepEqual(await reading, content);
-    await waitFor(() => transfer.responses().some(response => response.state === "completed"), "helper received no final acknowledgement");
-    assert.deepEqual(transfer.responses().filter(response => "ok" in response).map(response => response.ok), [true, true]);
-    assert.equal(transfer.responses().at(-1).transferred, content.length);
+    await waitFor(() => transfer.responses().some(reply => reply.state === "completed"), "copy was not finalized after EOF");
+    assert.equal(f.observations.finalized, 1);
   }
 });
 
-test("cancelling an active real HTTP download closes its helper connection", { timeout: 10_000 }, async t => {
-  const f = await fixture(t);
-  const base = await serveFixture(t, f);
-  const transfer = await sender(t, f, 8 * 1024 * 1024);
-  const cancelled = new Promise<void>((resolve, reject) => {
-    const request = get(base + transfer.url, { headers: { Cookie: "canvas_session=authenticated-session" } }, response => {
+test("cancelling a native HTTP download does not affect the completed CLI copy", async t => {
+  const f = await fixture(t), base = await serveFixture(t, f), content = randomBytes(8 * 1024 * 1024);
+  const result = await copyFile(f, "large.bin", content);
+  const notice = f.receiver.messages.find(message => message.type === "download")!;
+  await new Promise<void>((resolve, reject) => {
+    const request = get(`${base}${notice.url}`, { headers: { Cookie: "canvas_session=authenticated-session" } }, response => {
       response.on("error", () => {});
       response.once("data", () => { response.destroy(); resolve(); });
     });
     request.once("error", reject);
     t.after(() => request.destroy());
   });
-  await waitFor(() => transfer.responses().some(response => response.ok === true), "helper was not accepted after the HTTP request");
-  transfer.socket.write(Buffer.alloc(64 * 1024));
-  await cancelled;
-  await waitFor(() => transfer.socket.destroyed, "cancelled HTTP download retained the helper connection");
-  assert(!transfer.responses().some(response => response.state === "completed"), "cancelled downloads must not acknowledge successful completion");
-  assert.equal(transfer.responses().at(-1).ok, false);
+  assert.equal(result.code, 0);
+  assert.equal(f.observations.aborted, 0);
+  const retry = await f.service.open(String(notice.id), "authenticated-session");
+  assert(retry);
+  const chunks: Buffer[] = [];
+  for await (const chunk of retry.body) chunks.push(Buffer.from(chunk));
+  assert.deepEqual(Buffer.concat(chunks), content);
 });
 
-test("malformed and oversized socket headers cannot affect the service or generate a download", async t => {
+test("a missing browser context fails with not-attached without sending file data", async t => {
+  const f = await fixture(t, { autoContext: false, contextTimeoutMs: 60 });
+  await writeFile(join(f.root, "copy.txt"), "private data");
+  const began = Date.now(), result = await f.run("copy.txt");
+  assert.equal(result.code, 1);
+  assert.equal(result.stderr, "canvas: no browser attached to this window\n");
+  assert(Date.now() - began < 2000);
+  assert.equal(f.observations.uploadedBytes, 0);
+});
+
+test("no controlling browser fails immediately without a context round trip", async t => {
+  const f = await fixture(t, { recipientAvailable: false });
+  await writeFile(join(f.root, "copy.txt"), "private data");
+  const began = Date.now(), result = await f.run("copy.txt");
+  assert.equal(result.code, 1);
+  assert.equal(result.stderr, "canvas: no browser attached to this window\n");
+  assert(Date.now() - began < 2000);
+  assert.deepEqual(f.receiver.messages, []);
+});
+
+test("copy inactivity times out and removes partial staging", async t => {
+  const f = await fixture(t, { progressTimeoutMs: 70 }), transfer = await sender(t, f, 10);
+  await waitFor(() => transfer.responses().some(reply => reply.ok === true), "copy never started");
+  transfer.socket.write("part");
+  await waitFor(() => transfer.responses().some(reply => reply.ok === false), "stalled copy did not time out");
+  assert.equal(transfer.responses().at(-1).reason, "timed-out");
+  await waitFor(() => f.observations.aborted === 1, "staging upload was not aborted");
+  assert.deepEqual(await readdir(join(f.root, "tmp")), ["staged"]);
+  assert.deepEqual(await readdir(join(f.root, "tmp", "staged")), []);
+});
+
+test("browser disconnect before context fails, but an already bound copy finishes on the server", async t => {
+  const unbound = await fixture(t, { autoContext: false }), first = await sender(t, unbound, 4);
+  unbound.receiver.readyState = 3; unbound.receiver.emit("close");
+  await waitFor(() => first.responses().some(reply => reply.ok === false), "unbound copy did not fail");
+  assert.equal(first.responses().at(-1).reason, "not-attached");
+  const bound = await fixture(t), second = await sender(t, bound, 4);
+  await waitFor(() => second.responses().some(reply => reply.ok === true), "bound copy never started");
+  bound.receiver.readyState = 3; bound.receiver.emit("close");
+  second.socket.end("done");
+  await waitFor(() => second.responses().some(reply => reply.state === "completed"), "bound copy did not survive browser disconnect");
+  assert.equal(bound.observations.finalized, 1);
+  assert.equal(bound.receiver.messages.some(message => message.type === "download"), false);
+  const staged = await bound.service.open(second.id, "authenticated-session");
+  assert(staged);
+  staged.body.destroy();
+});
+
+test("copy retains its source until server staging finishes even after the last viewer leaves", async t => {
+  const f = await fixture(t), releaseViewer = f.service.retainSource(source.id), transfer = await sender(t, f, 4);
+  await waitFor(() => transfer.responses().some(reply => reply.ok === true), "copy never started");
+  releaseViewer();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal((await readdir(f.registry)).length, 1, "in-flight copy owns a source lease");
+  transfer.socket.end("done");
+  await waitFor(() => transfer.responses().some(reply => reply.state === "completed"), "copy did not finish");
+  await waitFor(async () => (await readdir(f.registry)).length === 0, "completed copy leaked the source lease");
+});
+
+test("staging creation, write and commit failures fail the helper and clean partial data", async t => {
+  for (const uploadFailure of ["create", "write", "complete"] as const) {
+    await t.test(uploadFailure, async t => {
+      const f = await fixture(t, { uploadFailure });
+      await writeFile(join(f.root, "copy.txt"), "copy bytes");
+      const result = await f.run("copy.txt");
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /file transfer failed/u);
+      assert.equal(f.receiver.messages.some(message => message.type === "download"), false);
+      if (uploadFailure !== "create") {
+        await waitFor(() => f.observations.aborted === 1, "failed staging upload was not aborted");
+        assert.deepEqual(await readdir(join(f.root, "tmp")), ["staged"]);
+        assert.deepEqual(await readdir(join(f.root, "tmp", "staged")), []);
+      }
+      assert.deepEqual(f.store.fileAssetIds(), []);
+    });
+  }
+});
+
+test("truncated and disconnected helpers cannot publish a file", async t => {
+  for (const abrupt of [false, true]) {
+    const f = await fixture(t), transfer = await sender(t, f, 10);
+    await waitFor(() => transfer.responses().some(reply => reply.ok === true), "copy never started");
+    if (abrupt) transfer.socket.destroy(); else transfer.socket.end("short");
+    await waitFor(() => f.observations.aborted === 1, "invalid stream did not abort staging");
+    assert.equal(f.receiver.messages.some(message => message.type === "download"), false);
+    assert.deepEqual(await readdir(join(f.root, "tmp", "staged")), []);
+  }
+});
+
+test("legacy helpers receive only actual copy start and completion acknowledgements", async t => {
+  const f = await fixture(t), transfer = await sender(t, f, 4, false);
+  await waitFor(() => transfer.responses().length === 1, "legacy helper received no copy acknowledgement");
+  assert.equal(transfer.responses()[0].ok, true);
+  transfer.socket.end("done");
+  await waitFor(() => transfer.responses().length === 2, "legacy helper received no copy completion");
+  assert.deepEqual(transfer.responses().map(reply => reply.ok), [true, true]);
+});
+
+test("malformed and oversized socket headers cannot generate a file transfer", async t => {
   const f = await fixture(t);
   const record = JSON.parse(await readFile(join(f.registry, (await readdir(f.registry))[0]!), "utf8"));
   for (const input of ["null\n", "[]\n", "1\n", "bad json\n", "x".repeat(17 * 1024)]) {
@@ -309,86 +368,31 @@ test("malformed and oversized socket headers cannot affect the service or genera
       socket.once("close", () => { clearTimeout(timer); resolve(); });
     });
   }
-  assert.equal(f.receiver.messages.length, 0);
-  assert.equal((await completeDownload(f, "still-working", Buffer.from("ok"))).code, 0);
-});
-
-test("truncated or disconnected helper streams reject the HTTP body instead of hanging", async t => {
-  const f = await fixture(t);
-  for (const abrupt of [false, true]) {
-    f.receiver.messages.length = 0;
-    const transfer = await sender(t, f, 10);
-    const response = await f.app.request(`http://canvas.test${transfer.url}`, { headers: { Cookie: "canvas_session=authenticated-session" } });
-    const reading = response.arrayBuffer();
-    const failed = assert.rejects(reading, /File transfer/u);
-    await waitFor(() => transfer.responses().some(response => response.ok === true), "helper was not accepted");
-    if (abrupt) transfer.socket.destroy(); else transfer.socket.end("short");
-    await failed;
-    transfer.socket.destroy();
-  }
-});
-
-test("canvas open refuses panes without a live controlling browser before sending file bytes", async t => {
-  const f = await fixture(t, false);
-  const file = join(f.root, "not-sent"); await writeFile(file, "private bytes");
-  const began = Date.now();
-  const result = await f.run(file);
-  assert.equal(result.code, 1);
-  assert.equal(result.stderr, "canvas: no browser attached to this window\n");
-  assert(Date.now() - began < 2000, "no active browser must fail before the decision timeout");
   assert.deepEqual(f.receiver.messages, []);
+  await copyFile(f, "still-working", Buffer.from("ok"));
 });
 
-test("linked tmux references for one native window resolve to one controller", async t => {
+test("linked tmux references for one native window resolve to one destination", async t => {
   const f = await fixture(t);
   f.setResources({ ...resources, spaces: [...resources.spaces, { id: "linked-space", name: "Linked", windows: [{ ...resources.spaces[0]!.windows[0]!, panes: [...resources.spaces[0]!.windows[0]!.panes] }] }] });
-  const result = await completeDownload(f, "linked.bin", Buffer.from("one native window"));
-  assert.equal(result.code, 0, result.stderr);
+  await copyFile(f, "linked.bin", Buffer.from("one native window"));
   assert.equal(f.receiver.messages.filter(message => message.type === "download").length, 1);
-});
-
-test("closing the controlling browser cancels a pending one-use download", async t => {
-  const f = await fixture(t);
-  const file = join(f.root, "cancelled"); await writeFile(file, randomBytes(256 * 1024));
-  const running = f.run(file);
-  for (let i = 0; i < 150 && !f.receiver.messages.some(message => message.type === "download"); i++)
-    await new Promise(resolve => setTimeout(resolve, 20));
-  assert(f.receiver.messages.some(message => message.type === "download"));
-  f.receiver.emit("close");
-  const result = await running;
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /file transfer failed|download connection closed|no Canvas tab/u);
 });
 
 test("two independent Canvas backends on the same native socket fail closed", async t => {
   const f = await fixture(t);
   const other = new OpenDownloadService({
-    registryDirectory: f.registry,
-    socketDirectory: f.sockets,
+    registryDirectory: f.registry, socketDirectory: f.sockets,
+    createUpload: metadata => f.assets.begin(metadata), readTemporary: id => f.assets.readTemporary(id),
     prepare: async (_source, localSocket) => ({ nativeSocket: f.nativeSocket, remoteSocket: localSocket, cleanup: async () => {} }),
     resources: async () => resources,
     recipient: async () => ({ socket: f.receiver as never, sessionId: "authenticated-session", isCurrent: () => f.receiver.readyState === 1 }),
   });
+  t.after(() => other.closeAll());
   await other.ensureSource({ ...source, id: "second-backend" });
-  const file = join(f.root, "ambiguous"); await writeFile(file, "must not be duplicated");
-  const result = await f.run(file);
+  await writeFile(join(f.root, "ambiguous"), "must not be duplicated");
+  const result = await f.run("ambiguous");
   assert.equal(result.code, 1);
   assert.match(result.stderr, /multiple Canvas connections/u);
   assert.deepEqual(f.receiver.messages, []);
-  await other.closeAll();
-});
-
-test("the last viewer releases its bridge after an idle grace period; a returning viewer retains it", async t => {
-  const f = await fixture(t);
-  const releaseFirst = f.service.retainSource(source.id);
-  releaseFirst();
-  const releaseSecond = f.service.retainSource(source.id);
-  await new Promise(resolve => setTimeout(resolve, 40));
-  assert.equal((await readdir(f.registry)).length, 1);
-  releaseSecond();
-  for (let i = 0; i < 100 && (await readdir(f.registry)).length; i++)
-    await new Promise(resolve => setTimeout(resolve, 10));
-  assert.equal((await readdir(f.registry)).length, 0);
-  await f.service.ensureSource(source);
-  assert.equal((await readdir(f.registry)).length, 1);
 });

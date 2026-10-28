@@ -55,20 +55,23 @@ async function writeAll(file: FileHandle, chunk: Buffer, position: number) {
 
 export interface AssetUpload {
   write(chunk: Uint8Array): Promise<void>;
-  complete(context: FileNodeContext): Promise<FileAsset | undefined>;
+  complete(context: FileNodeContext): Promise<FileAsset & { temporary: boolean }>;
   abort(): Promise<void>;
 }
 
 export class AssetStore {
   private readonly directory: string;
   private readonly temporary: string;
+  private readonly staged: string;
   private cleanupQueued = false;
   private closed = false;
   private initialized?: Promise<void>;
+  private stagedFiles = new Map<string, { asset: FileAsset; expiresAt: number; timer: ReturnType<typeof setTimeout> }>();
 
-  constructor(dataDirectory: string, private readonly store: Store) {
+  constructor(dataDirectory: string, private readonly store: Store, private readonly options: { temporaryTtlMs?: number } = {}) {
     this.directory = join(dataDirectory, "files");
     this.temporary = join(dataDirectory, "tmp");
+    this.staged = join(this.temporary, "staged");
     store.on("change", this.scheduleCleanup);
   }
 
@@ -110,7 +113,9 @@ export class AssetStore {
         if (!active) throw new Error("Upload is closed");
         if (written !== input.size) throw new Error("File transfer ended before declared length");
         const id = randomUUID();
-        const path = join(this.directory, id);
+        const temporary = !context.canvasId || context.canvasId === "overview";
+        const directoryPath = temporary ? this.staged : this.directory;
+        const path = join(directoryPath, id);
         try {
           await file.sync();
           await file.close();
@@ -123,16 +128,19 @@ export class AssetStore {
             createdAt: Date.now(),
           };
           await rename(partialPath, path);
-          const directory = await open(this.directory, constants.O_RDONLY | constants.O_DIRECTORY);
+          const directory = await open(directoryPath, constants.O_RDONLY | constants.O_DIRECTORY);
           try { await directory.sync(); } finally { await directory.close(); }
-          if (!active) throw new Error("Upload is closed");
-          const saved = this.store.addFileNode(asset, context);
-          active = false;
-          if (!saved) {
-            await rm(path, { force: true });
-            return undefined;
+          if (!active || this.closed) throw new Error("Upload is closed");
+          if (temporary) {
+            const ttl = this.options.temporaryTtlMs ?? 60 * 60_000;
+            const timer = setTimeout(() => { void this.discardTemporary(id).catch(() => {}); }, ttl);
+            timer.unref();
+            this.stagedFiles.set(id, { asset, expiresAt: Date.now() + ttl, timer });
+          } else if (!this.store.addFileNode(asset, context)) {
+            throw new Error("File destination no longer exists");
           }
-          return asset;
+          active = false;
+          return { ...asset, temporary };
         } catch (error) {
           active = false;
           await file.close().catch(() => {});
@@ -154,9 +162,32 @@ export class AssetStore {
     await this.initialize();
     const asset = this.store.fileAsset(id);
     if (!asset) return undefined;
+    return await this.openAsset(join(this.directory, id), asset);
+  }
+
+  async readTemporary(id: string): Promise<{ body: Readable; asset: FileAsset } | undefined> {
+    if (this.closed) return undefined;
+    await this.initialize();
+    const staged = this.stagedFiles.get(id);
+    if (!staged) return undefined;
+    if (staged.expiresAt <= Date.now()) {
+      await this.discardTemporary(id);
+      return undefined;
+    }
+    return await this.openAsset(join(this.staged, id), staged.asset);
+  }
+
+  async discardTemporary(id: string): Promise<void> {
+    const staged = this.stagedFiles.get(id);
+    if (!staged) return;
+    clearTimeout(staged.timer);
+    this.stagedFiles.delete(id);
+    await rm(join(this.staged, id), { force: true });
+  }
+
+  private async openAsset(path: string, asset: FileAsset): Promise<{ body: Readable; asset: FileAsset } | undefined> {
     let handle: FileHandle | undefined;
     try {
-      const path = join(this.directory, id);
       handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
       const info = await handle.stat();
       if (!info.isFile() || info.size !== asset.size) {
@@ -171,6 +202,7 @@ export class AssetStore {
     this.initialized ??= (async () => {
       await privateDirectory(this.temporary);
       await privateDirectory(this.directory);
+      await privateDirectory(this.staged);
       // Only names created by this store are eligible for crash recovery.
       // A committed metadata row always wins over a leftover directory entry.
       const generated = /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/iu;
@@ -180,6 +212,8 @@ export class AssetStore {
       for (const entry of await readdir(this.directory))
         if (generated.test(entry) && !this.store.fileAsset(entry))
           await rm(join(this.directory, entry), { force: true });
+      for (const entry of await readdir(this.staged))
+        if (generated.test(entry)) await rm(join(this.staged, entry), { force: true });
       await this.cleanupOrphans();
     })();
     return this.initialized;
@@ -195,9 +229,11 @@ export class AssetStore {
     }
   }
 
-  close() {
+  async close(): Promise<void> {
     this.closed = true;
     this.store.off("change", this.scheduleCleanup);
+    await this.initialized?.catch(() => {});
+    await Promise.all([...this.stagedFiles.keys()].map(id => this.discardTemporary(id)));
   }
 }
 

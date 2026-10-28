@@ -59,9 +59,9 @@ No custom remote tmux installation is required.
 
 ## Download a file
 
-Run `canvas open <path>` in a connected terminal. Canvas streams the file from
-that machine and downloads it in the browser tab that currently controls the
-native window. The path is read on the terminal's host; the Canvas server never
+Run `canvas open <path>` in a connected terminal. Canvas copies the file from
+that machine to server storage for the browser tab controlling the native window.
+The path is read on the terminal's host; the Canvas server never
 opens a path supplied by terminal output. Regular files, Unicode names and
 large files are supported. Python 3 is required on the terminal host. Canvas
 installs its helper at `~/.local/bin/canvas` when that source first connects,
@@ -72,16 +72,19 @@ Click the terminal or maximize it to choose the receiving tab. Opening a passive
 viewer does not claim downloads, and closing the controlling tab does not hand
 them to another viewer. An agent can run the helper without echoing its output.
 
-Accept or cancel the offer at the bottom right. Transfer progress appears there
-and in an interactive terminal. Cancelling stops the helper; an unanswered offer,
-a blocked browser download, or a stalled transfer times out. Browser save-dialog
-cancellation is detected when the browser closes the request, otherwise by timeout.
+The terminal progress bar measures bytes copied to Canvas. The command succeeds
+after the full file is committed on the server; browser download speed or
+cancellation does not affect it. There is no confirmation or notification UI.
+If no browser can receive the file, the command exits nonzero immediately with
+`canvas: no browser attached to this window`. Ctrl+C cancels an unfinished copy.
 
-In a custom canvas, a completed transfer also creates a file card beside its
-originating window. Images, PDFs and text have previews; other files have a
-download icon. Cards can be moved, resized and downloaded again from another
-browser, even after the terminal disconnects or Canvas restarts. Overview does
-not retain files. Removing the last card removes the stored file. Include both
+In Overview, completion starts a native browser download. Its staged file remains
+available to that login session for one hour and is cleared when Canvas restarts.
+In a custom canvas, completion adds a file card beside its originating window.
+Images, PDFs and text have previews; every card has a download button. Cards can
+be moved, resized and downloaded again from another browser, even after the
+terminal disconnects or Canvas restarts. Removing the last card removes the
+stored file. Include both
 the database and the `files` directory when backing up `CANVAS_DATA_DIR`.
 
 Multiple canvases and browser tabs on one Canvas Server share the same native

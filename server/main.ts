@@ -34,6 +34,7 @@ const helperBytes = readFileSync(new URL("../cli/canvas", import.meta.url));
 const socketSessions = new WeakMap<import("ws").WebSocket, string>();
 const downloads = new OpenDownloadService({
   createUpload: metadata => assets.begin(metadata),
+  readTemporary: id => assets.readTemporary(id),
   prepare: prepareOpenBridge,
   publishRemote: writeRemoteBridgeRegistry,
   installHelper: (source) => installCanvasHelper(source, helperBytes),
@@ -47,7 +48,7 @@ const downloads = new OpenDownloadService({
 });
 const app = createApp(store, account, terminals, {
   secureCookie: process.env.CANVAS_SECURE_COOKIE === "1",
-  openDownload: (ticket, session, context) => downloads.open(ticket, session, context),
+  openDownload: (ticket, session) => downloads.open(ticket, session),
   downloadAction: (ticket, session, action, context) => downloads.action(ticket, session, action, context),
   closeOpenBridge: (sourceId) => downloads.closeSource(sourceId),
   assets,
@@ -152,7 +153,7 @@ async function stop() {
   closeStatusObservers();
   await terminals.closeAll();
   await downloads.closeAll();
-  assets.close();
+  await assets.close();
   await closeProviderConnections();
   store.emit("close");
   wss.close();

@@ -1,151 +1,82 @@
-import { shallowRef } from 'vue'
-
-export type DownloadState = 'offered' | 'accepted' | 'transferring' | 'completed' | 'cancelled' | 'failed'
-export interface Download {
-  id: string
-  url: string
-  filename: string
-  size: number
-  transferred: number
-  state: DownloadState
-  reason?: string
-  cancelling?: boolean
-  context: DownloadContext
-}
 export interface DownloadContext { canvasId?: string; anchorId?: string }
 export interface DownloadResource { sourceId: string; windowId: string }
 
-export const downloads = shallowRef<Download[]>([])
-const owners = new Map<string, WebSocket>()
-const dismissTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const requests = new Set<AbortController>()
+const requests = new Map<AbortController, WebSocket>()
+let received = new WeakMap<WebSocket, Set<string>>()
 let getDownloadContext: (resource: DownloadResource) => DownloadContext | undefined = () => undefined
-const terminalStates = new Set<DownloadState>(['completed', 'cancelled', 'failed'])
-const states = new Set<DownloadState>(['offered', 'accepted', 'transferring', ...terminalStates])
-export const downloadFinished = (download: Download) => terminalStates.has(download.state)
+
 export function setDownloadContext(getter?: (resource: DownloadResource) => DownloadContext | undefined) {
   getDownloadContext = getter || (() => undefined)
 }
 
-function find(id: string) { return downloads.value.find(download => download.id === id) }
-function update(id: string, patch: Partial<Download>) {
-  downloads.value = downloads.value.map(download => download.id === id ? { ...download, ...patch } : download)
-}
-export function dismissDownload(id: string) {
-  clearTimeout(dismissTimers.get(id))
-  dismissTimers.delete(id)
-  owners.delete(id)
-  downloads.value = downloads.value.filter(download => download.id !== id)
-}
-function finish(id: string) {
-  const download = find(id)
-  if (!download || !downloadFinished(download)) return
-  owners.delete(id)
-  clearTimeout(dismissTimers.get(id))
-  dismissTimers.set(id, setTimeout(() => dismissDownload(id), download.state === 'failed' ? 10_000 : 6_000))
-  const finished = downloads.value.filter(downloadFinished)
-  for (const stale of finished.slice(0, Math.max(0, finished.length - 3))) dismissDownload(stale.id)
-}
-function progress(id: string, message: Record<string, unknown>) {
-  const download = find(id)
-  if (!download || downloadFinished(download) || !states.has(message.state as DownloadState)) return
-  const state = message.state as DownloadState
-  // Acceptance is optimistic so a second click cannot start a second GET.
-  if (state === 'offered' && download.state !== 'offered') return
-  if (state === 'accepted' && download.state === 'transferring') return
-  update(id, {
-    state,
-    transferred: typeof message.transferred === 'number' && Number.isSafeInteger(message.transferred)
-      ? Math.max(download.transferred, Math.min(download.size, message.transferred)) : download.transferred,
-    reason: typeof message.reason === 'string' ? message.reason : undefined,
-    ...(terminalStates.has(state) ? { cancelling: false } : {}),
-  })
-  finish(id)
-}
-
-/** Download offers belong to the exact terminal socket that received them. */
-export function receiveDownload(socket: WebSocket, message: Record<string, unknown>, resource: DownloadResource): boolean {
-  if (message.type !== 'download' && message.type !== 'download-progress') return false
-  if (typeof message.id !== 'string') return true
-  if (message.type === 'download-progress') {
-    if (owners.get(message.id) === socket) progress(message.id, message)
-    return true
-  }
-  if (find(message.id) || typeof message.url !== 'string' || typeof message.filename !== 'string'
-      || typeof message.size !== 'number' || !Number.isSafeInteger(message.size) || message.size < 0) return true
-  let url: URL
-  try { url = new URL(message.url, location.href) } catch { return true }
-  const path = `/api/downloads/${encodeURIComponent(message.id)}`
-  if (url.origin !== location.origin || url.pathname !== path || url.search || url.hash) return true
-  const context = { ...getDownloadContext(resource) }
-  const href = new URL(path, location.href)
-  if (context.canvasId) href.searchParams.set('canvasId', context.canvasId)
-  if (context.anchorId) href.searchParams.set('anchorId', context.anchorId)
-  owners.set(message.id, socket)
-  downloads.value = [...downloads.value, { id: message.id, url: `${href.pathname}${href.search}`, filename: message.filename,
-    size: message.size, transferred: 0, state: 'offered', context }]
+function firstMessage(socket: WebSocket, type: string, id: string) {
+  const messages = received.get(socket) || new Set<string>()
+  const key = `${type}:${id}`
+  if (messages.has(key)) return false
+  messages.add(key)
+  if (messages.size > 256) messages.delete(messages.values().next().value!)
+  received.set(socket, messages)
   return true
 }
 
-async function action(id: string, action: 'accept' | 'cancel') {
-  const download = find(id)
-  if (!download) return
+async function prepare(socket: WebSocket, path: string, context: DownloadContext) {
   const controller = new AbortController()
-  requests.add(controller)
+  requests.set(controller, socket)
   const timeout = setTimeout(() => controller.abort(), 10_000)
   try {
-    const response = await fetch(download.url, {
+    const response = await fetch(path, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, ...download.context }), signal: controller.signal,
+      body: JSON.stringify({ action: 'prepare', ...context }), signal: controller.signal,
     })
     if (response.status === 401) window.dispatchEvent(new Event('canvas:unauthorized'))
-    if (response.status === 404 && action === 'cancel') {
-      progress(id, { state: 'cancelled' })
-      return
-    }
-    if (!response.ok) throw new Error('Download action failed')
-    const result: Record<string, unknown> | undefined = response.status === 204 ? undefined : await response.json()
-    if (result?.state) progress(id, result)
-    else if (action === 'cancel') progress(id, { state: 'cancelled' })
   } catch {
-    const current = find(id)
-    if (!current || downloadFinished(current)) return
-    // The GET may already be transferring even if its acceptance POST failed.
-    if (action === 'accept') return
-    update(id, { state: 'failed', reason: 'disconnected', cancelling: false })
-    finish(id)
+    // The server expires an unprepared transfer and reports the failure to its
+    // helper. No browser download is attempted before staging has completed.
   } finally {
     clearTimeout(timeout)
     requests.delete(controller)
   }
 }
 
-/** Called by a real download link click; never await before its default action. */
-export function acceptDownload(id: string): boolean {
-  const download = find(id)
-  if (!download || download.state !== 'offered' || download.cancelling) return false
-  update(id, { state: 'accepted' })
-  void action(id, 'accept')
+/** Bind staging to the receiving tab's canvas without a browser decision. */
+export function receiveDownload(socket: WebSocket, message: Record<string, unknown>, resource: DownloadResource): boolean {
+  if (message.type !== 'file-context' && message.type !== 'download') return false
+  if (typeof message.id !== 'string' || !message.id || message.id.length > 256) return true
+  let path: string
+  try { path = `/api/downloads/${encodeURIComponent(message.id)}` } catch { return true }
+  if (message.type === 'file-context') {
+    if (!firstMessage(socket, message.type, message.id)) return true
+    const context = { ...getDownloadContext(resource) }
+    void prepare(socket, path, context)
+    return true
+  }
+  if (typeof message.url !== 'string' || typeof message.filename !== 'string') return true
+  let url: URL
+  try { url = new URL(message.url, location.href) } catch { return true }
+  if (url.origin !== location.origin || url.pathname !== path || url.search || url.hash) return true
+  if (!firstMessage(socket, message.type, message.id)) return true
+  // This URL serves an already-staged file. Browser download policy can no
+  // longer hold the remote helper or its terminal session open.
+  const anchor = document.createElement('a')
+  anchor.href = url.href
+  anchor.download = message.filename
+  anchor.hidden = true
+  const target = document.fullscreenElement || document.body
+  target.append(anchor)
+  anchor.click()
+  anchor.remove()
   return true
 }
-export function cancelDownload(id: string) {
-  const download = find(id)
-  if (!download || downloadFinished(download) || download.cancelling) return
-  update(id, { cancelling: true })
-  void action(id, 'cancel')
-}
+
 export function disconnectDownloads(socket: WebSocket) {
-  for (const [id, owner] of owners) {
-    if (owner !== socket) continue
-    update(id, { state: 'failed', reason: 'disconnected', cancelling: false })
-    finish(id)
+  for (const [controller, owner] of requests) {
+    if (owner === socket) { controller.abort(); requests.delete(controller) }
   }
+  received.delete(socket)
 }
+
 export function clearDownloads() {
-  for (const controller of requests) controller.abort()
+  for (const controller of requests.keys()) controller.abort()
   requests.clear()
-  for (const timer of dismissTimers.values()) clearTimeout(timer)
-  dismissTimers.clear()
-  owners.clear()
-  downloads.value = []
+  received = new WeakMap()
 }

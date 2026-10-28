@@ -195,7 +195,7 @@ test("canvas open never retries after transfer acceptance", async t => {
   assert.equal(endpoint.headers.length, 1);
 });
 
-test("canvas open waits for the browser choice and sends no bytes until accepted", async t => {
+test("canvas open waits for server readiness and tolerates legacy offer and acceptance messages", async t => {
   const f = await fixture(t), endpoint = await f.endpoint("delayed", { protocol: true, acceptDelay: 180, browserAccepted: true });
   const content = randomBytes(256 * 1024);
   await writeFile(join(f.root, "file"), content);
@@ -205,21 +205,21 @@ test("canvas open waits for the browser choice and sends no bytes until accepted
   assert(endpoint.bodies[0]!.equals(content));
 });
 
-test("canvas open exits promptly when the browser rejects the download", async t => {
+test("canvas open exits promptly when the server rejects the copy", async t => {
   const f = await fixture(t), endpoint = await f.endpoint("declined", { protocol: true, acceptDelay: 100, rejectReason: "cancelled" });
   await writeFile(join(f.root, "file"), randomBytes(1024 * 1024));
   const result = await f.run("file");
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /download cancelled/u);
+  assert.match(result.stderr, /copy cancelled/u);
   assert.equal(endpoint.bodies.length, 0, "no file bytes were sent after rejection");
 });
 
-test("canvas open bounds an unanswered browser offer without sending file bytes", async t => {
+test("canvas open bounds a legacy server that never starts accepting file bytes", async t => {
   const f = await fixture(t), endpoint = await f.endpoint("unanswered", { protocol: true, acceptDelay: 500 });
   await writeFile(join(f.root, "file"), "not accepted");
   const result = await f.run("file", {}, { start: 0.15, idle: 1 });
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /download was not started/u);
+  assert.match(result.stderr, /copy did not start/u);
   assert.equal(endpoint.bodies.length, 0);
 });
 
@@ -229,7 +229,7 @@ test("canvas open reads cancellation while its output is backpressured", async t
   const began = Date.now();
   const result = await f.run("file");
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /download cancelled/u);
+  assert.match(result.stderr, /copy cancelled/u);
   assert(Date.now() - began < 2000, "cancel is not blocked behind pending file data");
 });
 
@@ -259,7 +259,7 @@ test("canvas open does not count repeated status messages as download progress",
   await writeFile(join(f.root, "file"), randomBytes(1024 * 1024));
   const result = await f.run("file", {}, { start: 1, idle: 0.2 });
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /download timed out/u);
+  assert.match(result.stderr, /copy timed out/u);
 });
 
 test("canvas open bounds a missing final acknowledgement for new and legacy servers", async t => {
@@ -269,7 +269,7 @@ test("canvas open bounds a missing final acknowledgement for new and legacy serv
       await writeFile(join(f.root, "file"), "all bytes sent");
       const result = await f.run("file", {}, { start: 1, idle: 0.2 });
       assert.equal(result.code, 1);
-      assert.match(result.stderr, /download timed out/u);
+      assert.match(result.stderr, /copy timed out/u);
       assert(endpoint.bodies[0]!.equals(Buffer.from("all bytes sent")));
     });
   }
@@ -311,16 +311,16 @@ test("canvas open bounds a transfer that stops reporting progress", async t => {
   const began = Date.now();
   const result = await f.run("file", {}, { start: 1, idle: 0.2 });
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /download timed out/u);
+  assert.match(result.stderr, /copy timed out/u);
   assert(Date.now() - began < 2000, "stall timeout is finite");
 });
 
-test("canvas open displays waiting and byte progress only on a terminal", async t => {
+test("canvas open displays server copy progress only on a terminal", async t => {
   const f = await fixture(t), endpoint = await f.endpoint("tty", { protocol: true, acceptDelay: 30 });
   await writeFile(join(f.root, "file"), randomBytes(32 * 1024));
   const result = await f.run("file", {}, undefined, true);
   assert.equal(result.code, 0, result.stderr);
-  assert.match(result.stderr, /Waiting for download in Canvas/u);
+  assert.match(result.stderr, /Copying to Canvas/u);
   assert.match(result.stderr, /100%/u);
   assert(result.stderr.endsWith("\n"));
 });
