@@ -10,6 +10,7 @@ import {
   type TerminalCommand,
 } from "./providers.ts";
 import { GeometryController } from "./geometry.ts";
+import { TerminalMouseEncoding } from "./terminal-modes.ts";
 const { Terminal } = headless;
 const { SerializeAddon } = serialize;
 export type TerminalTarget = {
@@ -50,6 +51,7 @@ class LiveTerminal {
   proc: pty.IPty;
   emulator: InstanceType<typeof Terminal>;
   serializer: InstanceType<typeof SerializeAddon>;
+  mouseEncoding: TerminalMouseEncoding;
   clients = new Set<WebSocket>();
   controller?: WebSocket;
   idle?: ReturnType<typeof setTimeout>;
@@ -81,6 +83,7 @@ class LiveTerminal {
     });
     this.serializer = new SerializeAddon();
     this.emulator.loadAddon(this.serializer);
+    this.mouseEncoding = new TerminalMouseEncoding(this.emulator);
     this.proc = pty.spawn(handle.file, handle.args, {
       name: "xterm-256color",
       cols,
@@ -186,7 +189,12 @@ class LiveTerminal {
     this.queue = this.queue.then(() => {
       if (this.closed || ws.readyState !== 1) return;
       json(ws, { type: "resize", cols: this.cols, rows: this.rows });
-      ws.send(Buffer.from(this.serializer.serialize(), "utf8"));
+      ws.send(
+        Buffer.from(
+          this.serializer.serialize() + this.mouseEncoding.serialize(),
+          "utf8",
+        ),
+      );
       this.clients.add(ws);
       if (!this.controller) this.controller = ws;
       this.status();
@@ -232,9 +240,14 @@ class LiveTerminal {
         if (
           msg.type === "input" &&
           typeof msg.data === "string" &&
-          msg.data.length <= 64 * 1024
+          msg.data.length <= 64 * 1024 &&
+          (msg.encoding === undefined || msg.encoding === "binary")
         )
-          this.proc.write(msg.data);
+          this.proc.write(
+            msg.encoding === "binary"
+              ? Buffer.from(msg.data, "latin1")
+              : msg.data,
+          );
         if (msg.type === "resize") this.geometry.persistent(ws, size);
       } catch {
         /* Malformed messages cannot become terminal commands. */

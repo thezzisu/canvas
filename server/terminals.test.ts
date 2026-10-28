@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WebSocket } from "ws";
@@ -138,6 +138,80 @@ test("shared native terminals serialize screen to late viewers and keep last res
       tmux("kill-server");
     } catch {
       /* Already stopped. */
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("binary terminal input reaches a real PTY byte-for-byte without changing UTF-8 text input", async () => {
+  const root = mkdtempSync(join(tmpdir(), "canvas-input-bytes-"));
+  const socket = join(root, "socket"),
+    receiver = join(root, "receiver.py");
+  writeFileSync(
+    receiver,
+    "import os,tty\ntty.setraw(0)\nprint('\\x1b[?1003hREADY',flush=True)\nwhile True:\n data=os.read(0,4096)\n print('HEX:'+data.hex(),flush=True)\n",
+  );
+  const tmux = (...args: string[]) =>
+    execFileSync("tmux", ["-S", socket, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trimEnd();
+  const source: Source = {
+    id: "bytes",
+    name: "Bytes",
+    type: "tmux",
+    transport: "local",
+    tmuxSocket: socket,
+  };
+  const manager = new TerminalManager(),
+    client = new Client();
+  const waitFor = async (check: () => boolean) => {
+    for (let i = 0; i < 150; i++) {
+      if (check()) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.fail("native byte receiver timed out");
+  };
+  try {
+    tmux(
+      "-f",
+      "/dev/null",
+      "new-session",
+      "-d",
+      "-s",
+      "bytes",
+      `python3 -u '${receiver}'`,
+    );
+    const space = (await listResources(source)).spaces[0]!,
+      windowId = space.windows[0]!.id;
+    const screen = () => tmux("capture-pane", "-p", "-t", "bytes:0.0");
+    await manager.connect(
+      source,
+      { sourceId: source.id, spaceId: space.id, windowId },
+      client.socket,
+    );
+    await waitFor(() => screen().includes("READY"));
+    client.command({ type: "resize", cols: 220, rows: 60 });
+    await waitFor(
+      () =>
+        tmux("display-message", "-p", "-t", "bytes:0", "#{window_width}") ===
+        "220",
+    );
+    // A valid legacy mouse report has a non-ASCII column byte at column 168.
+    client.command({
+      type: "input",
+      encoding: "binary",
+      data: "\x1b[M" + String.fromCharCode(67, 200, 70),
+    });
+    await waitFor(() => screen().includes("HEX:1b5b4d43c846"));
+    client.command({ type: "input", data: "中文" });
+    await waitFor(() => screen().includes("HEX:e4b8ade69687"));
+  } finally {
+    await manager.closeAll();
+    try {
+      tmux("kill-server");
+    } catch {
+      /* fixture already stopped */
     }
     rmSync(root, { recursive: true, force: true });
   }

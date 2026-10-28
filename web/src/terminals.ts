@@ -225,14 +225,16 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     Object.assign(surface.style, { transformOrigin: 'top left', width: '100%', height: '100%' })
     session = { term, fit, surface, opened: false, magnified: false, state: { status: 'connecting' }, listeners: new Set(), geometryListeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
     const current = session
-    function sendInput(data: string) {
+    function sendInput(data: string, binary = false) {
       // onData includes terminal query replies; passive viewers must never
       // claim control or send duplicate replies merely by rendering output.
       if (current.socket?.readyState !== WebSocket.OPEN || current.state.readOnly || current.state.status !== 'connected') return
-      current.socket.send(JSON.stringify({ type: 'input', data }))
+      current.socket.send(JSON.stringify({ type: 'input', data, ...(binary ? { encoding: 'binary' } : {}) }))
     }
-    term.onData(sendInput)
-    term.onBinary(sendInput)
+    term.onData(data => sendInput(data))
+    // Legacy mouse coordinates are bytes, not UTF-8 text. Encoding them as
+    // Unicode changes bytes above 127 and leaves stray characters in the PTY.
+    term.onBinary(data => sendInput(data, true))
     term.attachCustomKeyEventHandler(event => {
       if (event.type === 'keydown' && current.state.readOnly) claimFocus(current)
       if (event.type === 'keydown' && (event.ctrlKey || event.metaKey) && event.shiftKey && event.code === 'KeyC' && term.hasSelection()) {
