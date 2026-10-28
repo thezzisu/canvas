@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 const helper = fileURLToPath(new URL("../cli/canvas", import.meta.url));
 interface Header {
   version: number; secret: string; provider: string; nativeSocket: string;
-  paneId: string; filename: string; size: number;
+  paneId: string; filename: string; size: number; progress: boolean;
 }
 
 async function fixture(t: TestContext) {
@@ -22,8 +22,15 @@ async function fixture(t: TestContext) {
   const env = { PATH: process.env.PATH, LANG: "C.UTF-8", CANVAS_BRIDGE_REGISTRY_DIR: registry,
     HERDR_SOCKET_PATH: nativeSocket, HERDR_PANE_ID: "w1:p2" };
   t.after(() => rm(root, { recursive: true, force: true }));
-  const run = (path: string, extra: NodeJS.ProcessEnv = {}) => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn("python3", [helper, "open", "--", path], { cwd: root, env: { ...env, ...extra } });
+  const run = (path: string, extra: NodeJS.ProcessEnv = {}, timeouts?: { start: number; idle: number }, tty = false) => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+    // Load the real executable and shorten only its inactivity intervals. This
+    // exercises the same main/transport code without adding a production env knob.
+    const setup = ["import runpy, sys", "module = runpy.run_path(sys.argv.pop(1))"];
+    if (timeouts) setup.push(`module["transfer_file"].__defaults__ = (None, ${timeouts.start}, ${timeouts.idle})`);
+    if (tty) setup.push("sys.stderr.isatty = lambda: True");
+    setup.push('sys.exit(module["main"]())');
+    const args = timeouts || tty ? ["-c", setup.join("\n"), helper, "open", "--", path] : [helper, "open", "--", path];
+    const child = spawn("python3", args, { cwd: root, env: { ...env, ...extra } });
     let stdout = "", stderr = "";
     child.stdout.on("data", data => stdout += data);
     child.stderr.on("data", data => stderr += data);
@@ -32,40 +39,81 @@ async function fixture(t: TestContext) {
     const timeout = setTimeout(() => { child.kill(); reject(new Error("helper timed out")); }, 10000);
     child.once("close", () => clearTimeout(timeout));
   });
-  async function endpoint(name: string, options: { reject?: boolean; finalReject?: boolean; provider?: string; nativeSocket?: string } = {}) {
+  async function endpoint(name: string, options: {
+    reject?: boolean; finalReject?: boolean; provider?: string; nativeSocket?: string;
+    protocol?: boolean; acceptDelay?: number; rejectReason?: unknown; browserAccepted?: boolean;
+    cancelDelay?: number; pauseInput?: boolean; progressDelay?: number; neverComplete?: boolean;
+    repeatedProgress?: boolean;
+  } = {}) {
     const socket = join(root, `${name}.sock`), record = join(registry, `${name}.json`);
     const secret = randomBytes(32).toString("base64url");
     const headers: Omit<Header, "secret">[] = [], bodies: Buffer[] = [];
     const clients = new Set<Socket>();
+    const timers = new Set<NodeJS.Timeout>();
+    const later = (callback: () => void, milliseconds: number) => {
+      const timer = setTimeout(() => { timers.delete(timer); callback(); }, milliseconds);
+      timers.add(timer);
+    };
     const server = createServer({ allowHalfOpen: true }, client => {
       clients.add(client);
       client.on("close", () => clients.delete(client));
       client.on("error", () => {});
-      let data = Buffer.alloc(0), accepted = false, body = Buffer.alloc(0);
+      let data = Buffer.alloc(0), accepted = false, body = Buffer.alloc(0), header: Header | undefined;
+      const send = (message: object) => { if (!client.destroyed) client.write(JSON.stringify(message) + "\n"); };
+      const consume = (chunk: Buffer) => {
+        body = Buffer.concat([body, chunk]);
+        if (options.protocol && !options.progressDelay) send({ state: "transferring", transferred: body.length, size: header!.size });
+        if (options.progressDelay) {
+          client.pause();
+          later(() => { send({ state: "transferring", transferred: body.length, size: header!.size }); client.resume(); }, options.progressDelay);
+        }
+      };
       client.on("data", (input: Buffer) => {
         const chunk = Buffer.from(input);
-        if (accepted) { body = Buffer.concat([body, chunk]); return; }
+        if (accepted) { consume(chunk); return; }
+        assert.equal(header, undefined, "no file data before download acceptance");
         data = Buffer.concat([data, chunk]);
         const end = data.indexOf(10);
         if (end < 0) return;
-        const header = JSON.parse(data.subarray(0, end).toString()) as Header;
+        header = JSON.parse(data.subarray(0, end).toString()) as Header;
         // Check credentials without including their values in assertion output.
         assert(header.secret === secret, "bridge credential matches");
         const { secret: ignored, ...publicHeader } = header;
         headers.push(publicHeader);
         assert.equal(data.length, end + 1, "helper waits before transferring bytes");
-        if (options.reject) { client.end('{"ok":false,"error":"No active browser"}\n'); return; }
-        accepted = true;
-        client.write('{"ok":true}\n');
+        const accept = () => {
+          if (options.reject || options.rejectReason !== undefined) {
+            client.end(JSON.stringify({ ok: false, reason: options.rejectReason, error: "No active browser" }) + "\n"); return;
+          }
+          accepted = true;
+          send(options.protocol ? { ok: true, state: "transferring", transferred: 0, size: header!.size } : { ok: true });
+          if (options.pauseInput) client.pause();
+          if (options.cancelDelay !== undefined) later(() => send({ ok: false, state: "cancelled", reason: "cancelled" }), options.cancelDelay);
+          if (options.repeatedProgress) {
+            const repeat = () => { if (!client.destroyed) { send({ state: "transferring", transferred: 0, size: header!.size }); later(repeat, 20); } };
+            repeat();
+          }
+        };
+        if (options.acceptDelay !== undefined) {
+          send({ state: "offered", transferred: 0, size: header.size });
+          if (options.browserAccepted) send({ state: "accepted", transferred: 0, size: header.size });
+          later(accept, options.acceptDelay);
+        } else accept();
       });
       client.on("end", () => {
-        if (!accepted) return;
+        if (!accepted) { client.end(); return; }
         bodies.push(body);
-        client.end(options.finalReject ? '{"ok":false}\n' : '{"ok":true}\n');
+        if (options.neverComplete) return;
+        const complete = () => {
+          if (options.finalReject) client.end('{"ok":false}\n');
+          else if (options.protocol) client.end(JSON.stringify({ ok: true, state: "completed", transferred: body.length, size: header!.size }) + "\n");
+          else client.end('{"ok":true}\n');
+        };
+        complete();
       });
     });
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
-    t.after(() => new Promise<void>(resolve => { for (const client of clients) client.destroy(); server.close(() => resolve()); }));
+    t.after(() => new Promise<void>(resolve => { for (const timer of timers) clearTimeout(timer); for (const client of clients) client.destroy(); server.close(() => resolve()); }));
     await writeFile(record, JSON.stringify({ version: 1, provider: options.provider || "herdr", nativeSocket: options.nativeSocket || nativeSocket, socket, secret }), { mode: 0o600 });
     return { headers, bodies, record };
   }
@@ -78,7 +126,7 @@ test("canvas open streams binary files with relative, Unicode and spaced names",
   await writeFile(join(f.root, name), content);
   const result = await f.run(name);
   assert.deepEqual(result, { code: 0, stdout: "", stderr: "" });
-  assert.deepEqual(endpoint.headers, [{ version: 1, provider: "herdr", nativeSocket: f.nativeSocket, paneId: "w1:p2", filename: name, size: content.length }]);
+  assert.deepEqual(endpoint.headers, [{ version: 1, progress: true, provider: "herdr", nativeSocket: f.nativeSocket, paneId: "w1:p2", filename: name, size: content.length }]);
   assert.equal(endpoint.bodies.length, 1);
   assert(endpoint.bodies[0]!.equals(content), "download preserves every byte");
 });
@@ -132,7 +180,7 @@ test("canvas open rejects nonfiles and reports unavailable recipients without se
   assert.equal(directory.code, 1); assert.match(directory.stderr, /regular file/u);
   assert.equal(endpoint.headers.length, 0);
   const denied = await f.run("file");
-  assert.equal(denied.code, 1); assert.match(denied.stderr, /no Canvas tab/u);
+  assert.equal(denied.code, 1); assert.match(denied.stderr, /no browser attached to this window/u);
   assert.equal(denied.stdout, ""); assert.equal(endpoint.bodies.length, 0);
   assert.equal(endpoint.headers.length, 1);
 });
@@ -145,6 +193,136 @@ test("canvas open never retries after transfer acceptance", async t => {
   assert.equal(endpoint.bodies.length, 1);
   assert(endpoint.bodies[0]!.equals(Buffer.from("single download")));
   assert.equal(endpoint.headers.length, 1);
+});
+
+test("canvas open waits for the browser choice and sends no bytes until accepted", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("delayed", { protocol: true, acceptDelay: 180, browserAccepted: true });
+  const content = randomBytes(256 * 1024);
+  await writeFile(join(f.root, "file"), content);
+  const result = await f.run("file");
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(endpoint.bodies.length, 1);
+  assert(endpoint.bodies[0]!.equals(content));
+});
+
+test("canvas open exits promptly when the browser rejects the download", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("declined", { protocol: true, acceptDelay: 100, rejectReason: "cancelled" });
+  await writeFile(join(f.root, "file"), randomBytes(1024 * 1024));
+  const result = await f.run("file");
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /download cancelled/u);
+  assert.equal(endpoint.bodies.length, 0, "no file bytes were sent after rejection");
+});
+
+test("canvas open bounds an unanswered browser offer without sending file bytes", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("unanswered", { protocol: true, acceptDelay: 500 });
+  await writeFile(join(f.root, "file"), "not accepted");
+  const result = await f.run("file", {}, { start: 0.15, idle: 1 });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /download was not started/u);
+  assert.equal(endpoint.bodies.length, 0);
+});
+
+test("canvas open reads cancellation while its output is backpressured", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("cancelled", { protocol: true, pauseInput: true, cancelDelay: 80 });
+  await writeFile(join(f.root, "file"), randomBytes(16 * 1024 * 1024));
+  const began = Date.now();
+  const result = await f.run("file");
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /download cancelled/u);
+  assert(Date.now() - began < 2000, "cancel is not blocked behind pending file data");
+});
+
+test("canvas open accepts old servers with only start and completion acknowledgements", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("legacy");
+  const content = randomBytes(128 * 1024);
+  await writeFile(join(f.root, "file"), content);
+  const result = await f.run("file");
+  assert.equal(result.code, 0, result.stderr);
+  assert(endpoint.bodies[0]!.equals(content));
+});
+
+test("canvas open uses reported byte progress instead of a total file duration limit", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("slow-progress", { protocol: true, progressDelay: 80 });
+  const content = randomBytes(512 * 1024);
+  await writeFile(join(f.root, "file"), content);
+  const began = Date.now();
+  const result = await f.run("file", {}, { start: 1, idle: 0.25 });
+  assert.equal(result.code, 0, result.stderr);
+  assert(Date.now() - began > 250, "transfer duration exceeds its inactivity interval");
+  assert(endpoint.bodies[0]!.equals(content));
+});
+
+test("canvas open does not count repeated status messages as download progress", async t => {
+  const f = await fixture(t);
+  await f.endpoint("no-progress", { protocol: true, pauseInput: true, repeatedProgress: true });
+  await writeFile(join(f.root, "file"), randomBytes(1024 * 1024));
+  const result = await f.run("file", {}, { start: 1, idle: 0.2 });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /download timed out/u);
+});
+
+test("canvas open bounds a missing final acknowledgement for new and legacy servers", async t => {
+  for (const protocol of [true, false]) {
+    await t.test(protocol ? "progress server" : "legacy server", async t => {
+      const f = await fixture(t), endpoint = await f.endpoint("no-final", { protocol, neverComplete: true });
+      await writeFile(join(f.root, "file"), "all bytes sent");
+      const result = await f.run("file", {}, { start: 1, idle: 0.2 });
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /download timed out/u);
+      assert(endpoint.bodies[0]!.equals(Buffer.from("all bytes sent")));
+    });
+  }
+});
+
+test("canvas open never reflects a remote error or terminal controls", async t => {
+  const f = await fixture(t);
+  await f.endpoint("unsafe-error", { rejectReason: { reflectedSecret: "never-display\u001b[2J" } });
+  await writeFile(join(f.root, "file"), "fixture");
+  const result = await f.run("file");
+  assert.equal(result.code, 1);
+  assert.equal(result.stderr, "canvas: no browser attached to this window\n");
+});
+
+test("canvas open exits promptly when no browser bridge is attached", async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.root, "file"), "fixture");
+  const began = Date.now();
+  const result = await f.run("file");
+  assert.equal(result.code, 1);
+  assert.equal(result.stderr, "canvas: no browser attached to this window\n");
+  assert(Date.now() - began < 2000, "missing bridge must not wait for a browser decision");
+});
+
+test("canvas open exits promptly when the server has only passive browser viewers", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("passive", { rejectReason: "not-attached" });
+  await writeFile(join(f.root, "file"), "fixture");
+  const began = Date.now();
+  const result = await f.run("file");
+  assert.equal(result.code, 1);
+  assert.equal(result.stderr, "canvas: no browser attached to this window\n");
+  assert.equal(endpoint.bodies.length, 0);
+  assert(Date.now() - began < 2000, "passive viewers must not leave the helper waiting");
+});
+
+test("canvas open bounds a transfer that stops reporting progress", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("stalled", { protocol: true, pauseInput: true });
+  await writeFile(join(f.root, "file"), randomBytes(4 * 1024 * 1024));
+  const began = Date.now();
+  const result = await f.run("file", {}, { start: 1, idle: 0.2 });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /download timed out/u);
+  assert(Date.now() - began < 2000, "stall timeout is finite");
+});
+
+test("canvas open displays waiting and byte progress only on a terminal", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("tty", { protocol: true, acceptDelay: 30 });
+  await writeFile(join(f.root, "file"), randomBytes(32 * 1024));
+  const result = await f.run("file", {}, undefined, true);
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stderr, /Waiting for download in Canvas/u);
+  assert.match(result.stderr, /100%/u);
+  assert(result.stderr.endsWith("\n"));
 });
 
 test("canvas open fails closed when two Canvas backends claim the same native terminal", async t => {

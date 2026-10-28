@@ -20,7 +20,7 @@ export function useCanvasNavigation(options: {
   function wheel(event: WheelEvent) {
     if (options.blocked() || !surface.value) return
     // Editors retain ordinary text scrolling; pinch remains a canvas gesture.
-    if (!event.ctrlKey && (event.target as HTMLElement)?.closest('.note-content, .vue-flow__minimap, .canvas-toolbar')) return
+    if (!event.ctrlKey && (event.target as HTMLElement)?.closest('.note-content, .file-preview, .vue-flow__minimap, .canvas-toolbar')) return
     if (terminalConsumesWheel(event)) return
     event.preventDefault()
     event.stopPropagation()

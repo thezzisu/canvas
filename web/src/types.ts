@@ -62,7 +62,21 @@ export interface NoteCanvasNode extends NodeLayout {
   color: NoteColor
   minimized: boolean
 }
-export type CanvasNode = TerminalCanvasNode | NoteCanvasNode
+export interface FileAsset {
+  id: string
+  filename: string
+  size: number
+  mime: string
+  preview: 'image' | 'pdf' | 'text' | 'file'
+  createdAt: number
+}
+export interface FileCanvasNode extends NodeLayout {
+  type: 'file'
+  assetId: string
+  asset: FileAsset
+}
+export type CanvasNode = TerminalCanvasNode | NoteCanvasNode | FileCanvasNode
+export const isTerminalNode = (node: CanvasNode): node is TerminalCanvasNode => node.type === undefined || node.type === 'terminal'
 export type NotePatch = Partial<Pick<NoteCanvasNode, 'title' | 'content' | 'color' | 'minimized'>>
 export interface Canvas { id: string; name: string; nodes: CanvasNode[]; snapToGrid?: boolean; background?: { url: string; opacity: number } | null }
 export interface WindowSize { width: number; height: number }
@@ -92,4 +106,9 @@ export interface NoteData extends NoteCanvasNode {
   onChange: (id: string, patch: NotePatch) => void
   onFlush: () => void
   onAction: (action: string, id: string) => void
+}
+export interface FileData extends FileCanvasNode {
+  onResize: TerminalData['onResize']
+  onLayoutStart: () => void
+  onRemove: (id: string) => void
 }

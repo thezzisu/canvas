@@ -1,6 +1,7 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { uuid } from './api'
+import { clearDownloads, disconnectDownloads, receiveDownload } from './downloads'
 
 export type TerminalStatus = {
   status: 'connecting' | 'connected' | 'disconnected'
@@ -104,6 +105,7 @@ function connect(session: Session) {
     else {
       try {
         const message = JSON.parse(event.data)
+        if (receiveDownload(socket, message, session.resource)) return
         if (message.type === 'reset') session.term.write('\x1bc')
         else if (message.type === 'presentation') {
           const revision = session.presentationRevision = (session.presentationRevision || 0) + 1
@@ -117,18 +119,6 @@ function connect(session: Session) {
           else session.term.write('', update)
         }
         else if (message.type === 'output') session.term.write(message.data)
-        else if (message.type === 'download' && typeof message.url === 'string' && typeof message.filename === 'string') {
-          const url = new URL(message.url, location.href)
-          if (url.origin === location.origin && url.pathname.startsWith('/api/downloads/')) {
-            const anchor = document.createElement('a')
-            anchor.href = url.href
-            anchor.download = message.filename
-            anchor.hidden = true
-            document.body.append(anchor)
-            anchor.click()
-            anchor.remove()
-          }
-        }
         else if (message.type === 'status') {
           setState(session, { ...session.state, status: message.status === 'closed' || message.status === 'error' ? 'disconnected' : message.status, error: message.error, readOnly: message.readOnly })
           schedulePresentation(session)
@@ -157,6 +147,7 @@ function connect(session: Session) {
     if (session.socket === socket) setState(session, { status: 'disconnected', error: '终端连接失败' })
   }
   socket.onclose = () => {
+    disconnectDownloads(socket)
     if (session.socket === socket) setState(session, { status: 'disconnected', error: session.state.error })
   }
 }
@@ -328,6 +319,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   }
 }
 export function clearTerminals() {
+  clearDownloads()
   for (const session of sessions.values()) {
     endFocusSize(session)
     if (session.presentationFrame !== undefined) cancelAnimationFrame(session.presentationFrame)

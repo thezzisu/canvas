@@ -13,11 +13,14 @@ import {
   nodeLayoutSchema,
   noteNodeSchema,
   noteColorSchema,
+  isTerminalNode,
   type Source,
   type Canvas,
 } from "./state.ts";
 import * as providers from "./providers.ts";
 import type { TerminalManager } from "./terminals.ts";
+import type { DownloadContext, DownloadProgress } from "./open-download.ts";
+import type { AssetStore } from "./assets.ts";
 import {
   BackgroundError,
   DEFAULT_BACKGROUND_OPACITY,
@@ -73,8 +76,10 @@ export function createApp(
   terminals: TerminalManager,
   options: {
     secureCookie?: boolean;
-    openDownload?: (ticket: string, sessionId: string) => DownloadResponse | undefined;
+    openDownload?: (ticket: string, sessionId: string, context?: DownloadContext) => Promise<DownloadResponse | undefined>;
+    downloadAction?: (ticket: string, sessionId: string, action: "accept" | "cancel", context?: DownloadContext) => DownloadProgress | undefined;
     closeOpenBridge?: (sourceId: string) => Promise<void>;
+    assets?: AssetStore;
   } = {},
 ) {
   const app = new Hono();
@@ -121,14 +126,51 @@ export function createApp(
       username: account.username,
     }),
   );
-  app.get("/api/downloads/:ticket", (c) => {
+  app.get("/api/downloads/:ticket", async (c) => {
     if (c.req.method !== "GET") return c.body(null, 405);
-    const download = options.openDownload?.(
+    const context = z.object({ canvasId: z.string().uuid().optional(), anchorId: z.string().max(150).optional() })
+      .parse({ canvasId: c.req.query("canvasId"), anchorId: c.req.query("anchorId") });
+    const download = await options.openDownload?.(
       c.req.param("ticket"),
       getCookie(c, "canvas_session") ?? "",
+      context,
     );
     if (!download) return c.json({ error: "Download expired" }, 404);
     return c.newResponse(Readable.toWeb(download.body) as ReadableStream, 200, download.headers);
+  });
+  app.post("/api/downloads/:ticket", async (c) => {
+    const { action, ...context } = z.object({
+      action: z.enum(["accept", "cancel"]),
+      canvasId: z.string().uuid().optional(), anchorId: z.string().max(150).optional(),
+    }).strict().parse(await c.req.json());
+    const progress = options.downloadAction?.(c.req.param("ticket"), getCookie(c, "canvas_session") ?? "", action, context);
+    if (!progress) return c.json({ error: "Download expired" }, 404);
+    return c.json(progress);
+  });
+  app.on(["GET", "HEAD"], "/api/files/:id", async (c) => {
+    const file = await options.assets?.read(c.req.param("id"));
+    if (!file) return c.json({ error: "File not found" }, 404);
+    const { asset, body } = file;
+    const mode = c.req.query("download") === "1" || asset.preview === "file" ? "attachment" : "inline";
+    const fallback = asset.filename.replace(/[^\x20-\x7e]|["\\]/gu, "_");
+    const encoded = encodeURIComponent(asset.filename).replace(/[!'()*]/gu, char =>
+      `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+    const headers = {
+      "Content-Type": asset.mime,
+      "Content-Length": String(asset.size),
+      "Content-Disposition": `${mode}; filename="${fallback}"; filename*=UTF-8''${encoded}`,
+      "X-Content-Type-Options": "nosniff",
+      "Cross-Origin-Resource-Policy": "same-origin",
+      // Sandboxing disables Chromium's native PDF viewer and triggers a download.
+      // PDFs run in the browser's isolated viewer; all other previews stay sandboxed.
+      "Content-Security-Policy": asset.preview === "pdf"
+        ? "default-src 'none'; frame-ancestors 'self'"
+        : "default-src 'none'; sandbox; frame-ancestors 'self'",
+      "Referrer-Policy": "no-referrer",
+      "Cache-Control": "private, no-store",
+    };
+    if (c.req.method === "HEAD") { body.destroy(); return c.newResponse(null, 200, headers); }
+    return c.newResponse(Readable.toWeb(body) as ReadableStream, 200, headers);
   });
   app.post("/api/login", async (c) => {
     const input = z
@@ -334,7 +376,7 @@ export function createApp(
         !canvas.nodes.some(
           (existing) =>
             existing.id === node.id ||
-            (existing.type !== "note" && node.type !== "note" &&
+            (isTerminalNode(existing) && isTerminalNode(node) &&
               existing.sourceId === node.sourceId && existing.windowId === node.windowId),
         )
       )
@@ -377,7 +419,7 @@ export function createApp(
     const changes = new Map(nodes.map((node) => [node.id, node]));
     for (const node of canvas.nodes) {
       const patch = changes.get(node.id);
-      if (node.type !== "note" && patch && (patch.width !== undefined || patch.height !== undefined))
+      if (isTerminalNode(node) && patch && (patch.width !== undefined || patch.height !== undefined))
         store.setWindowSize(node.sourceId, node.windowId, {
           ...(patch.width === undefined ? {} : { width: patch.width }),
           ...(patch.height === undefined ? {} : { height: patch.height }),

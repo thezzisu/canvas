@@ -72,6 +72,18 @@ Click the terminal or maximize it to choose the receiving tab. Opening a passive
 viewer does not claim downloads, and closing the controlling tab does not hand
 them to another viewer. An agent can run the helper without echoing its output.
 
+Accept or cancel the offer at the bottom right. Transfer progress appears there
+and in an interactive terminal. Cancelling stops the helper; an unanswered offer,
+a blocked browser download, or a stalled transfer times out. Browser save-dialog
+cancellation is detected when the browser closes the request, otherwise by timeout.
+
+In a custom canvas, a completed transfer also creates a file card beside its
+originating window. Images, PDFs and text have previews; other files have a
+download icon. Cards can be moved, resized and downloaded again from another
+browser, even after the terminal disconnects or Canvas restarts. Overview does
+not retain files. Removing the last card removes the stored file. Include both
+the database and the `files` directory when backing up `CANVAS_DATA_DIR`.
+
 Multiple canvases and browser tabs on one Canvas Server share the same native
 window controller; only its current controller receives the download. SSH
 sources use a private reverse Unix-socket forward and an owner-only registry.

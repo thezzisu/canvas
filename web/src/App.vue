@@ -2,16 +2,22 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { VueFlow, useVueFlow, type Node } from '@vue-flow/core'
 import { MiniMap } from '@vue-flow/minimap'
+import UApp from '@nuxt/ui/components/App.vue'
+import { zh_cn } from '@nuxt/ui/locale'
 import Icon from './components/Icon.vue'
 import TerminalNode from './components/TerminalNode.vue'
 import NoteNode from './components/NoteNode.vue'
+import FileNode from './components/FileNode.vue'
+import { downloads, setDownloadContext } from './downloads'
+import { isTerminalNode } from './types'
 import GroupNode from './components/GroupNode.vue'
 import BackgroundDialog from './components/BackgroundDialog.vue'
+import DownloadTray from './components/DownloadTray.vue'
 import { api, segment, uuid, write } from './api'
 import { clearTerminals } from './terminals'
 import { useCanvasNavigation } from './canvas-navigation'
 import { statusColor, statusLabel } from './status'
-import type { Canvas, CanvasNode, NoteData, NotePatch, SharedState, Source, SourceResource, TerminalCanvasNode, TerminalData, WindowSize } from './types'
+import type { Canvas, CanvasNode, FileData, NoteData, NotePatch, SharedState, Source, SourceResource, TerminalCanvasNode, TerminalData, WindowSize } from './types'
 
 const { fitView, zoomIn, zoomOut, setViewport, getViewport, getNodesInitialized } = useVueFlow()
 const ready = ref(false)
@@ -90,7 +96,9 @@ const canvasCounts = computed(() => {
   if (isOverview.value) return `${sources.value.length} 个连接 · ${windowCount.value} 个窗口`
   const items = currentCanvas.value?.nodes || []
   const notes = items.filter(node => node.type === 'note').length
-  return [items.length > notes && `${items.length - notes} 个窗口`, notes && `${notes} 个便签`].filter(Boolean).join(' · ') || '空画布'
+  const files = items.filter(node => node.type === 'file').length
+  const windows = items.filter(isTerminalNode).length
+  return [windows && `${windows} 个窗口`, notes && `${notes} 个便签`, files && `${files} 个文件`].filter(Boolean).join(' · ') || '空画布'
 })
 
 function windowHeight(node: Pick<TerminalCanvasNode, 'sourceId' | 'windowId' | 'width' | 'height'>) {
@@ -141,7 +149,13 @@ function terminalFlowNode(node: TerminalCanvasNode, overview = false): Node {
   return { id: node.id, type: 'terminal', position: { x: node.x, y: node.y }, data: terminalData(node, overview), style: { width: `${node.width}px`, height: `${node.height}px` }, draggable: !overview, selectable: true, dragHandle: '.drag-handle' }
 }
 function flowNode(node: CanvasNode): Node {
-  if (node.type !== 'note') return terminalFlowNode(node)
+  if (isTerminalNode(node)) return terminalFlowNode(node)
+  if (node.type === 'file') {
+    const data: FileData = { ...node, onResize: resizeNode, onLayoutStart: layoutStarted, onRemove: removeFile }
+    return { id: node.id, type: 'file', position: { x: node.x, y: node.y }, data,
+      style: { width: `${node.width}px`, height: `${node.height}px` },
+      draggable: true, selectable: true, dragHandle: '.drag-handle' }
+  }
   const canvasId = activeId.value
   const data: NoteData = { ...node, onResize: resizeNode, onLayoutStart: layoutStarted,
     onChange: (id, patch) => editNote(canvasId, id, patch), onFlush: () => void flushNotes(canvasId),
@@ -193,7 +207,7 @@ function applySharedState(state: SharedState) {
   const nextSizes = { ...state.windowSizes }
   for (const canvas of state.canvases) for (const [id, patch] of pendingLayouts.get(canvas.id) || []) {
     const node = canvas.nodes.find(item => item.id === id)
-    if (node && node.type !== 'note' && (patch.width !== undefined || patch.height !== undefined)) {
+    if (node && isTerminalNode(node) && (patch.width !== undefined || patch.height !== undefined)) {
       const key = `${node.sourceId}/${node.windowId}`
       nextSizes[key] = { ...(nextSizes[key] || windowSize(node)),
         ...(patch.width === undefined ? {} : { width: patch.width }),
@@ -439,7 +453,7 @@ async function submitAdd() {
     const chosen = allWindows.value.filter(item => selectedWindows.value.includes(item.key))
     const additions: CanvasNode[] = []
     for (const item of chosen) {
-      if (canvas.nodes.some(node => node.type !== 'note' && node.sourceId === item.source.id && node.windowId === item.window.id)) continue
+      if (canvas.nodes.some(node => isTerminalNode(node) && node.sourceId === item.source.id && node.windowId === item.window.id)) continue
       additions.push({ id: uuid(), sourceId: item.source.id, spaceId: item.space.id, windowId: item.window.id, x: (index % 3) * 580, y: Math.floor(index / 3) * 390, width: 552, height: 352 }); index++
     }
     await write(`/api/canvases/${segment(canvas.id)}/nodes`, 'POST', { nodes: additions })
@@ -538,6 +552,11 @@ async function addNote() {
   } catch (reason) { showError(reason) }
   finally { busy.value = false }
 }
+function removeFile(id: string) {
+  const node = currentCanvas.value?.nodes.find(item => item.id === id)
+  if (!node || node.type !== 'file') return
+  actionDialog.value = { title: `删除「${node.asset.filename}」`, description: '文件将从画布中移除。', value: '', danger: true, button: '删除文件', submit: async () => { await removeNode(id) } }
+}
 function removeNote(id: string) {
   const node = currentCanvas.value?.nodes.find(item => item.id === id)
   if (!node || node.type !== 'note') return
@@ -570,8 +589,8 @@ function resizeNode(id: string, width: number, height: number, x?: number, y?: n
   layoutGesture = ''
   const node = currentCanvas.value?.nodes.find(item => item.id === id)
   if (node) {
-    const size = { width: Math.round(width), height: Math.max(160, Math.min(3000, Math.round(node.type === 'note' ? height : windowHeight({ ...node, width, height })))) }
-    if (node.type !== 'note') windowSizes.value[`${node.sourceId}/${node.windowId}`] = size
+    const size = { width: Math.round(width), height: Math.max(160, Math.min(3000, Math.round(isTerminalNode(node) ? windowHeight({ ...node, width, height }) : height))) }
+    if (isTerminalNode(node)) windowSizes.value[`${node.sourceId}/${node.windowId}`] = size
     editLayout(id, { ...size, ...(x === undefined ? {} : { x }), ...(y === undefined ? {} : { y }) })
   }
   rebuildNodes()
@@ -597,6 +616,12 @@ function beforeUnload(event: BeforeUnloadEvent) {
   event.returnValue = ''
 }
 function windowResize() { focusedSize.width = window.innerWidth - 32; focusedSize.height = window.innerHeight - 32 }
+setDownloadContext(resource => {
+  if (isOverview.value) return undefined
+  const canvas = currentCanvas.value
+  const anchor = canvas?.nodes.find(node => isTerminalNode(node) && node.sourceId === resource.sourceId && node.windowId === resource.windowId)
+  return canvas && anchor ? { canvasId: canvas.id, anchorId: anchor.id } : undefined
+})
 onMounted(async () => {
   window.addEventListener('canvas:unauthorized', unauthorized)
   window.addEventListener('keydown', keydown)
@@ -608,10 +633,11 @@ onMounted(async () => {
   finally { ready.value = true }
   refreshTimer = setInterval(() => { void refreshResources(true) }, 2000)
 })
-onBeforeUnmount(() => { stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('pointerdown', outsideCanvasMenu) })
+onBeforeUnmount(() => { setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('pointerdown', outsideCanvasMenu) })
 </script>
 
 <template>
+  <UApp :locale="zh_cn" :portal="appElement || false" :toaster="{ position: 'bottom-right', progress: false, max: Math.max(5, downloads.length), disableSwipe: true, ui: { viewport: 'download-tray z-[70] w-80', base: 'p-3 gap-2' } }">
   <div v-if="!ready" class="boot-screen"><span class="spinner" />加载中…</div>
   <div v-else-if="!authenticated" class="login-screen">
     <main class="login-content">
@@ -649,7 +675,7 @@ onBeforeUnmount(() => { stopStateEvents(); cancelAnimationFrame(geometryFrame); 
       </header>
       <div ref="graphSurface" class="graph-wrap" :class="{ 'has-background': currentBackground }" @wheel.capture="canvasWheel">
         <img v-if="currentBackground" class="canvas-background" :src="currentBackground.url" :style="{ opacity: currentBackground.opacity }" alt="" aria-hidden="true" />
-        <VueFlow :snap-to-grid="!isOverview && !!currentCanvas?.snapToGrid" :snap-grid="[24, 24]" v-if="nodes.length && !focused" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="true" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><MiniMap :pannable="true" :zoomable="true" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? '#bba071' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
+        <VueFlow :snap-to-grid="!isOverview && !!currentCanvas?.snapToGrid" :snap-grid="[24, 24]" v-if="nodes.length && !focused" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="true" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><MiniMap :pannable="true" :zoomable="true" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? '#bba071' : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
         <div v-if="!nodes.length && isOverview" class="empty-state"><Icon name="server" :size="32" /><h2>{{ sources.length ? '暂无窗口' : '暂无连接' }}</h2><button class="button primary" @click="sources.length ? sourcePanel = true : openSource()"><Icon :name="sources.length ? 'server' : 'plus'" :size="17" />{{ sources.length ? '连接' : '添加连接' }}</button></div>
         <div v-if="!nodes.length && !isOverview" class="empty-state"><Icon name="canvas" :size="32" /><h2>空画布</h2><button class="button primary" @click="openAdd()"><Icon name="plus" :size="17" />加入窗口</button></div>
         <div v-if="!focused" class="canvas-toolbar"><button :title="canvasFullscreen ? '退出全屏画布' : '全屏画布'" :aria-label="canvasFullscreen ? '退出全屏画布' : '全屏画布'" :aria-pressed="canvasFullscreen" @click="toggleFullscreen"><Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button><button v-if="!isOverview" title="网格吸附" aria-label="网格吸附" :aria-pressed="!!currentCanvas?.snapToGrid" @click="toggleSnap"><Icon name="grid" :size="15" /></button><button title="缩小" aria-label="缩小" @click="zoomOut({ duration: 150 })"><Icon name="minus" :size="17" /></button><button title="适合画布" aria-label="适合画布" @click="fitView({ padding: .14, maxZoom: 1, duration: 200 })"><Icon name="fit" :size="17" /></button><button title="放大" aria-label="放大" @click="zoomIn({ duration: 150 })"><Icon name="plus" :size="17" /></button></div>
@@ -657,6 +683,7 @@ onBeforeUnmount(() => { stopStateEvents(); cancelAnimationFrame(geometryFrame); 
     </main>
     <Transition name="slide"><aside v-if="sourcePanel" class="source-panel"><header><div><h2>连接与窗口</h2></div><button class="icon-button" aria-label="关闭连接面板" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />添加连接</button><div class="source-panel-content"><div v-for="source in sources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small>{{ source.type }} · {{ source.transport === 'local' ? '本机' : source.target }}</small></span></button><button class="icon-button" title="编辑连接" aria-label="编辑连接" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" title="移除连接" aria-label="移除连接" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><div v-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" title="新建窗口" aria-label="新建窗口" @click="windowAction({ id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="plus" :size="14" /></button><button class="icon-button" title="重命名 Space" aria-label="重命名 Space" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" title="关闭 Space" aria-label="关闭 Space" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :class="`program-${window.status || 'unknown'}`" :title="statusLabel(window.status)" /><span>{{ window.name }}</span><button class="icon-button" title="加入画布" aria-label="加入画布" @click="openAdd({ id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 })"><Icon name="plus" :size="14" /></button><button class="icon-button" title="窗口操作" aria-label="窗口操作" @click="windowMenu = { name: window.name, node: { id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" @click="spaceAction(resources.find(item => item.id === source.id) || { ...source, host: '', status: '', spaces: [] }, undefined, 'create')"><Icon name="plus" :size="14" />新建 {{ source.type === 'tmux' ? 'session' : 'space' }}</button></template></div><p v-if="!sources.length" class="panel-empty">暂无连接</p></div></aside></Transition>
     <div v-if="focused" class="focus-overlay"><TerminalNode :id="focused.id" :data="{ ...terminalData(focused, true), ...focusedSize, overview: true, focus: true }" /></div>
+    <DownloadTray />
     <BackgroundDialog v-if="backgroundCanvas" :canvas="backgroundCanvas" @close="closeBackgroundDialog" @saved="backgroundSaved" />
     <div v-if="modalOpen && !backgroundCanvas" class="modal-backdrop" @click.self="!busy && (sourceDialog = false, canvasDialog = false, actionDialog = null, addDialog = false, windowMenu = null)">
       <section v-if="sourceDialog" class="modal source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title"><header><div><h2 id="source-title">{{ sourceDraft.id ? '编辑连接' : '添加连接' }}</h2></div><button class="icon-button" aria-label="关闭对话框" @click="sourceDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitSource"><div class="type-options"><button v-for="type in (['tmux', 'herdr'] as const)" :key="type" type="button" :class="{ selected: sourceDraft.type === type }" @click="sourceDraft.type = type"><strong>{{ type }}</strong><Icon v-if="sourceDraft.type === type" name="check" :size="16" /></button></div><label>连接名称<input v-model="sourceDraft.name" name="sourceName" required placeholder="例如：开发机器" /></label><div class="segmented-control"><button type="button" :class="{ selected: sourceDraft.transport === 'local' }" @click="sourceDraft.transport = 'local'"><Icon name="server" :size="15" />本机</button><button type="button" :class="{ selected: sourceDraft.transport === 'ssh' }" @click="sourceDraft.transport = 'ssh'"><Icon name="globe" :size="15" />远程 SSH</button></div><label v-if="sourceDraft.transport === 'ssh'">SSH 地址<input v-model="sourceDraft.target" name="target" placeholder="ssh://user@hostname:22" :required="sourceDraft.transport === 'ssh'" /></label><label v-if="sourceDraft.type === 'tmux'">Socket 名称或路径 <span class="optional">可选</span><input v-model="sourceDraft.tmuxSocket" name="tmuxSocket" placeholder="default" /></label><label v-else>herdr session <span class="optional">可选</span><input v-model="sourceDraft.herdrSession" name="herdrSession" placeholder="default" /></label><details><summary>高级设置</summary><template v-if="sourceDraft.transport === 'ssh'"><label>SSH 私钥路径（Server） <span class="optional">可选</span><input v-model="sourceDraft.sshIdentityFile" name="sshIdentityFile" placeholder="/path/to/id_ed25519" /></label><label>SSH known_hosts 路径（Server） <span class="optional">可选</span><input v-model="sourceDraft.sshKnownHostsFile" name="sshKnownHostsFile" placeholder="/path/to/known_hosts" /></label></template><label>程序路径（目标机器） <span class="optional">可选</span><input v-model="sourceDraft.binary" name="binary" :placeholder="sourceDraft.type" /></label></details><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="sourceDialog = false">取消</button><button class="button primary" type="submit" :disabled="busy"><span v-if="busy" class="spinner" />{{ busy ? '保存中…' : '保存' }}</button></footer></form></section>
@@ -667,4 +694,5 @@ onBeforeUnmount(() => { stopStateEvents(); cancelAnimationFrame(geometryFrame); 
     </div>
     <div v-if="error || success" class="toast" :class="{ 'error-toast': error }" role="status"><Icon :name="error ? 'info' : 'check'" :size="17" /><span>{{ error || success }}</span><button class="icon-button" aria-label="关闭通知" @click="error = ''; success = ''"><Icon name="close" :size="15" /></button></div>
   </div>
+  </UApp>
 </template>

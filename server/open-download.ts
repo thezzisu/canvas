@@ -12,8 +12,24 @@ const MAX_HEADER = 16 * 1024;
 const MAX_TRANSFERS_PER_SOURCE = 4;
 const HANDSHAKE_TIMEOUT = 30_000;
 const TICKET_TIMEOUT = 60_000;
-const accepted = Buffer.from('{"ok":true}\n');
 const rejected = Buffer.from('{"ok":false}\n');
+
+type DownloadState = "offered" | "accepted" | "transferring" | "completed" | "cancelled" | "failed";
+type DownloadReason = "cancelled" | "not-started" | "timed-out" | "disconnected" | "invalid-transfer";
+export interface DownloadContext { canvasId?: string; anchorId?: string }
+interface Upload {
+  write(chunk: Buffer): Promise<void>;
+  complete(target: { canvasId: string; anchorId?: string; sourceId: string; windowId: string }): Promise<unknown>;
+  abort(): Promise<void>;
+}
+export interface DownloadProgress {
+  type: "download-progress";
+  id: string;
+  state: DownloadState;
+  transferred: number;
+  size: number;
+  reason?: DownloadReason;
+}
 
 export interface PreparedOpenBridge {
   nativeSocket: string;
@@ -31,6 +47,10 @@ export interface OpenDownloadOptions {
   registryDirectory?: string;
   socketDirectory?: string;
   idleTimeoutMs?: number;
+  decisionTimeoutMs?: number;
+  startTimeoutMs?: number;
+  progressTimeoutMs?: number;
+  createUpload?(metadata: { filename: string; size: number }): Promise<Upload>;
   prepare(source: Source, localSocket: string): Promise<PreparedOpenBridge>;
   publishRemote?(source: Source, record: RegistryRecord): Promise<() => Promise<void>>;
   installHelper?(source: Source): Promise<void>;
@@ -62,9 +82,19 @@ interface DownloadTicket {
   sessionId: string;
   socket: Socket;
   sourceId: string;
+  windowId: string;
   filename: string;
   size: number;
-  timer: ReturnType<typeof setTimeout>;
+  state: DownloadState;
+  transferred: number;
+  recipient: WebSocket;
+  helperProgress: boolean;
+  lastProgressAt: number;
+  body?: Transform;
+  upload?: Upload;
+  context?: DownloadContext;
+  claimed: boolean;
+  timer?: ReturnType<typeof setTimeout>;
   removeCloseListener: () => void;
 }
 
@@ -94,6 +124,7 @@ export class OpenDownloadService {
   private users = new Map<string, number>();
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private tickets = new Map<string, DownloadTicket>();
+  private finished = new Map<string, { sessionId: string; progress: DownloadProgress; expires: number }>();
   private stopping = false;
   private readonly registryDirectory: string;
   private readonly socketDirectory: string;
@@ -277,88 +308,170 @@ export class OpenDownloadService {
     if (!target) { socket.end(rejected); return; }
     const recipient = await this.options.recipient(source.id, target.windowId).catch(() => undefined);
     if (socket.destroyed) return;
-    if (!recipient || !recipient.isCurrent() || recipient.socket.readyState !== 1 || !recipient.sessionId) { socket.end(rejected); return; }
-    const ticket = randomBytes(32).toString("base64url");
-    const pending: DownloadTicket = {
-      id: ticket, sessionId: recipient.sessionId, socket, sourceId: source.id,
-      filename, size: header.size as number,
-      timer: setTimeout(() => this.cancelTicket(ticket), TICKET_TIMEOUT),
-      removeCloseListener: () => {},
+    if (!recipient || !recipient.isCurrent() || recipient.socket.readyState !== 1 || !recipient.sessionId) {
+      socket.end(jsonLine({ ok: false, reason: "not-attached" })); return;
+    }
+    const id = randomBytes(32).toString("base64url");
+    const ticket: DownloadTicket = {
+      id, sessionId: recipient.sessionId, socket, sourceId: source.id, windowId: target.windowId,
+      filename, size: header.size as number, state: "offered", transferred: 0,
+      recipient: recipient.socket, helperProgress: header.progress === true,
+      lastProgressAt: 0, claimed: false, removeCloseListener: () => {},
     };
-    pending.timer.unref();
-    const onClose = () => { this.cancelTicket(ticket); socket.destroy(); };
-    const onHelperClose = () => this.cancelTicket(ticket);
+    const onClose = () => this.finish(ticket, "failed", "disconnected");
     recipient.socket.once("close", onClose);
-    socket.once("close", onHelperClose);
-    pending.removeCloseListener = () => {
+    socket.once("close", onClose);
+    ticket.removeCloseListener = () => {
       recipient.socket.off("close", onClose);
-      socket.off("close", onHelperClose);
+      socket.off("close", onClose);
     };
-    this.tickets.set(ticket, pending);
+    this.tickets.set(id, ticket);
     socket.setTimeout(0);
-    socket.pause();
+    this.deadline(ticket, this.options.decisionTimeoutMs ?? TICKET_TIMEOUT, "not-started");
     try {
-      recipient.socket.send(JSON.stringify({ type: "download", url: `/api/downloads/${ticket}`, filename }));
-      socket.write(accepted);
-    } catch {
-      this.cancelTicket(ticket);
+      recipient.socket.send(JSON.stringify({ type: "download", url: `/api/downloads/${id}`, id, filename,
+        size: ticket.size, transferred: 0, state: "offered" }));
+      if (ticket.helperProgress) socket.write(jsonLine({ state: "offered", transferred: 0, size: ticket.size }));
+    } catch { this.finish(ticket, "failed", "disconnected"); }
+  }
+
+  private snapshot(ticket: DownloadTicket, reason?: DownloadReason): DownloadProgress {
+    return { type: "download-progress", id: ticket.id, state: ticket.state,
+      transferred: ticket.transferred, size: ticket.size, ...(reason ? { reason } : {}) };
+  }
+
+  private notify(ticket: DownloadTicket, reason?: DownloadReason): void {
+    if (ticket.recipient.readyState === 1) {
+      try { ticket.recipient.send(JSON.stringify(this.snapshot(ticket, reason))); } catch {}
+    }
+  }
+
+  private deadline(ticket: DownloadTicket, milliseconds: number, reason: DownloadReason): void {
+    clearTimeout(ticket.timer);
+    ticket.timer = setTimeout(() => this.finish(ticket, "failed", reason), milliseconds);
+    ticket.timer.unref();
+  }
+
+  private finish(ticket: DownloadTicket, state: "completed" | "cancelled" | "failed", reason?: DownloadReason): void {
+    if (this.tickets.get(ticket.id) !== ticket) return;
+    this.tickets.delete(ticket.id);
+    ticket.state = state;
+    clearTimeout(ticket.timer);
+    ticket.removeCloseListener();
+    const now = Date.now();
+    for (const [id, result] of this.finished) if (result.expires <= now) this.finished.delete(id);
+    this.finished.set(ticket.id, { sessionId: ticket.sessionId, progress: this.snapshot(ticket, reason), expires: now + 60_000 });
+    while (this.finished.size > 256) this.finished.delete(this.finished.keys().next().value!);
+    this.notify(ticket, reason);
+    const socket = ticket.socket;
+    if (!socket.destroyed && !socket.writableEnded) {
+      socket.end(jsonLine({ ok: state === "completed", state, transferred: ticket.transferred,
+        size: ticket.size, ...(reason ? { reason } : {}) }));
+    }
+    if (state !== "completed") {
+      ticket.body?.destroy(new Error(`File transfer ${reason || "failed"}`));
+      void ticket.upload?.abort().catch(() => {});
+      // Deliver the rejection even while the peer is blocked sending, then
+      // release a peer which does not read it. Never leave a paused socket open.
+      const destroy = setTimeout(() => socket.destroy(), 500);
+      destroy.unref();
+      socket.once("close", () => clearTimeout(destroy));
     }
   }
 
   private cancelTicket(id: string): void {
     const ticket = this.tickets.get(id);
-    if (!ticket) return;
-    this.tickets.delete(id);
-    clearTimeout(ticket.timer);
-    ticket.removeCloseListener();
-    ticket.socket.destroy();
+    if (ticket) this.finish(ticket, "cancelled", "cancelled");
   }
 
-  open(ticketId: string, sessionId: string): { body: Readable; size: number; filename: string; headers: Record<string, string> } | undefined {
+  action(ticketId: string, sessionId: string, action: "accept" | "cancel", context?: DownloadContext): DownloadProgress | undefined {
     const ticket = this.tickets.get(ticketId);
-    if (!ticket || ticket.sessionId !== sessionId || ticket.socket.destroyed) return;
-    this.tickets.delete(ticketId);
-    clearTimeout(ticket.timer);
+    if (!ticket) {
+      const result = this.finished.get(ticketId);
+      return result && result.sessionId === sessionId && result.expires > Date.now() ? result.progress : undefined;
+    }
+    if (ticket.sessionId !== sessionId) return;
+    if (action === "cancel") this.finish(ticket, "cancelled", "cancelled");
+    else if (ticket.state === "offered") {
+      ticket.context = context;
+      ticket.state = "accepted";
+      this.deadline(ticket, this.options.startTimeoutMs ?? 15_000, "not-started");
+      this.notify(ticket);
+      if (ticket.helperProgress) ticket.socket.write(jsonLine({ state: "accepted", transferred: 0, size: ticket.size }));
+    }
+    return this.snapshot(ticket, action === "cancel" ? "cancelled" : undefined);
+  }
+
+  async open(ticketId: string, sessionId: string, context?: DownloadContext): Promise<{ body: Readable; size: number; filename: string; headers: Record<string, string> } | undefined> {
+    const ticket = this.tickets.get(ticketId);
+    if (!ticket || ticket.sessionId !== sessionId || ticket.claimed || ticket.socket.destroyed) return;
+    // A native link can reach HTTP before its asynchronous accept notification.
+    if (ticket.state === "offered") ticket.context = context;
+    ticket.claimed = true;
+    ticket.state = "accepted";
+    this.deadline(ticket, this.options.startTimeoutMs ?? 15_000, "not-started");
+    if (ticket.context?.canvasId && ticket.context.canvasId !== "overview" && this.options.createUpload) {
+      try {
+        ticket.upload = await this.options.createUpload({ filename: ticket.filename, size: ticket.size });
+        if (this.tickets.get(ticket.id) !== ticket) { await ticket.upload.abort(); return; }
+      } catch { this.finish(ticket, "failed", "invalid-transfer"); return; }
+    }
     const socket = ticket.socket;
-    socket.setTimeout(0);
-    const body = new Transform({
-      transform(chunk: Buffer, _encoding, callback) {
+    ticket.state = "transferring";
+    this.deadline(ticket, this.options.progressTimeoutMs ?? 60_000, "timed-out");
+    this.notify(ticket);
+    let received = 0;
+    const body = ticket.body = new Transform({
+      transform: (chunk: Buffer, _encoding, callback) => {
         received += chunk.length;
-        if (received > ticket.size) callback(new Error("File transfer exceeded declared length"));
-        else callback(null, chunk);
+        if (received > ticket.size) { callback(new Error("File transfer exceeded declared length")); return; }
+        const advance = () => {
+          if (this.tickets.get(ticket.id) !== ticket) { callback(new Error("File transfer cancelled")); return; }
+          ticket.transferred = received;
+          this.deadline(ticket, this.options.progressTimeoutMs ?? 60_000, "timed-out");
+          const now = Date.now();
+          if (now - ticket.lastProgressAt >= 100) {
+            ticket.lastProgressAt = now;
+            this.notify(ticket);
+            if (ticket.helperProgress && !socket.destroyed) socket.write(jsonLine({ state: "transferring", transferred: received, size: ticket.size }));
+          }
+          callback(null, chunk);
+        };
+        if (ticket.upload) void ticket.upload.write(chunk).then(advance, error => callback(error));
+        else advance();
       },
-      flush(callback) {
+      flush: callback => {
         if (received !== ticket.size) { callback(new Error("File transfer ended before declared length")); return; }
-        socket.end(jsonLine({ ok: true }));
-        callback();
+        const complete = async () => {
+          if (ticket.upload && ticket.context?.canvasId) await ticket.upload.complete({ ...ticket.context,
+            canvasId: ticket.context.canvasId, sourceId: ticket.sourceId, windowId: ticket.windowId });
+          if (this.tickets.get(ticket.id) !== ticket) { callback(new Error("File transfer cancelled")); return; }
+          this.finish(ticket, "completed");
+          callback();
+        };
+        void complete().catch(error => callback(error));
       },
     });
-    let received = 0;
     const onError = (error: Error) => body.destroy(error);
-    const onClose = () => {
-      if (!socket.readableEnded) body.destroy(new Error("File transfer connection closed"));
-    };
+    const onClose = () => { if (!socket.readableEnded) body.destroy(new Error("File transfer connection closed")); };
     socket.once("error", onError);
     socket.once("close", onClose);
-    socket.pipe(body);
+    body.once("error", (error: Error & { code?: string }) => {
+      if (error.name === "AbortError" || error.code === "ABORT_ERR") this.finish(ticket, "cancelled", "cancelled");
+      else this.finish(ticket, "failed", "invalid-transfer");
+    });
     body.once("close", () => {
-      ticket.removeCloseListener();
       socket.off("error", onError);
       socket.off("close", onClose);
-      if (!body.readableEnded) socket.destroy();
+      if (!body.readableEnded) this.finish(ticket, "cancelled", "cancelled");
     });
-    body.once("error", () => socket.destroy());
-    return {
-      body,
-      size: ticket.size,
-      filename: ticket.filename,
-      headers: {
-        "Cache-Control": "no-store",
-        "Content-Disposition": contentDisposition(ticket.filename),
-        "Content-Type": "application/octet-stream",
-        "X-Content-Type-Options": "nosniff",
-      },
-    };
+    // Acceptance acknowledges actual HTTP consumption, never just an offer.
+    socket.write(jsonLine({ ok: true, state: "transferring", transferred: 0, size: ticket.size }));
+    socket.pipe(body);
+    return { body, size: ticket.size, filename: ticket.filename, headers: {
+      "Cache-Control": "no-store", "Content-Disposition": contentDisposition(ticket.filename),
+      "Content-Type": "application/octet-stream", "X-Content-Type-Options": "nosniff",
+    } };
   }
 
   async closeSource(sourceId: string): Promise<void> {

@@ -18,6 +18,7 @@ import {
   listResources,
 } from "./providers.ts";
 import { OpenDownloadService } from "./open-download.ts";
+import { AssetStore } from "./assets.ts";
 const dataDir =
   process.env.CANVAS_DATA_DIR ?? join(homedir(), ".local/share/canvas");
 const accountFile = join(dataDir, "auth.json");
@@ -27,10 +28,12 @@ if (!existsSync(accountFile))
   );
 const account: Account = JSON.parse(readFileSync(accountFile, "utf8"));
 const store = new Store(join(dataDir, "canvas.db"));
+const assets = new AssetStore(dataDir, store);
 const terminals = new TerminalManager();
 const helperBytes = readFileSync(new URL("../cli/canvas", import.meta.url));
 const socketSessions = new WeakMap<import("ws").WebSocket, string>();
 const downloads = new OpenDownloadService({
+  createUpload: metadata => assets.begin(metadata),
   prepare: prepareOpenBridge,
   publishRemote: writeRemoteBridgeRegistry,
   installHelper: (source) => installCanvasHelper(source, helperBytes),
@@ -44,8 +47,10 @@ const downloads = new OpenDownloadService({
 });
 const app = createApp(store, account, terminals, {
   secureCookie: process.env.CANVAS_SECURE_COOKIE === "1",
-  openDownload: (ticket, session) => downloads.open(ticket, session),
+  openDownload: (ticket, session, context) => downloads.open(ticket, session, context),
+  downloadAction: (ticket, session, action, context) => downloads.action(ticket, session, action, context),
   closeOpenBridge: (sourceId) => downloads.closeSource(sourceId),
+  assets,
 });
 app.get("/api/*", (c) => c.json({ error: "Not found" }, 404));
 app.use("*", async (c, next) => {
@@ -147,6 +152,7 @@ async function stop() {
   closeStatusObservers();
   await terminals.closeAll();
   await downloads.closeAll();
+  assets.close();
   await closeProviderConnections();
   store.emit("close");
   wss.close();

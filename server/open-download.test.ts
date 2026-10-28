@@ -14,7 +14,7 @@ import type { Source } from "./state.ts";
 import { Store } from "./state.ts";
 import { createApp } from "./app.ts";
 import type { TerminalManager } from "./terminals.ts";
-import { OpenDownloadService } from "./open-download.ts";
+import { OpenDownloadService, type OpenDownloadOptions } from "./open-download.ts";
 
 const helper = fileURLToPath(new URL("../cli/canvas", import.meta.url));
 const source: Source = { id: "open-source", name: "Open", type: "herdr", transport: "local" };
@@ -31,7 +31,7 @@ class FakeWebSocket extends EventEmitter {
   send(value: string) { this.messages.push(JSON.parse(value)); }
 }
 
-async function fixture(t: TestContext, recipientAvailable = true) {
+async function fixture(t: TestContext, recipientAvailable = true, timeouts: Partial<Pick<OpenDownloadOptions, "decisionTimeoutMs" | "startTimeoutMs" | "progressTimeoutMs">> = {}) {
   const root = await mkdtemp(join(tmpdir(), "canvas-open-service-"));
   const registry = join(root, "registry"), sockets = join(root, "sockets");
   await mkdir(registry, { mode: 0o700 }); await mkdir(sockets, { mode: 0o700 });
@@ -45,13 +45,15 @@ async function fixture(t: TestContext, recipientAvailable = true) {
     registryDirectory: registry,
     socketDirectory: sockets,
     idleTimeoutMs: 15,
+    ...timeouts,
     prepare: async (_source, localSocket) => ({ nativeSocket, remoteSocket: localSocket, cleanup: async () => {} }),
     resources: async () => resourceState,
     recipient: async () => recipientAvailable ? { socket: receiver as never, sessionId: sessions.get(receiver)!, isCurrent: () => receiver.readyState === 1 } : undefined,
   });
   await service.ensureSource(source);
   const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {} as TerminalManager, {
-    openDownload: (ticket, session) => service.open(ticket, session),
+    openDownload: (ticket, session, context) => service.open(ticket, session, context),
+    downloadAction: (ticket, session, action, context) => service.action(ticket, session, action, context),
   });
   t.after(async () => {
     await service.closeAll();
@@ -83,6 +85,8 @@ async function completeDownload(f: Awaited<ReturnType<typeof fixture>>, filename
   const id = url.pathname.split("/").at(-1)!;
   const wrongSession = await f.app.request(url.href, { headers: { Cookie: "canvas_session=other-session" } });
   assert.equal(wrongSession.status, 404, "a different browser session cannot consume the ticket");
+  const accepted = await f.app.request(url.href, { method: "POST", headers: { Cookie: "canvas_session=authenticated-session", "Content-Type": "application/json" }, body: JSON.stringify({ action: "accept" }) });
+  assert.equal(accepted.status, 200);
   const response = await f.app.request(url.href, { headers: { Cookie: "canvas_session=authenticated-session" } });
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("content-length"), null, "completion waits for validated helper EOF");
@@ -112,7 +116,7 @@ async function waitFor(check: () => boolean, message: string) {
   assert.fail(message);
 }
 
-async function sender(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, size: number) {
+async function sender(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, size: number, progress = true) {
   const record = JSON.parse(await readFile(join(f.registry, (await readdir(f.registry))[0]!), "utf8"));
   const socket = createConnection(record.socket);
   socket.on("error", () => {});
@@ -123,13 +127,16 @@ async function sender(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, si
     socket.once("connect", resolve);
     socket.once("error", reject);
   });
-  socket.write(JSON.stringify({ version: 1, secret: record.secret, provider: "herdr", nativeSocket: f.nativeSocket,
+  socket.write(JSON.stringify({ version: 1, progress, secret: record.secret, provider: "herdr", nativeSocket: f.nativeSocket,
     paneId: "pane", filename: "file.bin", size }) + "\n");
-  await waitFor(() => responses.includes("\n"), "helper received no initial acknowledgement");
-  assert.deepEqual(JSON.parse(responses.trim()), { ok: true });
+  await waitFor(() => f.receiver.messages.some(message => message.type === "download"), "browser received no download offer");
+  if (progress) {
+    await waitFor(() => responses.includes("\n"), "helper received no offered state");
+    assert.deepEqual(JSON.parse(responses.trim()), { state: "offered", transferred: 0, size });
+  } else assert.equal(responses, "", "legacy helper must wait for HTTP consumption before acceptance");
   const notice = f.receiver.messages.find(message => message.type === "download");
   assert.ok(notice);
-  return { socket, url: String(notice.url), responses: () => responses.trim().split("\n").map(line => JSON.parse(line)) };
+  return { socket, id: String(notice.id), url: String(notice.url), responses: () => responses.trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) };
 }
 
 test("canvas open streams arbitrary binary bytes only after binding a one-use browser ticket", async t => {
@@ -140,7 +147,11 @@ test("canvas open streams arbitrary binary bytes only after binding a one-use br
   assert.equal(result.stderr, "");
   assert.equal(f.receiver.messages.filter(message => message.type === "download").length, 1);
   const ticket = String(new URL(String(f.receiver.messages[0]!.url), "http://canvas.test").pathname.split("/").at(-1));
-  assert.equal(f.service.open(ticket, "authenticated-session"), undefined);
+  assert.equal(await f.service.open(ticket, "authenticated-session"), undefined);
+  assert.equal(f.service.action(ticket, "authenticated-session", "cancel")?.state, "completed",
+    "a late cancel must not overwrite an already completed transfer");
+  assert.equal(f.service.action(ticket, "other-session", "cancel"), undefined,
+    "completed ticket state remains private to its receiving browser session");
 });
 
 test("an empty file completes a real HTTP response and helper acknowledgement", { timeout: 10_000 }, async t => {
@@ -156,6 +167,79 @@ test("an empty file completes a real HTTP response and helper acknowledgement", 
   const result = await running;
   assert.equal(result.code, 0, result.stderr);
   assert.equal(result.stderr, "");
+});
+
+test("accepting an offer does not send file bytes until the browser starts HTTP consumption", async t => {
+  const f = await fixture(t), transfer = await sender(t, f, 4);
+  assert.equal(f.service.action(transfer.id, "other-session", "accept"), undefined);
+  assert.equal(f.service.action(transfer.id, "authenticated-session", "accept")?.state, "accepted");
+  await waitFor(() => transfer.responses().some(response => response.state === "accepted"), "helper did not receive the accepted state");
+  assert(!transfer.responses().some(response => response.ok === true), "acceptance alone must not unblock file transmission");
+  const response = await f.app.request(`http://canvas.test${transfer.url}`, { headers: { Cookie: "canvas_session=authenticated-session" } });
+  const reading = response.arrayBuffer();
+  await waitFor(() => transfer.responses().some(response => response.ok === true), "HTTP consumption did not unblock the helper");
+  transfer.socket.end("done");
+  assert.equal(Buffer.from(await reading).toString(), "done");
+  await waitFor(() => transfer.responses().some(response => response.state === "completed"), "helper did not receive completion");
+});
+
+test("the browser can reject an offer and the helper exits without transferring its file", async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.root, "decline.bin"), randomBytes(1024 * 1024));
+  const running = f.run("decline.bin");
+  await waitFor(() => f.receiver.messages.some(message => message.type === "download"), "browser received no offer");
+  const notice = f.receiver.messages.find(message => message.type === "download")!;
+  const response = await f.app.request(`http://canvas.test${notice.url}`, {
+    method: "POST", headers: { Cookie: "canvas_session=authenticated-session", "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "cancel" }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).state, "cancelled");
+  const result = await running;
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /download cancelled/u);
+  assert(!f.receiver.messages.some(message => message.state === "transferring"));
+  assert.equal(await f.service.open(String(notice.id), "authenticated-session"), undefined);
+});
+
+test("accepted downloads expire when the browser never starts its HTTP request", async t => {
+  const f = await fixture(t, true, { startTimeoutMs: 80 }), transfer = await sender(t, f, 10);
+  f.service.action(transfer.id, "authenticated-session", "accept");
+  await waitFor(() => transfer.responses().some(response => response.ok === false), "accepted download did not expire");
+  const failure = transfer.responses().at(-1);
+  assert.equal(failure.reason, "not-started");
+  assert.equal(failure.transferred, 0);
+  assert(!transfer.responses().some(response => response.ok === true));
+  assert.equal(await f.service.open(transfer.id, "authenticated-session"), undefined);
+});
+
+test("an unanswered offer expires and releases its helper", async t => {
+  const f = await fixture(t, true, { decisionTimeoutMs: 80 }), transfer = await sender(t, f, 10);
+  await waitFor(() => transfer.responses().some(response => response.ok === false), "offer did not expire");
+  assert.equal(transfer.responses().at(-1).reason, "not-started");
+  assert.equal(f.service.action(transfer.id, "authenticated-session", "accept")?.state, "failed");
+});
+
+test("a started transfer with no byte progress times out instead of hanging", async t => {
+  const f = await fixture(t, true, { progressTimeoutMs: 80 }), transfer = await sender(t, f, 10);
+  const response = await f.app.request(`http://canvas.test${transfer.url}`, { headers: { Cookie: "canvas_session=authenticated-session" } });
+  const failed = assert.rejects(response.arrayBuffer(), /File transfer timed-out/u);
+  await waitFor(() => transfer.responses().some(response => response.ok === false), "stalled transfer did not time out");
+  assert.equal(transfer.responses().at(-1).reason, "timed-out");
+  await failed;
+});
+
+test("legacy helpers receive only actual start and final acknowledgements", async t => {
+  const f = await fixture(t), transfer = await sender(t, f, 4, false);
+  f.service.action(transfer.id, "authenticated-session", "accept");
+  assert.deepEqual(transfer.responses(), []);
+  const response = await f.app.request(`http://canvas.test${transfer.url}`, { headers: { Cookie: "canvas_session=authenticated-session" } });
+  const reading = response.arrayBuffer();
+  await waitFor(() => transfer.responses().some(response => response.ok === true), "legacy helper received no acceptance");
+  transfer.socket.end("done");
+  assert.equal(Buffer.from(await reading).toString(), "done");
+  await waitFor(() => transfer.responses().length === 2, "legacy helper received no completion");
+  assert.deepEqual(transfer.responses().map(response => response.ok), [true, true]);
 });
 
 test("real HTTP downloads wait for helper EOF even after all declared bytes arrive", { timeout: 10_000 }, async t => {
@@ -179,6 +263,7 @@ test("real HTTP downloads wait for helper EOF even after all declared bytes arri
       request.once("error", reject);
       t.after(() => request.destroy());
     });
+    await waitFor(() => transfer.responses().some(response => response.ok === true), "helper was not accepted after the HTTP request");
     transfer.socket.write(content);
     await waitFor(() => received, "HTTP download did not begin");
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -186,8 +271,9 @@ test("real HTTP downloads wait for helper EOF even after all declared bytes arri
     assert.equal(transfer.socket.destroyed, false, "HTTP completion cancelled the helper before final acknowledgement");
     transfer.socket.end();
     assert.deepEqual(await reading, content);
-    await waitFor(() => transfer.responses().length === 2, "helper received no final acknowledgement");
-    assert.deepEqual(transfer.responses(), [{ ok: true }, { ok: true }]);
+    await waitFor(() => transfer.responses().some(response => response.state === "completed"), "helper received no final acknowledgement");
+    assert.deepEqual(transfer.responses().filter(response => "ok" in response).map(response => response.ok), [true, true]);
+    assert.equal(transfer.responses().at(-1).transferred, content.length);
   }
 });
 
@@ -203,10 +289,12 @@ test("cancelling an active real HTTP download closes its helper connection", { t
     request.once("error", reject);
     t.after(() => request.destroy());
   });
+  await waitFor(() => transfer.responses().some(response => response.ok === true), "helper was not accepted after the HTTP request");
   transfer.socket.write(Buffer.alloc(64 * 1024));
   await cancelled;
   await waitFor(() => transfer.socket.destroyed, "cancelled HTTP download retained the helper connection");
-  assert.deepEqual(transfer.responses(), [{ ok: true }], "cancelled downloads must not acknowledge successful completion");
+  assert(!transfer.responses().some(response => response.state === "completed"), "cancelled downloads must not acknowledge successful completion");
+  assert.equal(transfer.responses().at(-1).ok, false);
 });
 
 test("malformed and oversized socket headers cannot affect the service or generate a download", async t => {
@@ -227,31 +315,27 @@ test("malformed and oversized socket headers cannot affect the service or genera
 
 test("truncated or disconnected helper streams reject the HTTP body instead of hanging", async t => {
   const f = await fixture(t);
-  const record = JSON.parse(await readFile(join(f.registry, (await readdir(f.registry))[0]!), "utf8"));
   for (const abrupt of [false, true]) {
     f.receiver.messages.length = 0;
-    const socket = createConnection(record.socket);
-    socket.on("error", () => {});
-    await new Promise<void>(resolve => socket.once("connect", resolve));
-    socket.write(JSON.stringify({ version: 1, secret: record.secret, provider: "herdr", nativeSocket: f.nativeSocket,
-      paneId: "pane", filename: "truncated", size: 10 }) + "\n");
-    await new Promise<void>(resolve => socket.once("data", () => resolve()));
-    const notice = f.receiver.messages.find(message => message.type === "download")!;
-    const response = await f.app.request(`http://canvas.test${notice.url}`, { headers: { Cookie: "canvas_session=authenticated-session" } });
+    const transfer = await sender(t, f, 10);
+    const response = await f.app.request(`http://canvas.test${transfer.url}`, { headers: { Cookie: "canvas_session=authenticated-session" } });
     const reading = response.arrayBuffer();
     const failed = assert.rejects(reading, /File transfer/u);
-    if (abrupt) socket.destroy(); else socket.end("short");
+    await waitFor(() => transfer.responses().some(response => response.ok === true), "helper was not accepted");
+    if (abrupt) transfer.socket.destroy(); else transfer.socket.end("short");
     await failed;
-    socket.destroy();
+    transfer.socket.destroy();
   }
 });
 
 test("canvas open refuses panes without a live controlling browser before sending file bytes", async t => {
   const f = await fixture(t, false);
   const file = join(f.root, "not-sent"); await writeFile(file, "private bytes");
+  const began = Date.now();
   const result = await f.run(file);
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /no Canvas tab/u);
+  assert.equal(result.stderr, "canvas: no browser attached to this window\n");
+  assert(Date.now() - began < 2000, "no active browser must fail before the decision timeout");
   assert.deepEqual(f.receiver.messages, []);
 });
 
