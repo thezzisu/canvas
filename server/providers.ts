@@ -190,6 +190,7 @@ function sourceCommand(
     "-u",
     "HERDR_SESSION",
     "TERM=xterm-256color",
+    ...(tty ? ["COLORTERM=truecolor"] : []),
     binary,
     ...base,
     ...args,
