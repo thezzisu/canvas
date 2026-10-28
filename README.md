@@ -72,14 +72,20 @@ No custom remote tmux installation is required.
   details; source context is available in the title tooltip.
 - Cards follow the attached client's aspect ratio. Width determines the display
   scale and height follows, keeping every pane visible without distortion.
+- Each native window has one backend PTY and one shared card size across all
+  canvases and browsers. Card positions and canvas zoom remain local to each
+  canvas; Overview follows the shared card size without resize handles.
 - Overview has no card resize handles. Switching canvases and zooming preserve
   the attached client's viewport without reconnecting it. tmux views follow
   native dimensions; herdr uses its ordinary native attach rules.
 - Drag a custom canvas card's header to move it; explicitly resizing the card
   changes its native window's dimensions.
 - Focus fills the viewport by resizing the attached PTY at normal font size.
-  Each window has one focus owner; focusing it in another browser closes the
-  previous browser's focus view. Leaving focus restores that client's viewport.
+  Each native window has one maximum-size view. Its other references show
+  “已最大化” and pause terminal rendering. Maximizing another reference takes
+  over; the previous view returns to its canvas. Leaving focus restores the
+  client's viewport and resumes other references from the latest full screen.
+  Different native windows can be maximized independently.
 - tmux follows external native dimensions and restores the original window size
   only while Canvas still owns its geometry. Herdr's unmodified server decides
   which native client controls pane sizes. Canvas does not override that decision

@@ -53,6 +53,9 @@ class LiveTerminal {
   serializer: InstanceType<typeof SerializeAddon>;
   mouseEncoding: TerminalMouseEncoding;
   clients = new Set<WebSocket>();
+  private rendered = new Set<WebSocket>();
+  private maximized?: { owner: WebSocket; token: string };
+  private presentationRevision = 0;
   controller?: WebSocket;
   idle?: ReturnType<typeof setTimeout>;
   queue: Promise<void> = Promise.resolve();
@@ -133,6 +136,7 @@ class LiveTerminal {
             await new Promise<void>((resolve) =>
               this.emulator.write(data, () => {
                 for (const ws of this.clients) {
+                  if (!this.canRender(ws)) continue;
                   if (ws.bufferedAmount > 2 * 1024 * 1024) {
                     ws.close(1013, "Terminal output is too fast; reconnect");
                     continue;
@@ -184,19 +188,74 @@ class LiveTerminal {
           : read(),
     };
   }
+  private canRender(ws: WebSocket) {
+    return this.rendered.has(ws) && (!this.maximized || this.maximized.owner === ws);
+  }
+  private presentation(ws: WebSocket) {
+    json(ws, {
+      type: "presentation",
+      maximized: !!this.maximized,
+      owned: this.maximized?.owner === ws,
+      ...(this.maximized ? { token: this.maximized.token } : {}),
+    });
+  }
+  private snapshot(ws: WebSocket) {
+    if (this.closed || !this.clients.has(ws) || ws.readyState !== 1) return;
+    if (this.maximized && this.maximized.owner !== ws) {
+      this.rendered.delete(ws);
+      this.presentation(ws);
+      return;
+    }
+    // The caller runs in the same queue as headless writes. Reset, geometry,
+    // serialized state and live output therefore form one ordered stream.
+    json(ws, { type: "reset" });
+    json(ws, { type: "resize", cols: this.cols, rows: this.rows });
+    ws.send(Buffer.from(this.serializer.serialize() + this.mouseEncoding.serialize(), "utf8"));
+    this.rendered.add(ws);
+    this.presentation(ws);
+  }
+  private resume() {
+    const revision = this.presentationRevision;
+    this.queue = this.queue.then(() => {
+      if (revision !== this.presentationRevision) return;
+      for (const ws of this.clients)
+        if (!this.rendered.has(ws)) this.snapshot(ws);
+    }).catch(() => { void this.close(); });
+  }
+  private maximize(ws: WebSocket, token: string) {
+    this.presentationRevision++;
+    this.maximized = { owner: ws, token };
+    this.controller = ws;
+    for (const client of this.clients) {
+      if (client !== ws) {
+        this.rendered.delete(client);
+        this.presentation(client);
+      } else if (this.rendered.has(client)) this.presentation(client);
+    }
+    this.status();
+    this.resume();
+  }
+  private async releaseMaximized(ws: WebSocket, token?: string) {
+    const current = this.maximized;
+    if (!current || current.owner !== ws || (token !== undefined && token !== current.token)) return;
+    this.presentationRevision++;
+    // Keep every view paused until conditional geometry restoration completes.
+    // A new owner can take over while that read/restore is pending; snapshots
+    // re-check the current owner and never release a newer request.
+    this.rendered.clear();
+    await this.geometry.end(ws, current.token);
+    if (this.maximized !== current) return;
+    this.maximized = undefined;
+    this.resume();
+    this.status();
+  }
   async join(ws: WebSocket) {
     clearTimeout(this.idle);
     this.queue = this.queue.then(() => {
       if (this.closed || ws.readyState !== 1) return;
-      json(ws, { type: "resize", cols: this.cols, rows: this.rows });
-      ws.send(
-        Buffer.from(
-          this.serializer.serialize() + this.mouseEncoding.serialize(),
-          "utf8",
-        ),
-      );
       this.clients.add(ws);
       if (!this.controller) this.controller = ws;
+      this.snapshot(ws);
       this.status();
       json(ws, this.geometry.state(ws));
     });
@@ -207,6 +266,7 @@ class LiveTerminal {
       try {
         const msg = JSON.parse(data.toString());
         if (msg.type === "focus") {
+          if (this.maximized && this.maximized.owner !== ws) return;
           this.controller = ws;
           this.status();
           return;
@@ -220,8 +280,7 @@ class LiveTerminal {
           typeof msg.token === "string" &&
           msg.token.length <= 100
         ) {
-          this.controller = ws;
-          this.status();
+          this.maximize(ws, msg.token);
           this.geometry.begin(ws, msg.token, size);
           return;
         }
@@ -229,14 +288,16 @@ class LiveTerminal {
           msg.type === "focus-resize-update" &&
           typeof msg.token === "string"
         ) {
+          if (this.maximized?.owner !== ws || this.maximized.token !== msg.token) return;
           this.geometry.update(ws, msg.token, size);
           return;
         }
         if (msg.type === "focus-resize-end" && typeof msg.token === "string") {
-          void this.geometry.end(ws, msg.token);
+          void this.releaseMaximized(ws, msg.token);
           return;
         }
         if (this.controller !== ws) return;
+        if (this.maximized && this.maximized.owner !== ws) return;
         if (
           msg.type === "input" &&
           typeof msg.data === "string" &&
@@ -255,8 +316,10 @@ class LiveTerminal {
     });
     ws.once("close", () => {
       this.clients.delete(ws);
+      this.rendered.delete(ws);
       if (this.closed) return;
-      void this.geometry.end(ws);
+      if (this.maximized?.owner === ws) void this.releaseMaximized(ws);
+      else void this.geometry.end(ws);
       if (this.controller === ws)
         this.controller = this.clients.values().next().value;
       this.status();
@@ -275,14 +338,14 @@ class LiveTerminal {
     this.proc.resize(size.cols, size.rows);
     this.emulator.resize(size.cols, size.rows);
     for (const ws of this.clients)
-      json(ws, { type: "resize", cols: size.cols, rows: size.rows });
+      if (this.canRender(ws)) json(ws, { type: "resize", cols: size.cols, rows: size.rows });
   }
   status() {
     for (const ws of this.clients)
       json(ws, {
         type: "status",
         status: "connected",
-        readOnly: this.controller !== ws,
+        readOnly: this.controller !== ws || (!!this.maximized && this.maximized.owner !== ws),
       });
   }
   close(): Promise<void> {
@@ -299,6 +362,8 @@ class LiveTerminal {
         ws.close(1000, "Terminal detached");
       }
       this.clients.clear();
+      this.rendered.clear();
+      this.maximized = undefined;
       try {
         this.proc.kill();
       } catch {}

@@ -11,7 +11,7 @@ import { api, segment, uuid, write } from './api'
 import { clearTerminals } from './terminals'
 import { useCanvasNavigation } from './canvas-navigation'
 import { statusColor, statusLabel } from './status'
-import type { Canvas, CanvasNode, NoteData, NotePatch, SharedState, Source, SourceResource, TerminalCanvasNode, TerminalData } from './types'
+import type { Canvas, CanvasNode, NoteData, NotePatch, SharedState, Source, SourceResource, TerminalCanvasNode, TerminalData, WindowSize } from './types'
 
 const { fitView, zoomIn, zoomOut, setViewport, getViewport, getNodesInitialized } = useVueFlow()
 const ready = ref(false)
@@ -25,6 +25,7 @@ const success = ref('')
 const sources = ref<Source[]>([])
 const resources = ref<SourceResource[]>([])
 const canvases = ref<Canvas[]>([])
+const windowSizes = ref<Record<string, WindowSize>>({})
 const overviewBackground = ref<Canvas['background']>(null)
 const activeId = ref('overview')
 const nodes = shallowRef<Node[]>([])
@@ -96,6 +97,9 @@ function windowHeight(node: Pick<TerminalCanvasNode, 'sourceId' | 'windowId' | '
   const geometry = windowGeometry.get(`${node.sourceId}/${node.windowId}`)
   return geometry ? (node.width - geometry.insetX) * geometry.ratio + geometry.insetY : node.height
 }
+function windowSize(node: Pick<TerminalCanvasNode, 'sourceId' | 'windowId'>): WindowSize {
+  return windowSizes.value[`${node.sourceId}/${node.windowId}`] || { width: 480, height: 302 }
+}
 function recordGeometry(sourceId: string, windowId: string, ratio: number, insetX: number, insetY: number) {
   if (!(ratio > 0) || !Number.isFinite(ratio)) return
   const key = `${sourceId}/${windowId}`
@@ -132,7 +136,8 @@ function terminalData(node: TerminalCanvasNode, overview = false): TerminalData 
   return { ...node, name: found.window?.name || '已关闭的窗口', subtitle: `${found.source?.name || sourceConfig?.name || '未知连接'} / ${found.space?.name || 'space'}`, type: found.source?.type || sourceConfig?.type || 'tmux', available: !!found.window && !found.source?.error, status: found.window?.status || 'unknown', panes: found.window?.panes || [], overview, focus: false, onAction: terminalAction, onResize: resizeNode, onLayoutStart: layoutStarted, onGeometry: recordGeometry }
 }
 function terminalFlowNode(node: TerminalCanvasNode, overview = false): Node {
-  node = { ...node, height: windowHeight(node) }
+  node = { ...node, ...windowSize(node) }
+  node.height = windowHeight(node)
   return { id: node.id, type: 'terminal', position: { x: node.x, y: node.y }, data: terminalData(node, overview), style: { width: `${node.width}px`, height: `${node.height}px` }, draggable: !overview, selectable: true, dragHandle: '.drag-handle' }
 }
 function flowNode(node: CanvasNode): Node {
@@ -155,16 +160,21 @@ function overviewNodes(): Node[] {
   }
   let y = 0
   for (const [host, machineSources] of machines) {
-    const maxWindows = Math.max(1, ...machineSources.flatMap(source => source.spaces.map(space => space.windows.length)))
-    const width = maxWindows * 496 + 32
+    const rowWidth = (source: SourceResource, space: SourceResource['spaces'][number]) => space.windows.reduce((sum, window) => sum + windowSize({ sourceId: source.id, windowId: window.id }).width + 16, 0)
+    const width = Math.max(528, ...machineSources.flatMap(source => source.spaces.map(space => rowWidth(source, space) + 32)))
     const count = machineSources.reduce((total, source) => total + source.spaces.reduce((sum, space) => sum + space.windows.length, 0), 0)
-    const rows = machineSources.flatMap(source => source.spaces.map(space => ({ source, space, height: space.windows.length ? 54 + Math.max(...space.windows.map(window => windowHeight({ sourceId: source.id, windowId: window.id, width: 480, height: 302 }))) : 66 })))
+    const rows = machineSources.flatMap(source => source.spaces.map(space => ({ source, space, height: space.windows.length ? 54 + Math.max(...space.windows.map(window => windowHeight({ sourceId: source.id, windowId: window.id, ...windowSize({ sourceId: source.id, windowId: window.id }) }))) : 66 })))
     const height = Math.max(132, 78 + rows.reduce((sum, row) => sum + row.height, 0))
     result.push({ id: `machine:${host}`, type: 'group', position: { x: 0, y }, data: { kind: 'machine', name: host === 'local' ? '本机' : host.replace(/^ssh:\/\//, ''), subtitle: host === 'local' ? 'LOCAL' : 'SSH', count, width, height }, draggable: false, selectable: false, style: { width: `${width}px`, height: `${height}px`, zIndex: '-1', pointerEvents: 'none' } })
     let rowY = y + 68
     for (const { source, space, height: rowHeight } of rows) {
       result.push({ id: `space:${source.id}:${space.id}`, type: 'group', position: { x: 24, y: rowY }, data: { kind: 'space', name: space.name, subtitle: `${source.name} · ${source.type}`, count: space.windows.length }, draggable: false, selectable: false, style: { width: `${width - 48}px`, pointerEvents: 'none' } })
-      for (const [index, window] of space.windows.entries()) result.push(terminalFlowNode({ id: `window:${source.id}:${space.id}:${window.id}`, sourceId: source.id, spaceId: space.id, windowId: window.id, x: 24 + index * 496, y: rowY + 34, width: 480, height: 302 }, true))
+      let windowX = 24
+      for (const window of space.windows) {
+        const target = { sourceId: source.id, windowId: window.id }
+        result.push(terminalFlowNode({ id: `window:${source.id}:${space.id}:${window.id}`, ...target, spaceId: space.id, x: windowX, y: rowY + 34, ...windowSize(target) }, true))
+        windowX += windowSize(target).width + 16
+      }
       rowY += rowHeight
     }
     y += height + 48
@@ -180,6 +190,18 @@ function applySharedState(state: SharedState) {
   latestState = state
   const sourceChanged = JSON.stringify(sources.value) !== JSON.stringify(state.sources)
   const previousNodes = JSON.stringify(currentCanvas.value?.nodes)
+  const nextSizes = { ...state.windowSizes }
+  for (const canvas of state.canvases) for (const [id, patch] of pendingLayouts.get(canvas.id) || []) {
+    const node = canvas.nodes.find(item => item.id === id)
+    if (node && node.type !== 'note' && (patch.width !== undefined || patch.height !== undefined)) {
+      const key = `${node.sourceId}/${node.windowId}`
+      nextSizes[key] = { ...(nextSizes[key] || windowSize(node)),
+        ...(patch.width === undefined ? {} : { width: patch.width }),
+        ...(patch.height === undefined ? {} : { height: patch.height }) }
+    }
+  }
+  const sizesChanged = JSON.stringify(windowSizes.value) !== JSON.stringify(nextSizes)
+  windowSizes.value = nextSizes
   sources.value = state.sources
   overviewBackground.value = state.overviewBackground
   canvases.value = state.canvases.map(canvas => ({ ...canvas, nodes: (canvas.nodes || []).map(node => ({ ...node, ...pendingLayouts.get(canvas.id)?.get(node.id), ...(node.type === 'note' ? { ...savingNotes.get(noteKey(canvas.id, node.id))?.patch, ...pendingNotes.get(noteKey(canvas.id, node.id))?.patch } : {}) })) }))
@@ -189,7 +211,7 @@ function applySharedState(state: SharedState) {
   if (!isOverview.value && !currentCanvas.value) switchCanvas('overview')
   else {
     if (!isOverview.value && focused.value && !currentCanvas.value?.nodes.some(node => node.id === focused.value?.id)) void closeFocus()
-    if (!layoutGesture && previousNodes !== JSON.stringify(currentCanvas.value?.nodes)) rebuildNodes()
+    if (!layoutGesture && (sizesChanged || previousNodes !== JSON.stringify(currentCanvas.value?.nodes))) rebuildNodes()
   }
   if (backgroundCanvas.value && backgroundCanvas.value.id !== 'overview' && !canvases.value.some(canvas => canvas.id === backgroundCanvas.value?.id)) backgroundCanvas.value = null
   if (sourceChanged) {
@@ -547,7 +569,11 @@ function dragStopped(event: { node: Node }) {
 function resizeNode(id: string, width: number, height: number, x?: number, y?: number) {
   layoutGesture = ''
   const node = currentCanvas.value?.nodes.find(item => item.id === id)
-  if (node) editLayout(id, { width: Math.round(width), height: Math.max(160, Math.min(3000, Math.round(node.type === 'note' ? height : windowHeight({ ...node, width, height })))), ...(x === undefined ? {} : { x }), ...(y === undefined ? {} : { y }) })
+  if (node) {
+    const size = { width: Math.round(width), height: Math.max(160, Math.min(3000, Math.round(node.type === 'note' ? height : windowHeight({ ...node, width, height })))) }
+    if (node.type !== 'note') windowSizes.value[`${node.sourceId}/${node.windowId}`] = size
+    editLayout(id, { ...size, ...(x === undefined ? {} : { x }), ...(y === undefined ? {} : { y }) })
+  }
   rebuildNodes()
 }
 function keydown(event: KeyboardEvent) {

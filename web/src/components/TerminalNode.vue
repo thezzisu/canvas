@@ -10,16 +10,21 @@ import type { TerminalData } from '../types'
 const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>>()
 const host = ref<HTMLElement>()
 const status = ref<TerminalStatus>({ status: 'connecting' })
+const maximizedElsewhere = computed(() => !!status.value.presentation?.maximized && (!status.value.presentation.owned || !props.data.focus))
 const frameStatus = computed(() => !props.data.available || status.value.status === 'disconnected' ? 'error' : status.value.status === 'connecting' ? 'unknown' : props.data.status)
 const resizeState = computed(() => !props.data.focus ? 'passive' : !status.value.focusResize ? 'pending' : status.value.focusResize.owned ? 'owned' : 'passive')
 const resizeNotes: Record<string, string> = { 'external-resize': '尺寸由外部终端调整', superseded: '尺寸由其他视图调整', unavailable: '终端暂不支持调整尺寸' }
 const title = computed(() => [props.data.name, props.data.subtitle, props.data.focus && resizeNotes[status.value.focusResize?.reason || '']].filter(Boolean).join('\n'))
 let terminal: ReturnType<typeof mountTerminal> | undefined
+let ownedPresentation = false
 function mount() {
   if (host.value && props.data.available) terminal = mountTerminal(host.value, props.data, state => {
+    const superseded = ownedPresentation && state.presentation?.maximized && !state.presentation.owned
+    ownedPresentation = props.data.focus && state.presentation?.owned === true
     status.value = state
-    if (props.data.focus && state.focusResize?.reason === 'superseded' && !state.focusResize.owned) props.data.onAction('unfocus', props.id)
+    if (superseded) props.data.onAction('unfocus', props.id)
   }, geometry => {
+    if (props.data.focus || maximizedElsewhere.value) return
     const element = host.value
     const card = element?.closest<HTMLElement>('.terminal-card')
     if (!element || !card) return
@@ -45,8 +50,8 @@ async function resized(event: { params: { width: number; height: number; x: numb
 }
 </script>
 <template>
-  <NodeResizer v-if="!data.overview && !data.focus" :is-visible="selected" :min-width="360" :min-height="220" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="resized" />
-  <article class="terminal-card" :class="[{ selected, unavailable: !data.available, focused: data.focus }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="data.available ? status.status : 'unavailable'" :data-program-status="data.status" :data-resize-state="resizeState" :data-resize-reason="status.focusResize?.reason" :style="{ '--program-color': statusColor(frameStatus), width: dimensions ? '100%' : `${data.width}px`, height: dimensions ? '100%' : `${data.height}px` }" :aria-label="`${data.name} · ${data.subtitle}`">
+  <NodeResizer v-if="!data.overview && !data.focus && !maximizedElsewhere" :is-visible="selected" :min-width="360" :min-height="220" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="resized" />
+  <article class="terminal-card" :class="[{ selected, unavailable: !data.available, focused: data.focus }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="data.available ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :data-resize-reason="status.focusResize?.reason" :style="{ '--program-color': statusColor(frameStatus), width: dimensions ? '100%' : `${data.width}px`, height: dimensions ? '100%' : `${data.height}px` }" :aria-label="`${data.name} · ${data.subtitle}`">
     <header class="terminal-header drag-handle">
       <PaneIndicators :panes="data.panes" :status="data.status" :available="data.available" :connection="status.status" :error="status.error" :read-only="status.readOnly" />
       <span class="terminal-name" :title="title">{{ data.name }}</span>
@@ -58,8 +63,9 @@ async function resized(event: { params: { width: number; height: number; x: numb
         <button v-if="data.focus" title="返回画布" aria-label="返回画布" @click.stop="action('unfocus')"><Icon name="close" :size="15" /></button>
       </div>
     </header>
-    <div v-if="data.available" ref="host" class="terminal-host nodrag nowheel" :style="data.focus ? { overflow: 'auto' } : undefined" @pointerdown.stop="terminal?.focus()" @wheel.stop @dblclick.stop />
-    <div v-else class="terminal-unavailable"><Icon name="terminal" :size="28" /><strong>窗口不可用</strong></div>
+    <div v-if="data.available" ref="host" class="terminal-host nodrag nopan nowheel" :class="{ 'terminal-paused': maximizedElsewhere }" :style="data.focus ? { overflow: 'auto' } : undefined" @pointerdown.stop="terminal?.focus()" @mousedown.stop @wheel.stop @dblclick.stop />
+    <div v-if="data.available && maximizedElsewhere" class="terminal-maximized">已最大化</div>
+    <div v-if="!data.available" class="terminal-unavailable"><Icon name="terminal" :size="28" /><strong>窗口不可用</strong></div>
     <div v-if="data.available && status.status === 'disconnected'" class="terminal-disconnected nodrag"><span>{{ status.error || '终端连接已断开' }}</span><button @click.stop="action('reconnect')"><Icon name="refresh" :size="13" />重连</button></div>
     <div v-if="data.available && status.status === 'connecting'" class="terminal-loading nodrag"><span class="spinner" />连接中</div>
   </article>

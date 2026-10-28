@@ -6,6 +6,7 @@ export type TerminalStatus = {
   status: 'connecting' | 'connected' | 'disconnected'
   error?: string
   readOnly?: boolean
+  presentation?: { maximized: boolean; owned: boolean }
   focusResize?: { active: boolean; owned: boolean; reason?: string }
 }
 export interface TerminalGeometry { width: number; height: number; cols: number; rows: number }
@@ -18,6 +19,7 @@ interface Session {
   magnified: boolean
   focusResize?: FocusResize
   presentationFrame?: number
+  presentationRevision?: number
   socket?: WebSocket
   opened: boolean
   state: TerminalStatus
@@ -37,6 +39,7 @@ export function terminalConsumesWheel(event: WheelEvent): boolean {
     session.term.element?.contains(target) &&
     session.term.element.contains(document.activeElement) && document.hasFocus() &&
     session.state.status === 'connected' && !session.state.readOnly &&
+    !(session.state.presentation?.maximized && !session.state.presentation.owned) &&
     session.term.modes.mouseTrackingMode !== 'none')
 }
 function normalizeMouseCoordinates(event: MouseEvent) {
@@ -101,7 +104,19 @@ function connect(session: Session) {
     else {
       try {
         const message = JSON.parse(event.data)
-        if (message.type === 'output') session.term.write(message.data)
+        if (message.type === 'reset') session.term.write('\x1bc')
+        else if (message.type === 'presentation') {
+          const revision = session.presentationRevision = (session.presentationRevision || 0) + 1
+          const presentation = { maximized: message.maximized === true, owned: message.owned === true }
+          const update = () => {
+            if (session.socket !== socket || session.presentationRevision !== revision) return
+            setState(session, { ...session.state, presentation })
+            schedulePresentation(session)
+          }
+          if (presentation.maximized && !presentation.owned) update()
+          else session.term.write('', update)
+        }
+        else if (message.type === 'output') session.term.write(message.data)
         else if (message.type === 'status') {
           setState(session, { ...session.state, status: message.status === 'closed' || message.status === 'error' ? 'disconnected' : message.status, error: message.error, readOnly: message.readOnly })
           schedulePresentation(session)
@@ -143,6 +158,7 @@ function availableSize(host: HTMLElement) {
 /** A view is a scaled projection of the shared native window, not its size owner. */
 function present(session: Session) {
   if (!session.host?.isConnected || !session.opened) return
+  if (session.state.presentation?.maximized && (!session.state.presentation.owned || !session.magnified)) return
   const screen = session.term.element?.querySelector<HTMLElement>('.xterm-screen')
   if (!screen?.offsetWidth || !screen.offsetHeight) return
   const available = availableSize(session.host)
@@ -198,7 +214,7 @@ function endFocusSize(session: Session) {
   setState(session, { ...session.state, focusResize: undefined })
 }
 function resize(session: Session) {
-  if (session.magnified || session.state.status !== 'connected') return
+  if (session.magnified || session.state.status !== 'connected' || (session.state.presentation?.maximized && !session.state.presentation.owned)) return
   const proposed = proposedSize(session)
   if (proposed && session.socket?.readyState === WebSocket.OPEN) {
     claimFocus(session)
@@ -211,7 +227,7 @@ function resize(session: Session) {
   present(session)
 }
 function claimFocus(session: Session) {
-  if (session.socket?.readyState !== WebSocket.OPEN || session.state.status !== 'connected') return
+  if (session.socket?.readyState !== WebSocket.OPEN || session.state.status !== 'connected' || (session.state.presentation?.maximized && !session.state.presentation.owned)) return
   session.socket.send(JSON.stringify({ type: 'focus' }))
   setState(session, { ...session.state, readOnly: false })
 }
@@ -240,7 +256,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     function sendInput(data: string, binary = false) {
       // onData includes terminal query replies; passive viewers must never
       // claim control or send duplicate replies merely by rendering output.
-      if (current.socket?.readyState !== WebSocket.OPEN || current.state.readOnly || current.state.status !== 'connected') return
+      if (current.socket?.readyState !== WebSocket.OPEN || current.state.readOnly || current.state.status !== 'connected' || (current.state.presentation?.maximized && !current.state.presentation.owned)) return
       current.socket.send(JSON.stringify({ type: 'input', data, ...(binary ? { encoding: 'binary' } : {}) }))
     }
     term.onData(data => sendInput(data))

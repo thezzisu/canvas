@@ -58,12 +58,15 @@ export const canvasSchema = z
 export type Canvas = z.infer<typeof canvasSchema> & { id: string };
 export type CanvasBackground = { url: string; opacity: number };
 export type CanvasView = Canvas & { background: CanvasBackground | null };
+export type WindowSize = { width: number; height: number };
+const defaultWindowSize: WindowSize = { width: 480, height: 302 };
 export type SharedState = {
   instanceId: string;
   revision: number;
   sources: Source[];
   canvases: CanvasView[];
   overviewBackground: CanvasBackground | null;
+  windowSizes: Record<string, WindowSize>;
 };
 export class Store extends EventEmitter {
   db: DatabaseSync;
@@ -84,6 +87,24 @@ export class Store extends EventEmitter {
         "INSERT OR IGNORE INTO documents(kind,id,body) VALUES('canvas','overview',?)",
       )
       .run(JSON.stringify({ id: "overview", name: "总览", nodes: [] }));
+    // Existing references establish one shared presentation size. Later stale
+    // canvas documents must never become writers of that size merely by saving.
+    if (!this.get("migration", "window-sizes-v1")) {
+      const seed = this.db.prepare(
+        "INSERT OR IGNORE INTO documents(kind,id,body) VALUES('window-size',?,?)",
+      );
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        for (const canvas of this.list<Canvas>("canvas"))
+          for (const node of canvas.nodes)
+            if (node.type !== "note") {
+              const id = `${node.sourceId}/${node.windowId}`;
+              seed.run(id, JSON.stringify({ id, width: node.width, height: node.height }));
+            }
+        this.db.prepare("INSERT INTO documents(kind,id,body) VALUES('migration','window-sizes-v1','{}')").run();
+        this.db.exec("COMMIT");
+      } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    }
   }
   list<T>(kind: string): T[] {
     return this.db
@@ -100,7 +121,11 @@ export class Store extends EventEmitter {
     return r ? JSON.parse(String(r.body)) : undefined;
   }
   put<T extends { id?: string }>(kind: string, obj: T): T & { id: string } {
-    const result = { ...obj, id: obj.id ?? randomUUID() };
+    let result = { ...obj, id: obj.id ?? randomUUID() };
+    if (kind === "canvas") {
+      const canvas = result as unknown as Canvas;
+      result = { ...result, nodes: this.normalizeNodes(canvas.nodes) };
+    }
     this.db
       .prepare(
         "INSERT INTO documents(kind,id,body) VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body",
@@ -110,6 +135,9 @@ export class Store extends EventEmitter {
     return result;
   }
   remove(kind: string, id: string) {
+    if (kind === "source")
+      this.db.prepare("DELETE FROM documents WHERE kind='window-size' AND substr(id,1,?)=?")
+        .run(id.length + 1, `${id}/`);
     this.db
       .prepare("DELETE FROM documents WHERE kind=? AND id=?")
       .run(kind, id);
@@ -130,6 +158,8 @@ export class Store extends EventEmitter {
       overviewBackground: this.canvasView(
         this.get<Canvas>("canvas", "overview")!,
       ).background,
+      windowSizes: Object.fromEntries(this.list<WindowSize & { id: string }>("window-size")
+        .map(({ id, width, height }) => [id, { width, height }])),
     };
   }
   canvasView(canvas: Canvas): CanvasView {
@@ -140,6 +170,7 @@ export class Store extends EventEmitter {
       .get(canvas.id);
     return {
       ...canvas,
+      nodes: this.normalizeNodes(canvas.nodes),
       background: background
         ? {
             url: `/api/backgrounds/${String(background.image_id)}`,
@@ -147,6 +178,22 @@ export class Store extends EventEmitter {
           }
         : null,
     };
+  }
+  windowSize(sourceId: string, windowId: string): WindowSize {
+    const stored = this.get<WindowSize>("window-size", `${sourceId}/${windowId}`);
+    return stored ? { width: stored.width, height: stored.height } : { ...defaultWindowSize };
+  }
+  setWindowSize(sourceId: string, windowId: string, patch: Partial<WindowSize>) {
+    const id = `${sourceId}/${windowId}`;
+    const value = { id, ...this.windowSize(sourceId, windowId), ...patch };
+    this.db.prepare("INSERT INTO documents(kind,id,body) VALUES('window-size',?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body")
+      .run(id, JSON.stringify(value));
+    // The owning canvas write publishes the combined geometry/layout snapshot.
+  }
+  private normalizeNodes(nodes: Canvas["nodes"]): Canvas["nodes"] {
+    return nodes.map(node => node.type === "note" ? node : {
+      ...node, ...this.windowSize(node.sourceId, node.windowId),
+    });
   }
   setCanvasBackground(canvasId: string, data: Uint8Array, opacity: number) {
     this.db

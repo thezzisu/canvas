@@ -65,7 +65,8 @@ export interface NoteCanvasNode extends NodeLayout {
 export type CanvasNode = TerminalCanvasNode | NoteCanvasNode
 export type NotePatch = Partial<Pick<NoteCanvasNode, 'title' | 'content' | 'color' | 'minimized'>>
 export interface Canvas { id: string; name: string; nodes: CanvasNode[]; snapToGrid?: boolean; background?: { url: string; opacity: number } | null }
-export interface SharedState { instanceId: string; revision: number; sources: Source[]; canvases: Canvas[]; overviewBackground: Canvas['background'] }
+export interface WindowSize { width: number; height: number }
+export interface SharedState { instanceId: string; revision: number; sources: Source[]; canvases: Canvas[]; overviewBackground: Canvas['background']; windowSizes: Record<string, WindowSize> }
 export interface TerminalData {
   sourceId: string
   spaceId: string

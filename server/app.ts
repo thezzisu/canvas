@@ -353,6 +353,14 @@ export function createApp(
     const canvas = store.get<Canvas>("canvas", id);
     if (!canvas) return c.json({ error: "Canvas not found" }, 404);
     const changes = new Map(nodes.map((node) => [node.id, node]));
+    for (const node of canvas.nodes) {
+      const patch = changes.get(node.id);
+      if (node.type !== "note" && patch && (patch.width !== undefined || patch.height !== undefined))
+        store.setWindowSize(node.sourceId, node.windowId, {
+          ...(patch.width === undefined ? {} : { width: patch.width }),
+          ...(patch.height === undefined ? {} : { height: patch.height }),
+        });
+    }
     canvas.nodes = canvas.nodes.map((node) => ({
       ...node,
       ...changes.get(node.id),
