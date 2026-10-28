@@ -24,6 +24,7 @@ const paths: Record<string, string> = {
   info: 'M12 11v6 M12 7h.01 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',
   minus: 'M5 12h14',
   copy: 'M8 8h12v12H8z M16 8V4H4v12h4',
+  image: 'M3 3h18v18H3z M3 16l6-6 5 5 3-3 4 4 M16 7h.01',
 }
 </script>
 <template>

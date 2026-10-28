@@ -5,6 +5,7 @@ import { MiniMap } from '@vue-flow/minimap'
 import Icon from './components/Icon.vue'
 import TerminalNode from './components/TerminalNode.vue'
 import GroupNode from './components/GroupNode.vue'
+import BackgroundDialog from './components/BackgroundDialog.vue'
 import { api, segment, uuid, write } from './api'
 import { clearTerminals } from './terminals'
 import { statusColor, statusLabel } from './status'
@@ -32,6 +33,9 @@ const expandedSource = ref('')
 const sourceDialog = ref(false)
 const sourceDraft = reactive<Source>({ id: '', name: '', type: 'tmux', transport: 'local', target: '', binary: '', tmuxSocket: '', herdrSession: '', sshIdentityFile: '', sshKnownHostsFile: '' })
 const canvasDialog = ref(false)
+const backgroundCanvas = ref<Canvas | null>(null)
+const canvasMenu = ref(false)
+const canvasMenuElement = ref<HTMLElement>()
 const canvasDraft = reactive({ id: '', name: '' })
 const dialogError = ref('')
 const actionDialog = ref<{ title: string; description: string; label?: string; value: string; danger?: boolean; button: string; submit: (value: string) => Promise<void> } | null>(null)
@@ -61,7 +65,9 @@ const allWindows = computed(() => resources.value.flatMap(source => source.space
 const windowCount = computed(() => allWindows.value.length)
 const onlineCount = computed(() => resources.value.filter(source => !source.error && !['offline', 'error', 'disconnected'].includes(source.status)).length)
 const filteredWindows = computed(() => allWindows.value.filter(item => `${item.source.name} ${item.space.name} ${item.window.name}`.toLowerCase().includes(addSearch.value.toLowerCase())))
-const modalOpen = computed(() => sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || windowMenu.value)
+const modalOpen = computed(() => sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || windowMenu.value || backgroundCanvas.value)
+const currentBackground = computed(() => isOverview.value ? null : currentCanvas.value?.background)
+const canvasCounts = computed(() => isOverview.value ? `${sources.value.length} 个连接 · ${windowCount.value} 个窗口` : `${currentCanvas.value?.nodes.length || 0} 个窗口`)
 const focusedDimensions = computed(() => {
   const geometry = focused.value && windowGeometry.get(`${focused.value.sourceId}/${focused.value.windowId}`)
   if (!geometry) return focusedSize
@@ -203,8 +209,21 @@ async function login() {
 }
 async function logout() { await write('/api/logout', 'POST'); authenticated.value = false; clearTerminals() }
 function unauthorized() { authenticated.value = false; clearTerminals() }
-watch(activeId, async () => { focused.value = null; rebuildNodes(); await restoreViewport() })
+watch(activeId, async () => { focused.value = null; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
 function switchCanvas(id: string) { saveViewport(); activeId.value = id }
+function backgroundSaved(updated: Canvas) {
+  const canvas = canvases.value.find(item => item.id === updated.id)
+  if (canvas) canvas.background = updated.background
+}
+function closeBackgroundDialog() {
+  backgroundCanvas.value = null
+  void nextTick(() => canvasMenuElement.value?.querySelector<HTMLButtonElement>('.canvas-menu-trigger')?.focus())
+}
+function outsideCanvasMenu(event: PointerEvent) { if (!canvasMenuElement.value?.contains(event.target as HTMLElement)) canvasMenu.value = false }
+async function toggleCanvasMenu() {
+  canvasMenu.value = !canvasMenu.value
+  if (canvasMenu.value) { await nextTick(); canvasMenuElement.value?.querySelector<HTMLButtonElement>('.canvas-menu button')?.focus() }
+}
 function openCanvasDialog(canvas?: Canvas) { canvasDraft.id = canvas?.id || ''; canvasDraft.name = canvas?.name || ''; dialogError.value = ''; canvasDialog.value = true }
 async function submitCanvas() {
   if (!canvasDraft.name.trim()) return
@@ -324,9 +343,11 @@ function resizeNode(id: string, width: number, height: number, x?: number, y?: n
   if (node) { node.width = Math.round(width); node.height = Math.max(160, Math.min(3000, Math.round(windowHeight({ ...node, height })))); if (x !== undefined) node.x = x; if (y !== undefined) node.y = y; rebuildNodes(); scheduleSave() }
 }
 function keydown(event: KeyboardEvent) {
+  if (backgroundCanvas.value) return
   if ((event.target as HTMLElement)?.closest('.xterm') && !modalOpen.value) return
   if (event.key === 'Escape') {
-    if (windowMenu.value) windowMenu.value = null
+    if (canvasMenu.value) { canvasMenu.value = false; canvasMenuElement.value?.querySelector<HTMLButtonElement>('.canvas-menu-trigger')?.focus() }
+    else if (windowMenu.value) windowMenu.value = null
     else if (actionDialog.value) actionDialog.value = null
     else if (sourceDialog.value) sourceDialog.value = false
     else if (canvasDialog.value) canvasDialog.value = false
@@ -340,12 +361,13 @@ onMounted(async () => {
   window.addEventListener('canvas:unauthorized', unauthorized)
   window.addEventListener('keydown', keydown)
   window.addEventListener('resize', windowResize)
+  document.addEventListener('pointerdown', outsideCanvasMenu)
   try { const session = await api<{ authenticated: boolean; username?: string }>('/api/session'); authenticated.value = session.authenticated; username.value = session.username || ''; if (authenticated.value) await load() }
   catch (reason) { showError(reason) }
   finally { ready.value = true }
   refreshTimer = setInterval(() => { void refreshResources(true) }, 2000)
 })
-onBeforeUnmount(() => { cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize) })
+onBeforeUnmount(() => { cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); document.removeEventListener('pointerdown', outsideCanvasMenu) })
 </script>
 
 <template>
@@ -364,18 +386,28 @@ onBeforeUnmount(() => { cancelAnimationFrame(geometryFrame); clearInterval(refre
   <div v-else class="app-shell">
     <aside class="sidebar">
       <div class="brand"><span class="brand-symbol"><Icon name="canvas" :size="24" /></span><span>canvas</span></div>
-      <button class="nav-item" :class="{ active: isOverview }" @click="switchCanvas('overview')"><Icon name="grid" /><span>总览</span><span class="nav-count">{{ windowCount }}</span></button>
-      <div class="nav-section-label canvas-label"><span>画布</span><button class="icon-button" title="新建画布" aria-label="新建画布" @click="openCanvasDialog()"><Icon name="plus" :size="16" /></button></div>
-      <div class="canvas-nav"><button v-for="canvas in canvases" :key="canvas.id" class="nav-item" :class="{ active: activeId === canvas.id }" @click="switchCanvas(canvas.id)"><Icon name="canvas" /><span>{{ canvas.name }}</span><span class="nav-count">{{ canvas.nodes.length }}</span></button></div>
+      <div class="nav-section-label canvas-label"><span>画布</span><button class="icon-button" title="新建画布" aria-label="新建画布" @click="openCanvasDialog()"><Icon name="plus" :size="14" /></button></div>
+      <nav class="canvas-nav" aria-label="画布">
+        <button class="nav-item" :class="{ active: isOverview }" :aria-current="isOverview ? 'page' : undefined" title="总览" @click="switchCanvas('overview')"><Icon name="grid" :size="16" /><span>总览</span><span class="nav-count">{{ windowCount }}</span></button>
+        <button v-for="canvas in canvases" :key="canvas.id" class="nav-item" :class="{ active: activeId === canvas.id }" :aria-current="activeId === canvas.id ? 'page' : undefined" :title="canvas.name" @click="switchCanvas(canvas.id)"><Icon name="canvas" :size="16" /><span>{{ canvas.name }}</span><span class="nav-count">{{ canvas.nodes.length }}</span></button>
+      </nav>
       <div class="sidebar-divider" />
       <div class="nav-section-label"><span>连接</span><button class="icon-button" title="添加连接" aria-label="添加连接" @click="openSource()"><Icon name="plus" :size="16" /></button></div>
-      <div class="source-nav"><button v-for="source in sources" :key="source.id" class="source-nav-item" :title="`${source.name} · ${source.type}`" @click="sourcePanel = true; expandedSource = source.id"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}<small>{{ source.transport === 'local' ? '本机' : source.target?.replace(/^ssh:\/\//, '') }}</small></span><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : 'connected'" /></button><button v-if="!sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="15" />添加连接</button></div>
+      <div class="source-nav"><button v-for="source in sources" :key="source.id" class="source-nav-item" :title="`${source.name} · ${source.type} · ${source.transport === 'local' ? '本机' : source.target?.replace(/^ssh:\/\//, '')}`" @click="sourcePanel = true; expandedSource = source.id"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}</span><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : 'connected'" /></button><button v-if="!sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="15" />添加连接</button></div>
       <div class="sidebar-footer"><button class="sidebar-account" @click="sourcePanel = true"><span class="avatar">{{ username.slice(0, 1).toUpperCase() || 'C' }}</span><span>{{ username || '工作台' }}<small>{{ onlineCount }} 个连接在线</small></span></button><button class="icon-button" title="退出登录" aria-label="退出登录" @click="logout"><Icon name="logout" :size="17" /></button></div>
     </aside>
     <main class="workspace">
-      <header class="workspace-header"><div class="breadcrumb"><Icon :name="isOverview ? 'grid' : 'canvas'" :size="18" /><h1>{{ currentName }}</h1></div><div class="header-actions"><span v-if="!isOverview && saveState" class="save-state"><Icon v-if="saveState === '已保存'" name="check" :size="13" />{{ saveState }}</span><button v-if="!isOverview" class="icon-button" title="重命名画布" aria-label="重命名画布" @click="openCanvasDialog(currentCanvas)"><Icon name="edit" :size="17" /></button><button v-if="!isOverview" class="icon-button" title="删除画布" aria-label="删除画布" @click="deleteCanvas"><Icon name="trash" :size="17" /></button><button class="button subtle" @click="sourcePanel = true"><Icon name="server" :size="16" />连接</button><button v-if="isOverview" class="button primary" @click="openSource()"><Icon name="plus" :size="16" />添加连接</button><button v-else class="button primary" @click="openAdd()"><Icon name="plus" :size="16" />加入窗口</button></div></header>
-      <div class="workspace-subheader"><div><span>{{ isOverview ? `${sources.length} 个连接 · ${windowCount} 个窗口` : `${currentCanvas?.nodes.length || 0} 个窗口` }}</span></div><button class="text-button" :disabled="loading" @click="refreshResources()"><Icon name="refresh" :size="13" :class="{ spinning: loading }" />{{ refreshedAt ? `${refreshedAt} 更新` : '刷新' }}</button></div>
-      <div class="graph-wrap">
+      <header class="workspace-header">
+        <div class="header-context"><div class="breadcrumb"><h1 :title="currentName">{{ currentName }}</h1></div><span class="header-counts">{{ canvasCounts }}</span><button class="icon-button refresh-button" :title="refreshedAt ? `刷新 · ${refreshedAt} 更新` : '刷新'" aria-label="刷新" :disabled="loading" @click="refreshResources()"><Icon name="refresh" :size="14" :class="{ spinning: loading }" /></button></div>
+        <div class="header-actions">
+          <span v-if="!isOverview && saveState" class="save-state" :title="saveState" :aria-label="saveState"><span v-if="saveState === '正在保存…'" class="spinner" /><Icon v-else :name="saveState === '已保存' ? 'check' : 'info'" :size="13" /></span>
+          <div v-if="!isOverview" ref="canvasMenuElement" class="canvas-menu-wrap"><button class="icon-button canvas-menu-trigger" title="画布设置" aria-label="画布设置" :aria-expanded="canvasMenu" aria-controls="canvas-menu" @click="toggleCanvasMenu"><Icon name="more" :size="17" /></button><div v-if="canvasMenu" id="canvas-menu" class="canvas-menu"><button @click="canvasMenu = false; backgroundCanvas = currentCanvas || null"><Icon name="image" :size="15" />背景图片</button><button @click="canvasMenu = false; openCanvasDialog(currentCanvas)"><Icon name="edit" :size="15" />重命名画布</button><button class="danger-text" @click="canvasMenu = false; deleteCanvas()"><Icon name="trash" :size="15" />删除画布</button></div></div>
+          <button class="button subtle" title="连接" aria-label="连接" @click="sourcePanel = true"><Icon name="server" :size="15" />连接</button>
+          <button v-if="isOverview" class="button primary" title="添加连接" aria-label="添加连接" @click="openSource()"><Icon name="plus" :size="15" />添加连接</button><button v-else class="button primary" title="加入窗口" aria-label="加入窗口" @click="openAdd()"><Icon name="plus" :size="15" />加入窗口</button>
+        </div>
+      </header>
+      <div class="graph-wrap" :class="{ 'has-background': currentBackground }">
+        <img v-if="currentBackground" class="canvas-background" :src="currentBackground.url" :style="{ opacity: currentBackground.opacity }" alt="" aria-hidden="true" />
         <VueFlow v-if="nodes.length && !focused" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview" :zoom-on-double-click="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="true" :prevent-scrolling="true" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><MiniMap :pannable="true" :zoomable="true" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
         <div v-if="!nodes.length && isOverview" class="empty-state"><Icon name="server" :size="32" /><h2>{{ sources.length ? '暂无窗口' : '暂无连接' }}</h2><button class="button primary" @click="sources.length ? sourcePanel = true : openSource()"><Icon :name="sources.length ? 'server' : 'plus'" :size="17" />{{ sources.length ? '连接' : '添加连接' }}</button></div>
         <div v-if="!nodes.length && !isOverview" class="empty-state"><Icon name="canvas" :size="32" /><h2>暂无窗口</h2><button class="button primary" @click="openAdd()"><Icon name="plus" :size="17" />加入窗口</button></div>
@@ -384,7 +416,8 @@ onBeforeUnmount(() => { cancelAnimationFrame(geometryFrame); clearInterval(refre
     </main>
     <Transition name="slide"><aside v-if="sourcePanel" class="source-panel"><header><div><h2>连接与窗口</h2></div><button class="icon-button" aria-label="关闭连接面板" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />添加连接</button><div class="source-panel-content"><div v-for="source in sources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small>{{ source.type }} · {{ source.transport === 'local' ? '本机' : source.target }}</small></span></button><button class="icon-button" title="编辑连接" aria-label="编辑连接" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" title="移除连接" aria-label="移除连接" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><div v-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" title="新建窗口" aria-label="新建窗口" @click="windowAction({ id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="plus" :size="14" /></button><button class="icon-button" title="重命名 Space" aria-label="重命名 Space" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" title="关闭 Space" aria-label="关闭 Space" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :class="`program-${window.status || 'unknown'}`" :title="statusLabel(window.status)" /><span>{{ window.name }}</span><button class="icon-button" title="加入画布" aria-label="加入画布" @click="openAdd({ id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 })"><Icon name="plus" :size="14" /></button><button class="icon-button" title="窗口操作" aria-label="窗口操作" @click="windowMenu = { name: window.name, node: { id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" @click="spaceAction(resources.find(item => item.id === source.id) || { ...source, host: '', status: '', spaces: [] }, undefined, 'create')"><Icon name="plus" :size="14" />新建 {{ source.type === 'tmux' ? 'session' : 'space' }}</button></template></div><p v-if="!sources.length" class="panel-empty">暂无连接</p></div></aside></Transition>
     <div v-if="focused" class="focus-overlay"><TerminalNode :id="focused.id" :data="{ ...terminalData(focused, true), ...focusedDimensions, overview: true, focus: true }" /></div>
-    <div v-if="modalOpen" class="modal-backdrop" @click.self="!busy && (sourceDialog = false, canvasDialog = false, actionDialog = null, addDialog = false, windowMenu = null)">
+    <BackgroundDialog v-if="backgroundCanvas" :canvas="backgroundCanvas" @close="closeBackgroundDialog" @saved="backgroundSaved" />
+    <div v-if="modalOpen && !backgroundCanvas" class="modal-backdrop" @click.self="!busy && (sourceDialog = false, canvasDialog = false, actionDialog = null, addDialog = false, windowMenu = null)">
       <section v-if="sourceDialog" class="modal source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title"><header><div><h2 id="source-title">{{ sourceDraft.id ? '编辑连接' : '添加连接' }}</h2></div><button class="icon-button" aria-label="关闭对话框" @click="sourceDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitSource"><div class="type-options"><button v-for="type in (['tmux', 'herdr'] as const)" :key="type" type="button" :class="{ selected: sourceDraft.type === type }" @click="sourceDraft.type = type"><strong>{{ type }}</strong><Icon v-if="sourceDraft.type === type" name="check" :size="16" /></button></div><label>连接名称<input v-model="sourceDraft.name" name="sourceName" required placeholder="例如：开发机器" /></label><div class="segmented-control"><button type="button" :class="{ selected: sourceDraft.transport === 'local' }" @click="sourceDraft.transport = 'local'"><Icon name="server" :size="15" />本机</button><button type="button" :class="{ selected: sourceDraft.transport === 'ssh' }" @click="sourceDraft.transport = 'ssh'"><Icon name="globe" :size="15" />远程 SSH</button></div><label v-if="sourceDraft.transport === 'ssh'">SSH 地址<input v-model="sourceDraft.target" name="target" placeholder="ssh://user@hostname:22" :required="sourceDraft.transport === 'ssh'" /></label><label v-if="sourceDraft.type === 'tmux'">Socket 名称或路径 <span class="optional">可选</span><input v-model="sourceDraft.tmuxSocket" name="tmuxSocket" placeholder="default" /></label><label v-else>herdr session <span class="optional">可选</span><input v-model="sourceDraft.herdrSession" name="herdrSession" placeholder="default" /></label><details><summary>高级设置</summary><template v-if="sourceDraft.transport === 'ssh'"><label>SSH 私钥路径（Server） <span class="optional">可选</span><input v-model="sourceDraft.sshIdentityFile" name="sshIdentityFile" placeholder="/path/to/id_ed25519" /></label><label>SSH known_hosts 路径（Server） <span class="optional">可选</span><input v-model="sourceDraft.sshKnownHostsFile" name="sshKnownHostsFile" placeholder="/path/to/known_hosts" /></label></template><label>程序路径（目标机器） <span class="optional">可选</span><input v-model="sourceDraft.binary" name="binary" :placeholder="sourceDraft.type" /></label></details><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="sourceDialog = false">取消</button><button class="button primary" type="submit" :disabled="busy"><span v-if="busy" class="spinner" />{{ busy ? '保存中…' : '保存' }}</button></footer></form></section>
       <section v-else-if="canvasDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="canvas-title"><header><div><h2 id="canvas-title">{{ canvasDraft.id ? '重命名画布' : '新建画布' }}</h2></div><button class="icon-button" aria-label="关闭对话框" @click="canvasDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitCanvas"><label>画布名称<input v-model="canvasDraft.name" name="canvasName" required autofocus placeholder="例如：日常开发" maxlength="80" /></label><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="canvasDialog = false">取消</button><button class="button primary" :disabled="busy" type="submit">{{ canvasDraft.id ? '保存' : '创建画布' }}</button></footer></form></section>
       <section v-else-if="actionDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="action-title"><header><h2 id="action-title">{{ actionDialog.title }}</h2><button class="icon-button" aria-label="关闭对话框" @click="actionDialog = null"><Icon name="close" /></button></header><p v-if="actionDialog.description">{{ actionDialog.description }}</p><form @submit.prevent="submitAction"><label v-if="actionDialog.label">{{ actionDialog.label }}<input v-model="actionDialog.value" name="resourceName" required autofocus maxlength="120" /></label><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="actionDialog = null">取消</button><button class="button" :class="actionDialog.danger ? 'danger' : 'primary'" :disabled="busy" type="submit">{{ actionDialog.button }}</button></footer></form></section>

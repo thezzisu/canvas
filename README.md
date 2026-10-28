@@ -38,7 +38,10 @@ Add a source from the connections panel:
 - **tmux / local:** use the default server or specify a tmux socket name or absolute path.
 - **herdr / local:** select a named session and the fork's executable path.
 - **SSH:** use an SSH config alias, `user@host`, or `ssh://user@host:port`.
-  The selected provider executable must exist on the destination. Key-based
+  With no executable override, Canvas looks for its dedicated herdr client at
+  `~/.local/share/canvas/bin/herdr`, then checks PATH and common user install
+  directories. Explicit executable paths take precedence. The selected provider
+  executable must exist on the destination. Key-based
   authentication and verified host keys are required. Optional identity and
   known-hosts file paths are resolved on the Canvas server.
 
@@ -70,6 +73,15 @@ herdr executable. See `thezzisu/herdr`, branch `canvas-bare`.
 - Reconnecting replays the retained terminal screen. Existing programs stay in
   the provider when Canvas disconnects. Dead window references remain visible
   so they can be removed or replaced deliberately.
+
+## Canvas backgrounds
+
+Overview is the first item in the canvas list and is read-only. Other canvases
+can have independent backgrounds: open canvas settings, choose Background image,
+upload a PNG/JPEG/WebP, and adjust opacity. Preview and Cancel do not alter the
+saved canvas. Images are stored on the server, require authentication, and remain
+independent when switching or reloading canvases. Uploads are limited to 8 MiB
+and 16 megapixels and are normalized to WebP without embedded metadata.
 
 ## Program status
 

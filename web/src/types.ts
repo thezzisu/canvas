@@ -51,7 +51,7 @@ export interface CanvasNode {
   width: number
   height: number
 }
-export interface Canvas { id: string; name: string; nodes: CanvasNode[] }
+export interface Canvas { id: string; name: string; nodes: CanvasNode[]; background?: { url: string; opacity: number } | null }
 export interface TerminalData {
   sourceId: string
   spaceId: string

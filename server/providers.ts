@@ -136,7 +136,42 @@ export function validateSource(source: Source): void {
     throw new Error("Binary must be an executable name or path");
 }
 
-function sourceCommand(
+// SSH does not normally run an interactive/login shell, so user-installed
+// clients may be absent from PATH. Do not source shell configuration to find
+// them: it can print startup text or start an interactive program. Arguments
+// remain positional throughout this script, including paths containing spaces.
+const REMOTE_CLIENT = `
+program=$1
+shift
+if [ "$program" = herdr ] && [ -n "\${HOME:-}" ]; then
+  candidate="$HOME/.local/share/canvas/bin/herdr"
+  if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+    exec "$candidate" "$@"
+  fi
+fi
+candidate=$(command -v "$program" 2>/dev/null) || candidate=
+if [ -n "$candidate" ]; then
+  exec "$candidate" "$@"
+fi
+if [ -n "\${HOME:-}" ]; then
+  for directory in "$HOME/.local/bin" "$HOME/.cargo/bin"; do
+    candidate="$directory/$program"
+    if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+      exec "$candidate" "$@"
+    fi
+  done
+fi
+for directory in /usr/local/bin /opt/homebrew/bin; do
+  candidate="$directory/$program"
+  if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+    exec "$candidate" "$@"
+  fi
+done
+printf 'Canvas could not find %s on the remote machine. Install it or set the connection executable to its full path.\\n' "$program" >&2
+exit 127
+`;
+
+export function sourceCommand(
   source: Source,
   args: string[],
   tty = false,
@@ -191,7 +226,9 @@ function sourceCommand(
     "HERDR_SESSION",
     "TERM=xterm-256color",
     ...(tty ? ["COLORTERM=truecolor"] : []),
-    binary,
+    ...(source.binary
+      ? [binary]
+      : ["sh", "-c", REMOTE_CLIENT, "canvas-remote-client", source.type]),
     ...base,
     ...args,
   ];
@@ -632,12 +669,26 @@ export async function openTerminal(
         await run(source, ["canvas-capabilities"]),
       );
       supported = capabilities.bare_tab === true && capabilities.version === 1;
-    } catch {
-      // Older upstream clients do not expose the bare-tab command.
+    } catch (error) {
+      // Older upstream clients do not expose the bare-tab command. Preserve
+      // network/execution failures instead of misreporting them as a version
+      // mismatch.
+      if (
+        !(error instanceof SyntaxError) &&
+        !(
+          error instanceof Error &&
+          /(?:unrecognized subcommand|unrecognized command|unexpected argument|unknown command)[^\n]*canvas-capabilities/u.test(
+            error.message,
+          )
+        )
+      )
+        throw error;
     }
     if (!supported) {
       throw new Error(
-        "Select the Canvas herdr fork executable; this client does not support bare tabs.",
+        source.transport === "ssh"
+          ? "This remote herdr client does not support bare tabs. Install the Canvas herdr client at ~/.local/share/canvas/bin/herdr on that machine, or set the connection executable to its full path."
+          : "Select the Canvas herdr fork executable; this client does not support bare tabs.",
       );
     }
     return {

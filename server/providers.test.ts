@@ -1,7 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -17,6 +24,7 @@ import {
   renameSpace,
   renameWindow,
   shellQuote,
+  sourceCommand,
   type Source,
 } from "./providers.ts";
 
@@ -50,6 +58,159 @@ test("SSH arguments reject credentials, options and shell metacharacters", () =>
     }),
     value,
   );
+});
+
+test("remote clients resolve user installs without login rc and preserve exact arguments", () => {
+  const root = mkdtempSync(join(tmpdir(), "canvas-remote-client-"));
+  const home = join(root, "home with 'quotes' and $variables");
+  const path = join(root, "ssh-path");
+  const source: Source = {
+    id: "remote",
+    name: "Remote",
+    type: "herdr",
+    transport: "ssh",
+    target: "ssh://alice@example.test",
+    herdrSession: "session ' ; $(printf injected) `whoami`",
+  };
+  const install = (directory: string, program: string, marker: string) => {
+    mkdirSync(directory, { recursive: true });
+    const executable = join(directory, program);
+    writeFileSync(
+      executable,
+      `#!/bin/sh\nprintf '%s\\0' ${shellQuote(marker)} "$@" "\${TMUX-unset}" "\${HERDR_SESSION-unset}" "$TERM"\n`,
+      { mode: 0o700 },
+    );
+    return executable;
+  };
+  const execute = (connection = source, args = ["api", "snapshot"]) => {
+    const command = sourceCommand(connection, args);
+    assert.equal(command.file, "ssh");
+    return execFileSync("/bin/sh", ["-c", command.args.at(-1)!], {
+      encoding: "utf8",
+      env: {
+        HOME: home,
+        PATH: path,
+        TMUX: "inherited-session",
+        HERDR_SESSION: "inherited-session",
+      },
+    })
+      .split("\0")
+      .slice(0, -1);
+  };
+  try {
+    mkdirSync(path, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    symlinkSync("/usr/bin/env", join(path, "env"));
+    symlinkSync("/bin/sh", join(path, "sh"));
+    // Loading these files would both corrupt the protocol and create a marker.
+    const rcMarker = join(root, "rc-loaded");
+    for (const rc of [".profile", ".bashrc", ".zshrc"])
+      writeFileSync(
+        join(home, rc),
+        `echo rc-output\n: > ${shellQuote(rcMarker)}\n`,
+      );
+    const args = [
+      "tab",
+      "rename",
+      "id",
+      "quotes ' ; $(printf injected) `whoami`\nnext",
+    ];
+    const expectedTail = [
+      "--session",
+      source.herdrSession!,
+      ...args,
+      "unset",
+      "unset",
+      "xterm-256color",
+    ];
+    install(join(home, ".cargo/bin"), "herdr", "cargo");
+    assert.deepEqual(execute(source, args), ["cargo", ...expectedTail]);
+    install(join(home, ".local/bin"), "herdr", "local");
+    assert.deepEqual(execute(source, args), ["local", ...expectedTail]);
+    install(path, "herdr", "path");
+    assert.deepEqual(execute(source, args), ["path", ...expectedTail]);
+    const canvasClient = install(
+      join(home, ".local/share/canvas/bin"),
+      "herdr",
+      "canvas",
+    );
+    assert.deepEqual(execute(source, args), ["canvas", ...expectedTail]);
+    // An explicit path/name is authoritative, even when a Canvas client exists.
+    assert.deepEqual(execute({ ...source, binary: "herdr" }, args), [
+      "path",
+      ...expectedTail,
+    ]);
+    const custom = install(
+      join(root, "custom ' executable"),
+      "herdr",
+      "custom",
+    );
+    assert.deepEqual(execute({ ...source, binary: custom }, args), [
+      "custom",
+      ...expectedTail,
+    ]);
+    assert.equal(existsSync(rcMarker), false);
+    // A directory is not a usable executable, even if its mode is executable.
+    rmSync(canvasClient);
+    mkdirSync(canvasClient);
+    assert.deepEqual(execute(source, args), ["path", ...expectedTail]);
+    install(join(home, ".local/bin"), "tmux", "tmux-local");
+    assert.deepEqual(
+      execute({ ...source, type: "tmux", tmuxSocket: "socket ' name" }, [
+        "list-sessions",
+      ]),
+      [
+        "tmux-local",
+        "-L",
+        "socket ' name",
+        "list-sessions",
+        "unset",
+        "unset",
+        "xterm-256color",
+      ],
+    );
+    for (const binary of ["-option", "bad\ncommand", "bad\0command"])
+      assert.throws(() => sourceCommand({ ...source, binary }, []));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("herdr capability checks distinguish old clients from connection failures", async () => {
+  const root = mkdtempSync(join(tmpdir(), "canvas-herdr-capabilities-"));
+  const binary = join(root, "herdr");
+  const source: Source = {
+    id: "capability-test",
+    name: "Capabilities",
+    type: "herdr",
+    transport: "local",
+    binary,
+  };
+  const snapshot = JSON.stringify({
+    workspaces: [{ workspace_id: "space", label: "Space" }],
+    tabs: [{ workspace_id: "space", tab_id: "tab", label: "Window" }],
+  });
+  try {
+    for (const [failure, expected] of [
+      [
+        "error: unrecognized subcommand 'canvas-capabilities'",
+        /does not support bare tabs/u,
+      ],
+      ["Connection reset by peer", /Connection reset by peer/u],
+    ] as const) {
+      writeFileSync(
+        binary,
+        `#!/bin/sh\nif [ "$3" = api ]; then\n  printf '%s\\n' ${shellQuote(snapshot)}\n  exit 0\nfi\nprintf '%s\\n' ${shellQuote(failure)} >&2\nexit 1\n`,
+        { mode: 0o700 },
+      );
+      await assert.rejects(
+        openTerminal(source, "space", "tab", 80, 24),
+        expected,
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("tmux native bare client preserves source selection, resize, panes and lifecycle", async (t) => {

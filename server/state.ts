@@ -43,13 +43,15 @@ export const canvasSchema = z
   })
   .strict();
 export type Canvas = z.infer<typeof canvasSchema> & { id: string };
+export type CanvasBackground = { url: string; opacity: number };
+export type CanvasView = Canvas & { background: CanvasBackground | null };
 export class Store {
   db: DatabaseSync;
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(path);
     this.db.exec(
-      "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS documents (kind TEXT, id TEXT, body TEXT, PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER);",
+      "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (kind TEXT, id TEXT, body TEXT, PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER); CREATE TABLE IF NOT EXISTS canvas_backgrounds (canvas_id TEXT PRIMARY KEY, image_id TEXT NOT NULL UNIQUE, opacity REAL NOT NULL CHECK(opacity >= 0 AND opacity <= 1), data BLOB NOT NULL, document_kind TEXT NOT NULL DEFAULT 'canvas' CHECK(document_kind = 'canvas'), FOREIGN KEY(document_kind, canvas_id) REFERENCES documents(kind, id) ON DELETE CASCADE);",
     );
   }
   list<T>(kind: string): T[] {
@@ -77,6 +79,45 @@ export class Store {
     this.db
       .prepare("DELETE FROM documents WHERE kind=? AND id=?")
       .run(kind, id);
+  }
+  canvasView(canvas: Canvas): CanvasView {
+    const background = this.db
+      .prepare(
+        "SELECT image_id, opacity FROM canvas_backgrounds WHERE canvas_id=?",
+      )
+      .get(canvas.id);
+    return {
+      ...canvas,
+      background: background
+        ? {
+            url: `/api/backgrounds/${String(background.image_id)}`,
+            opacity: Number(background.opacity),
+          }
+        : null,
+    };
+  }
+  setCanvasBackground(canvasId: string, data: Uint8Array, opacity: number) {
+    this.db
+      .prepare(
+        "INSERT INTO canvas_backgrounds(canvas_id,image_id,opacity,data) VALUES(?,?,?,?) ON CONFLICT(canvas_id) DO UPDATE SET image_id=excluded.image_id, opacity=excluded.opacity, data=excluded.data",
+      )
+      .run(canvasId, randomUUID(), opacity, data);
+  }
+  setCanvasBackgroundOpacity(canvasId: string, opacity: number) {
+    this.db
+      .prepare("UPDATE canvas_backgrounds SET opacity=? WHERE canvas_id=?")
+      .run(opacity, canvasId);
+  }
+  removeCanvasBackground(canvasId: string) {
+    this.db
+      .prepare("DELETE FROM canvas_backgrounds WHERE canvas_id=?")
+      .run(canvasId);
+  }
+  getBackground(imageId: string): Uint8Array | undefined {
+    const result = this.db
+      .prepare("SELECT data FROM canvas_backgrounds WHERE image_id=?")
+      .get(imageId);
+    return result?.data as Uint8Array | undefined;
   }
   addSession(id: string) {
     this.db.prepare("DELETE FROM sessions WHERE expires < ?").run(Date.now());
