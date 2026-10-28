@@ -61,6 +61,12 @@ No custom remote tmux installation is required.
 
 - The first canvas is the live overview. Spaces run vertically, windows horizontally,
   with sources grouped by machine.
+- Two-finger scrolling pans the canvas in either direction; pinching zooms around
+  the pointer. Scrolling reaches a terminal only when it has input focus and
+  mouse reporting enabled. Note text keeps its own scrolling.
+- The fullscreen button hides the sidebar and header for the entire canvas.
+  Exit with the same button or Escape to restore the previous view. This changes
+  only the canvas presentation; terminal dimensions stay unchanged.
 - Add a window to another canvas to create a reference, not another terminal.
 - A card has one title: the native window name. Its status dot opens pane
   details; source context is available in the title tooltip.

@@ -30,7 +30,19 @@ const scrollbarWidth = 6
 let mouseOwner: Session | undefined
 let mouseCoordinatesInstalled = false
 const mouseEvents = ['mousedown', 'mousemove', 'mouseup', 'wheel'] as const
+export function terminalConsumesWheel(event: WheelEvent): boolean {
+  if (event.ctrlKey) return false
+  const target = event.target
+  return target instanceof Node && [...sessions.values()].some(session =>
+    session.term.element?.contains(target) &&
+    session.term.element.contains(document.activeElement) && document.hasFocus() &&
+    session.state.status === 'connected' && !session.state.readOnly &&
+    session.term.modes.mouseTrackingMode !== 'none')
+}
 function normalizeMouseCoordinates(event: MouseEvent) {
+  // Canvas gestures need screen coordinates; only native wheel reports need
+  // conversion into the terminal's unscaled cell coordinate system.
+  if (event instanceof WheelEvent && !terminalConsumesWheel(event)) return
   const target = event.target
   const pointed = target instanceof Node
     ? [...sessions.values()].find(session => session.term.element?.contains(target))
