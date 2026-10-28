@@ -91,8 +91,9 @@ Overview is the first item in the canvas list; its name and layout are fixed.
 Every canvas, including Overview, can have an independent background: open canvas settings, choose Background image,
 upload a PNG/JPEG/WebP, and adjust opacity. Preview and Cancel do not alter the
 saved canvas. Images are stored on the server, require authentication, and remain
-independent when switching or reloading canvases. Uploads are limited to 8 MiB
-and 16 megapixels and are normalized to WebP without embedded metadata.
+independent when switching or reloading canvases. Photo uploads have no application
+file-size or pixel-count limit. Images retain their resolution and are normalized
+to WebP without embedded metadata; panoramas exceeding WebP's dimensions use PNG.
 Backgrounds, connections, canvas names, window references and saved positions
 synchronize across authenticated browsers. Logging out ends only that login
 session's connections.

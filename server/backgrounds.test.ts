@@ -7,7 +7,6 @@ import { setImmediate } from "node:timers/promises";
 import sharp from "sharp";
 import { createApp } from "./app.ts";
 import { Store, canvasSchema, type CanvasView } from "./state.ts";
-import { MAX_BACKGROUND_BYTES } from "./backgrounds.ts";
 import type { TerminalManager } from "./terminals.ts";
 
 function fixture(t: TestContext) {
@@ -286,6 +285,7 @@ test("invalid changes leave the previous background intact", async (t) => {
     ],
     [Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>"), "", {}, 400],
     [Buffer.from("not an image"), "", {}, 400],
+    [Buffer.alloc(0), "", {}, 400],
     [image.subarray(0, Math.ceil(image.length / 2)), "", {}, 400],
     [image, "", { "Content-Type": "image/jpeg" }, 400],
     [image, "?opacity=1.01", {}, 400],
@@ -321,29 +321,25 @@ test("invalid changes leave the previous background intact", async (t) => {
   );
 });
 
-test("upload limits cover bytes, decompressed pixels and ordinary API bodies", async (t) => {
+test("large photos retain full resolution while ordinary API bodies remain bounded", async (t) => {
   const f = fixture(t);
-  const image = await png();
-  assert.equal(
-    (
-      await f.upload(image, "", {
-        "Content-Length": String(MAX_BACKGROUND_BYTES + 1),
-      })
-    ).status,
-    413,
-  );
-  const oversized = Buffer.alloc(MAX_BACKGROUND_BYTES + 1);
-  assert.equal((await f.upload(oversized)).status, 413);
-  assert.equal(
-    (await f.upload(oversized, "", { "Content-Length": "1" })).status,
-    413,
-  );
-  const tooManyPixels = await sharp({
-    create: { width: 4001, height: 4000, channels: 3, background: "#555555" },
+  const image = await sharp({
+    create: { width: 6000, height: 4000, channels: 3, background: "#555555" },
   })
-    .png()
+    .png({ compressionLevel: 0 })
     .toBuffer();
-  assert.equal((await f.upload(tooManyPixels)).status, 400);
+  assert.ok(image.length > 8 * 1024 * 1024);
+  const uploaded = await f.upload(image, "", {
+    "Content-Length": String(image.length),
+  });
+  assert.equal(uploaded.status, 200);
+  const saved = (await uploaded.json()) as CanvasView;
+  const response = await f.request(saved.background!.url);
+  const metadata = await sharp(
+    Buffer.from(await response.arrayBuffer()),
+  ).metadata();
+  assert.equal(metadata.width, 6000);
+  assert.equal(metadata.height, 4000);
   assert.equal(
     (
       await f.request(
@@ -362,7 +358,39 @@ test("upload limits cover bytes, decompressed pixels and ordinary API bodies", a
     ).status,
     415,
   );
-  assert.equal(f.store.canvasView(f.canvas).background, null);
+  assert.deepEqual(f.store.canvasView(f.canvas).background, saved.background);
+});
+
+test("wide panoramas exceeding WebP dimensions are served as PNG without resizing", async (t) => {
+  const f = fixture(t);
+  const image = await sharp({
+    create: { width: 20000, height: 1000, channels: 3, background: "#385b7d" },
+  })
+    .png()
+    .toBuffer();
+  // No Content-Length: real streamed uploads must also accept the full image.
+  const uploaded = await f.request(
+    `/api/canvases/${f.canvas.id}/background`,
+    "PUT",
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(image);
+        controller.close();
+      },
+    }),
+    { "Content-Type": "image/png" },
+  );
+  assert.equal(uploaded.status, 200);
+  const saved = (await uploaded.json()) as CanvasView;
+  f.reopen();
+  const response = await f.request(saved.background!.url);
+  assert.equal(response.headers.get("Content-Type"), "image/png");
+  const metadata = await sharp(
+    Buffer.from(await response.arrayBuffer()),
+  ).metadata();
+  assert.equal(metadata.format, "png");
+  assert.equal(metadata.width, 20000);
+  assert.equal(metadata.height, 1000);
 });
 
 test("re-encoding strips JPEG metadata and accepts WebP; overview only allows background edits", async (t) => {

@@ -20,6 +20,7 @@ import {
   backgroundContentType,
   normalizeBackground,
   readBackground,
+  storedBackgroundContentType,
 } from "./backgrounds.ts";
 const nameSchema = z
   .object({ name: z.string().trim().min(1).max(100) })
@@ -383,7 +384,7 @@ export function createApp(
   app.get("/api/backgrounds/:id", (c) => {
     const image = store.getBackground(c.req.param("id"));
     if (!image) return c.json({ error: "Background not found" }, 404);
-    c.header("Content-Type", "image/webp");
+    c.header("Content-Type", storedBackgroundContentType(image));
     c.header("Content-Length", String(image.byteLength));
     c.header("Cross-Origin-Resource-Policy", "same-origin");
     return c.body(image as Uint8Array<ArrayBuffer>);
