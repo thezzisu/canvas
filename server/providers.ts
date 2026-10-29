@@ -5,6 +5,9 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { hostname, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import type { Source } from "./state.ts";
+import type { TerminalTransport } from "./terminal-transport.ts";
+import { createHerdrClient } from "./herdr/client.ts";
+import { discoverHerdrPython, herdrApiRequest, localHerdrSockets, parseHerdrSockets, validateHerdrLocation, type HerdrSockets } from "./herdr/api.ts";
 import {
   observeTmuxWindow,
   pruneTmuxStatus,
@@ -80,10 +83,7 @@ async function recoverGeometryWrite(
   }
   throw failure;
 }
-export interface TerminalCommand {
-  file: string;
-  args: string[];
-  env?: Record<string, string>;
+interface TerminalOptions {
   cleanup(): Promise<void>;
   /** Client viewport geometry follows the provider's ordinary attach semantics. */
   geometryMode?: "client";
@@ -103,6 +103,10 @@ export interface TerminalCommand {
   watchSize?(listener: () => void): () => void;
   connected?(): void;
 }
+export type TerminalCommand = TerminalOptions & (
+  | { file: string; args: string[]; env?: Record<string, string>; connect?: never }
+  | { connect(cols: number, rows: number): Promise<TerminalTransport>; file?: never; args?: never; env?: never }
+);
 
 const HELPER_PREFIX = "__canvas_";
 const INSTANCE = randomUUID().replaceAll("-", "").slice(0, 12);
@@ -189,6 +193,7 @@ export function validateSource(source: Source): void {
   )
     throw new Error("Invalid source");
   if (source.transport === "ssh") parseSshTarget(source.target ?? "");
+  if (source.type === "herdr") validateHerdrLocation(source);
   for (const value of [
     source.binary,
     source.tmuxSocket,
@@ -236,13 +241,10 @@ export function sourceCommand(
   tty = false,
 ): { file: string; args: string[] } {
   validateSource(source);
+  if (source.type !== "tmux") throw new Error("Herdr uses native sockets, not an executable");
   const binary = source.binary || source.type;
-  const base =
-    source.type === "tmux"
-      ? source.tmuxSocket
-        ? [source.tmuxSocket.startsWith("/") ? "-S" : "-L", source.tmuxSocket]
-        : []
-      : ["--session", source.herdrSession || "default"];
+  const base = source.tmuxSocket
+    ? [source.tmuxSocket.startsWith("/") ? "-S" : "-L", source.tmuxSocket] : [];
   if (source.transport === "local")
     return { file: binary, args: [...base, ...args] };
   // Clear inherited nesting variables on the destination too. env -u is supported
@@ -373,27 +375,29 @@ function tunnelRequest(
   };
 }
 
-function localHerdrClient(source: Source): string {
-  if (source.transport === "local" && source.binary) return source.binary;
-  return process.env.CANVAS_HERDR_BINARY || "herdr";
+async function discoverHerdrSockets(source: Source): Promise<HerdrSockets> {
+  validateHerdrLocation(source);
+  if (source.transport === "local") return localHerdrSockets(source);
+  const location = { herdrSocket: source.herdrSocket, herdrSession: source.herdrSession };
+  return parseHerdrSockets(await execute(sourcePythonCommand(source, discoverHerdrPython, [JSON.stringify(location)]), "herdr"));
 }
 
-async function remoteHerdrSockets(source: Source): Promise<[string, string]> {
-  const response = JSON.parse(await run(source, ["session", "list", "--json"]));
-  if (!response || !Array.isArray(response.sessions))
-    throw new Error("Unexpected remote herdr session list");
-  const requested = source.herdrSession || "default";
-  const session = response.sessions.find(
-    (item: { name?: string } | null) => item?.name === requested,
-  );
-  if (session?.running !== true)
-    throw new Error(`Remote herdr session '${requested}' is not running`);
-  if (
-    typeof session.socket_path !== "string" ||
-    typeof session.session_dir !== "string"
-  )
-    throw new Error("Unexpected remote herdr socket paths");
-  return [session.socket_path, join(session.session_dir, "herdr-client.sock")];
+async function connectedHerdrSockets(source: Source): Promise<HerdrSockets> {
+  const paths = await discoverHerdrSockets(source);
+  if (source.transport === "local") return paths;
+  const tunnel = await ensureSocketTunnel(tunnelRequest(source, { "herdr.sock": paths.api, "herdr-client.sock": paths.client }));
+  return { api: tunnel.sockets["herdr.sock"]!, client: tunnel.sockets["herdr-client.sock"]! };
+}
+
+async function requestHerdr(source: Source, method: string, params: Record<string, unknown> = {}) {
+  validateSource(source);
+  preparing.set(source.id, (preparing.get(source.id) || 0) + 1);
+  try { return await herdrApiRequest((await connectedHerdrSockets(source)).api, method, params); }
+  finally {
+    const count = preparing.get(source.id)! - 1;
+    if (count) preparing.set(source.id, count); else preparing.delete(source.id);
+    await releaseIdleConnections(source.id);
+  }
 }
 
 async function sourceSocketEndpoints(source: Source): Promise<{
@@ -401,9 +405,9 @@ async function sourceSocketEndpoints(source: Source): Promise<{
   forward: Record<string, string>;
 }> {
   if (source.type === "herdr") {
-    const [apiSocket, clientSocket] = await remoteHerdrSockets(source);
+    const { api: apiSocket, client: clientSocket } = await discoverHerdrSockets(source);
     return {
-      nativeSocket: await canonicalSocketPath(source, apiSocket),
+      nativeSocket: apiSocket,
       forward: { "herdr.sock": apiSocket, "herdr-client.sock": clientSocket },
     };
   }
@@ -1023,13 +1027,13 @@ async function tmuxSpaces(source: Source): Promise<SpaceResource[]> {
 }
 
 async function herdrSpaces(source: Source): Promise<SpaceResource[]> {
-  const response = JSON.parse(await run(source, ["api", "snapshot"]));
-  if (response.error)
-    throw new Error(
-      `herdr: ${response.error.message || JSON.stringify(response.error)}`,
-    );
-  const snapshot = response.result?.snapshot ?? response.result ?? response;
-  if (!Array.isArray(snapshot.workspaces) || !Array.isArray(snapshot.tabs))
+  const response = await requestHerdr(source, "session.snapshot");
+  const snapshot = response.snapshot as {
+    workspaces: Array<{ workspace_id: string; label: string }>;
+    tabs: Array<{ workspace_id: string; tab_id: string; label: string; agent_status?: string }>;
+    panes?: Array<{ tab_id: string; pane_id: string; label?: string; display_agent?: string; agent?: string; focused?: boolean; agent_status?: string }>;
+  };
+  if (!snapshot || !Array.isArray(snapshot.workspaces) || !Array.isArray(snapshot.tabs))
     throw new Error("Unexpected herdr snapshot response");
   return snapshot.workspaces.map(
     (workspace: { workspace_id: string; label: string }) => ({
@@ -1136,7 +1140,7 @@ export async function createSpace(
   if (source.type === "tmux")
     await run(source, ["new-session", "-d", "-s", tmuxArgument(label)]);
   else
-    await run(source, ["workspace", "create", "--label", label, "--no-focus"]);
+    await requestHerdr(source, "workspace.create", { label, focus: false });
 }
 export async function renameSpace(
   source: Source,
@@ -1153,7 +1157,7 @@ export async function renameSpace(
       "--",
       tmuxArgument(label),
     ]);
-  else await run(source, ["workspace", "rename", spaceId, label]);
+  else await requestHerdr(source, "workspace.rename", { workspace_id: spaceId, label });
 }
 export async function closeSpace(
   source: Source,
@@ -1169,7 +1173,7 @@ export async function closeSpace(
   );
   if (source.type === "tmux")
     await run(source, ["kill-session", "-t", nativeId(spaceId, "$")]);
-  else await run(source, ["workspace", "close", spaceId]);
+  else await requestHerdr(source, "workspace.close", { workspace_id: spaceId });
 }
 export async function createWindow(
   source: Source,
@@ -1188,15 +1192,7 @@ export async function createWindow(
       tmuxArgument(label),
     ]);
   else
-    await run(source, [
-      "tab",
-      "create",
-      "--workspace",
-      spaceId,
-      "--label",
-      label,
-      "--no-focus",
-    ]);
+    await requestHerdr(source, "tab.create", { workspace_id: spaceId, label, focus: false });
 }
 export async function renameWindow(
   source: Source,
@@ -1214,7 +1210,7 @@ export async function renameWindow(
       "--",
       tmuxArgument(label),
     ]);
-  else await run(source, ["tab", "rename", windowId, label]);
+  else await requestHerdr(source, "tab.rename", { tab_id: windowId, label });
 }
 export async function closeWindow(
   source: Source,
@@ -1232,7 +1228,7 @@ export async function closeWindow(
   );
   if (source.type === "tmux")
     await run(source, ["kill-window", "-t", nativeId(windowId, "@")]);
-  else await run(source, ["tab", "close", windowId]);
+  else await requestHerdr(source, "tab.close", { tab_id: windowId });
 }
 
 export async function openTerminal(
@@ -1263,86 +1259,7 @@ async function prepareTerminal(
   dimensions(cols, rows);
   await requireResource(source, spaceId, windowId);
   if (source.type === "herdr") {
-    let clientFile: string;
-    let clientArgs: string[];
-    let clientEnv: Record<string, string> = {
-      TERM: "xterm-256color",
-      COLORTERM: "truecolor",
-    };
-    if (source.transport === "ssh") {
-      const localClient = localHerdrClient(source);
-      let capabilities: { bare_tab?: boolean };
-      try {
-        capabilities = JSON.parse(
-          await execute(
-            {
-              file: localClient,
-              args: ["canvas-capabilities"],
-            },
-            "herdr",
-          ),
-        );
-      } catch {
-        throw new Error(
-          "The local Canvas herdr client is unavailable or lacks bare-tab support; configure CANVAS_HERDR_BINARY on the Canvas server",
-        );
-      }
-      if (capabilities.bare_tab !== true)
-        throw new Error(
-          "The local Canvas herdr client lacks bare-tab support; configure CANVAS_HERDR_BINARY on the Canvas server",
-        );
-      // The remote machine supplies only the official server sockets. The
-      // Canvas fork remains a local client and receives both sockets over SSH.
-      const [apiSocket, clientSocket] = await remoteHerdrSockets(source);
-      const tunnel = await ensureSocketTunnel(
-        tunnelRequest(source, {
-          "herdr.sock": apiSocket,
-          "herdr-client.sock": clientSocket,
-        }),
-      );
-      clientFile = localClient;
-      clientArgs = ["tab", "attach", windowId, "--bare"];
-      clientEnv = {
-        ...clientEnv,
-        HERDR_SOCKET_PATH: tunnel.sockets["herdr.sock"]!,
-        HERDR_CLIENT_SOCKET_PATH: tunnel.sockets["herdr-client.sock"]!,
-        // Match upstream remote attach: remote files are not local files and
-        // handshakes may take longer than a local Unix socket round trip.
-        HERDR_REMOTE_KEYBINDINGS: "local",
-      };
-    } else {
-      let supported = false;
-      try {
-        const capabilities = JSON.parse(
-          await run(source, ["canvas-capabilities"]),
-        );
-        supported = capabilities.bare_tab === true;
-      } catch (error) {
-        if (
-          !(error instanceof SyntaxError) &&
-          !(
-            error instanceof Error &&
-            /(?:unrecognized subcommand|unrecognized command|unexpected argument|unknown command)[^\n]*canvas-capabilities/u.test(
-              error.message,
-            )
-          )
-        )
-          throw error;
-      }
-      if (!supported)
-        throw new Error(
-          "Select the current Canvas herdr fork executable; this client does not support bare tabs.",
-        );
-      clientFile = source.binary || source.type;
-      clientArgs = [
-        "--session",
-        source.herdrSession || "default",
-        "tab",
-        "attach",
-        windowId,
-        "--bare",
-      ];
-    }
+    const sockets = await connectedHerdrSockets(source);
     let closed = false;
     const handle = { sourceId: source.id, spaceId, windowId, cleanup };
     async function cleanup() {
@@ -1353,11 +1270,10 @@ async function prepareTerminal(
     }
     active.add(handle);
     return {
-      file: clientFile,
-      args: clientArgs,
-      env: clientEnv,
+      connect: (cols, rows) => createHerdrClient({ socketPath: sockets.client, tabId: windowId, cols, rows,
+        readSelection: params => herdrApiRequest(sockets.api, "pane.selection.read", params) }),
       geometryMode: "client",
-      // This describes our PTY, not an authoritative native tab size. The
+      // This describes our viewport, not an authoritative native tab size. The
       // unmodified herdr server retains its ordinary client geometry rules.
       initialSize: { cols, rows, token: "0" },
       cleanup,

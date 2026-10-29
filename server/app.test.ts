@@ -116,3 +116,52 @@ test("authentication, CSRF rejection and persistent canvas CRUD", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("empty herdr settings explicitly clear overrides while omitted PATCH fields remain unchanged", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "canvas-source-clear-"));
+  const store = new Store(join(dir, "state.db"));
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  store.addSession("source-clear");
+  const closed: string[] = [];
+  const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {
+    closeSource: async (id: string) => { closed.push(id); },
+  } as unknown as TerminalManager);
+  const call = (path: string, method = "GET", body?: unknown) => app.request(`http://localhost${path}`, {
+    method,
+    headers: { Host: "localhost", Origin: "http://localhost", Cookie: "canvas_session=source-clear", "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const created = await call("/api/sources", "POST", {
+    name: "Herdr", type: "herdr", transport: "local", herdrSession: "named", herdrSocket: "/fixture/custom.sock",
+  });
+  assert.equal(created.status, 201);
+  const original = await created.json();
+  const path = `/api/sources/${original.id}`;
+  const renamed = await call(path, "PATCH", { name: "Renamed" });
+  assert.equal(renamed.status, 200);
+  assert.equal((await renamed.json()).herdrSocket, "/fixture/custom.sock");
+  assert.equal(closed.length, 0);
+  const cleared = await call(path, "PATCH", { herdrSession: "   ", herdrSocket: "" });
+  assert.equal(cleared.status, 200);
+  const clearBody = await cleared.json();
+  for (const body of [clearBody, store.get<Record<string, unknown>>("source", original.id)!]) {
+    assert.equal(Object.hasOwn(body, "herdrSession"), false);
+    assert.equal(Object.hasOwn(body, "herdrSocket"), false);
+    assert.equal(body.name, "Renamed");
+  }
+  assert.deepEqual(closed, [original.id]);
+  const state = await (await call("/api/state")).json();
+  const source = state.sources.find((value: { id: string }) => value.id === original.id);
+  assert.equal(Object.hasOwn(source, "herdrSession"), false);
+  assert.equal(Object.hasOwn(source, "herdrSocket"), false);
+  for (const body of [{ herdrSocket: "relative.sock" }, { herdrSession: ".." }, { herdrSocket: null }])
+    assert.equal((await call(path, "PATCH", body)).status, 400);
+  assert.equal(Object.hasOwn(store.get<Record<string, unknown>>("source", original.id)!, "herdrSocket"), false);
+  const defaults = await call("/api/sources", "POST", {
+    name: "Default", type: "herdr", transport: "local", herdrSession: "", herdrSocket: "   ",
+  });
+  assert.equal(defaults.status, 201);
+  const defaultBody = await defaults.json();
+  assert.equal(Object.hasOwn(defaultBody, "herdrSession"), false);
+  assert.equal(Object.hasOwn(defaultBody, "herdrSocket"), false);
+});

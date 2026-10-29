@@ -95,6 +95,7 @@ for (const [word, sgr] of colors) {
       80,
       24,
     );
+    assert.ok(!command.connect);
     terminal = pty.spawn(command.file, command.args, {
       name: "xterm-256color",
       cwd: root,

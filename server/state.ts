@@ -19,7 +19,14 @@ export const sourceSchema = z
     sshKnownHostsFile: z.string().max(1000).optional(),
     binary: z.string().max(1000).optional(),
     tmuxSocket: z.string().max(1000).optional(),
-    herdrSession: z.string().max(100).optional(),
+    herdrSession: z.preprocess(
+      value => typeof value === "string" && !value.trim() ? undefined : value,
+      z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9_.-]+$/u).refine(value => value !== "." && value !== "..").optional(),
+    ),
+    herdrSocket: z.preprocess(
+      value => typeof value === "string" && !value.trim() ? undefined : value,
+      z.string().trim().max(1000).refine(value => value.startsWith("/") && !/[:\x00-\x1f\x7f]/u.test(value), "Use an absolute herdr socket path").optional(),
+    ),
   })
   .strict()
   .refine(

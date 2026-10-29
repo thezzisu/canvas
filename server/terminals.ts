@@ -1,5 +1,5 @@
-import * as pty from "node-pty";
 import headless from "@xterm/headless";
+import { terminalUnicodeAddon } from "../shared/terminal-unicode.ts";
 import serialize from "@xterm/addon-serialize";
 import type { WebSocket } from "ws";
 import type { Source } from "./state.ts";
@@ -11,6 +11,7 @@ import {
 } from "./providers.ts";
 import { GeometryController } from "./geometry.ts";
 import { TerminalMouseEncoding } from "./terminal-modes.ts";
+import { openTerminalTransport, type TerminalTransport } from "./terminal-transport.ts";
 const { Terminal } = headless;
 const { SerializeAddon } = serialize;
 export type TerminalTarget = {
@@ -22,33 +23,10 @@ const clamp = (n: unknown, min: number, max: number, fallback: number) =>
   typeof n === "number" && Number.isFinite(n)
     ? Math.min(max, Math.max(min, Math.round(n)))
     : fallback;
-function safeEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const key of [
-    "PATH",
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "SHELL",
-    "LANG",
-    "LC_ALL",
-    "LC_CTYPE",
-    "SSH_AUTH_SOCK",
-    "XDG_RUNTIME_DIR",
-    "XDG_CONFIG_HOME",
-    "XDG_STATE_HOME",
-    "XDG_DATA_HOME",
-  ])
-    if (process.env[key]) env[key] = process.env[key]!;
-  env.TERM = "xterm-256color";
-  env.COLORTERM = "truecolor";
-  return env;
-}
 function json(ws: WebSocket, data: unknown) {
   if (ws.readyState === 1) ws.send(JSON.stringify(data));
 }
 class LiveTerminal {
-  proc: pty.IPty;
   emulator: InstanceType<typeof Terminal>;
   serializer: InstanceType<typeof SerializeAddon>;
   mouseEncoding: TerminalMouseEncoding;
@@ -76,6 +54,7 @@ class LiveTerminal {
     cols: number,
     rows: number,
     readonly onClose: () => void,
+    readonly proc: TerminalTransport,
   ) {
     this.cols = cols;
     this.rows = rows;
@@ -85,16 +64,10 @@ class LiveTerminal {
       scrollback: 2000,
       allowProposedApi: true,
     });
+    this.emulator.loadAddon(terminalUnicodeAddon());
     this.serializer = new SerializeAddon();
     this.emulator.loadAddon(this.serializer);
     this.mouseEncoding = new TerminalMouseEncoding(this.emulator);
-    this.proc = pty.spawn(handle.file, handle.args, {
-      name: "xterm-256color",
-      cols,
-      rows,
-      cwd: process.env.HOME,
-      env: { ...safeEnv(), ...handle.env },
-    });
     this.geometry = new GeometryController(
       handle.geometryMode === "client" ? this.clientViewport(handle) : handle,
       handle.initialSize ?? { cols, rows, token: "initial" },
@@ -355,7 +328,7 @@ class LiveTerminal {
     this.cols = size.cols;
     this.rows = size.rows;
     // For native geometry providers this follows a confirmed size. For herdr
-    // this resizes only its client PTY; the upstream server arbitrates panes.
+    // this resizes its client viewport; the upstream server arbitrates panes.
     this.proc.resize(size.cols, size.rows);
     this.emulator.resize(size.cols, size.rows);
     for (const ws of this.clients)
@@ -414,16 +387,22 @@ export class TerminalManager {
           100,
           30,
         );
+        let transport: TerminalTransport | undefined;
         try {
+          const cols = handle.initialSize?.cols ?? 100;
+          const rows = handle.initialSize?.rows ?? 30;
+          transport = await openTerminalTransport(handle, cols, rows);
           return new LiveTerminal(
             key,
             source.id,
             handle,
-            handle.initialSize?.cols ?? 100,
-            handle.initialSize?.rows ?? 30,
+            cols,
+            rows,
             () => this.entries.delete(key),
+            transport,
           );
         } catch (error) {
+          transport?.kill();
           await handle.cleanup();
           throw error;
         }
@@ -435,6 +414,8 @@ export class TerminalManager {
     if (terminal.closed)
       throw new Error("Terminal is detaching; reconnect in a moment");
     await terminal.join(ws);
+    if (terminal.closed)
+      throw new Error("Terminal detached while connecting; reconnect in a moment");
     if (!terminal.clients.size && !terminal.closed) {
       terminal.idle = setTimeout(() => void terminal.close(), 20_000);
       terminal.idle.unref();

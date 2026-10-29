@@ -12,6 +12,7 @@ export interface Source {
   binary?: string
   tmuxSocket?: string
   herdrSession?: string
+  herdrSocket?: string
 }
 export type ProgramStatus = 'error' | 'attention' | 'working' | 'done' | 'idle' | 'unknown'
 export type StatusSource = 'herdr' | 'osc9' | 'osc7501' | 'none'

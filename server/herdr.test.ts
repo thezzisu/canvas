@@ -5,13 +5,11 @@ import {
   mkdtempSync,
   mkdirSync,
   writeFileSync,
-  readFileSync,
-  realpathSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as pty from "node-pty";
+import { openTerminalTransport, type TerminalTransport } from "./terminal-transport.ts";
 import headless from "@xterm/headless";
 import {
   createSpace,
@@ -22,24 +20,17 @@ import {
   closeWindow,
   listResources,
   openTerminal,
-  shellQuote,
   type Source,
 } from "./providers.ts";
 
-test("herdr client works with an unmodified server: split rendering, keyboard, mouse and PTY resize", async (t) => {
-  const binary = process.env.CANVAS_TEST_HERDR_BINARY;
+test("native herdr transport works with an unmodified server: split rendering, keyboard, mouse and viewport resize", async (t) => {
   const serverBinary = process.env.CANVAS_TEST_HERDR_SERVER_BINARY;
-  if (!binary || !serverBinary) {
+  if (!serverBinary) {
     t.skip(
-      "Set CANVAS_TEST_HERDR_BINARY to the client fork and CANVAS_TEST_HERDR_SERVER_BINARY to an unmodified upstream server",
+      "Set CANVAS_TEST_HERDR_SERVER_BINARY to an unmodified upstream server",
     );
     return;
   }
-  assert.notEqual(
-    realpathSync(binary),
-    realpathSync(serverBinary),
-    "Compatibility requires a separate unmodified server binary",
-  );
   const root = mkdtempSync(join(tmpdir(), "canvas-herdr-test-"));
   const before = {
     config: process.env.XDG_CONFIG_HOME,
@@ -66,36 +57,26 @@ test("herdr client works with an unmodified server: split rendering, keyboard, m
   };
   const session = "canvas-test";
   const cli = (...args: string[]) =>
-    execFileSync(binary, ["--session", session, ...args], {
+    execFileSync(serverBinary, ["--session", session, ...args], {
       env,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10_000,
     });
-  const requests = join(root, "client-requests");
-  const recordedClient = join(root, "herdr-client");
-  writeFileSync(
-    recordedClient,
-    `#!/bin/sh
-printf '%s\\n' "$*" >> ${shellQuote(requests)}
-exec ${shellQuote(binary)} "$@"
-`,
-    { mode: 0o700 },
-  );
   const source: Source = {
     id: "herdr-test",
     name: "Herdr test",
     type: "herdr",
     transport: "local",
-    binary: recordedClient,
+    herdrSocket: join(root, "config", "herdr", "sessions", session, "herdr.sock"),
     herdrSession: session,
   };
   const server = spawn(serverBinary, ["--session", session, "server"], {
     env,
     stdio: "ignore",
   });
-  let terminal: pty.IPty | undefined;
-  let secondTerminal: pty.IPty | undefined;
+  let terminal: TerminalTransport | undefined;
+  let secondTerminal: TerminalTransport | undefined;
   let command: Awaited<ReturnType<typeof openTerminal>> | undefined;
   let secondCommand: Awaited<ReturnType<typeof openTerminal>> | undefined;
   const screen = new headless.Terminal({
@@ -147,7 +128,7 @@ exec ${shellQuote(binary)} "$@"
         bottom.endsWith("┘") &&
         bottom.length === cols
       );
-    }, "bare tab frame did not reach every edge of the native viewport");
+    }, "native tab frame did not reach every edge of the native viewport");
   };
   try {
     await waitFor(
@@ -215,25 +196,19 @@ exec ${shellQuote(binary)} "$@"
     assert.equal(command.geometryMode, "client");
     assert.equal(command.readSize, undefined);
     assert.equal(command.resize, undefined);
-    terminal = pty.spawn(command.file, command.args, {
-      cols: 90,
-      rows: 25,
-      name: "xterm-256color",
-      cwd: root,
-      env: { ...env, ...command.env },
-    });
+    terminal = await openTerminalTransport(command, 90, 25);
     terminal.onData((chunk) => {
       screen.write(chunk);
     });
     await waitFor(
       () => screenText().includes("sh-"),
-      "bare herdr client produced no shell frame",
+      "native herdr client produced no shell frame",
     );
     await assertSplitGeometry(90, 25);
     terminal.write("printf 'HERDR_NATIVE_%s\\n' OK\r");
     await waitFor(
       () => screenText().includes("HERDR_NATIVE_OK"),
-      "bare herdr client did not accept native input",
+      "native herdr client did not accept native input",
     );
     screen.resize(112, 32);
     terminal.resize(112, 32);
@@ -292,27 +267,21 @@ exec ${shellQuote(binary)} "$@"
     terminal.resize(112, 32);
     await assertSplitGeometry(112, 32);
     secondCommand = await openTerminal(source, space.id, other.id, 90, 25);
-    secondTerminal = pty.spawn(secondCommand.file, secondCommand.args, {
-      cols: 90,
-      rows: 25,
-      name: "xterm-256color",
-      cwd: root,
-      env: { ...env, ...secondCommand.env },
-    });
+    secondTerminal = await openTerminalTransport(secondCommand, 90, 25);
     secondTerminal.onData((chunk) => secondScreen.write(chunk));
     await waitFor(
       () => secondText().includes("sh-"),
-      "second bare tab produced no shell frame",
+      "second native tab produced no shell frame",
     );
     secondTerminal.write("printf 'SECOND_TAB_%s\\n' ONLY\r");
     await waitFor(
       () => secondText().includes("SECOND_TAB_ONLY"),
-      "second bare tab input did not reach its window",
+      "second native tab input did not reach its window",
     );
     terminal.write("printf 'FIRST_TAB_%s\\n' ONLY\r");
     await waitFor(
       () => screenText().includes("FIRST_TAB_ONLY"),
-      "first bare tab lost its pinned input target",
+      "first native tab lost its pinned input target",
     );
     assert.ok(
       !screenText().includes("SECOND_TAB_ONLY"),
@@ -322,6 +291,14 @@ exec ${shellQuote(binary)} "$@"
       !secondText().includes("FIRST_TAB_ONLY"),
       "first tab output leaked to second",
     );
+    cli("tab", "focus", other.id);
+    terminal.write("printf 'PINNED_FIRST_%s\\n' AFTER_API\r");
+    await waitFor(() => screenText().includes("PINNED_FIRST_AFTER_API"), "external API focus redirected the first native client");
+    assert.ok(!secondText().includes("PINNED_FIRST_AFTER_API"));
+    cli("tab", "focus", window.id);
+    secondTerminal.write("printf 'PINNED_SECOND_%s\\n' AFTER_API\r");
+    await waitFor(() => secondText().includes("PINNED_SECOND_AFTER_API"), "external API focus redirected the second native client");
+    assert.ok(!screenText().includes("PINNED_SECOND_AFTER_API"));
     await renameSpace(source, space.id, "Renamed space");
     await renameWindow(source, space.id, window.id, "Renamed tab");
     space = (await listResources(source)).spaces.find(
@@ -331,18 +308,6 @@ exec ${shellQuote(binary)} "$@"
     assert.equal(
       space.windows.find((w) => w.id === window.id)!.name,
       "Renamed tab",
-    );
-    const invocationLog = readFileSync(requests, "utf8");
-    assert.equal(
-      invocationLog
-        .split("\n")
-        .filter((line) => /tab attach .* --bare$/u.test(line)).length,
-      2,
-    );
-    assert.doesNotMatch(
-      invocationLog,
-      /(?:--follow-size|--expected-revision|--expected-boot-id|--operation-id|tab geometr(?:y|ies)|tab resize)/u,
-      "Client integration invoked a server extension",
     );
     await closeWindow(source, space.id, other.id);
     await closeSpace(source, space.id);

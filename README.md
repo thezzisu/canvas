@@ -29,13 +29,11 @@ key authentication and verified host keys. Identity and known-hosts paths refer
 to files on the Canvas server.
 
 - **tmux:** use the default server or specify a socket name or absolute path.
-- **herdr:** choose a session and install the
-  [Canvas bare client](https://github.com/thezzisu/herdr/tree/canvas-bare) on the
-  Canvas server. For local connections, select that executable in the connection
-  settings. For SSH connections, set `CANVAS_HERDR_BINARY` to its path; the
-  connection's executable field selects the ordinary remote herdr CLI.
+- **herdr:** choose a session on the machine running the official herdr server.
+  Canvas connects through its native sockets. Advanced settings accept an absolute
+  API socket path for custom installations.
 
-Remote herdr uses SSH-forwarded server sockets with the local bare client.
+Remote herdr uses SSH-forwarded server sockets with Canvas's built-in client.
 Remote tmux uses the installed tmux client through an SSH PTY.
 
 ## Using Canvas
@@ -93,7 +91,6 @@ VS Code, its Remote SSH extension and SSH access to the source machine.
 | `CANVAS_DATA_DIR` | `~/.local/share/canvas` | Account, database and stored files |
 | `CANVAS_HOST` | `127.0.0.1` | Listen address |
 | `CANVAS_PORT` | `3010` | Listen port |
-| `CANVAS_HERDR_BINARY` | `herdr` | Local bare client for SSH herdr connections |
 | `CANVAS_SECURE_COOKIE` | unset | Set to `1` behind TLS termination |
 | `CANVAS_PUBLIC_SSH_HOST` | Listen address or hostname | Advertised VS Code SSH host for local connections |
 | `CANVAS_PUBLIC_SSH_PORT` | `22` | Advertised VS Code SSH port for local connections |
@@ -116,8 +113,7 @@ npm run build
 ```
 
 Native tests use isolated sessions. For herdr tests, set
-`CANVAS_TEST_HERDR_BINARY` to the bare client and `CANVAS_TEST_HERDR_SERVER_BINARY`
-to the upstream server executable.
+`CANVAS_TEST_HERDR_SERVER_BINARY` to the official server executable.
 
 ## License
 

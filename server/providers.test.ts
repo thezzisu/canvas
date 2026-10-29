@@ -1,8 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createConnection, createServer } from "node:net";
-import { promisify } from "node:util";
 import {
   existsSync,
   chmodSync,
@@ -264,17 +263,17 @@ test("Canvas helper accepts owner-managed group-writable parent directories with
   }
 });
 
-test("remote clients resolve user installs without login rc and preserve exact arguments", () => {
+test("remote tmux clients resolve user installs without login rc and preserve exact arguments", () => {
   const root = mkdtempSync(join(tmpdir(), "canvas-remote-client-"));
   const home = join(root, "home with 'quotes' and $variables");
   const path = join(root, "ssh-path");
   const source: Source = {
     id: "remote",
     name: "Remote",
-    type: "herdr",
+    type: "tmux",
     transport: "ssh",
     target: "ssh://alice@example.test",
-    herdrSession: "session ' ; $(printf injected) `whoami`",
+    tmuxSocket: "session ' ; $(printf injected) `whoami`",
   };
   const install = (directory: string, program: string, marker: string) => {
     mkdirSync(directory, { recursive: true });
@@ -286,7 +285,7 @@ test("remote clients resolve user installs without login rc and preserve exact a
     );
     return executable;
   };
-  const execute = (connection = source, args = ["api", "snapshot"]) => {
+  const execute = (connection = source, args = ["list-sessions"]) => {
     const command = sourceCommand(connection, args);
     assert.equal(command.file, "ssh");
     return execFileSync("/bin/sh", ["-c", command.args.at(-1)!], {
@@ -314,41 +313,40 @@ test("remote clients resolve user installs without login rc and preserve exact a
         `echo rc-output\n: > ${shellQuote(rcMarker)}\n`,
       );
     const args = [
-      "tab",
-      "rename",
-      "id",
+      "rename-window",
+      "-t",
+      "@7",
       "quotes ' ; $(printf injected) `whoami`\nnext",
     ];
     const expectedTail = [
-      "--session",
-      source.herdrSession!,
+      "-L",
+      source.tmuxSocket!,
       ...args,
       "unset",
       "unset",
       "xterm-256color",
     ];
-    install(join(home, ".cargo/bin"), "herdr", "cargo");
+    install(join(home, ".cargo/bin"), "tmux", "cargo");
     assert.deepEqual(execute(source, args), ["cargo", ...expectedTail]);
-    install(join(home, ".local/bin"), "herdr", "local");
+    install(join(home, ".local/bin"), "tmux", "local");
     assert.deepEqual(execute(source, args), ["local", ...expectedTail]);
-    install(path, "herdr", "path");
+    install(path, "tmux", "path");
     assert.deepEqual(execute(source, args), ["path", ...expectedTail]);
     const canvasClient = install(
       join(home, ".local/share/canvas/bin"),
-      "herdr",
+      "tmux",
       "canvas",
     );
-    // A remote Canvas fork is not used implicitly; only the installed upstream
-    // executable resolves remote metadata and the server socket location.
+    // A bundled executable is not used implicitly; PATH keeps precedence.
     assert.deepEqual(execute(source, args), ["path", ...expectedTail]);
     // An explicit path/name is authoritative, even when a Canvas client exists.
-    assert.deepEqual(execute({ ...source, binary: "herdr" }, args), [
+    assert.deepEqual(execute({ ...source, binary: "tmux" }, args), [
       "path",
       ...expectedTail,
     ]);
     const custom = install(
       join(root, "custom ' executable"),
-      "herdr",
+      "tmux",
       "custom",
     );
     assert.deepEqual(execute({ ...source, binary: custom }, args), [
@@ -360,6 +358,7 @@ test("remote clients resolve user installs without login rc and preserve exact a
     rmSync(canvasClient);
     mkdirSync(canvasClient);
     assert.deepEqual(execute(source, args), ["path", ...expectedTail]);
+    rmSync(join(path, "tmux"));
     install(join(home, ".local/bin"), "tmux", "tmux-local");
     assert.deepEqual(
       execute({ ...source, type: "tmux", tmuxSocket: "socket ' name" }, [
@@ -382,114 +381,12 @@ test("remote clients resolve user installs without login rc and preserve exact a
   }
 });
 
-test("herdr capability checks distinguish old clients from connection failures", async () => {
-  const root = mkdtempSync(join(tmpdir(), "canvas-herdr-capabilities-"));
-  const binary = join(root, "herdr");
-  const source: Source = {
-    id: "capability-test",
-    name: "Capabilities",
-    type: "herdr",
-    transport: "local",
-    binary,
-  };
-  const snapshot = JSON.stringify({
-    workspaces: [{ workspace_id: "space", label: "Space" }],
-    tabs: [{ workspace_id: "space", tab_id: "tab", label: "Window" }],
-  });
-  try {
-    for (const [failure, expected] of [
-      [
-        "error: unrecognized subcommand 'canvas-capabilities'",
-        /does not support bare tabs/u,
-      ],
-      ["Connection reset by peer", /Connection reset by peer/u],
-    ] as const) {
-      writeFileSync(
-        binary,
-        `#!/bin/sh\nif [ "$3" = api ]; then\n  printf '%s\\n' ${shellQuote(snapshot)}\n  exit 0\nfi\nprintf '%s\\n' ${shellQuote(failure)} >&2\nexit 1\n`,
-        { mode: 0o700 },
-      );
-      await assert.rejects(
-        openTerminal(source, "space", "tab", 80, 24),
-        expected,
-      );
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("herdr uses only client bare-tab capability and ordinary attach commands", async () => {
-  const root = mkdtempSync(join(tmpdir(), "canvas-herdr-client-"));
-  const binary = join(root, "herdr");
-  const requests = join(root, "requests");
-  const snapshot = {
-    workspaces: [{ workspace_id: "space", label: "Space" }],
-    tabs: [{ workspace_id: "space", tab_id: "tab", label: "Window" }],
-  };
-  writeFileSync(
-    binary,
-    `#!${process.execPath}
-const fs = require('node:fs');
-const args = process.argv.slice(4);
-fs.appendFileSync(${JSON.stringify(requests)}, JSON.stringify(args) + '\\n');
-if (args[0] === 'canvas-capabilities') console.log('{"bare_tab":true}');
-else if (args[0] === 'api' && args[1] === 'snapshot') console.log(${JSON.stringify(JSON.stringify(snapshot))});
-else { console.error('Forbidden server extension: ' + args.join(' ')); process.exit(1); }
-`,
-    { mode: 0o700 },
-  );
-  const source: Source = {
-    id: "client-test",
-    name: "Client",
-    type: "herdr",
-    transport: "local",
-    binary,
-  };
-  let command: Awaited<ReturnType<typeof openTerminal>> | undefined;
-  try {
-    command = await openTerminal(source, "space", "tab", 110, 35);
-    assert.equal(command.geometryMode, "client");
-    assert.deepEqual(command.initialSize, {
-      cols: 110,
-      rows: 35,
-      token: "0",
-    });
-    assert.deepEqual(command.args, [
-      "--session",
-      "default",
-      "tab",
-      "attach",
-      "tab",
-      "--bare",
-    ]);
-    assert.equal(command.readSize, undefined);
-    assert.equal(command.resize, undefined);
-    assert.equal(command.restoreSize, undefined);
-    assert.equal(command.watchSize, undefined);
-    await command.cleanup();
-    await command.cleanup();
-    assert.deepEqual(
-      readFileSync(requests, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-      [["api", "snapshot"], ["canvas-capabilities"]],
-    );
-  } finally {
-    await command?.cleanup();
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("SSH herdr runs the bare client locally through shared sockets from an ordinary remote install", async () => {
+test("SSH herdr discovers native sockets and shares direct API forwarding without a herdr executable", async () => {
   const root = mkdtempSync(join(tmpdir(), "canvas-herdr-ssh-"));
   const remoteDir = join(root, "remote ' session");
-  const localClient = join(root, "local-herdr");
   const requests = join(root, "requests");
   const forwards = join(root, "forwards");
   const previousPath = process.env.PATH;
-  const previousClient = process.env.CANVAS_HERDR_BINARY;
   const source: Source = {
     id: "remote-local-client",
     name: "Remote",
@@ -497,13 +394,20 @@ test("SSH herdr runs the bare client locally through shared sockets from an ordi
     transport: "ssh",
     target: "ssh://alice@example.test",
     herdrSession: "work",
+    herdrSocket: join(remoteDir, "herdr.sock"),
   };
   const remote = createServer((socket) =>
     socket.on("data", (data) => socket.write(data)),
   );
-  const api = createServer((socket) =>
-    socket.on("data", (data) => socket.write(data)),
-  );
+  const api = createServer(socket => {
+    let input = "";
+    socket.on("data", data => {
+      input += data.toString(); if (!input.includes("\n")) return;
+      const request = JSON.parse(input.split("\n")[0]!);
+      assert.equal(request.method, "session.snapshot");
+      socket.end(JSON.stringify({ id: request.id, result: { snapshot: { workspaces: [{ workspace_id: "space", label: "Space" }], tabs: [{ workspace_id: "space", tab_id: "tab", label: "Window" }] } } }) + "\n");
+    });
+  });
   let first: Awaited<ReturnType<typeof openTerminal>> | undefined;
   let second: Awaited<ReturnType<typeof openTerminal>> | undefined;
   try {
@@ -566,74 +470,24 @@ process.on('SIGTERM',()=>{ for(const socket of sockets) socket.destroy(); for(co
     symlinkSync("/bin/sh", join(root, "sh"));
     for (const [name, binary] of [["realpath", "/usr/bin/realpath"], ["mkdir", "/bin/mkdir"], ["rmdir", "/bin/rmdir"], ["sleep", "/bin/sleep"], ["python3", "/usr/bin/python3"]])
       symlinkSync(binary, join(root, name));
-    writeFileSync(
-      join(root, "herdr"),
-      `#!${process.execPath}
-const fs = require('node:fs');
-const args=process.argv.slice(4);
-fs.appendFileSync(${JSON.stringify(requests)}, JSON.stringify(['remote',...args])+'\\n');
-if(args[0]==='api'&&args[1]==='snapshot') console.log(${JSON.stringify(JSON.stringify({ workspaces: [{ workspace_id: "space", label: "Space" }], tabs: [{ workspace_id: "space", tab_id: "tab", label: "Window" }] }))});
-else if(args[0]==='session'&&args[1]==='list') console.log(${JSON.stringify(JSON.stringify({ sessions: [{ name: "work", running: true, socket_path: join(remoteDir, "herdr.sock"), session_dir: remoteDir }] }))});
-else { console.error('Remote bare client must never be needed'); process.exit(1); }
-`,
-      { mode: 0o700 },
-    );
+    writeFileSync(join(root, "herdr"), `#!/bin/sh\nprintf forbidden >> ${shellQuote(requests)}\nexit 97\n`, { mode: 0o700 });
     process.env.PATH = root;
     const nativeSocket = await nativeSocketForSource(source);
     assert.equal(nativeSocket, execFileSync("realpath", [join(remoteDir, "herdr.sock")], { encoding: "utf8" }).trim());
-    writeFileSync(
-      localClient,
-      `#!${process.execPath}
-const fs = require('node:fs');
-const net = require('node:net');
-const args=process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(requests)}, JSON.stringify(['local',...args])+'\\n');
-if(args[0]==='canvas-capabilities') { console.log('{"bare_tab":true}'); process.exit(0); }
-if(JSON.stringify(args)!==JSON.stringify(['tab','attach','tab','--bare'])) process.exit(1);
-let count=0;
-for(const key of ['HERDR_SOCKET_PATH','HERDR_CLIENT_SOCKET_PATH']) {
- const socket=net.createConnection(process.env[key]);
- socket.on('connect',()=>socket.write(key));
- socket.on('data',(data)=>{ if(data.toString()!==key) process.exit(1); socket.destroy(); if(++count===2) console.log('native sockets connected'); });
- socket.on('error',()=>process.exit(1));
-}
-`,
-      { mode: 0o700 },
-    );
-    process.env.CANVAS_HERDR_BINARY = localClient;
     [first, second] = await Promise.all([
       openTerminal(source, "space", "tab", 100, 30),
       openTerminal(source, "space", "tab", 100, 30),
     ]);
-    assert.equal(first.file, localClient);
-    assert.deepEqual(first.env, second.env);
+    assert.equal(typeof first.connect, "function");
+    assert.equal(first.file, undefined); assert.equal(first.args, undefined);
+    assert.equal(first.geometryMode, "client");
     assert.equal(readFileSync(forwards, "utf8").trim().split("\n").length, 1);
-    const runClient = async () =>
-      await promisify(execFile)(first!.file, first!.args, {
-        env: { ...process.env, ...first!.env },
-      });
-    assert.match((await runClient()).stdout, /native sockets connected/u);
-    await second.cleanup();
-    second = undefined;
-    assert.match((await runClient()).stdout, /native sockets connected/u);
-    await first.cleanup();
-    assert.equal(existsSync(first.env!.HERDR_SOCKET_PATH!), false);
-    first = undefined;
-    const log = readFileSync(requests, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    assert.ok(
-      log
-        .filter((entry) => entry[0] === "remote")
-        .every((entry) => entry[1] === "api" || entry[1] === "session"),
-    );
-    assert.equal(
-      log.filter(
-        (entry) => entry[0] === "local" && entry[1] === "canvas-capabilities",
-      ).length,
-      2,
-    );
+    assert.equal((await listResources(source)).spaces[0]!.windows[0]!.id, "tab");
+    await second.cleanup(); second = undefined;
+    assert.equal((await listResources(source)).status, "online");
+    assert.equal(readFileSync(forwards, "utf8").trim().split("\n").length, 1, "one native handle keeps both forwards alive");
+    await first.cleanup(); first = undefined;
+    assert.equal(existsSync(requests), false, "neither discovery nor API calls execute herdr");
 
     const localBridgeSocket = join(root, "open.sock"), bridgeServer = createServer(socket => socket.on("data", data => socket.write(Buffer.concat([Buffer.from("download:"), Buffer.isBuffer(data) ? data : Buffer.from(data)]))));
     await new Promise<void>(resolve => bridgeServer.listen(localBridgeSocket, resolve));
@@ -664,8 +518,6 @@ for(const key of ['HERDR_SOCKET_PATH','HERDR_CLIENT_SOCKET_PATH']) {
     await closeProviderConnections(source.id);
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
-    if (previousClient === undefined) delete process.env.CANVAS_HERDR_BINARY;
-    else process.env.CANVAS_HERDR_BINARY = previousClient;
     await Promise.all(
       [remote, api].map(
         (server) =>
@@ -716,6 +568,7 @@ test("tmux failed PTY preparation retains recovery until native cleanup", async 
     const windowId = space.windows[0]!.id;
     const window = windowId.split(":")[1]!;
     command = await openTerminal(source, space.id, windowId, 101, 31);
+    assert.ok(!command.connect, "tmux uses a PTY transport");
     terminal = pty.spawn(command.file, command.args, {
       name: "xterm-256color",
       cols: 101,
@@ -971,6 +824,7 @@ test("tmux native bare client preserves source selection, resize, panes and life
       LANG: "C.UTF-8",
       ...command.env,
     };
+    assert.ok(!command.connect, "tmux uses a PTY transport");
     terminal = pty.spawn(command.file, command.args, {
       name: "xterm-256color",
       cols: 90,
@@ -1186,6 +1040,7 @@ test("tmux named sockets and abrupt native client exit clean the helper", async 
       80,
       24,
     );
+    assert.ok(!command.connect, "tmux uses a PTY transport");
     terminal = pty.spawn(command.file, command.args, {
       name: "xterm-256color",
       cols: 80,
@@ -1327,6 +1182,7 @@ test("tmux passive views follow native size and temporary resize never overwrite
     );
     assert.equal(command.initialSize!.cols, 101);
     assert.equal(command.initialSize!.rows, 31);
+    assert.ok(!command.connect, "tmux uses a PTY transport");
     terminal = pty.spawn(command.file, command.args, {
       name: "xterm-256color",
       cols: command.initialSize!.cols,

@@ -204,6 +204,7 @@ test("tmux OSC7501 helper observer preserves native selections, dimensions and p
       100,
       30,
     );
+    assert.ok(!opened.connect);
     bare = pty.spawn(opened.file, opened.args, {
       cols: 100,
       rows: 30,

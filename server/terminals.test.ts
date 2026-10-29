@@ -28,6 +28,15 @@ class Client extends EventEmitter {
   }
 }
 
+test("a transport closing during queued browser join rejects the connection", async () => {
+  const manager = new TerminalManager(), client = new Client();
+  const source: Source = { id: "join-race", name: "Join race", type: "herdr", transport: "local" };
+  const terminal = { closed: false, async join() { await Promise.resolve(); this.closed = true; } };
+  manager.entries.set("join-race/window", Promise.resolve(terminal) as never);
+  await assert.rejects(manager.connect(source, { sourceId: source.id, spaceId: "space", windowId: "window" }, client.socket), /detached while connecting/);
+  manager.entries.clear();
+});
+
 test("file downloads require explicit interaction and never follow passive controller fallback", async (t) => {
   try { execFileSync("tmux", ["-V"], { stdio: "ignore" }); }
   catch { t.skip("tmux is not installed"); return; }

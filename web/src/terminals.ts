@@ -1,5 +1,6 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { terminalUnicodeAddon } from '../../shared/terminal-unicode'
 import { uuid } from './api'
 import { clearDownloads, disconnectDownloads, receiveDownload } from './downloads'
 import { clearDirectories, receiveDirectory } from './directories'
@@ -318,6 +319,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       allowProposedApi: true,
       theme: { background: '#111317', foreground: '#d5d7dd', cursor: '#e8b183', selectionBackground: '#415168', black: '#20242b', red: '#f08080', green: '#9ecb8f', yellow: '#e5c285', blue: '#8daed7', magenta: '#c7a0df', cyan: '#8fc5c4', white: '#d5d7dd', brightBlack: '#66707f', brightWhite: '#f6f6f7' },
     })
+    term.loadAddon(terminalUnicodeAddon())
     const fit = new FitAddon()
     term.loadAddon(fit)
     const surface = document.createElement('div')
