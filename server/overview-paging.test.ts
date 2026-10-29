@@ -122,3 +122,70 @@ test('cancellation consumes existing momentum without postponing the next indepe
   assert.equal(wheel.pending, true)
   assert.deepEqual(wheel.displacement, { x: 12, y: 0 })
 })
+
+test('renewed trackpad acceleration advances again without waiting for its old tail to end', () => {
+  const wheel = new PageWheelGesture(), directions: string[] = []
+  let now = 0
+  const feed = (values: number[]) => {
+    for (const value of values) {
+      const direction = wheel.consume(value, 0, now += 16)
+      if (direction) directions.push(direction)
+    }
+  }
+  feed([20, 24, 6, 100, 80, 50, 25, 10, 4, 1, 1, 1])
+  assert.deepEqual(directions, ['right'], 'acceleration after the first threshold is still the same stroke')
+  feed([8, 16, 24, 40, 30, 10, 3, 1])
+  assert.deepEqual(directions, ['right', 'right'], 'a fresh pulse after decay commits at its accumulated threshold')
+  feed([-12, -16, -20])
+  assert.deepEqual(directions, ['right', 'right', 'left'], 'clear reversal does not require a quiet gap')
+  feed([-16, -12, -8, -4, -1, ...Array(500).fill(-1)])
+  assert.deepEqual(directions, ['right', 'right', 'left'], 'even a long momentum tail cannot create another page')
+})
+
+test('tail noise and isolated acceleration cannot accumulate weak inertia into a new stroke', () => {
+  const wheel = new PageWheelGesture()
+  let now = 0
+  assert.equal(wheel.consume(60, 0, now), 'right')
+  for (const value of [40, 20, 8, 2, 1, 3, 1, 5, 2, 1, 8, 1, ...Array(100).fill(1)]) {
+    assert.equal(wheel.consume(value, 0, now += 16), undefined)
+  }
+  for (const value of [8, 16]) assert.equal(wheel.consume(value, 0, now += 16), undefined)
+  assert.equal(wheel.consume(24, 0, now += 16), 'right')
+})
+
+test('reversal must reach the threshold continuously and resets when the original direction returns', () => {
+  const wheel = new PageWheelGesture()
+  let now = 0
+  assert.equal(wheel.consume(60, 0, now), 'right')
+  for (const value of [-20, -20, 1, -20, -20]) assert.equal(wheel.consume(value, 0, now += 16), undefined)
+  assert.equal(wheel.consume(-8, 0, now += 16), 'left')
+})
+
+test('a new axis is accepted only after the committed stroke has decayed', () => {
+  const wheel = new PageWheelGesture()
+  let now = 0
+  assert.equal(wheel.consume(48, 0, now), 'right')
+  for (const value of [16, 16, 32]) assert.equal(wheel.consume(0, value, now += 16), undefined, 'original axis stays locked')
+  for (const value of [30, 16, 8, 2]) assert.equal(wheel.consume(value, 0, now += 16), undefined)
+  for (const value of [8, 16]) assert.equal(wheel.consume(0, value, now += 16), undefined)
+  assert.equal(wheel.consume(0, 24, now += 16), 'down')
+  assert.equal(wheel.consume(60, 0, now += 16), undefined, 'the new stroke establishes its own axis lock')
+})
+
+test('hard cancellation ignores reversal and acceleration until an actual quiet gap', () => {
+  const wheel = new PageWheelGesture()
+  let now = 0
+  assert.equal(wheel.consume(60, 0, now), 'right')
+  wheel.block()
+  for (const value of [40, 20, 8, 2, 1, 8, 16, 24, -60, 100]) assert.equal(wheel.consume(value, 0, now += 16), undefined)
+  assert.equal(wheel.consume(60, 0, now += 300), 'right')
+})
+
+test('zero movement never starts or prolongs a wheel gesture', () => {
+  const wheel = new PageWheelGesture()
+  assert.equal(wheel.consume(0, 0, 0), undefined)
+  assert.equal(wheel.pending, false)
+  assert.equal(wheel.consume(60, 0, 10), 'right')
+  for (let now = 26; now < 1000; now += 16) assert.equal(wheel.consume(0, 0, now), undefined)
+  assert.equal(wheel.consume(60, 0, 1000), 'right')
+})
