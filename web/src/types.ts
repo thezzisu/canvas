@@ -95,6 +95,7 @@ export interface TerminalData {
   panes: PaneResource[]
   overview: boolean
   focus: boolean
+  mobile?: boolean
   onAction: (action: string, id: string) => void
   onResize: (id: string, width: number, height: number, x?: number, y?: number) => void
   onLayoutStart: () => void

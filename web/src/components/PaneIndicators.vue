@@ -17,6 +17,7 @@ const open = ref(false)
 const pinned = ref(false)
 const panelId = useId()
 const position = ref({ left: '0px', top: '0px' })
+const portal = computed(() => trigger.value?.closest('.app-shell') || document.body)
 let leaveTimer: ReturnType<typeof setTimeout> | undefined
 const summary = computed(() => !props.available ? '窗口不可用' : props.connection === 'connecting' ? '连接中' : props.connection === 'disconnected' ? '连接已断开' : statusLabel(props.status))
 const color = computed(() => !props.available || props.connection === 'disconnected' ? statusColor('error') : props.connection === 'connecting' ? statusColor('attention') : statusColor(props.status))
@@ -34,8 +35,12 @@ function positionPanel() {
   const anchor = trigger.value?.getBoundingClientRect()
   if (!anchor || !panel.value) return
   const width = panel.value.offsetWidth, height = panel.value.offsetHeight
-  const left = Math.max(8, Math.min(anchor.left - 8, window.innerWidth - width - 8))
-  const top = anchor.bottom + height + 8 <= window.innerHeight ? anchor.bottom + 6 : Math.max(8, anchor.top - height - 6)
+  const viewport = window.visualViewport
+  const x = viewport?.offsetLeft || 0, y = viewport?.offsetTop || 0
+  const right = x + (viewport?.width || window.innerWidth), bottom = y + (viewport?.height || window.innerHeight)
+  panel.value.style.maxHeight = `${Math.max(64, bottom - y - 16)}px`
+  const left = Math.max(x + 8, Math.min(anchor.left - 8, right - width - 8))
+  const top = anchor.bottom + height + 8 <= bottom ? anchor.bottom + 6 : Math.max(y + 8, anchor.top - height - 6)
   position.value = { left: `${left}px`, top: `${top}px` }
 }
 watch(open, async value => {
@@ -45,6 +50,8 @@ watch(open, async value => {
     document.addEventListener('keydown', escape, true)
     window.addEventListener('resize', positionPanel)
     window.addEventListener('scroll', positionPanel, true)
+    window.visualViewport?.addEventListener('resize', positionPanel)
+    window.visualViewport?.addEventListener('scroll', positionPanel)
     await nextTick()
     positionPanel()
   } else {
@@ -53,6 +60,8 @@ watch(open, async value => {
     document.removeEventListener('keydown', escape, true)
     window.removeEventListener('resize', positionPanel)
     window.removeEventListener('scroll', positionPanel, true)
+    window.visualViewport?.removeEventListener('resize', positionPanel)
+    window.visualViewport?.removeEventListener('scroll', positionPanel)
   }
 })
 watch(() => [props.panes.length, props.error], async () => { if (open.value) { await nextTick(); positionPanel() } })
@@ -63,12 +72,14 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', escape, true)
   window.removeEventListener('resize', positionPanel)
   window.removeEventListener('scroll', positionPanel, true)
+  window.visualViewport?.removeEventListener('resize', positionPanel)
+  window.visualViewport?.removeEventListener('scroll', positionPanel)
 })
 </script>
 
 <template>
   <button ref="trigger" class="terminal-status-trigger nodrag" :class="{ connecting: available && connection === 'connecting' }" :style="{ '--status-color': color }" :data-connection-status="available ? connection : 'unavailable'" :aria-label="`窗口状态：${summary}`" :aria-expanded="open" :aria-controls="panelId" @pointerdown.stop @mouseenter="enter" @mouseleave="leave" @focus="enter" @blur="blur" @click.stop="toggle" @keydown.esc.stop.prevent="close"><i /></button>
-  <Teleport to="body">
+  <Teleport :to="portal">
     <div v-if="open" :id="panelId" ref="panel" class="terminal-status-popover" :style="position" role="region" aria-label="窗口状态" @mouseenter="enter" @mouseleave="leave" @pointerdown.stop @wheel.stop @keydown.esc.stop.prevent="close">
       <div class="terminal-status-summary"><i class="program-dot" :style="{ '--program-color': color }" /><span>{{ summary }}</span><small v-if="readOnly && connection === 'connected'">只读</small></div>
       <p v-if="error" class="terminal-status-error">{{ error }}</p>

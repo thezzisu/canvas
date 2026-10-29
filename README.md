@@ -191,6 +191,27 @@ override that advertised address for a deployment behind a proxy or NAT.
   the provider when Canvas disconnects. Dead window references remain visible
   so they can be removed or replaced deliberately.
 
+## Mobile
+
+On phones and touch-first tablets, canvas terminals are read-only previews. Drag
+with one finger to pan or pinch with two fingers to zoom. Tap a window to open
+it full-screen, then use its keyboard button to show or hide the system keyboard.
+The terminal resizes to the remaining visible area, including when the keyboard
+stays open. Leaving full-screen follows the same shared-window and external-resize
+rules as desktop.
+
+The row above the keyboard provides Esc, Tab, one-shot Ctrl and arrow keys;
+hold an arrow to repeat. More contains Alt, navigation keys, Ctrl+C, file upload,
+text paste and text selection. Scroll mode moves terminal history or sends native
+scroll events. Switch to touch mouse mode when an application needs clicks or
+dragging. Text selection opens a read-only copy sheet. The paste sheet accepts
+native long-press paste; images and files use the same managed upload path as
+desktop. Pasting text never adds Enter.
+
+Mobile layout depends on the device's primary touch input, not just browser width.
+A narrow desktop window retains desktop controls. Actual clipboard formats and
+software-keyboard behavior depend on the browser and operating system.
+
 ## Notes
 
 Custom canvases support plaintext notes with a title, five colors, drag, resize

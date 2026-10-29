@@ -1,6 +1,7 @@
 <script setup lang="ts">
 defineProps<{ name: string; size?: number }>()
 const paths: Record<string, string> = {
+  menu: 'M4 6h16 M4 12h16 M4 18h16',
   canvas: 'M4 5h16v14H4z M4 10h16 M10 10v9',
   grid: 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z',
   plus: 'M12 5v14 M5 12h14',

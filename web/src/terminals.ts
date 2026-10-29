@@ -5,6 +5,8 @@ import { clearDownloads, disconnectDownloads, receiveDownload } from './download
 import { clearDirectories, receiveDirectory } from './directories'
 import { bindFileInput, preventFileNavigation, TerminalUploads, type TerminalUploadState } from './uploads'
 import { clipboardRestoringFocus, TerminalClipboard } from './clipboard'
+import { modifiedText, terminalKey, type TerminalModifiers } from './terminal-input'
+import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch'
 
 export type TerminalStatus = {
   status: 'connecting' | 'connected' | 'disconnected'
@@ -15,6 +17,9 @@ export type TerminalStatus = {
   upload?: TerminalUploadState
   draggingFile?: boolean
   clipboardError?: string
+  modifiers?: TerminalModifiers
+  touchMode?: TerminalTouchMode
+  keyboardRequested?: boolean
 }
 export interface TerminalGeometry { width: number; height: number; cols: number; rows: number }
 interface FocusResize { token: string; suspended: boolean; requested?: { cols: number; rows: number } }
@@ -24,6 +29,13 @@ interface Session {
   surface: HTMLDivElement
   host?: HTMLElement
   magnified: boolean
+  mobile: boolean
+  modifiers: TerminalModifiers
+  touchMode: TerminalTouchMode
+  keyboardRequested: boolean
+  suppressInput?: boolean
+  resizeTimer?: ReturnType<typeof setTimeout>
+  removeTouch?: () => void
   focusResize?: FocusResize
   presentationFrame?: number
   presentationRevision?: number
@@ -86,14 +98,31 @@ function installMouseCoordinates() {
 }
 const key = (sourceId: string, spaceId: string, windowId: string) => `${sourceId}\u0000${spaceId}\u0000${windowId}`
 function setState(session: Session, state: TerminalStatus) {
-  session.state = state
-  session.listeners.forEach(listener => listener(state))
+  const next = session.state = { ...state, modifiers: session.modifiers, touchMode: session.touchMode,
+    keyboardRequested: session.keyboardRequested }
+  session.listeners.forEach(listener => listener(next))
+}
+function interactive(session: Session) { return !session.mobile || session.magnified }
+function setModifiers(session: Session, modifiers: Partial<TerminalModifiers> = {}) {
+  session.modifiers = { ctrl: modifiers.ctrl === true, alt: modifiers.alt === true }
+  setState(session, { ...session.state, modifiers: session.modifiers })
+}
+function focusTerminal(session: Session, keyboard?: boolean) {
+  if (!interactive(session)) return
+  claimFocus(session)
+  if (session.mobile && keyboard !== undefined) session.keyboardRequested = keyboard
+  if (session.term.textarea) session.term.textarea.inputMode = session.mobile && !session.keyboardRequested ? 'none' : 'text'
+  session.term.focus()
+  setState(session, { ...session.state, keyboardRequested: session.keyboardRequested })
 }
 function schedulePresentation(session: Session) {
   if (session.presentationFrame !== undefined) return
   session.presentationFrame = requestAnimationFrame(() => {
     session.presentationFrame = undefined
-    updateFocusSize(session)
+    if (session.mobile && session.magnified && session.focusResize) {
+      clearTimeout(session.resizeTimer)
+      session.resizeTimer = setTimeout(() => { session.resizeTimer = undefined; updateFocusSize(session) }, 80)
+    } else updateFocusSize(session)
     present(session)
   })
 }
@@ -224,6 +253,7 @@ function updateFocusSize(session: Session) {
   session.socket.send(JSON.stringify({ type: 'focus-resize-update', token: request.token, ...proposed }))
 }
 function endFocusSize(session: Session) {
+  clearTimeout(session.resizeTimer); session.resizeTimer = undefined
   const request = session.focusResize
   if (!request) return
   session.focusResize = undefined
@@ -244,11 +274,12 @@ function resize(session: Session) {
   present(session)
 }
 function claimFocus(session: Session) {
+  if (!interactive(session)) return
   if (session.socket?.readyState !== WebSocket.OPEN || session.state.status !== 'connected' || (session.state.presentation?.maximized && !session.state.presentation.owned)) return
   session.socket.send(JSON.stringify({ type: 'focus' }))
   setState(session, { ...session.state, readOnly: false })
 }
-export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, onGeometry?: (geometry: TerminalGeometry) => void, options: { magnified?: boolean } = {}) {
+export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, onGeometry?: (geometry: TerminalGeometry) => void, options: { magnified?: boolean; mobile?: boolean } = {}) {
   installMouseCoordinates()
   const id = key(resource.sourceId, resource.spaceId, resource.windowId)
   let session = sessions.get(id)
@@ -269,20 +300,26 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     surface.className = 'terminal-surface'
     Object.assign(surface.style, { transformOrigin: 'top left', width: '100%', height: '100%' })
     const uploads = new TerminalUploads({
-      available: () => session!.state.status === 'connected' && !(session!.state.presentation?.maximized && !session!.state.presentation.owned),
-      focus: () => { claimFocus(session!); session!.term.focus() },
+      available: () => interactive(session!) && session!.state.status === 'connected' && !(session!.state.presentation?.maximized && !session!.state.presentation.owned),
+      focus: () => { focusTerminal(session!) },
       send: message => {
         if (session!.socket?.readyState !== WebSocket.OPEN) return false
         session!.socket.send(JSON.stringify(message)); return true
       },
       changed: upload => setState(session!, { ...session!.state, upload }),
     })
-    session = { term, fit, surface, uploads, opened: false, magnified: false, state: { status: 'connecting' }, listeners: new Set(), geometryListeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
+    session = { term, fit, surface, uploads, opened: false, magnified: false, mobile: !!options.mobile,
+      modifiers: { ctrl: false, alt: false }, touchMode: 'scroll', keyboardRequested: false,
+      state: { status: 'connecting' }, listeners: new Set(), geometryListeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
     const current = session
     function sendInput(data: string, binary = false) {
       // onData includes terminal query replies; passive viewers must never
       // claim control or send duplicate replies merely by rendering output.
-      if (current.socket?.readyState !== WebSocket.OPEN || current.state.readOnly || current.state.status !== 'connected' || (current.state.presentation?.maximized && !current.state.presentation.owned)) return
+      if (current.suppressInput || !interactive(current) || current.socket?.readyState !== WebSocket.OPEN || current.state.readOnly || current.state.status !== 'connected' || (current.state.presentation?.maximized && !current.state.presentation.owned)) return
+      if (current.mobile && !binary && data.length === 1 && (current.modifiers.ctrl || current.modifiers.alt)) {
+        data = modifiedText(data, current.modifiers)
+        setModifiers(current)
+      }
       current.socket.send(JSON.stringify({ type: 'input', data, ...(binary ? { encoding: 'binary' } : {}) }))
     }
     term.onData(data => sendInput(data))
@@ -291,10 +328,11 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     term.onBinary(data => sendInput(data, true))
     current.clipboard = new TerminalClipboard(term, surface, {
       visible: () => !!current.host?.isConnected && !(current.state.presentation?.maximized && (!current.state.presentation.owned || !current.magnified)),
-      controlsInput: () => current.state.status === 'connected' && !current.state.readOnly,
+      controlsInput: () => interactive(current) && current.state.status === 'connected' && !current.state.readOnly,
       copyError: clipboardError => setState(current, { ...current.state, clipboardError }),
     })
     term.attachCustomKeyEventHandler(event => {
+      if (!interactive(current)) return false
       if (current.clipboard?.key(event) === false) return false
       if (event.type === 'keydown' && current.state.readOnly) claimFocus(current)
       return true
@@ -305,13 +343,44 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   // the current host owns its presentation and temporary size request.
   if (session.host !== host) endFocusSize(session)
   session.host = host
+  session.mobile = options.mobile === true
   session.magnified = options.magnified === true
+  session.term.options.disableStdin = !interactive(session)
+  if (!interactive(session)) { session.keyboardRequested = false; session.term.blur() }
+  setModifiers(session)
   host.appendChild(session.surface)
   if (!session.opened) {
     session.term.open(session.surface); session.opened = true
     const current = session
     session.term.textarea?.addEventListener('focus', () => { if (!clipboardRestoringFocus()) claimFocus(current) })
-    session.term.textarea?.addEventListener('paste', () => claimFocus(current), { capture: true })
+    session.term.textarea?.addEventListener('paste', event => {
+      if (!interactive(current)) { event.preventDefault(); event.stopImmediatePropagation(); return }
+      setModifiers(current); claimFocus(current)
+    }, { capture: true })
+    session.term.textarea?.addEventListener('compositionstart', () => setModifiers(current))
+    session.term.textarea?.addEventListener('blur', () => setModifiers(current))
+    session.removeTouch = bindTerminalTouch(session.surface, session.term, {
+      active: () => current.mobile && current.magnified && current.state.status === 'connected' && !current.state.readOnly,
+      mode: () => current.touchMode,
+      focus: () => focusTerminal(current),
+      copyGesture: () => current.clipboard?.touchSelectionCompleted(),
+      suppressInput: action => {
+        const previous = current.suppressInput
+        current.suppressInput = true
+        try { action() } finally { current.suppressInput = previous }
+      },
+    })
+  }
+  if (session.term.textarea) {
+    session.term.textarea.readOnly = !interactive(session)
+    session.term.textarea.tabIndex = interactive(session) ? 0 : -1
+    session.term.textarea.inputMode = session.mobile && !session.keyboardRequested ? 'none' : 'text'
+    // Keep the hidden input large enough to avoid iOS focus zoom; xterm's
+    // rendered font and native grid stay independent of this input element.
+    session.term.textarea.style.fontSize = session.mobile ? '16px' : ''
+    session.term.textarea.setAttribute('autocapitalize', 'off')
+    session.term.textarea.setAttribute('autocorrect', 'off')
+    session.term.textarea.spellcheck = false
   }
   session.listeners.add(listener)
   if (onGeometry) session.geometryListeners.add(onGeometry)
@@ -325,7 +394,27 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   observer.observe(host)
   schedulePresentation(current)
   return {
-    focus() { claimFocus(current); current.term.focus() },
+    focus(options: { keyboard?: boolean } = {}) { focusTerminal(current, options.keyboard) },
+    blur() { current.keyboardRequested = false; current.term.blur(); setModifiers(current); setState(current, { ...current.state, keyboardRequested: false }) },
+    setModifiers(modifiers: Partial<TerminalModifiers>) { setModifiers(current, modifiers) },
+    sendKey(key: string, modifiers: Partial<TerminalModifiers> = current.modifiers) {
+      if (!interactive(current) || current.socket?.readyState !== WebSocket.OPEN || current.state.status !== 'connected' || (current.state.presentation?.maximized && !current.state.presentation.owned)) return
+      const data = terminalKey(key, modifiers, current.term.modes.applicationCursorKeysMode)
+      setModifiers(current)
+      if (!data) return
+      claimFocus(current)
+      current.socket.send(JSON.stringify({ type: 'input', data }))
+    },
+    uploadFiles(files: File[]) { current.uploads.enqueue(files) },
+    selectionText() { return current.term.getSelection() },
+    viewportText() {
+      const buffer = current.term.buffer.active, lines: string[] = []
+      for (let row = buffer.viewportY; row < Math.min(buffer.length, buffer.viewportY + current.term.rows); row++) lines.push(buffer.getLine(row)?.translateToString(true) || '')
+      return lines.join('\n').trimEnd()
+    },
+    copySelection(text = current.term.getSelection()) { return current.clipboard?.copyText(text) ?? false },
+    pasteText(text: string) { if (interactive(current)) { setModifiers(current); claimFocus(current); current.term.paste(text) } },
+    setTouchMode(mode: TerminalTouchMode) { current.touchMode = mode; setModifiers(current); setState(current, { ...current.state, touchMode: mode }) },
     resize() { resize(current) },
     cancelUpload() { current.uploads.cancel() },
     reconnect() {
@@ -345,6 +434,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
         endFocusSize(current)
         current.host = undefined
         current.magnified = false
+        current.keyboardRequested = false
+        if (current.mobile) current.term.blur()
       }
     },
   }
@@ -354,6 +445,7 @@ export function clearTerminals() {
   clearDirectories()
   for (const session of sessions.values()) {
     session.uploads.clear()
+    session.removeTouch?.()
     endFocusSize(session)
     if (session.presentationFrame !== undefined) cancelAnimationFrame(session.presentationFrame)
     const socket = session.socket

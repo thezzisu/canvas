@@ -102,6 +102,8 @@ export class TerminalClipboard {
     this.options.copyError(undefined)
     return copyText(text, () => this.notice('复制失败'))
   }
+  copyText(text: string): boolean { return this.ready() && this.copy(text) }
+  touchSelectionCompleted(): void { this.allowProgramCopy() }
   private notice(message: string) {
     if (this.disposed) return
     clearTimeout(this.noticeTimer)
