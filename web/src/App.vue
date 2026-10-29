@@ -941,7 +941,7 @@ onBeforeUnmount(() => { for (const event of ['pointerdown', 'keydown', 'wheel', 
   <div v-if="!ready" class="boot-screen"><span class="spinner" />加载中…</div>
   <div v-else-if="!authenticated" class="login-screen" :class="{ 'mobile-layout': mobile }" :style="mobileViewportStyle">
     <main class="login-content">
-      <div class="brand login-brand"><span class="brand-symbol"><Icon name="canvas" :size="27" /></span><span>canvas</span></div>
+      <div class="brand login-brand"><span class="brand-symbol"><Icon name="canvas" :size="27" /></span><span class="brand-name">canvas</span></div>
       <form class="login-form" @submit.prevent="login">
         <label>用户名<input v-model="username" name="username" autocomplete="username" required autofocus /></label>
         <label>密码<input v-model="password" name="password" type="password" autocomplete="current-password" required /></label>
@@ -953,7 +953,7 @@ onBeforeUnmount(() => { for (const event of ['pointerdown', 'keydown', 'wheel', 
   <div v-else ref="appElement" class="app-shell" :class="{ 'canvas-fullscreen': canvasFullscreen, 'mobile-layout': mobile }" :style="[mobileViewportStyle, contentFontStyle]" :data-content-font="appliedContentFont">
     <button v-if="mobile && sidebarOpen" class="sidebar-backdrop" aria-label="关闭画布列表" @click="sidebarOpen = false" />
     <aside v-show="!mobile || sidebarOpen" id="canvas-sidebar" class="sidebar" :class="{ 'sidebar-open': sidebarOpen }">
-      <div class="brand"><span class="brand-symbol"><Icon name="canvas" :size="24" /></span><span>canvas</span><button v-if="mobile" class="icon-button sidebar-close" aria-label="关闭画布列表" @click="sidebarOpen = false"><Icon name="close" :size="19" /></button></div>
+      <div class="brand"><span class="brand-symbol"><Icon name="canvas" :size="24" /></span><span class="brand-name">canvas</span><button v-if="mobile" class="icon-button sidebar-close" aria-label="关闭画布列表" @click="sidebarOpen = false"><Icon name="close" :size="19" /></button></div>
       <div class="nav-section-label canvas-label"><span>画布</span><button class="icon-button" title="新建画布" aria-label="新建画布" @click="openCanvasDialog()"><Icon name="plus" :size="14" /></button></div>
       <nav class="canvas-nav" aria-label="画布">
         <button class="nav-item" :class="{ active: isOverview }" :aria-current="isOverview ? 'page' : undefined" title="总览" @click="switchCanvas('overview')"><Icon name="grid" :size="16" /><span>总览</span><span class="nav-count">{{ windowCount }}</span></button>
