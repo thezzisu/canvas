@@ -35,7 +35,12 @@ watch(downloadPreview, preview => {
   loading.value = preview?.preview === 'image'
   if (preview?.preview === 'text') void loadText()
 }, { immediate: true })
-function imageFailed() { loading.value = false; error.value = '无法预览此文件' }
+function imageSettled(event: Event, failed = false) {
+  const id = (event.currentTarget as HTMLImageElement | null)?.dataset.previewId
+  if (!id || id !== downloadPreview.value?.id) return
+  loading.value = false
+  if (failed) error.value = '无法预览此文件'
+}
 function openChanged(open: boolean) { if (!open) dismissDownloadPreview() }
 function preventReturnFocus(event: Event) { event.preventDefault() }
 function stopEscape(event: Event) { event.stopPropagation() }
@@ -55,7 +60,7 @@ onBeforeUnmount(() => request?.abort())
       <div class="download-preview-content" :data-download-id="downloadPreview.id" :data-preview-kind="downloadPreview.preview">
         <div v-if="loading" class="download-preview-status" role="status"><span class="spinner" />加载中…</div>
         <div v-if="error" class="download-preview-status" role="alert"><span>{{ error }}</span><button v-if="downloadPreview.preview === 'text'" type="button" @click="loadText">重试</button></div>
-        <img v-if="downloadPreview.preview === 'image' && !error" class="download-preview-image" :src="previewUrl" :alt="downloadPreview.filename" draggable="false" @load="loading = false" @error="imageFailed" />
+        <img v-if="downloadPreview.preview === 'image' && !error" :key="downloadPreview.id" class="download-preview-image" :data-preview-id="downloadPreview.id" :src="previewUrl" :alt="downloadPreview.filename" draggable="false" @load="imageSettled($event)" @error="imageSettled($event, true)" />
         <template v-else-if="downloadPreview.preview === 'pdf'">
           <iframe v-if="pdfPreview" class="download-preview-pdf" :src="previewUrl" :title="downloadPreview.filename" referrerpolicy="no-referrer" />
           <div v-else class="download-preview-status">浏览器不支持 PDF 预览</div>
