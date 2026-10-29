@@ -1,16 +1,15 @@
 # Canvas
 
-A single-account workspace for all your herdr and tmux windows. The overview
-arranges machines, spaces and windows automatically. Create additional canvases
-to keep selected windows and notes together in a draggable, zoomable workspace.
+A browser workspace for local and SSH-connected herdr and tmux windows. Use the
+automatic overview to see your machines, or arrange terminals, notes and files on
+custom, zoomable canvases.
 
-Canvas renders native clients through PTYs. Existing pane layouts, terminal
-applications and mouse interactions are handled by herdr/tmux.
+Status: in development.
 
-## Run
+## Quick start
 
-Requires Node.js 24+, a POSIX host, and tmux and/or the Canvas herdr fork.
-The first release is verified on Linux.
+Requires Node.js 24+, a POSIX host, and tmux or herdr. Linux is the tested platform.
+File transfers also require Python 3 on each connected machine.
 
 ```sh
 npm ci
@@ -19,307 +18,108 @@ npm run setup
 npm start
 ```
 
-Open `http://127.0.0.1:3010`. Setup creates the only account; there is no
-registration or role system. The password is stored as a salted scrypt hash.
+Open <http://127.0.0.1:3010> and sign in with the account created during setup.
+Canvas uses one shared account.
 
-`CANVAS_DATA_DIR` selects the private runtime directory (default
-`~/.local/share/canvas`). `CANVAS_HOST` and `CANVAS_PORT` select the listener;
-the default listener is loopback. For remote access use an SSH tunnel or a TLS
-reverse proxy with WebSocket and unbuffered server-sent event support. Behind TLS termination, set
-`CANVAS_SECURE_COOKIE=1` and preserve the original Host header. The browser and
-API must share an origin.
-Protect this account as you would your SSH session: terminal access can run
-commands with the Canvas process's local and remote permissions.
+## Connections
 
-## Connect a machine
+Add connections from the sidebar. Local connections use the Canvas server's
+machine. SSH accepts an alias, `user@host`, or `ssh://user@host:port` and requires
+key authentication and verified host keys. Identity and known-hosts paths refer
+to files on the Canvas server.
 
-Add a source from the connections panel:
+- **tmux:** use the default server or specify a socket name or absolute path.
+- **herdr:** choose a session and install the
+  [Canvas bare client](https://github.com/thezzisu/herdr/tree/canvas-bare) on the
+  Canvas server. For local connections, select that executable in the connection
+  settings. For SSH connections, set `CANVAS_HERDR_BINARY` to its path; the
+  connection's executable field selects the ordinary remote herdr CLI.
 
-- **tmux / local:** use the default server or specify a tmux socket name or absolute path.
-- **herdr / local:** select a named session and the fork's executable path.
-- **SSH:** use an SSH config alias, `user@host`, or `ssh://user@host:port`.
-  With no executable override, Canvas checks PATH and common user install
-  directories for the ordinary provider executable on the destination. Explicit
-  executable paths take precedence. Key-based
-  authentication and verified host keys are required. Optional identity and
-  known-hosts file paths are resolved on the Canvas server.
+Remote herdr uses SSH-forwarded server sockets with the local bare client.
+Remote tmux uses the installed tmux client through an SSH PTY.
 
-Herdr uses the unmodified upstream server and a small client-only fork for
-`tab attach <id> --bare`. For a local source, select the fork client in the
-executable field. For SSH sources, set `CANVAS_HERDR_BINARY` to that client on
-the Canvas server (defaults to `herdr` on PATH). Canvas forwards the remote
-API and client Unix sockets over SSH, then runs the bare client locally. The
-source's executable field still refers to the ordinary remote herdr CLI used
-for discovery and resource operations. Remote machines need no fork or server
-changes. See `thezzisu/herdr`, branch `canvas-bare`.
+## Using Canvas
 
-Tmux attach passes native file descriptors, so it cannot use a byte-only SSH
-socket tunnel. Canvas runs the remote stock tmux client through an SSH PTY.
-No custom remote tmux installation is required.
+- **Overview:** machines are grouped together, spaces run vertically, and windows
+  run horizontally. The layout follows native window sizes.
+- **Custom canvases:** add windows from the overview, arrange cards, and add notes
+  or files. Every canvas supports its own background image.
+- **Windows:** references share one native terminal and one card size. Maximizing
+  a window resizes its PTY to the available area; its other views show “已最大化”.
+  Removing a card keeps the native window running. Closing a window ends its
+  processes after confirmation.
+- **Navigation:** scroll to pan, pinch to zoom, or use fullscreen for the canvas.
+  On mobile, tap a terminal preview to interact in fullscreen; the auxiliary
+  keyboard provides modifiers, navigation keys, clipboard and upload actions.
+- **Status:** window colors summarize pane activity. Click the status indicator
+  for pane details. herdr supplies agent status; tmux supports OSC 9;4 and
+  [OSC 7501](https://mitchellh.com/writing/program-status-osc7501) reports.
+- **Fonts:** global settings provide an ordered font list and a ligature switch.
+  Maple Mono NF CN is the default; Maple Mono Normal NF CN, Cascadia Code PL and
+  locally installed fonts use the same controls.
 
-## Download a file
+Saved layouts, notes, backgrounds and global settings synchronize across browsers.
+Native pane layouts and terminal interaction follow herdr/tmux behavior.
 
-Run `canvas open <path>` in a connected terminal. Canvas copies the file from
-that machine to server storage for the browser tab controlling the native window.
-The path is read on the terminal's host; the Canvas server never
-opens a path supplied by terminal output. Regular files, Unicode names and
-large files are supported. Python 3 is required on the terminal host. Canvas
-installs its helper at `~/.local/bin/canvas` when that source first connects,
-without replacing a different existing `canvas` command. Keep `~/.local/bin`
-in the terminal's PATH.
+## Files and clipboard
 
-Click the terminal or maximize it to choose the receiving tab. Opening a passive
-viewer does not claim downloads, and closing the controlling tab does not hand
-them to another viewer. An agent can run the helper without echoing its output.
+```sh
+canvas open ./report.pdf
+canvas open ./project
+```
 
-The terminal progress bar measures bytes copied to Canvas. The command succeeds
-after the full file is committed on the server; browser download speed or
-cancellation does not affect it. There is no confirmation or notification UI.
-If no browser can receive the file, the command exits nonzero immediately with
-`canvas: no browser attached to this window`. Ctrl+C cancels an unfinished copy.
+Canvas installs the helper at `~/.local/bin/canvas` on each connected machine;
+keep that directory in your PATH. Focus a terminal in the receiving browser tab
+before running the command. Agents can use it through their shell tools.
 
-In Overview, images, PDFs and text open in a preview dialog with a Download button.
-Closing the dialog does not download; multiple files are previewed in order.
-Image dialogs fit their aspect ratio within the visible page and keep small images
-at native size. All previews can expand within the page. Images support zoom
-controls, pointer-centered wheel zoom, dragging and two-finger pinch/pan; Fit
-restores the centered view. Escape first exits preview fullscreen, then closes
-the preview. This does not change the underlying canvas or terminal size.
-Other file types start a native browser download. The staged file remains
-available to that login session for one hour and is cleared when Canvas restarts.
-In a custom canvas, completion adds a file card beside its originating window.
-Images, PDFs and text have previews; every card has a download button. Cards can
-be moved, resized and downloaded again from another browser, even after the
-terminal disconnects or Canvas restarts. Removing the last card removes the
-stored file. Include both
-the database and the `files` directory when backing up `CANVAS_DATA_DIR`.
+For files, progress measures the copy into Canvas server storage, and the command
+finishes when that copy completes. The overview previews images, PDFs and text
+with a download button; other types download directly. Image previews support
+page fullscreen, zoom and pan. Custom canvases retain files as downloadable cards.
+Overview files expire after one hour or a server restart.
 
-Multiple canvases and browser tabs on one Canvas Server share the same native
-window controller; only its current controller receives the download. SSH
-sources use a private reverse Unix-socket forward and an owner-only registry.
-If separate Canvas Server instances register the same native terminal, the
-helper refuses the ambiguous request instead of sending the file to multiple
-browsers. No custom herdr server or global SSH configuration is required.
+Paste or drop images, screenshots and files onto a terminal to upload them to
+`~/.local/share/canvas/inbox` on that machine. Canvas prefixes each filename with
+a random identifier and inserts shell-quoted absolute paths into the original
+window. Press Enter when ready. Selecting terminal text copies it to the clipboard.
 
-## Paste files into a terminal
+For directories, `canvas open` offers a VS Code Remote SSH link. The desktop needs
+VS Code, its Remote SSH extension and SSH access to the source machine.
 
-Paste a screenshot or copied files, or drop files onto a terminal's content area.
-Canvas uploads them to `~/.local/share/canvas/inbox` on that window's machine,
-using an eight-character random prefix followed by the original filename. Local
-and SSH windows follow the same behavior. Images retain their original bytes.
+## Configuration
 
-After all files finish, Canvas inserts their quoted absolute paths into the
-original window in order, without pressing Enter. You can type `cat `, paste a
-file, then press Enter yourself. Start at an unquoted shell argument position;
-Canvas cannot infer shell quoting already typed into arbitrary terminal programs.
-Changing canvases does not redirect a pending upload; native pane selection stays
-with herdr/tmux. A closed target window fails instead of receiving input elsewhere.
-Progress and cancellation appear only inside the originating terminal card.
-Uploaded files remain in the managed inbox until removed; cancellation removes
-the unfinished batch. Directory drops are not supported.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CANVAS_DATA_DIR` | `~/.local/share/canvas` | Account, database and stored files |
+| `CANVAS_HOST` | `127.0.0.1` | Listen address |
+| `CANVAS_PORT` | `3010` | Listen port |
+| `CANVAS_HERDR_BINARY` | `herdr` | Local bare client for SSH herdr connections |
+| `CANVAS_SECURE_COOKIE` | unset | Set to `1` behind TLS termination |
+| `CANVAS_PUBLIC_SSH_HOST` | Listen address or hostname | Advertised VS Code SSH host for local connections |
+| `CANVAS_PUBLIC_SSH_PORT` | `22` | Advertised VS Code SSH port for local connections |
 
-Plaintext paste remains native terminal behavior. File clipboard support depends
-on the browser and operating system: a file item or screenshot can be uploaded,
-but a copied local pathname alone does not grant access to that file. Dragging
-files from the file manager provides an alternative without clipboard permissions.
+For remote access, use an SSH tunnel or a TLS reverse proxy supporting WebSockets
+and unbuffered server-sent events. Preserve the Host header and serve the UI and
+API from the same origin. Account access grants terminal access to connected machines.
 
-Use the browser's paste shortcut: Ctrl+V on Windows/Linux or Command+V on macOS.
-Canvas handles that shortcut before terminal key encoding, so a remote program
-does not attempt to read the server machine's clipboard instead. Selecting text
-with the mouse copies on release. Ctrl+Shift+C (or Command+C on macOS) also copies
-a terminal selection, including on HTTP origins. When a terminal application owns
-mouse selection, its OSC52 copy response is accepted only for the focused window
-after the user's copy gesture. Clipboard queries never read back browser data.
-OS-injected paste shortcuts without a physical keyboard code, including the
-event shape used by Windows clipboard history, also retain native browser paste.
-
-## Continue in VS Code
-
-Run `canvas open <directory>` to send its absolute path to the current browser.
-Canvas displays a compact “在本地继续” dialog with one “在VSCode打开” button.
-The command exits when the browser receives the dialog; clicking the button
-opens VS Code Remote SSH with the source's hostname, username and port. Directory
-contents are not copied. The desktop needs VS Code, Remote SSH and SSH access to
-that machine; browser external-application confirmation may appear.
-
-Remote links do not include private keys or change SSH configuration. Existing
-desktop SSH configuration and credentials still apply. Local sources refer to
-the Canvas server machine, not necessarily the browser computer: their editor
-host defaults to the non-loopback `CANVAS_HOST` or the server hostname, its current
-user and SSH port 22. `CANVAS_PUBLIC_SSH_HOST` and `CANVAS_PUBLIC_SSH_PORT` can
-override that advertised address for a deployment behind a proxy or NAT.
-
-## Window behavior
-
-- The first canvas is the live overview. Spaces run vertically, windows horizontally,
-  with sources grouped by machine.
-- Two-finger scrolling pans the canvas in either direction; pinching zooms around
-  the pointer. Scrolling reaches a terminal only when it has input focus and
-  mouse reporting enabled. Note text keeps its own scrolling.
-- The fullscreen button hides the sidebar and header for the entire canvas.
-  Exit with the same button or Escape to restore the previous view. This changes
-  only the canvas presentation; terminal dimensions stay unchanged.
-- Add a window to another canvas to create a reference, not another terminal.
-- A card has one title: the native window name. Its status dot opens pane
-  details; source context is available in the title tooltip.
-- Selection and focus emphasize the existing status-colored border without an
-  extra outline. The inward-corner icon exits a maximized window.
-- Cards follow the attached client's aspect ratio. Width determines the display
-  scale and height follows, keeping every pane visible without distortion.
-- Each native window has one backend PTY and one shared card size across all
-  canvases and browsers. Card positions and canvas zoom remain local to each
-  canvas; Overview follows the shared card size without resize handles.
-- Overview has no card resize handles. Switching canvases and zooming preserve
-  the attached client's viewport without reconnecting it. tmux views follow
-  native dimensions; herdr uses its ordinary native attach rules.
-- Drag a custom canvas card's header to move it; explicitly resizing the card
-  changes its native window's dimensions.
-- Focus fills the viewport by resizing the attached PTY at normal font size.
-  Each native window has one maximum-size view. Its other references show
-  “已最大化” and pause terminal rendering. Maximizing another reference takes
-  over; the previous view returns to its canvas. Leaving focus restores the
-  client's viewport and resumes other references from the latest full screen.
-  Different native windows can be maximized independently.
-- tmux follows external native dimensions and restores the original window size
-  only while Canvas still owns its geometry. Herdr's unmodified server decides
-  which native client controls pane sizes. Canvas does not override that decision
-  or claim atomic native restoration: external resize may leave Canvas's client
-  viewport unchanged until native interaction transfers control. Initial attach
-  can resize native tabs according to herdr's existing rules.
-- Explicitly focusing a terminal claims input. Merely opening another viewer
-  preserves input ownership; all references share the same native screen.
-- Removing a card only removes that reference. Closing a native window ends its
-  processes and requires an explicit confirmation.
-- tmux uses a temporary `__canvas_` session linked to the selected window. The
-  status line and prefix navigation are disabled in this bare view. Pane mouse
-  interaction and application shortcuts work normally; use Canvas or tmux CLI
-  for window operations. Auxiliary sessions are filtered out of the overview.
-- Reconnecting replays the retained terminal screen. Existing programs stay in
-  the provider when Canvas disconnects. Dead window references remain visible
-  so they can be removed or replaced deliberately.
-
-## Mobile
-
-On phones and touch-first tablets, canvas terminals are read-only previews. Drag
-with one finger to pan or pinch with two fingers to zoom. Tap a window to open
-it full-screen, then use its keyboard button to show or hide the system keyboard.
-The terminal resizes to the remaining visible area, including when the keyboard
-stays open. Leaving full-screen follows the same shared-window and external-resize
-rules as desktop.
-
-The row above the keyboard provides equally sized Esc, Tab, Ctrl and arrow keys
-without horizontal scrolling; hold an arrow to repeat. More opens a keyboard with
-a number/symbol row, letters, punctuation, function and navigation keys, without
-a separate number pad. F1–F12 fit on one row. Shift, Ctrl, Alt and Meta can be combined;
-they clear after the next key, while holding a key repeats the original combination.
-Holding a modifier with one finger also works with keys tapped by another finger.
-Caps Lock controls letter case separately, and Shift updates letter and symbol
-keycaps immediately, for example 4 becomes $. Every key has its own visible keycap.
-File upload, text paste, text selection, Scroll and Mouse use icon buttons at the
-bottom of the expanded panel while its keyboard area scrolls vertically when
-needed. Navigation and modifiers share a bottom key row with a wider, unlabelled
-Space; Escape and arrows remain on the compact row.
-
-Scroll mode moves terminal history or sends native scroll events, without mouse
-clicks. Switch to Mouse when an application needs clicks or dragging. Text
-selection opens a read-only copy sheet. The paste sheet accepts
-native long-press paste; images and files use the same managed upload path as
-desktop. Pasting text never adds Enter.
-
-Combinations use traditional terminal encoding: Shift+Left is a modified arrow,
-while Ctrl+A and Ctrl+Shift+A have the same control character. Meta characters
-use the usual ESC prefix like Alt; a provider may also normalize Meta navigation
-keys to Alt. These keys target the terminal, not the browser or operating system.
-Canvas does not force an extended keyboard protocol on native applications.
-
-Mobile layout depends on the device's primary touch input, not just browser width.
-A narrow desktop window retains desktop controls. Actual clipboard formats and
-software-keyboard behavior depend on the browser and operating system.
-
-## Content fonts
-
-Open Settings from the sidebar footer to configure the ordered content-font
-stack. The first family is preferred; later entries provide missing glyphs.
-Built-in suggestions and locally installed family names use the same list.
-Each entry is only a font name. Changes preview inside the dialog
-until saved, then synchronize across browsers. They apply to terminals, note text,
-text file previews and mobile selection/paste sheets, leaving application chrome
-unchanged.
-
-Maple Mono NF CN is the default. Maple Mono Normal NF CN and Cascadia Code PL
-are separate bundled font names in the same list. Both Maple families retain
-their full Chinese/Nerd Fonts character sets. Built-in fonts load from
-Canvas, not a third-party CDN. Locally installed fonts depend on each browser
-computer; unavailable names fall through the configured list. Known bundled font
-metrics are aligned for mixed-script fallback. Ligatures are optional and off by
-default; they change glyph presentation without changing copied or terminal text.
-The font catalog can gain families without changing the settings API or adding
-special controls. Preferences contain only family names and the ligature switch.
-
-Changing fonts preserves ordinary cards' native rows/columns and connections.
-Only the existing maximized owner may update its temporary geometry; an external
-resize that revoked ownership is not overridden. Native herdr size arbitration
-keeps its existing client-only limits. Loading errors retain the last usable font.
-
-Text file previews show up to the first 1 MiB as plain text, with a download link
-to the complete original. Image and PDF previews retain their native behavior.
-Bundled font provenance and licenses are in `web/public/fonts/README.md`.
-
-## Notes
-
-Custom canvases support plaintext notes with a title, five colors, drag, resize
-and collapse. Notes save automatically and synchronize across browsers; layout
-and content edits are saved independently. The grid button toggles position
-snapping. Overview keeps its automatic window layout and does not accept notes.
-
-## Canvas backgrounds
-
-Overview is the first item in the canvas list; its name and layout are fixed.
-Every canvas, including Overview, can have an independent background: open canvas settings, choose Background image,
-upload a PNG/JPEG/WebP, and adjust opacity. Preview and Cancel do not alter the
-saved canvas. Images are stored on the server, require authentication, and remain
-independent when switching or reloading canvases. Photo uploads have no application
-file-size or pixel-count limit. Images retain their resolution and are normalized
-to WebP without embedded metadata; panoramas exceeding WebP's dimensions use PNG.
-Backgrounds, connections, canvas names, window references and saved positions
-synchronize across authenticated browsers. Logging out ends only that login
-session's connections.
-
-## Program status
-
-Each window shows the highest-priority pane state: error, attention, working,
-done, idle, then unknown. Pane indicators retain the native pane ID and show
-individual states. Unknown stays neutral; Canvas never infers an agent state
-from a prompt, title or output text.
-
-Herdr uses its native `agent_status`; `blocked` means attention and `done` means
-completed work that has not yet been seen. tmux exposes OSC 9;4 progress through
-`pane_pb_state` on versions that support it: normal/indeterminate mean working,
-paused means attention, and error means error. Hidden progress is unknown.
-
-Opened tmux windows also accept passive
-[OSC 7501 reports](https://www.superlogical.com/rex/docs/build/program-status).
-Canvas observes the existing bare-window helper with a control client that does
-not contribute dimensions or send terminal input. It does not attach to original
-sessions, replace `pipe-pane`, or install persistent hooks. Reports are scoped to
-the native pane; child records, clear, full reset and OSC 133 prompt lifetime are
-handled independently for each pane. After a valid OSC 7501 report, OSC 9;4 is
-ignored for that pane until a full terminal reset.
-
-Only reports emitted after the window opens are available; reconnecting or
-restarting Canvas loses this in-memory status history. Capability queries (`?`)
-are not answered, so programs that require negotiation must be configured to
-emit reports directly. This is passive report display, not full OSC 7501
-terminal capability negotiation.
+Back up the complete data directory, including the SQLite database and `files/`.
+Uploaded terminal files remain in each source machine's managed inbox.
 
 ## Development
 
-Run `npm run server` and `npm run dev` in separate terminals. Vite proxies the
-API and WebSocket to port 3010. Run `npm run typecheck`, `npm test`, and
-`npm run build` before shipping. Native tests use isolated synthetic sockets.
-Set `CANVAS_TEST_HERDR_BINARY` to the bare client and
-`CANVAS_TEST_HERDR_SERVER_BINARY` to a separate, unmodified upstream server
-executable for herdr compatibility tests.
+Run `npm run server` and `npm run dev` in separate terminals. Before submitting:
 
-Canvas's free-layout interaction was informed by SecFlow's canvas. The application
-is independent of SecFlow's workspace, authentication and task systems.
+```sh
+npm run typecheck
+npm test
+npm run build
+```
+
+Native tests use isolated sessions. For herdr tests, set
+`CANVAS_TEST_HERDR_BINARY` to the bare client and `CANVAS_TEST_HERDR_SERVER_BINARY`
+to the upstream server executable.
+
+## License
+
+[Apache License 2.0](LICENSE). Bundled fonts retain their
+[upstream licenses](web/public/fonts/README.md).
