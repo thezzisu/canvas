@@ -20,7 +20,7 @@ const position = ref({ left: '0px', top: '0px' })
 const portal = computed(() => trigger.value?.closest('.app-shell') || document.body)
 let leaveTimer: ReturnType<typeof setTimeout> | undefined
 const summary = computed(() => !props.available ? '窗口不可用' : props.connection === 'connecting' ? '连接中' : props.connection === 'disconnected' ? '连接已断开' : statusLabel(props.status))
-const color = computed(() => !props.available || props.connection === 'disconnected' ? statusColor('error') : props.connection === 'connecting' ? statusColor('attention') : statusColor(props.status))
+const color = computed(() => !props.available || props.connection === 'disconnected' ? statusColor('error') : props.connection === 'connecting' ? statusColor('working') : statusColor(props.status))
 
 function contains(target: EventTarget | null) { return target instanceof Node && (trigger.value?.contains(target) || panel.value?.contains(target)) }
 function close() { clearTimeout(leaveTimer); open.value = false; pinned.value = false }

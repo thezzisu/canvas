@@ -6,6 +6,7 @@ import { FrameReader, encodeClientMessage, type ClientMessage, type ClientShellS
 
 export interface HerdrClientTransport {
   onData(listener: (data: string) => void): { dispose(): void }
+  onPaneFocus(listener: (paneId: string | undefined) => void): { dispose(): void }
   onExit(listener: (event: { exitCode: number; signal?: number }) => void): { dispose(): void }
   write(data: string | Buffer): void
   resize(cols: number, rows: number): void
@@ -44,6 +45,8 @@ class HerdrClient implements HerdrClientTransport {
   private readonly reader = new FrameReader()
   private readonly screen = new HerdrScreen()
   private readonly dataListeners = new Set<(data: string) => void>()
+  private readonly paneFocusListeners = new Set<(paneId: string | undefined) => void>()
+  private focusedPaneId?: string
   private readonly exitListeners = new Set<(event: Exit) => void>()
   private readonly requests = new Map<string, Request>()
   private requestLane: Promise<unknown> = Promise.resolve()
@@ -220,7 +223,6 @@ class HerdrClient implements HerdrClientTransport {
       } catch (error) { request.reject(error instanceof Error ? error : new Error('Invalid herdr response')) }
     } else if (message.type === 'clipboard') this.clipboard(message.data)
     else if (message.type === 'bell') this.emit('\x07'.repeat(Math.min(message.count, 16)))
-    else if (message.type === 'title') this.emit(`\x1b]0;${(message.title || '').replace(/[\x00-\x1f\x7f-\x9f]/gu, '')}\x07`)
     else if (message.type === 'shutdown') this.finish({ exitCode: 0 })
     else if (message.type === 'error') throw new Error(message.message)
   }
@@ -233,6 +235,11 @@ class HerdrClient implements HerdrClientTransport {
   private render() {
     const surface = this.coherentSurface()
     if (!surface || this.closed) return
+    const paneId = surface.panes.find(pane => pane.focused)?.pane_id
+    if (paneId !== this.focusedPaneId) {
+      this.focusedPaneId = paneId
+      for (const listener of this.paneFocusListeners) listener(paneId)
+    }
     this.input.refresh()
     const rendered = this.screen.render(surface, this.selection)
     if (!this.initialized) {
@@ -267,6 +274,11 @@ class HerdrClient implements HerdrClientTransport {
     })
   }
   onData(listener: (data: string) => void) { this.dataListeners.add(listener); this.scheduleFlush(); return { dispose: () => { this.dataListeners.delete(listener) } } }
+  onPaneFocus(listener: (paneId: string | undefined) => void) {
+    this.paneFocusListeners.add(listener)
+    queueMicrotask(() => { if (!this.closed && this.paneFocusListeners.has(listener)) listener(this.focusedPaneId) })
+    return { dispose: () => { this.paneFocusListeners.delete(listener) } }
+  }
   onExit(listener: (event: Exit) => void) {
     this.exitListeners.add(listener)
     if (this.exit) queueMicrotask(() => { if (this.exitListeners.has(listener)) listener(this.exit!) })

@@ -9,13 +9,14 @@ const labels: Record<ProgramStatus, string> = {
   unknown: '未报告状态',
 }
 
+// Herdr’s default Catppuccin Mocha status palette.
 export const statusColors: Record<ProgramStatus, string> = {
-  error: '#de7272',
-  attention: '#d8a756',
-  working: '#6a9fe2',
-  done: '#79b88c',
-  idle: '#7b9c88',
-  unknown: '#4c545f',
+  error: '#f38ba8',
+  attention: '#f38ba8',
+  working: '#f9e2af',
+  done: '#94e2d5',
+  idle: '#a6e3a1',
+  unknown: '#6c7086',
 }
 
 export function statusLabel(status?: ProgramStatus) { return labels[status || 'unknown'] }

@@ -269,7 +269,8 @@ test("SSH herdr discovers native sockets and shares direct API forwarding withou
       input += data.toString(); if (!input.includes("\n")) return;
       const request = JSON.parse(input.split("\n")[0]!);
       assert.equal(request.method, "session.snapshot");
-      socket.end(JSON.stringify({ id: request.id, result: { snapshot: { workspaces: [{ workspace_id: "space", label: "Space" }], tabs: [{ workspace_id: "space", tab_id: "tab", label: "Window" }] } } }) + "\n");
+      socket.end(JSON.stringify({ id: request.id, result: { snapshot: { workspaces: [{ workspace_id: "space", label: "Space" }], tabs: [{ workspace_id: "space", tab_id: "tab", label: "Window" }],
+        panes: [{ pane_id: "pane", tab_id: "tab", terminal_title_stripped: " \x1b\x07" + "中🙂".repeat(600) + "\x9f " }] } } }) + "\n");
     });
   });
   let first: Awaited<ReturnType<typeof openTerminal>> | undefined;
@@ -344,7 +345,9 @@ process.on('SIGTERM',()=>{ for(const socket of sockets) socket.destroy(); for(co
     ]);
     assert.equal(typeof first.connect, "function");
     assert.equal(readFileSync(forwards, "utf8").trim().split("\n").length, 1);
-    assert.equal((await listResources(source)).spaces[0]!.windows[0]!.id, "tab");
+    const window = (await listResources(source)).spaces[0]!.windows[0]!;
+    assert.equal(window.id, "tab");
+    assert.equal(window.panes[0]?.terminalTitle, "中🙂".repeat(512), "pane title strips controls and bounds Unicode codepoints without splitting emoji");
     await second.cleanup(); second = undefined;
     assert.equal((await listResources(source)).status, "online");
     assert.equal(readFileSync(forwards, "utf8").trim().split("\n").length, 1, "one native handle keeps both forwards alive");

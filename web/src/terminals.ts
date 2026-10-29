@@ -15,6 +15,7 @@ export type TerminalStatus = {
   status: 'connecting' | 'connected' | 'disconnected'
   error?: string
   readOnly?: boolean
+  focusedPaneId?: string
   presentation?: { maximized: boolean; owned: boolean }
   focusResize?: { owned: boolean }
   upload?: TerminalUploadState
@@ -166,6 +167,7 @@ function connect(session: Session) {
         if (receiveDownload(socket, message, session.resource)) return
         if (receiveDirectory(socket, message) || session.uploads.receive(message)) return
         if (message.type === 'reset') session.term.write('\x1bc')
+        else if (message.type === 'pane-focus') setState(session, { ...session.state, focusedPaneId: typeof message.paneId === 'string' ? message.paneId : undefined })
         else if (message.type === 'presentation') {
           const revision = session.presentationRevision = (session.presentationRevision || 0) + 1
           const presentation = { maximized: message.maximized === true, owned: message.owned === true }
@@ -217,16 +219,22 @@ function availableSize(host: HTMLElement) {
     height: host.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom),
   }
 }
+function terminalGeometry(session: Session): TerminalGeometry | undefined {
+  const screen = session.term.element?.querySelector<HTMLElement>('.xterm-screen')
+  if (!screen?.offsetWidth || !screen.offsetHeight) return
+  // Use the renderer's actual grid, including its device-pixel rounding.
+  return { width: screen.offsetWidth + scrollbarWidth, height: screen.offsetHeight }
+}
 /** A view is a scaled projection of the shared native window, not its size owner. */
 function present(session: Session) {
   if (!session.host?.isConnected || !session.opened) return
   if (session.state.presentation?.maximized && (!session.state.presentation.owned || !session.magnified)) return
-  const screen = session.term.element?.querySelector<HTMLElement>('.xterm-screen')
-  if (!screen?.offsetWidth || !screen.offsetHeight) return
+  const geometry = terminalGeometry(session)
+  if (!geometry) return
   const available = availableSize(session.host)
   // The viewport's scrollbar belongs beside the terminal cells. Keep its space
   // even when hidden so output/scrollback never alters the native geometry.
-  const width = screen.offsetWidth + scrollbarWidth, height = screen.offsetHeight
+  const { width, height } = geometry
   if (session.state.status === 'connected') {
     for (const listener of session.geometryListeners) listener({ width, height })
   }
@@ -279,15 +287,15 @@ function endFocusSize(session: Session) {
 function resize(session: Session) {
   if (session.magnified || session.state.status !== 'connected' || (session.state.presentation?.maximized && !session.state.presentation.owned)) return
   const proposed = proposedSize(session)
-  if (proposed && session.socket?.readyState === WebSocket.OPEN) {
-    claimFocus(session)
-    const { cols, rows } = proposed
-    if (cols !== session.term.cols || rows !== session.term.rows) {
-      session.term.resize(cols, rows)
-      session.socket.send(JSON.stringify({ type: 'resize', cols, rows }))
-    }
+  if (!proposed || session.socket?.readyState !== WebSocket.OPEN) return
+  claimFocus(session)
+  const { cols, rows } = proposed
+  if (cols !== session.term.cols || rows !== session.term.rows) {
+    session.term.resize(cols, rows)
+    session.socket.send(JSON.stringify({ type: 'resize', cols, rows }))
   }
   present(session)
+  return terminalGeometry(session)
 }
 function claimFocus(session: Session) {
   if (!interactive(session)) return
@@ -468,7 +476,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     copySelection(text = current.term.getSelection()) { return current.clipboard?.copyText(text) ?? false },
     pasteText(text: string) { if (interactive(current)) { setModifiers(current); claimFocus(current); current.term.paste(text) } },
     setTouchMode(mode: TerminalTouchMode) { current.touchMode = mode; setModifiers(current); setState(current, { ...current.state, touchMode: mode }) },
-    resize() { resize(current) },
+    resize() { return resize(current) },
     cancelUpload() { current.uploads.cancel() },
     reconnect() {
       endFocusSize(current)

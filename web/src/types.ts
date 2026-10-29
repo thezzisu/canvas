@@ -18,6 +18,7 @@ export interface PaneResource {
   active: boolean
   status: ProgramStatus
   agent?: string
+  terminalTitle?: string
 }
 export interface WindowResource {
   id: string

@@ -23,17 +23,17 @@ async function fixture(t: TestContext, options: { holdFocus?: boolean; badWelcom
   let peer: Socket, pending = Buffer.alloc(0), hello: Record<string, unknown> | undefined
   const send = (writer: Writer) => peer.write(framed(writer.finish()))
   const control = (kind: string, value: unknown) => send(new Writer().uint(20).string(kind).string(JSON.stringify(value)))
-  const snapshot = (revision = 1, focused = 'target', boot = 'boot') => control('shell.snapshot.v1', {
-    boot_id: boot, revision, focused_workspace_id: 'space', focused_tab_id: focused, focused_pane_id: 'pane',
+  const snapshot = (revision = 1, focused = 'target', boot = 'boot', pane = 'pane') => control('shell.snapshot.v1', {
+    boot_id: boot, revision, focused_workspace_id: 'space', focused_tab_id: focused, focused_pane_id: pane,
     tabs: [{ tab_id: 'target', workspace_id: 'space', focused: focused === 'target' }, { tab_id: 'other', workspace_id: 'space', focused: focused === 'other' }],
-    panes: [{ pane_id: 'pane', tab_id: 'target', workspace_id: 'space', focused: true, right_click_passthrough: false }],
+    panes: [{ pane_id: pane, tab_id: 'target', workspace_id: 'space', focused: true, right_click_passthrough: false }],
   })
-  const surface = (revision = 1, surfaceRevision = 1, text = 'READY', boot = 'boot') => {
+  const surface = (revision = 1, surfaceRevision = 1, text = 'READY', boot = 'boot', pane = 'pane') => {
     const writer = new Writer().uint(13).string(boot).uint(revision).uint(surfaceRevision)
     writer.uint(8)
     for (let i = 0; i < 8; i++) writer.string(text[i] || ' ').uint(0).uint(0).uint(0).bool(false).byte(0)
     writer.uint(8).uint(1).byte(0).uint(0).uint(0) // frame dimensions, cursor, links, graphics
-    writer.uint(1).string('pane').uint(surfaceRevision)
+    writer.uint(1).string(pane).uint(surfaceRevision)
     for (let i = 0; i < 2; i++) writer.uint(0).uint(0).uint(8).uint(1)
     writer.byte(0).byte(0).bool(true).bool(false).bool(false).bool(false).uint(0).uint(0)
     writer.uint(0).byte(0).uint(0).uint(0).uint(0) // splits, popup, graphics scene
@@ -108,6 +108,32 @@ test('native client pause/resume preserves queued display and cleanup reports on
   client.resume(); await until(() => output.includes('P'))
   client.kill(); client.kill(); await delay(10); assert.equal(exits, 1)
   client.write('ignored'); client.resume()
+})
+
+test('pane focus follows coherent endpoint surfaces, replays to late listeners and ignores the outer herdr title', async t => {
+  const f = await fixture(t), client = await f.connect()
+  t.after(() => client.kill())
+  const focused: (string | undefined)[] = []
+  let output = ''
+  client.onData(data => output += data)
+  const subscription = client.onPaneFocus(pane => focused.push(pane))
+  await until(() => focused.length === 1)
+  assert.deepEqual(focused, ['pane'])
+  f.surface(1, 2); await delay(10)
+  assert.equal(focused.length, 1, 'unchanged focus does not emit metadata')
+  f.snapshot(2, 'target', 'boot', 'second'); await delay(10)
+  assert.equal(focused.length, 1, 'snapshot does not overtake its matching surface')
+  f.surface(2, 3, 'SECOND', 'boot', 'second')
+  await until(() => focused.length === 2)
+  assert.deepEqual(focused, ['pane', 'second'])
+  const late: (string | undefined)[] = []
+  client.onPaneFocus(pane => late.push(pane))
+  await until(() => late.length === 1)
+  assert.deepEqual(late, ['second'])
+  subscription.dispose()
+  f.send(new Writer().uint(6).byte(1).string('hostname: outer workspace'))
+  await delay(10)
+  assert(!output.includes('\x1b]0;'), 'outer title must not masquerade as a pane title')
 })
 
 test('input waits behind a serialized tab-focus barrier and cannot escape before its acknowledgement', async t => {

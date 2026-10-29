@@ -27,6 +27,7 @@ class LiveTerminal {
   private rendered = new Set<WebSocket>();
   private maximized?: { owner: WebSocket; token: string };
   private presentationRevision = 0;
+  private focusedPaneId?: string;
   controller?: WebSocket;
   private downloadController?: WebSocket;
   idle?: ReturnType<typeof setTimeout>;
@@ -70,6 +71,11 @@ class LiveTerminal {
       },
       () => { void this.close(); },
     );
+    this.proc.onPaneFocus((paneId) => {
+      if (this.closed || this.focusedPaneId === paneId) return;
+      this.focusedPaneId = paneId;
+      for (const ws of this.clients) json(ws, { type: "pane-focus", paneId });
+    });
     this.proc.onData((data) => {
       if (this.closed) return;
       const bytes = Buffer.byteLength(data);
@@ -139,6 +145,7 @@ class LiveTerminal {
   }
   private snapshot(ws: WebSocket) {
     if (this.closed || !this.clients.has(ws) || ws.readyState !== 1) return;
+    json(ws, { type: "pane-focus", paneId: this.focusedPaneId });
     if (this.maximized && this.maximized.owner !== ws) {
       this.rendered.delete(ws);
       this.presentation(ws);

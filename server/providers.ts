@@ -14,6 +14,7 @@ export interface PaneResource {
   name: string;
   active: boolean;
   agent?: string;
+  terminalTitle?: string;
   status: ProgramStatus;
 }
 export interface WindowResource {
@@ -612,7 +613,7 @@ async function herdrSpaces(source: Source): Promise<SpaceResource[]> {
   const snapshot = response.snapshot as {
     workspaces: Array<{ workspace_id: string; label: string }>;
     tabs: Array<{ workspace_id: string; tab_id: string; label: string; agent_status?: string }>;
-    panes?: Array<{ tab_id: string; pane_id: string; label?: string; display_agent?: string; agent?: string; focused?: boolean; agent_status?: string }>;
+    panes?: Array<{ tab_id: string; pane_id: string; label?: string; display_agent?: string; agent?: string; focused?: boolean; agent_status?: string; terminal_title_stripped?: string }>;
   };
   if (!snapshot || !Array.isArray(snapshot.workspaces) || !Array.isArray(snapshot.tabs))
     throw new Error("Unexpected herdr snapshot response");
@@ -640,6 +641,7 @@ async function herdrSpaces(source: Source): Promise<SpaceResource[]> {
                     agent?: string;
                     focused?: boolean;
                     agent_status?: string;
+                    terminal_title_stripped?: string;
                   },
                   index: number,
                 ) => ({
@@ -650,6 +652,8 @@ async function herdrSpaces(source: Source): Promise<SpaceResource[]> {
                     pane.agent ||
                     String(index + 1),
                   active: pane.focused === true,
+                  terminalTitle: typeof pane.terminal_title_stripped === "string"
+                    ? Array.from(pane.terminal_title_stripped.replace(/[\x00-\x1f\x7f-\x9f]/gu, "").trim()).slice(0, 1024).join("") : "",
                   ...(pane.display_agent || pane.agent
                     ? { agent: pane.display_agent || pane.agent }
                     : {}),

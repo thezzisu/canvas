@@ -32,9 +32,14 @@ const uploadLabel = computed(() => {
   if (upload.state === 'completed') return '已插入路径'
   return upload.state === 'preparing' ? '准备上传…' : `${uploadPercent.value}%`
 })
-const title = computed(() => [props.data.name, props.data.subtitle].filter(Boolean).join('\n'))
+const liveTitle = computed(() => {
+  const value = props.data.panes.find(pane => pane.id === status.value.focusedPaneId)?.terminalTitle || ''
+  return value === props.data.name ? '' : value
+})
+const title = computed(() => [props.data.name, liveTitle.value, props.data.subtitle].filter(Boolean).join('\n'))
 let terminal: ReturnType<typeof mountTerminal> | undefined
 let ownedPresentation = false
+let resizeOrigin: { x: number; y: number } | undefined
 let previewTap: { id: number; x: number; y: number; at: number } | undefined
 let previewEligible = false
 function clearPreviewTap() { previewTap = undefined; previewEligible = false; document.removeEventListener('pointerdown', cancelMultiTap, true) }
@@ -101,20 +106,35 @@ function action(name: string) {
   if (name === 'reconnect') terminal?.reconnect()
   else { if (name === 'unfocus' && props.data.mobile) terminal?.blur(); props.data.onAction(name, props.id) }
 }
+function resizeStarted(event: { params: { x: number; y: number } }) {
+  resizeOrigin = { x: event.params.x, y: event.params.y }
+  props.data.onLayoutStart()
+}
 async function resized(event: { params: { width: number; height: number; x: number; y: number } }) {
   if (props.data.overview || props.data.focus) return
   await nextTick()
-  // Read the user's final rectangle before normalizing its view to the new grid.
-  terminal?.resize()
-  props.data.onResize(props.id, event.params.width, event.params.height, event.params.x, event.params.y)
+  const geometry = terminal?.resize()
+  let { width, height, x, y } = event.params
+  const element = host.value, card = element?.closest<HTMLElement>('.terminal-card')
+  if (geometry && element && card) {
+    const style = getComputedStyle(element)
+    const snappedWidth = geometry.width + card.offsetWidth - element.clientWidth + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
+    const snappedHeight = geometry.height + card.offsetHeight - element.clientHeight + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
+    // A left/top handle keeps the opposite edge anchored when snapping.
+    if (resizeOrigin && x !== resizeOrigin.x) x += width - snappedWidth
+    if (resizeOrigin && y !== resizeOrigin.y) y += height - snappedHeight
+    width = snappedWidth; height = snappedHeight
+  }
+  resizeOrigin = undefined
+  props.data.onResize(props.id, width, height, x, y)
 }
 </script>
 <template>
-  <NodeResizer v-if="!data.mobile && !data.overview && !data.focus && !maximizedElsewhere" :is-visible="selected" :min-width="360" :min-height="220" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="resized" />
+  <NodeResizer v-if="!data.mobile && !data.overview && !data.focus && !maximizedElsewhere" :is-visible="selected" :min-width="360" :min-height="220" :max-width="4000" :max-height="3000" @resize-start="resizeStarted" @resize-end="resized" />
   <article class="terminal-card" :class="[{ selected, unavailable: !data.available, focused: data.focus, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="data.available ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :style="{ '--program-color': statusColor(frameStatus), width: dimensions ? '100%' : `${data.width}px`, height: dimensions ? '100%' : `${data.height}px` }" :aria-label="`${data.name} · ${data.subtitle}`">
     <header class="terminal-header drag-handle">
       <PaneIndicators :panes="data.panes" :status="data.status" :available="data.available" :connection="status.status" :error="status.error" :read-only="status.readOnly" />
-      <span class="terminal-name" :title="title">{{ data.name }}</span>
+      <span class="terminal-name" :title="title"><span class="terminal-tab-name">{{ data.name }}</span><span v-if="liveTitle" class="terminal-live-title">{{ liveTitle }}</span></span>
       <div class="terminal-actions nodrag">
         <button v-if="data.overview && !mobileFocus" title="加入画布" aria-label="加入画布" @click.stop="action('add')"><Icon name="plus" :size="15" /></button>
         <button v-else-if="!mobileFocus" title="从画布移除" aria-label="从画布移除" @click.stop="action('remove')"><Icon name="minus" :size="15" /></button>
@@ -124,7 +144,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
         <button v-if="data.focus" title="退出放大" aria-label="退出放大" @click.stop="action('unfocus')"><Icon name="collapse" :size="15" /></button>
       </div>
     </header>
-    <div v-if="data.available" ref="host" class="terminal-host nodrag nopan nowheel" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :style="data.focus ? { overflow: 'auto' } : undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop />
+    <div v-if="data.available" ref="host" class="terminal-host nodrag nopan nowheel" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop />
     <div v-if="mobilePreview" class="terminal-preview-button" role="button" tabindex="0" :aria-label="`打开窗口 ${data.name}`" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
     <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">上传文件</div>
     <span v-if="status.clipboardError" class="terminal-copy-notice" :class="{ 'copy-failed': status.clipboardError === '复制失败' }" role="status">{{ status.clipboardError }}</span>
@@ -141,6 +161,10 @@ async function resized(event: { params: { width: number; height: number; x: numb
 </template>
 
 <style scoped>
+.terminal-name{display:flex;align-items:center;gap:8px}
+.terminal-tab-name{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.terminal-name:has(.terminal-live-title) .terminal-tab-name{max-width:40%;flex-shrink:0}
+.terminal-live-title{color:#939ba8;overflow:hidden;text-overflow:ellipsis;min-width:0;font-weight:400}
 .terminal-drop-target{outline:1px solid var(--accent);outline-offset:-3px;background:#e9b18808}
 .terminal-copy-notice{position:absolute;bottom:8px;right:9px;padding:4px 7px;border:1px solid #424a56;border-radius:4px;background:#242930f2;color:#b6c0ce;font-size:10px;pointer-events:none}
 .terminal-copy-notice.copy-failed{border-color:#79545470;background:#33262bf2;color:#d6aaaa}

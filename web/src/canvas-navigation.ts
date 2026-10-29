@@ -2,6 +2,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { terminalConsumesWheel } from './terminals'
 import { touchViewport, type TouchPosition } from './mobile-layout'
 import { canvasFrame, preserveCanvasCenter, type CanvasFrame } from './viewport'
+import { PageWheelGesture, swipePage, type PageDirection } from './overview-paging'
 
 type Viewport = { x: number; y: number; zoom: number }
 export function useCanvasNavigation(options: {
@@ -12,6 +13,7 @@ export function useCanvasNavigation(options: {
   blocked(): boolean
   beforeFullscreen(): void
   mobile(): boolean
+  paging?: { enabled(): boolean; move(direction: PageDirection): void; recenter(): Promise<unknown> }
 }) {
   const surface = ref<HTMLElement>()
   const app = ref<HTMLElement>()
@@ -19,7 +21,8 @@ export function useCanvasNavigation(options: {
   let previous: { canvasId: string; viewport: Viewport; width: number; height: number; frame?: CanvasFrame } | undefined
   let saveTimer: ReturnType<typeof setTimeout> | undefined
   let changing = false
-  let gesture: { count: number; viewport: Viewport; point: TouchPosition; distance: number } | undefined
+  let gesture: { count: number; viewport: Viewport; point: TouchPosition; distance: number; paged: boolean; multi: boolean; latest: TouchPosition } | undefined
+  const pageWheel = new PageWheelGesture()
   let moved = false
   let suppressClickUntil = 0
   let lastTouch: TouchPosition | undefined
@@ -48,7 +51,12 @@ export function useCanvasNavigation(options: {
     if (!gesture && !target?.closest('.terminal-preview-button') &&
         target?.closest('button, a, input, select, .file-preview, .canvas-toolbar, .vue-flow__minimap')) return
     if (!gesture) moved = false
-    gesture = { ...touchPosition(event.touches), viewport: { ...options.getViewport() } }
+    const position = touchPosition(event.touches)
+    if (gesture?.paged) {
+      if (position.count > 1) { gesture.multi = true; moved = true; suppressClickUntil = performance.now() + 500 }
+      return
+    }
+    gesture = { ...position, viewport: { ...options.getViewport() }, paged: !!options.paging?.enabled(), multi: position.count > 1, latest: position.point }
     if (gesture.count > 1) { moved = true; suppressClickUntil = performance.now() + 500 }
   }
   function touchMove(event: TouchEvent) {
@@ -64,8 +72,18 @@ export function useCanvasNavigation(options: {
     }
     if (!gesture || !options.mobile() || options.blocked() || !surface.value || !event.touches.length) return
     const current = touchPosition(event.touches)
+    if (gesture.paged) {
+      gesture.latest = current.point
+      gesture.multi ||= current.count > 1
+      if (Math.hypot(current.point.x - gesture.point.x, current.point.y - gesture.point.y) >= 6 || gesture.multi) {
+        moved = true
+        suppressClickUntil = performance.now() + 500
+        event.preventDefault(); event.stopPropagation()
+      }
+      return
+    }
     if (current.count !== gesture.count) {
-      gesture = { ...current, viewport: { ...options.getViewport() } }
+      gesture = { ...gesture, ...current, viewport: { ...options.getViewport() } }
       return
     }
     if (!moved && current.count === 1 && Math.hypot(current.point.x - gesture.point.x, current.point.y - gesture.point.y) < 6) return
@@ -78,18 +96,25 @@ export function useCanvasNavigation(options: {
   function touchEnd(event: TouchEvent) {
     if (!event.touches.length) editorScroll = undefined
     if (!gesture) return
+    const paged = gesture.paged
+    if (paged && event.touches.length) return
     if (moved) {
       suppressClickUntil = performance.now() + 500
       const ended = event.changedTouches[0]
       if (ended) lastTouch = { x: ended.clientX, y: ended.clientY }
-      clearTimeout(saveTimer)
-      saveTimer = setTimeout(options.saveViewport, 160)
+      if (paged) {
+        const direction = !gesture.multi && swipePage(gesture.latest.x - gesture.point.x, gesture.latest.y - gesture.point.y)
+        if (direction && options.paging?.enabled() && !options.blocked()) options.paging.move(direction)
+      } else {
+        clearTimeout(saveTimer)
+        saveTimer = setTimeout(options.saveViewport, 160)
+      }
     }
     gesture = event.touches.length && surface.value
-      ? { ...touchPosition(event.touches), viewport: { ...options.getViewport() } } : undefined
+      ? { ...gesture, ...touchPosition(event.touches), viewport: { ...options.getViewport() } } : undefined
   }
   function touchCancel() {
-    if (gesture && moved) options.saveViewport()
+    if (gesture && moved && !gesture.paged) options.saveViewport()
     gesture = undefined
     editorScroll = undefined
   }
@@ -112,6 +137,16 @@ export function useCanvasNavigation(options: {
     event.stopPropagation()
     const box = surface.value.getBoundingClientRect()
     const unit = event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? box.height : 1
+    if (options.paging?.enabled()) {
+      // Pinch is deliberately inert in paging mode, including its wheel tail.
+      if (event.ctrlKey) { pageWheel.block(performance.now()); return }
+      const horizontal = event.shiftKey && !event.deltaX
+      const direction = pageWheel.consume((horizontal ? event.deltaY : event.deltaX) * unit,
+        (horizontal ? 0 : event.deltaY) * unit, performance.now())
+      if (direction) options.paging.move(direction)
+      return
+    }
+    pageWheel.reset()
     const current = options.getViewport()
     if (event.ctrlKey) {
       const zoom = Math.max(.08, Math.min(2, current.zoom * 2 ** (-event.deltaY * unit * .02)))
@@ -138,7 +173,8 @@ export function useCanvasNavigation(options: {
     previous = undefined
     fullscreen.value = false
     await settle()
-    if (saved?.canvasId === options.getCanvasId()) {
+    if (options.paging?.enabled()) await options.paging.recenter()
+    else if (saved?.canvasId === options.getCanvasId()) {
       const frame = canvasFrame(surface.value)
       await options.setViewport(options.mobile() && frame ? preserveCanvasCenter(saved.viewport, saved.frame, frame) : saved.viewport)
     }
@@ -166,7 +202,8 @@ export function useCanvasNavigation(options: {
         try { await app.value.requestFullscreen?.() } catch { /* page fullscreen */ }
       }
       await settle()
-      if (previous && fullscreen.value) await options.setViewport({ ...previous.viewport,
+      if (fullscreen.value && options.paging?.enabled()) await options.paging.recenter()
+      else if (previous && fullscreen.value) await options.setViewport({ ...previous.viewport,
         x: previous.viewport.x + (surface.value.clientWidth - previous.width) / 2,
         y: previous.viewport.y + (surface.value.clientHeight - previous.height) / 2 })
     } finally { changing = false }
