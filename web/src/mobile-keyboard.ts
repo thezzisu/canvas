@@ -9,12 +9,12 @@ interface VirtualKeyboard extends EventTarget {
   show(): void
   hide(): void
 }
-interface KeyboardOptions { active(): boolean; changed(requested: boolean): void }
+interface KeyboardOptions { active(): boolean; changed(requested: boolean): void; setEditable?(value: boolean): void }
 let owner: ReturnType<typeof bindMobileKeyboard> | undefined
 export function hideMobileKeyboard() { owner?.blur() }
 
 /** Keep native keyboard intent, input focus and its temporary viewport together. */
-export function bindMobileKeyboard(textarea: HTMLTextAreaElement, options: KeyboardOptions) {
+export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptions) {
   const visual = window.visualViewport
   const keyboard = (navigator as Navigator & { virtualKeyboard?: VirtualKeyboard }).virtualKeyboard
   const read = (): ViewportFrame => ({ width: visual?.width || window.innerWidth,
@@ -30,7 +30,11 @@ export function bindMobileKeyboard(textarea: HTMLTextAreaElement, options: Keybo
   const occluded = (frame: ViewportFrame) => (keyboard?.boundingRect.height || 0) > 0
     || baseline.height - frame.height > Math.max(80, baseline.height * .15)
   const updateIntent = (value: boolean) => { requested = value; options.changed(value) }
-  const inputMode = () => { textarea.readOnly = !requested; textarea.inputMode = requested ? 'text' : 'none' }
+  const inputMode = () => {
+    if (options.setEditable) options.setEditable(requested)
+    else (textarea as HTMLTextAreaElement).readOnly = !requested
+    textarea.inputMode = requested ? 'text' : 'none'
+  }
   function confirmOpening() {
     openingTimer = setTimeout(() => { openingTimer = undefined; if (requested && !occluded(read())) controller.blur() }, 900)
   }

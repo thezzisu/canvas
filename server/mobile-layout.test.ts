@@ -21,6 +21,10 @@ test('visible viewport retains keyboard height and browser pan offsets with a la
   assert.deepEqual(viewportFrame(layout), { width: 390, height: 844, top: 0, left: 0 })
   assert.deepEqual(viewportFrame(layout, { width: NaN, height: 0, offsetTop: -2, offsetLeft: NaN }),
     { width: 390, height: 844, top: 0, left: 0 })
+  // resizes-content shrinks both viewports; browsers without that policy can
+  // still report the remaining space through visualViewport alone.
+  const keyboard = { width: 390, height: 410, offsetTop: 0, offsetLeft: 0 }
+  assert.deepEqual(viewportFrame({ width: 390, height: 410 }, keyboard), viewportFrame(layout, keyboard))
 })
 
 test('touch navigation pans in screen pixels and pinches around the moving two-finger midpoint', () => {

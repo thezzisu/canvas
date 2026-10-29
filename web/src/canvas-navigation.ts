@@ -12,6 +12,7 @@ export function useCanvasNavigation(options: {
   saveViewport(): void
   blocked(): boolean
   beforeFullscreen(): void
+  onError(reason: unknown): void
   mobile(): boolean
   paging?: { enabled(): boolean; canMove(direction: PageDirection): boolean; move(direction: PageDirection): void; recenter(animate?: boolean): Promise<unknown> }
 }) {
@@ -276,11 +277,12 @@ export function useCanvasNavigation(options: {
       previous = { canvasId: options.getCanvasId(), viewport: { ...options.getViewport() }, width: surface.value.clientWidth, height: surface.value.clientHeight,
         frame: options.mobile() ? canvasFrame(surface.value) : undefined }
       fullscreen.value = true
-      // Fullscreen API may be unavailable in embedded browsers. The same layout
-      // remains usable as a page fullscreen, with an always-visible exit button.
-      if (!options.mobile()) {
-        try { await app.value.requestFullscreen?.() } catch { /* page fullscreen */ }
-      }
+      // Invoke before yielding so mobile browsers receive the original tap's
+      // user activation. Embedded browsers can still use the expanded page.
+      try {
+        await app.value.requestFullscreen?.({ navigationUI: 'hide' })
+        if (document.fullscreenElement !== app.value) throw new Error('Fullscreen unavailable')
+      } catch { options.onError('浏览器未允许系统全屏，已切换网页全屏') }
       await settle()
       if (fullscreen.value && options.paging?.enabled()) await options.paging.recenter()
       else if (previous && fullscreen.value) await options.setViewport({ ...previous.viewport,

@@ -43,8 +43,8 @@ built-in client connects through native sockets, forwarded over SSH remotely.
   between spaces. Scrolling follows immediately, springs back below the threshold,
   and snaps one window beyond it. This mode fits windows and locks manual zoom.
   Each space ends with a new-tab card; each connection ends with a new-space row.
-  Both are reachable while paging. Tab names are optional; spaces open directly.
-  Creation controls remain available when status filters hide windows.
+  Tab cards are reachable while paging; Space creation stays a click action.
+  Tab names are optional. The “新建” filter controls both creation entries.
 - **Custom canvases:** add windows from the overview, arrange cards, and add notes
   or files. Every canvas supports its own background image, stored unchanged.
 - **Windows:** references share one native terminal and one card size. Maximizing
@@ -53,11 +53,14 @@ built-in client connects through native sockets, forwarded over SSH remotely.
   processes after confirmation. Card resizing snaps to complete terminal cells.
   Terminal content fills the card; scrollbars overlay the grid.
   Each header keeps the tab name beside the active pane’s distinct terminal title.
+  Disconnections retry up to three times behind a quiet overlay, then offer manual retry.
 - **Navigation:** scroll to pan, pinch to zoom, or use fullscreen for the canvas.
   On mobile, tap a terminal preview to interact in fullscreen; the auxiliary
   keyboard provides modifiers, navigation keys, clipboard and upload actions.
   The header button controls the phone keyboard. Brief keyboard recovery keeps
   the terminal size stable; a refused request returns the button to off.
+  Mobile Overview includes a minimap in free mode. Fullscreen requests browser
+  fullscreen and reports when only page fullscreen is available.
   Modified Enter keys retain their modifiers; the terminal application controls
   their action.
 - **Status:** window colors summarize pane activity. Click the status indicator

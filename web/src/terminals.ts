@@ -10,7 +10,9 @@ import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch'
 import { defaultContentFont, type ContentFontSettings } from '../../shared/settings'
 import { applyTerminalFontFeatures, type FontPresentation } from './fonts'
 import { bindMobileKeyboard } from './mobile-keyboard'
+import { bindMobileInput } from './mobile-input'
 import { fitTerminalGrid, terminalBox } from './terminal-geometry'
+import { TerminalReconnect } from './terminal-reconnect'
 
 export type TerminalStatus = {
   status: 'connecting' | 'connected' | 'disconnected'
@@ -25,6 +27,7 @@ export type TerminalStatus = {
   modifiers?: TerminalModifiers
   touchMode?: TerminalTouchMode
   keyboardRequested?: boolean
+  retryAttempt?: number
 }
 export interface TerminalGeometry { width: number; height: number }
 interface FocusResize { token: string; suspended: boolean; requested?: { cols: number; rows: number } }
@@ -38,6 +41,8 @@ interface Session {
   touchMode: TerminalTouchMode
   keyboardRequested: boolean
   keyboard?: ReturnType<typeof bindMobileKeyboard>
+  mobileInput?: ReturnType<typeof bindMobileInput>
+  keyHandler?: (event: KeyboardEvent) => boolean
   suppressInput?: boolean
   nativeKey?: { id: string; key: string; modifiers: Partial<TerminalModifiers> }
   removeFontFeatures?: () => void
@@ -47,6 +52,10 @@ interface Session {
   presentationFrame?: number
   presentationRevision?: number
   socket?: WebSocket
+  reconnect?: TerminalReconnect
+  connectionRevision: number
+  connectionProbe?: AbortController
+  connectionError?: string
   opened: boolean
   rendered?: TerminalGeometry & { cols: number; rows: number }
   state: TerminalStatus
@@ -57,6 +66,10 @@ interface Session {
   clipboard?: TerminalClipboard
 }
 const sessions = new Map<string, Session>()
+export function hasLiveTerminal(sourceId: string, windowId: string): boolean {
+  return [...sessions.values()].some(session => session.resource.sourceId === sourceId && session.resource.windowId === windowId &&
+    session.host?.isConnected && session.state.status !== 'disconnected')
+}
 let contentFont = defaultContentFont()
 // The authenticated app loads bundled fonts before applying this presentation.
 let fontPresentation: FontPresentation = { family: 'monospace', features: '"calt" 0, "liga" 0, "dlig" 0' }
@@ -153,18 +166,53 @@ function schedulePresentation(session: Session) {
     present(session)
   })
 }
-function connect(session: Session) {
+function disconnect(session: Session) {
+  session.connectionRevision++
+  session.connectionProbe?.abort(); session.connectionProbe = undefined
+  endFocusSize(session)
+  const socket = session.socket
+  session.socket = undefined
+  if (socket) { disconnectDownloads(socket); socket.close() }
+  session.uploads.disconnected()
+  session.presentationRevision = (session.presentationRevision || 0) + 1
+  setState(session, { ...session.state, readOnly: true, presentation: undefined, focusResize: undefined })
+}
+function connectionFailed(session: Session, error = '终端连接已断开', retry = true) {
+  disconnect(session)
+  session.connectionError = error
+  session.reconnect?.failed(retry)
+}
+async function connect(session: Session, probe: boolean) {
+  const revision = ++session.connectionRevision
+  if (probe) {
+    const controller = session.connectionProbe = new AbortController()
+    try {
+      // WebSocket errors hide an HTTP 401. Check the existing account/source
+      // before retrying instead of repeatedly opening a rejected connection.
+      const response = await fetch('/api/state', { signal: controller.signal })
+      if (session.connectionRevision !== revision) return
+      if (response.status === 401) {
+        connectionFailed(session, '登录已失效', false)
+        window.dispatchEvent(new Event('canvas:unauthorized')); return
+      }
+      if (!response.ok) throw new Error('终端连接失败')
+      const state = await response.json() as { sources: Array<{ id: string }> }
+      if (session.connectionRevision !== revision) return
+      if (!state.sources.some(source => source.id === session.resource.sourceId)) {
+        connectionFailed(session, '连接已移除', false); return
+      }
+    } catch {
+      if (session.connectionRevision === revision) connectionFailed(session, '终端连接失败')
+      return
+    } finally { if (session.connectionProbe === controller) session.connectionProbe = undefined }
+  }
+  if (session.connectionRevision !== revision || !session.host?.isConnected) return
   const url = new URL('/api/terminal', location.href)
   url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
   for (const [name, value] of Object.entries(session.resource)) url.searchParams.set(name, value)
-  setState(session, { status: 'connecting' })
   const socket = new WebSocket(url)
   socket.binaryType = 'arraybuffer'
   session.socket = socket
-  socket.onopen = () => {
-    if (session.socket !== socket) return
-    setState(session, { status: 'connecting' })
-  }
   socket.onmessage = event => {
     if (session.socket !== socket) return
     if (event.data instanceof ArrayBuffer) session.term.write(new Uint8Array(event.data))
@@ -187,7 +235,13 @@ function connect(session: Session) {
           else session.term.write('', update)
         }
         else if (message.type === 'status') {
-          setState(session, { ...session.state, status: message.status === 'closed' || message.status === 'error' ? 'disconnected' : message.status, error: message.error, readOnly: message.readOnly })
+          if (message.status === 'closed' || message.status === 'error') {
+            connectionFailed(session, typeof message.error === 'string' ? message.error : undefined); return
+          }
+          if (message.status !== 'connected' && message.status !== 'connecting') return
+          if (message.status === 'connected') session.reconnect?.connected()
+          setState(session, { ...session.state, status: message.status, error: undefined,
+            retryAttempt: message.status === 'connected' ? undefined : session.state.retryAttempt, readOnly: message.readOnly === true })
           schedulePresentation(session)
         }
         else if (message.type === 'resize' && Number.isInteger(message.cols) && Number.isInteger(message.rows)) {
@@ -209,13 +263,12 @@ function connect(session: Session) {
     }
   }
   socket.onerror = () => {
-    if (session.socket === socket) setState(session, { status: 'disconnected', error: '终端连接失败' })
+    if (session.socket === socket) connectionFailed(session, '终端连接失败')
   }
-  socket.onclose = () => {
-    disconnectDownloads(socket)
+  socket.onclose = event => {
     if (session.socket === socket) {
-      session.uploads.disconnected()
-      setState(session, { ...session.state, status: 'disconnected', error: session.state.error })
+      connectionFailed(session, event.code === 1008 ? '登录已失效' : undefined, event.code !== 1008)
+      if (event.code === 1008) window.dispatchEvent(new Event('canvas:unauthorized'))
     }
   }
 }
@@ -331,10 +384,17 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       },
       changed: upload => setState(session!, { ...session!.state, upload }),
     })
-    session = { term, surface, uploads, opened: false, magnified: false, mobile: !!options.mobile,
+    session = { term, surface, uploads, opened: false, magnified: false, mobile: !!options.mobile, connectionRevision: 0,
       modifiers: emptyModifiers(), touchMode: 'scroll', keyboardRequested: false,
       state: { status: 'connecting' }, listeners: new Set(), geometryListeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
     const current = session
+    current.reconnect = new TerminalReconnect({
+      active: () => !!current.host?.isConnected,
+      connect: probe => { void connect(current, probe) },
+      waiting: attempt => setState(current, { ...current.state, status: 'connecting', error: undefined, retryAttempt: attempt || undefined }),
+      failed: () => setState(current, { ...current.state, status: 'disconnected', error: current.connectionError, retryAttempt: undefined }),
+      timeout: () => connectionFailed(current, '终端连接超时'),
+    })
     // Offscreen xterm buffers can resize before the DOM renderer catches up.
     // Keep each measured grid paired with the dimensions that actually painted it.
     term.onRender(() => {
@@ -364,7 +424,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       controlsInput: () => interactive(current) && current.state.status === 'connected' && !current.state.readOnly,
       copyError: clipboardError => setState(current, { ...current.state, clipboardError }),
     })
-    term.attachCustomKeyEventHandler(event => {
+    current.keyHandler = event => {
       if (!interactive(current)) return false
       if (current.clipboard?.key(event) === false) return false
       const modifiedEnter = event.key === 'Enter' && (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey)
@@ -398,9 +458,17 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
           }
         }
       }
+      if (current.mobile && document.activeElement === current.mobileInput?.element && event.type === 'keydown' &&
+        !event.isComposing && event.keyCode !== 229 &&
+        (!current.keyboardRequested || event.key.length !== 1 || event.ctrlKey || event.altKey || event.metaKey) &&
+        sendTerminalKey(current, event.key, { shift: event.key.length !== 1 && event.shiftKey,
+          ctrl: event.ctrlKey, alt: event.altKey, meta: event.metaKey })) {
+        event.preventDefault(); return false
+      }
       if (event.type === 'keydown' && current.state.readOnly) claimFocus(current)
       return true
-    })
+    }
+    term.attachCustomKeyEventHandler(current.keyHandler)
     sessions.set(id, session)
   }
   // Vue may mount a replacement host before disposing the old component. Only
@@ -411,7 +479,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   session.magnified = options.magnified === true
   session.nativeKey = undefined
   session.term.options.disableStdin = !interactive(session)
-  if (!interactive(session)) { session.keyboardRequested = false; session.term.blur() }
+  if (!interactive(session)) { session.keyboard?.blur(); session.keyboardRequested = false; session.term.blur() }
   setModifiers(session)
   host.appendChild(session.surface)
   if (!session.opened) {
@@ -437,18 +505,38 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       },
     })
   }
-  if (!session.mobile && session.keyboard) { session.keyboard.dispose(); session.keyboard = undefined }
-  if (session.mobile && !session.keyboard && session.term.textarea) {
+  if (!session.mobile && session.keyboard) {
+    session.keyboard.dispose(); session.keyboard = undefined
+    session.mobileInput?.dispose(); session.mobileInput = undefined
+  }
+  if (session.mobile && !session.keyboard && session.term.textarea && session.term.element) {
     const current = session
-    session.keyboard = bindMobileKeyboard(session.term.textarea, {
+    const input = session.mobileInput = bindMobileInput(session.term.element, {
+      active: () => current.mobile && interactive(current) && !!current.host?.isConnected,
+      input: text => { claimFocus(current); current.term.input(text, true) },
+      paste: text => { current.nativeKey = undefined; setModifiers(current); claimFocus(current); current.term.paste(text) },
+      files: files => current.uploads.enqueue(files),
+      key: event => { current.keyHandler?.(event) },
+      special: key => { sendTerminalKey(current, key, current.modifiers) },
+      composing: () => { current.nativeKey = undefined; setModifiers(current) },
+      // xterm's public input stays the renderer's focus signal; actual IME
+      // focus belongs to the rich input so Android can deliver image commits.
+      focus: () => current.term.textarea?.dispatchEvent(new FocusEvent('focus')),
+      blur: () => current.term.textarea?.dispatchEvent(new FocusEvent('blur')),
+    })
+    session.keyboard = bindMobileKeyboard(input.element, {
       active: () => current.mobile && current.magnified && !!current.host?.isConnected,
       changed: requested => { current.keyboardRequested = requested; setState(current, { ...current.state }) },
+      setEditable: input.setEditable,
     })
   }
   if (session.term.textarea) {
-    session.term.textarea.readOnly = !interactive(session) || session.mobile && !session.keyboardRequested
-    session.term.textarea.tabIndex = interactive(session) ? 0 : -1
-    session.term.textarea.inputMode = session.mobile && !session.keyboardRequested ? 'none' : 'text'
+    // xterm internally focuses its textarea on mouse presses. Disable that
+    // mobile target so it cannot steal the rich editor's IME connection.
+    session.term.textarea.disabled = session.mobile
+    session.term.textarea.readOnly = !interactive(session) || session.mobile
+    session.term.textarea.tabIndex = interactive(session) && !session.mobile ? 0 : -1
+    session.term.textarea.inputMode = session.mobile ? 'none' : 'text'
     // Keep the hidden input large enough to avoid iOS focus zoom; xterm's
     // rendered font and native grid stay independent of this input element.
     session.term.textarea.style.fontSize = session.mobile ? '16px' : ''
@@ -459,7 +547,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   session.listeners.add(listener)
   if (onGeometry) session.geometryListeners.add(onGeometry)
   listener(session.state)
-  if (!session.socket || session.socket.readyState === WebSocket.CLOSED) { session.term.reset(); connect(session) }
+  if (!session.socket || session.socket.readyState === WebSocket.CLOSED) session.reconnect?.resume()
+  else if (session.state.status === 'connected') session.reconnect?.connected()
   const current = session
   const removeFileInput = bindFileInput(host, current.uploads, draggingFile => {
     if (current.host === host) setState(current, { ...current.state, draggingFile })
@@ -487,12 +576,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     resize() { return resize(current) },
     cancelUpload() { current.uploads.cancel() },
     reconnect() {
-      endFocusSize(current)
-      current.uploads.disconnected()
-      current.socket?.close()
-      current.socket = undefined
-      current.term.reset()
-      connect(current)
+      disconnect(current)
+      current.reconnect?.restart()
     },
     dispose() {
       removeFileInput()
@@ -505,6 +590,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
         current.host = undefined
         current.magnified = false
         current.keyboardRequested = false
+        current.reconnect?.pause()
+        if (current.state.status !== 'connected') disconnect(current)
       }
     },
   }
@@ -517,11 +604,10 @@ export function clearTerminals() {
     session.removeTouch?.()
     session.removeFontFeatures?.()
     session.keyboard?.dispose()
-    endFocusSize(session)
+    session.mobileInput?.dispose()
+    session.reconnect?.pause()
+    disconnect(session)
     if (session.presentationFrame !== undefined) cancelAnimationFrame(session.presentationFrame)
-    const socket = session.socket
-    session.socket = undefined
-    socket?.close()
     session.clipboard?.dispose()
     session.term.dispose()
   }

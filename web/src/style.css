@@ -135,6 +135,7 @@
 .mobile-layout .terminal-card:not(.focused) .terminal-host{cursor:default;user-select:none;-webkit-user-select:none}
 .mobile-layout .terminal-card:not(.focused) .xterm{pointer-events:none}
 .mobile-layout .terminal-header{cursor:default}
+.mobile-layout .vue-flow__minimap{display:block;width:96px;height:64px;right:8px!important;bottom:62px!important;touch-action:none}.mobile-layout .vue-flow__minimap svg{width:96px;height:64px}
 .mobile-layout .canvas-toolbar{left:max(10px,env(safe-area-inset-left));bottom:max(10px,env(safe-area-inset-bottom));gap:2px;padding:3px;border-radius:7px}
 .mobile-layout .canvas-toolbar button{width:38px;height:38px}
 .mobile-layout .source-panel{position:absolute;inset:0 0 0 auto;width:min(100%,390px);padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) env(safe-area-inset-bottom) max(16px,env(safe-area-inset-left));z-index:43}

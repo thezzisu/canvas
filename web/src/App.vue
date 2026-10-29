@@ -20,7 +20,7 @@ import DownloadPreviewDialog from './components/DownloadPreviewDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import { directoryRequest } from './directories'
 import { api, segment, uuid, write } from './api'
-import { clearTerminals, focusWindow, setContentFont } from './terminals'
+import { clearTerminals, focusWindow, hasLiveTerminal, setContentFont } from './terminals'
 import { buildFontPresentation, ensureContentFont } from './fonts'
 import type { GlobalSettings } from '../../shared/settings'
 import { useCanvasNavigation } from './canvas-navigation'
@@ -125,10 +125,9 @@ const isOverview = computed(() => activeId.value === 'overview')
 const overviewPaged = ref(false)
 const paging = computed(() => isOverview.value && overviewPaged.value)
 const currentPage = shallowRef<OverviewPage>()
-const pages = computed<OverviewPage[]>(() => nodes.value.filter(node => node.type === 'terminal' || node.type === 'create').map(node => ({
+const pages = computed<OverviewPage[]>(() => nodes.value.filter(node => node.type === 'terminal' || node.type === 'create' && node.data.spaceId).map(node => ({
   id: node.type === 'terminal' ? `${node.data.sourceId}/${node.data.windowId}` : node.id, row: node.data.spaceId ? `${node.data.sourceId}/${node.data.spaceId}` : node.id,
   ...node.position, width: node.data.width, height: node.data.height,
-  ...(node.type === 'create' && !node.data.spaceId ? { y: node.position.y - 64, width: 480, height: 160 } : {}),
 })))
 const pageLayout = computed(() => paging.value ? JSON.stringify(pages.value) : '')
 const pageDirections = [
@@ -180,9 +179,10 @@ function fitCanvas() { if (paging.value) void fitPage(true); else void fitView({
 
 const overviewSelected = useStorage<ProgramStatus[]>('canvas:overview:statuses', [...overviewStatuses])
 const overviewOrder = useStorage<OverviewOrder>('canvas:overview:order', 'native')
+const overviewCreation = useStorage('canvas:overview:creation', true)
 const overviewMenuOpen = ref(false)
 const overviewFiltered = computed(() => overviewSelected.value.length !== overviewStatuses.length)
-const overviewChanged = computed(() => overviewFiltered.value || overviewOrder.value !== 'native')
+const overviewChanged = computed(() => overviewFiltered.value || overviewOrder.value !== 'native' || !overviewCreation.value)
 const activeElement = useActiveElement({ triggerOnRemoval: true })
 const overviewInteraction = computed<OverviewInteraction | undefined>(() => {
   if (!isOverview.value) return
@@ -193,13 +193,14 @@ const overviewInteraction = computed<OverviewInteraction | undefined>(() => {
 })
 const visibleOverview = computed(() => overviewResources(resources.value, overviewSelected.value, overviewOrder.value, overviewInteraction.value))
 const visibleOverviewCount = computed(() => visibleOverview.value.reduce((total, source) => total + source.spaces.reduce((sum, space) => sum + space.windows.length, 0), 0))
-function resetOverview() { overviewSelected.value = [...overviewStatuses]; overviewOrder.value = 'native' }
+function resetOverview() { overviewSelected.value = [...overviewStatuses]; overviewOrder.value = 'native'; overviewCreation.value = true }
 const overviewMenu = computed<DropdownMenuItem[][]>(() => [
   [{ type: 'label', label: '状态' },
     { type: 'checkbox', label: '全部状态', checked: !overviewFiltered.value, onSelect: event => event.preventDefault(), onUpdateChecked: checked => { overviewSelected.value = checked ? [...overviewStatuses] : [] } },
     ...overviewStatuses.map(status => ({ type: 'checkbox' as const, label: statusLabel(status), status, checked: overviewSelected.value.includes(status),
       onSelect: (event: Event) => event.preventDefault(), onUpdateChecked: (checked: boolean) => { overviewSelected.value = checked ? [...overviewSelected.value, status] : overviewSelected.value.filter(value => value !== status) } })),
   ],
+  [{ type: 'checkbox', label: '新建', checked: overviewCreation.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { overviewCreation.value = value } }],
   [{ type: 'label', label: '排序' }, ...(['native', 'status'] as const).map(order => ({ type: 'checkbox' as const,
     label: order === 'native' ? '原始顺序' : '状态优先', checked: overviewOrder.value === order, onSelect: (event: Event) => event.preventDefault(), onUpdateChecked: () => { overviewOrder.value = order } })),
   ],
@@ -213,6 +214,7 @@ const filteredWindows = computed(() => allWindows.value.filter(item => `${item.s
 const modalOpen = computed(() => sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || windowMenu.value || backgroundCanvas.value || settingsDialog.value)
 const { surface: graphSurface, app: appElement, fullscreen: canvasFullscreen, resetPagingFeedback, wheel: canvasWheel, touchStart: canvasTouchStart, touchMove: canvasTouchMove, touchEnd: canvasTouchEnd, touchCancel: canvasTouchCancel, click: canvasClick, toggleFullscreen, exitFullscreen } = useCanvasNavigation({
   getCanvasId: () => activeId.value, getViewport, setViewport, saveViewport,
+  onError: showError,
   blocked: () => overviewMenuOpen.value || !!modalOpen.value || !!directoryRequest.value || !!downloadPreview.value || !!focused.value || (mobile.value && (sidebarOpen.value || sourcePanel.value)),
   mobile: () => mobile.value,
   paging: { enabled: () => paging.value, canMove: direction => !!pageNeighbor(direction), move: movePage, recenter: fitPage },
@@ -252,6 +254,7 @@ function recordGeometry(sourceId: string, windowId: string, ratio: number, inset
       const height = windowHeight(node.data)
       return { ...node, data: { ...node.data, height }, style: { ...node.style, height: `${height}px` } }
     })
+    if (pendingCreatedWindow.value) void nextTick().then(() => focusCreatedWindow())
   })
 }
 
@@ -268,7 +271,7 @@ function resourceFor(node: TerminalCanvasNode) {
 function terminalData(node: TerminalCanvasNode, overview = false): TerminalData {
   const found = resourceFor(node)
   const sourceConfig = sources.value.find(source => source.id === node.sourceId)
-  return { ...node, name: found.window?.name || '已关闭的窗口', subtitle: `${found.source?.name || sourceConfig?.name || '未知连接'} / ${found.space?.name || 'space'}`, available: !!found.window && !found.source?.error, status: found.window?.status || 'unknown', panes: found.window?.panes || [], overview, focus: false, mobile: mobile.value, onAction: terminalAction, onResize: resizeNode, onLayoutStart: layoutStarted, onGeometry: recordGeometry }
+  return { ...node, name: found.window?.name || '已关闭的窗口', subtitle: `${found.source?.name || sourceConfig?.name || '未知连接'} / ${found.space?.name || 'space'}`, available: !!found.window && !found.source?.error, sourceOffline: !!found.source?.error, status: found.window?.status || 'unknown', panes: found.window?.panes || [], overview, focus: false, mobile: mobile.value, onAction: terminalAction, onResize: resizeNode, onLayoutStart: layoutStarted, onGeometry: recordGeometry }
 }
 function terminalFlowNode(node: TerminalCanvasNode, overview = false): Node {
   node = { ...node, ...windowSize(node) }
@@ -308,16 +311,18 @@ function overviewNodes(): Node[] {
     const source = resources.value.find(item => item.id === config.id)
     if (!source) continue
     const visible = visibleOverview.value.find(item => item.id === config.id)
-    const rows = source.spaces.map(space => {
+    const rows = source.spaces.flatMap(space => {
       const windows = visible?.spaces.find(item => item.id === space.id)?.windows || []
+      if (!windows.length && !overviewCreation.value) return []
       const last = windows.at(-1)
       const cardWidth = last ? windowSize({ sourceId: source.id, windowId: last.id }).width : 480
       const cardHeight = windows.length ? Math.max(...windows.map(window => windowHeight({ sourceId: source.id, windowId: window.id, ...windowSize({ sourceId: source.id, windowId: window.id }) }))) : 302
-      return { space: { ...space, windows }, cardWidth, cardHeight, height: 54 + cardHeight }
+      return [{ space: { ...space, windows }, cardWidth, cardHeight, height: 54 + cardHeight }]
     })
-    const width = Math.max(528, ...rows.map(row => 48 + row.cardWidth + row.space.windows.reduce((sum, window) => sum + windowSize({ sourceId: source.id, windowId: window.id }).width + 16, 0)))
+    if (!rows.length && !overviewCreation.value) continue
+    const width = Math.max(528, ...rows.map(row => 32 + (overviewCreation.value ? row.cardWidth + 16 : 0) + row.space.windows.reduce((sum, window) => sum + windowSize({ sourceId: source.id, windowId: window.id }).width + 16, 0)))
     const count = rows.reduce((sum, row) => sum + row.space.windows.length, 0)
-    const height = 132 + rows.reduce((sum, row) => sum + row.height, 0)
+    const height = (overviewCreation.value ? 132 : 78) + rows.reduce((sum, row) => sum + row.height, 0)
     result.push({ id: `source:${source.id}`, type: 'group', position: { x: 0, y }, data: { kind: 'source', name: config.name, subtitle: config.transport === 'local' ? 'LOCAL' : 'SSH', count, width, height }, draggable: false, selectable: false, style: { width: `${width}px`, height: `${height}px`, zIndex: '-1', pointerEvents: 'none' } })
     let rowY = y + 68
     for (const { space, height: rowHeight, cardWidth, cardHeight } of rows) {
@@ -328,10 +333,10 @@ function overviewNodes(): Node[] {
         result.push(terminalFlowNode({ type: 'terminal', id: `window:${source.id}:${space.id}:${window.id}`, ...target, spaceId: space.id, x: windowX, y: rowY + 34, ...windowSize(target) }, true))
         windowX += windowSize(target).width + 16
       }
-      result.push(overviewCreateNode(source, space.id, windowX, rowY + 34, cardWidth, cardHeight))
+      if (overviewCreation.value) result.push(overviewCreateNode(source, space.id, windowX, rowY + 34, cardWidth, cardHeight))
       rowY += rowHeight
     }
-    result.push(overviewCreateNode(source, undefined, 24, rowY + 4, width - 48, 32))
+    if (overviewCreation.value) result.push(overviewCreateNode(source, undefined, 24, rowY + 4, width - 48, 32))
     y += height + 48
   }
   return result
@@ -454,7 +459,15 @@ function focusNewNote(attempt = 0) {
 }
 function focusCreatedWindow(attempt = 0, target = pendingCreatedWindow.value) {
   if (!target || target !== pendingCreatedWindow.value || !isOverview.value || !createdCameraReady) return
-  if (!modalOpen.value) {
+  if (!modalOpen.value && windowGeometry.has(`${target.sourceId}/${target.windowId}`)) {
+    const page = pages.value.find(page => page.id === `${target.sourceId}/${target.windowId}`)
+    if (!page || Math.abs(page.height - windowHeight({ ...target, ...windowSize(target) })) > .02) {
+      if (attempt < 30) requestAnimationFrame(() => focusCreatedWindow(attempt + 1, target))
+      return
+    }
+    if (!paging.value && page && graphSurface.value) {
+      void setViewport(pageViewport(page, { width: graphSurface.value.clientWidth, height: graphSurface.value.clientHeight }))
+    }
     const card = document.querySelector<HTMLElement>(`[data-source-id="${target.sourceId}"][data-window-id="${target.windowId}"].terminal-card`)
     if (card?.checkVisibility() && (mobile.value || focusWindow(target.sourceId, target.spaceId, target.windowId))) {
       if (mobile.value) card.focus({ preventScroll: true })
@@ -498,6 +511,12 @@ async function refreshResources(silent = false): Promise<void> {
   resourceRequest = (async () => {
     try {
       const body = await api<{ sources: SourceResource[] }>('/api/resources')
+      body.sources = body.sources.map(source => source.error ? {
+        ...source, spaces: (resources.value.find(previous => previous.id === source.id)?.spaces || []).flatMap(space => {
+          const windows = space.windows.filter(window => hasLiveTerminal(source.id, window.id))
+          return windows.length ? [{ ...space, windows }] : []
+        }),
+      } : source)
       const signature = JSON.stringify(body.sources)
       if (signature !== resourceSignature) {
         const layoutSignature = JSON.stringify(body.sources.map(source => {
@@ -544,7 +563,7 @@ async function logout() {
 function unauthorized() { void exitFullscreen(); stopStateEvents(); for (const timer of saveTimers.values()) clearTimeout(timer); saveTimers.clear(); pendingLayouts.clear(); clearNoteEdits(); authenticated.value = false; focused.value = null; settingsDialog.value = false; settings.value = null; fontRevision++; fontSignature = ''; fontLoading.value = false; latestState = undefined; clearTerminals() }
 watch(pageLayout, async () => { if (paging.value) { await nextTick(); await fitPage() } })
 watch(overviewInteraction, value => { if (value) lastOverviewInteraction = value; if (isOverview.value) rebuildNodes() })
-watch([overviewSelected, overviewOrder], async () => { if (isOverview.value) { rebuildNodes(); await nextTick(); if (paging.value) await fitPage(); else void fitView({ padding: .14, maxZoom: 1, duration: 150 }) } })
+watch([overviewSelected, overviewOrder, overviewCreation], async () => { if (isOverview.value) { rebuildNodes(); await nextTick(); if (paging.value) await fitPage(); else void fitView({ padding: .14, maxZoom: 1, duration: 150 }) } })
 watch(activeId, async () => { cancelCreatedReveal(); lastOverviewInteraction = undefined; overviewMenuOpen.value = false; layoutGesture = ''; focused.value = null; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
 function switchCanvas(id: string) { sidebarOpen.value = false; void flushNotes(activeId.value); saveViewport(); activeId.value = id }
 function backgroundSaved(_updated: Canvas) { void syncState().catch(showError) }
@@ -981,7 +1000,7 @@ onBeforeUnmount(() => { for (const event of ['pointerdown', 'keydown', 'wheel', 
       </header>
       <div ref="graphSurface" class="graph-wrap" :class="{ 'has-background': currentBackground, paged: paging }" :data-page-window="paging ? currentPage?.id : undefined" @mousedown.capture="guardPageDrag" @wheel.capture="canvasWheel" @touchstart.capture="canvasTouchStart" @touchmove.capture="canvasTouchMove" @touchend.capture="canvasTouchEnd" @touchcancel.capture="canvasTouchCancel" @click.capture="canvasClick">
         <img v-if="currentBackground" class="canvas-background" :src="currentBackground.url" :style="{ opacity: currentBackground.opacity }" alt="" aria-hidden="true" />
-        <VueFlow :snap-to-grid="!isOverview && !!currentCanvas?.snapToGrid" :snap-grid="[24, 24]" v-if="nodes.length && !focused" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && !mobile" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><template #node-create="nodeProps"><OverviewCreateNode v-bind="nodeProps" /></template><MiniMap v-if="!mobile && !paging" :pannable="true" :zoomable="true" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? '#bba071' : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
+        <VueFlow :snap-to-grid="!isOverview && !!currentCanvas?.snapToGrid" :snap-grid="[24, 24]" v-if="nodes.length && !focused" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && !mobile" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><template #node-create="nodeProps"><OverviewCreateNode v-bind="nodeProps" /></template><MiniMap v-if="!paging && (!mobile || isOverview)" :pannable="true" :zoomable="!mobile" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? '#bba071' : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
         <div v-if="!nodes.length && isOverview" class="empty-state"><Icon name="server" :size="32" /><h2>{{ windowCount && overviewFiltered ? '没有匹配的窗口' : sources.length ? '暂无窗口' : '暂无连接' }}</h2><button v-if="windowCount && overviewFiltered" class="button subtle" @click="overviewSelected = [...overviewStatuses]">清除筛选</button><button v-else class="button primary" @click="sources.length ? sourcePanel = true : openSource()"><Icon :name="sources.length ? 'server' : 'plus'" :size="17" />{{ sources.length ? '连接' : '添加连接' }}</button></div>
         <div v-if="!nodes.length && !isOverview" class="empty-state"><Icon name="canvas" :size="32" /><h2>空画布</h2><button class="button primary" @click="openAdd()"><Icon name="plus" :size="17" />加入窗口</button></div>
         <div v-if="!focused" class="canvas-toolbar"><button :title="canvasFullscreen ? '退出全屏画布' : '全屏画布'" :aria-label="canvasFullscreen ? '退出全屏画布' : '全屏画布'" :aria-pressed="canvasFullscreen" @click="toggleFullscreen"><Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button><button v-if="isOverview" title="逐窗浏览" aria-label="逐窗浏览" :aria-pressed="overviewPaged" @click="togglePaging"><Icon name="pages" :size="17" /></button><button v-if="!isOverview" title="网格吸附" aria-label="网格吸附" :aria-pressed="!!currentCanvas?.snapToGrid" @click="toggleSnap"><Icon name="grid" :size="15" /></button><template v-if="paging"><button v-for="item in pageDirections" :key="item.direction" :title="item.label" :aria-label="item.label" :disabled="!pageNeighbor(item.direction)" @pointerdown.prevent @click="movePage(item.direction)"><Icon :name="item.icon" :size="16" :style="{ transform: item.rotation }" /></button></template><button v-if="!paging" title="缩小" aria-label="缩小" @click="zoomOut({ duration: 150 })"><Icon name="minus" :size="17" /></button><button :title="paging ? '居中窗口' : '适合画布'" :aria-label="paging ? '居中窗口' : '适合画布'" @click="fitCanvas"><Icon name="fit" :size="17" /></button><button v-if="!paging" title="放大" aria-label="放大" @click="zoomIn({ duration: 150 })"><Icon name="plus" :size="17" /></button></div>

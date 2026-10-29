@@ -83,6 +83,7 @@ export interface TerminalData {
   width: number
   height: number
   available: boolean
+  sourceOffline?: boolean
   status: ProgramStatus
   panes: PaneResource[]
   overview: boolean
