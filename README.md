@@ -80,6 +80,11 @@ If no browser can receive the file, the command exits nonzero immediately with
 
 In Overview, images, PDFs and text open in a preview dialog with a Download button.
 Closing the dialog does not download; multiple files are previewed in order.
+Image dialogs fit their aspect ratio within the visible page and keep small images
+at native size. All previews can expand within the page. Images support zoom
+controls, pointer-centered wheel zoom, dragging and two-finger pinch/pan; Fit
+restores the centered view. Escape first exits preview fullscreen, then closes
+the preview. This does not change the underlying canvas or terminal size.
 Other file types start a native browser download. The staged file remains
 available to that login session for one hour and is cleared when Canvas restarts.
 In a custom canvas, completion adds a file card beside its originating window.

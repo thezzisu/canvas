@@ -3,8 +3,10 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import UModal from '@nuxt/ui/components/Modal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import Icon from './Icon.vue'
+import ImagePreview from './ImagePreview.vue'
 import { downloadPreview, downloadPreviewCount, dismissDownloadPreview } from '../downloads'
 import { readTextPreview } from '../text-preview'
+import { useMobileViewport } from '../viewport'
 
 defineProps<{ portal?: HTMLElement }>()
 const pdfPreview = navigator.pdfViewerEnabled
@@ -13,6 +15,24 @@ const text = ref('')
 const loading = ref(false)
 const error = ref('')
 const truncated = ref(false)
+const expanded = ref(false)
+const imageSize = ref<{ width: number; height: number }>()
+const { viewport } = useMobileViewport(ref(true))
+const modalStyle = computed(() => {
+  const visible = viewport.value, narrow = visible.width <= 600
+  let width = Math.min(1000, visible.width - (narrow ? 12 : 32))
+  let height = Math.min(800, visible.height - (narrow ? 24 : 48))
+  if (downloadPreview.value?.preview === 'image' && imageSize.value) {
+    const image = imageSize.value
+    // The image viewport excludes the 44px header, 40px tools and two borders.
+    const scale = Math.min(1, Math.max(1, width - 2) / image.width, Math.max(1, height - 86) / image.height)
+    width = Math.min(width, Math.max(300, image.width * scale + 2))
+    height = Math.min(height, Math.max(126, image.height * scale + 86))
+  }
+  return { '--preview-width': `${Math.max(1, width)}px`, '--preview-height': `${Math.max(1, height)}px`,
+    '--preview-viewport-width': `${visible.width}px`, '--preview-viewport-height': `${visible.height}px`,
+    '--preview-left': `${visible.left}px`, '--preview-top': `${visible.top}px` }
+})
 let request: AbortController | undefined
 
 async function loadText() {
@@ -32,35 +52,44 @@ async function loadText() {
 watch(downloadPreview, preview => {
   request?.abort(); request = undefined
   text.value = ''; error.value = ''; truncated.value = false
+  expanded.value = false; imageSize.value = undefined
   loading.value = preview?.preview === 'image'
   if (preview?.preview === 'text') void loadText()
 }, { immediate: true })
-function imageSettled(event: Event, failed = false) {
-  const id = (event.currentTarget as HTMLImageElement | null)?.dataset.previewId
-  if (!id || id !== downloadPreview.value?.id) return
+function imageLoaded(id: string, width: number, height: number) {
+  if (id !== downloadPreview.value?.id) return
   loading.value = false
-  if (failed) error.value = '无法预览此文件'
+  imageSize.value = { width, height }
+}
+function imageFailed(id: string) {
+  if (id !== downloadPreview.value?.id) return
+  loading.value = false; error.value = '无法预览此文件'
 }
 function openChanged(open: boolean) { if (!open) dismissDownloadPreview() }
 function preventReturnFocus(event: Event) { event.preventDefault() }
-function stopEscape(event: Event) { event.stopPropagation() }
+function stopEscape(event: Event) {
+  event.stopPropagation()
+  if (expanded.value) { event.preventDefault(); expanded.value = false }
+}
+const modalContent = computed(() => ({ style: modalStyle.value, onCloseAutoFocus: preventReturnFocus, onEscapeKeyDown: stopEscape }))
 onBeforeUnmount(() => request?.abort())
 </script>
 
 <template>
-  <UModal v-if="downloadPreview" :key="downloadPreview.id" :open="true" :title="downloadPreview.filename" :portal="portal || false"
-    :close="{ 'aria-label': '关闭预览' }" :content="{ onCloseAutoFocus: preventReturnFocus, onEscapeKeyDown: stopEscape }"
-    :ui="{ content: 'download-preview-modal', overlay: 'download-preview-overlay', header: 'download-preview-header', wrapper: 'download-preview-title-wrap', title: 'download-preview-title', body: 'download-preview-body', close: 'download-preview-close' }"
+  <UModal v-if="downloadPreview" :key="downloadPreview.id" :open="true" :title="downloadPreview.filename" :portal="portal || false" :fullscreen="expanded" :transition="false"
+    :close="{ 'aria-label': '关闭预览', title: '关闭预览' }" :content="modalContent"
+    :ui="{ content: `download-preview-modal${expanded ? ' download-preview-fullscreen' : ''}`, overlay: 'download-preview-overlay', header: 'download-preview-header', wrapper: 'download-preview-title-wrap', title: 'download-preview-title', body: 'download-preview-body', close: 'download-preview-close' }"
     @update:open="openChanged">
     <template #actions>
       <span v-if="downloadPreviewCount > 1" class="download-preview-count" :aria-label="`还有 ${downloadPreviewCount - 1} 个文件待预览`">+{{ downloadPreviewCount - 1 }}</span>
       <UButton :href="downloadPreview.url" :download="downloadPreview.filename" color="neutral" variant="ghost" size="sm" class="download-preview-download" aria-label="下载文件" @pointerdown.stop @click.stop><Icon name="download" :size="15" />下载</UButton>
+      <UButton color="neutral" variant="ghost" size="sm" class="download-preview-expand" :aria-label="expanded ? '退出全屏预览' : '全屏预览'" :title="expanded ? '退出全屏预览' : '全屏预览'" :aria-pressed="expanded" @click="expanded = !expanded"><Icon :name="expanded ? 'collapse' : 'expand'" :size="16" /></UButton>
     </template>
     <template #body>
       <div class="download-preview-content" :data-download-id="downloadPreview.id" :data-preview-kind="downloadPreview.preview">
         <div v-if="loading" class="download-preview-status" role="status"><span class="spinner" />加载中…</div>
         <div v-if="error" class="download-preview-status" role="alert"><span>{{ error }}</span><button v-if="downloadPreview.preview === 'text'" type="button" @click="loadText">重试</button></div>
-        <img v-if="downloadPreview.preview === 'image' && !error" :key="downloadPreview.id" class="download-preview-image" :data-preview-id="downloadPreview.id" :src="previewUrl" :alt="downloadPreview.filename" draggable="false" @load="imageSettled($event)" @error="imageSettled($event, true)" />
+        <ImagePreview v-if="downloadPreview.preview === 'image' && !error" :key="downloadPreview.id" :id="downloadPreview.id" :src="previewUrl" :alt="downloadPreview.filename" @loaded="imageLoaded" @failed="imageFailed" />
         <template v-else-if="downloadPreview.preview === 'pdf'">
           <iframe v-if="pdfPreview" class="download-preview-pdf" :src="previewUrl" :title="downloadPreview.filename" referrerpolicy="no-referrer" />
           <div v-else class="download-preview-status">浏览器不支持 PDF 预览</div>
@@ -76,22 +105,22 @@ onBeforeUnmount(() => request?.abort())
 
 <style>
 .download-preview-overlay{z-index:84}
-.download-preview-modal{z-index:85;width:min(1000px,calc(100vw - 32px));max-width:none;height:min(800px,calc(100dvh - 48px));max-height:calc(100dvh - 24px);overflow:hidden;background:#191d23;border:1px solid #3b424c;box-shadow:0 16px 60px #0005}
+.download-preview-modal{z-index:85;display:grid;grid-template-rows:auto minmax(0,1fr);gap:0;position:fixed;left:calc(var(--preview-left) + var(--preview-viewport-width)/2);top:calc(var(--preview-top) + var(--preview-viewport-height)/2);translate:-50% -50%;width:min(var(--preview-width),calc(var(--preview-viewport-width) - 12px - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px)));max-width:none;height:min(var(--preview-height),calc(var(--preview-viewport-height) - 24px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px)));max-height:none;overflow:hidden;background:#191d23;border:1px solid #3b424c;box-shadow:0 16px 60px #0005}
+.download-preview-modal.download-preview-fullscreen{left:var(--preview-left);top:var(--preview-top);right:auto;bottom:auto;translate:none;width:var(--preview-viewport-width);height:var(--preview-viewport-height);max-width:none;max-height:none;border:0;border-radius:0;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
 .download-preview-header{min-height:44px;flex:0 0 44px;padding:0 8px 0 13px;gap:6px;border-bottom:1px solid #343a43}
 .download-preview-title-wrap{flex:1;min-width:0}
 .download-preview-title{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#d6dce5}
 .download-preview-count{flex:none;font-size:10px;color:#8290a1;font-variant-numeric:tabular-nums}
 .download-preview-download{flex:none;gap:5px;font-size:11px;color:#bec9d8;text-decoration:none}
-.download-preview-close{position:static;flex:none;color:#93a1b4}
-.download-preview-body{flex:1;min-height:0;padding:0;overflow:hidden}
-.download-preview-content{position:relative;display:flex;flex-direction:column;width:100%;height:100%;min-height:0;background:#11161c}
-.download-preview-status{display:flex;align-items:center;justify-content:center;gap:8px;position:absolute;inset:0;padding:16px;color:#8d9aaa;font-size:12px;text-align:center}
+.download-preview-close,.download-preview-expand{position:static;flex:none;display:flex;align-items:center;justify-content:center;width:28px;min-width:28px;height:30px;padding:0;color:#93a1b4;border-radius:5px}
+.download-preview-expand:hover,.download-preview-close:hover{background:#ffffff08;color:#d4dfec}
+.download-preview-body{display:flex;min-width:0;min-height:0;padding:0;overflow:hidden}
+.download-preview-content{position:relative;display:flex;flex:1;flex-direction:column;width:100%;min-width:0;min-height:0;background:#11161c}
+.download-preview-status{display:flex;align-items:center;justify-content:center;gap:8px;position:absolute;inset:0;padding:16px;color:#8d9aaa;font-size:12px;text-align:center;z-index:1}
 .download-preview-status button{color:#d4ac8e}
-.download-preview-image{width:100%;height:100%;min-height:0;object-fit:contain}
 .download-preview-pdf{display:block;flex:1;width:100%;height:100%;border:0;background:#fff;color-scheme:light}
 .download-preview-text{display:block;flex:1;min-height:0;margin:0;padding:14px;overflow:auto;white-space:pre;tab-size:4;font-family:var(--content-font-family,monospace);font-feature-settings:var(--content-font-features);font-size:13px;line-height:1.5;color:#ccd5e1;user-select:text;-webkit-user-select:text;touch-action:pan-x pan-y;scrollbar-width:thin;outline:none}
 .download-preview-text:focus-visible{box-shadow:inset 0 0 0 1px #b18a6d}
 .download-preview-truncated{padding:7px 12px;border-top:1px solid #303947;flex:none;font-size:10px;color:#8190a3}
-@media(max-width:600px){.download-preview-modal{width:calc(100vw - 12px);height:calc(100dvh - 24px);max-height:calc(100dvh - 12px)}.download-preview-header{padding-left:10px}.download-preview-download{min-height:36px}.download-preview-close{min-width:36px;min-height:36px}}
-.mobile-layout .download-preview-modal{left:calc(var(--mobile-left,0px) + var(--mobile-width,100vw)/2);top:calc(var(--mobile-top,0px) + var(--mobile-height,100dvh)/2);width:calc(var(--mobile-width,100vw) - 12px - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px));height:calc(var(--mobile-height,100dvh) - 24px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px));max-height:calc(var(--mobile-height,100dvh) - 24px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px))}
+@media(max-width:600px){.download-preview-header{padding-left:10px}.download-preview-download{min-height:36px}.download-preview-close,.download-preview-expand{width:36px;min-width:36px;min-height:36px}}
 </style>
