@@ -1,9 +1,13 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import ui from '@nuxt/ui/vite'
 
 export default defineConfig({
   root: 'web',
-  plugins: [vue()],
+  plugins: [vue(), ui({ router: false, colorMode: false, autoImport: false, components: false, dts: false,
+    icon: { clientBundle: { icons: ['lucide:x'] } },
+    ui: { colors: { primary: 'amber', neutral: 'zinc' } },
+  })],
   build: { outDir: '../dist/web', emptyOutDir: true },
   server: {
     host: '127.0.0.1',

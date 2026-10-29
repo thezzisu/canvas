@@ -21,6 +21,7 @@ import * as providers from "./providers.ts";
 import type { TerminalManager } from "./terminals.ts";
 import type { DownloadContext, DownloadProgress } from "./open-download.ts";
 import type { AssetStore } from "./assets.ts";
+import type { UploadService } from "./uploads.ts";
 import {
   BackgroundError,
   DEFAULT_BACKGROUND_OPACITY,
@@ -63,6 +64,8 @@ const notePatchSchema = z.object({
 }).strict();
 const isBackgroundUpload = (method: string, path: string) =>
   method === "PUT" && /^\/api\/canvases\/[^/]+\/background$/.test(path);
+const isInboxUpload = (method: string, path: string) =>
+  method === "PUT" && /^\/api\/uploads\/[A-Za-z0-9_-]+$/.test(path);
 export type Account = { username: string; passwordHash: string };
 export interface DownloadResponse {
   body: Readable;
@@ -80,6 +83,7 @@ export function createApp(
     downloadAction?: (ticket: string, sessionId: string, action: "prepare", context?: DownloadContext) => DownloadProgress | undefined;
     closeOpenBridge?: (sourceId: string) => Promise<void>;
     assets?: AssetStore;
+    uploads?: UploadService;
   } = {},
 ) {
   const app = new Hono();
@@ -106,6 +110,9 @@ export function createApp(
     if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method)) {
       if (isBackgroundUpload(c.req.method, c.req.path))
         backgroundContentType(c.req.header("content-type"));
+      else if (isInboxUpload(c.req.method, c.req.path)) {
+        if (c.req.header("content-type") !== "application/octet-stream") return c.json({ error: "File bytes required" }, 415);
+      }
       else if (!c.req.header("content-type")?.startsWith("application/json"))
         return c.json({ error: "JSON required" }, 415);
     }
@@ -116,7 +123,7 @@ export function createApp(
     onError: (c) => c.json({ error: "Request too large" }, 413),
   });
   app.use("/api/*", (c, next) =>
-    isBackgroundUpload(c.req.method, c.req.path)
+    isBackgroundUpload(c.req.method, c.req.path) || isInboxUpload(c.req.method, c.req.path)
       ? next()
       : jsonBodyLimit(c, next),
   );
@@ -126,6 +133,10 @@ export function createApp(
       username: account.username,
     }),
   );
+  app.put("/api/uploads/:token", async c => {
+    const status = await options.uploads?.receive(c.req.param("token"), getCookie(c, "canvas_session") ?? "", c.req.raw) ?? 404;
+    return status === 204 ? c.body(null, 204) : c.json({ error: status === 404 ? "Upload expired" : "Upload failed" }, status);
+  });
   app.get("/api/downloads/:ticket", async (c) => {
     if (c.req.method !== "GET") return c.body(null, 405);
     const download = await options.openDownload?.(

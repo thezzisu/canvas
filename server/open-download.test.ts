@@ -16,6 +16,7 @@ import { AssetStore } from "./assets.ts";
 import { createApp } from "./app.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { OpenDownloadService, type OpenDownloadOptions } from "./open-download.ts";
+import { vscodeDirectoryUri } from "./editor-links.ts";
 
 const helper = fileURLToPath(new URL("../cli/canvas", import.meta.url));
 const source: Source = { id: randomUUID(), name: "Open", type: "herdr", transport: "local" };
@@ -42,6 +43,8 @@ type FixtureOptions = Partial<Pick<OpenDownloadOptions, "contextTimeoutMs" | "pr
   autoContext?: boolean;
   customCanvas?: boolean;
   uploadFailure?: "create" | "write" | "complete";
+  directoryAck?: boolean;
+  directoryUri?: OpenDownloadOptions["directoryUri"];
 };
 async function fixture(t: TestContext, options: FixtureOptions = {}) {
   const root = await mkdtemp(join(tmpdir(), "canvas-open-service-"));
@@ -63,6 +66,8 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
     idleTimeoutMs: 15,
     contextTimeoutMs: options.contextTimeoutMs,
     progressTimeoutMs: options.progressTimeoutMs,
+    directoryUri: options.directoryUri ?? (async (_source, path) =>
+      vscodeDirectoryUri({ hostName: "192.0.2.10", user: "fixture", port: 22 }, path)),
     createUpload: async metadata => {
       if (options.uploadFailure === "create") throw new Error("fixture staging unavailable");
       const upload = await assets.begin(metadata);
@@ -89,6 +94,8 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
     } : undefined,
   });
   receiver.onMessage = message => {
+    if (message.type === "open-directory" && options.directoryAck !== false)
+      queueMicrotask(() => service.directoryReceived(String(message.id), receiver as never, "authenticated-session"));
     if (message.type === "file-context" && options.autoContext !== false) queueMicrotask(() => {
       if (receiver.readyState === 1) service.action(String(message.id), "authenticated-session", "prepare",
         options.customCanvas ? { canvasId: canvas.id, anchorId: "anchor" } : undefined);
@@ -180,6 +187,62 @@ test("overview copy succeeds before any HTTP request and stages exact retryable 
   }
   assert.equal(f.service.action(String(notice.id), "authenticated-session", "prepare")?.state, "completed");
   assert.equal(f.service.action(String(notice.id), "other-session", "prepare"), undefined);
+});
+
+test("directories reach only their controlling browser and do not stage file bytes", async t => {
+  const f = await fixture(t);
+  const path = join(f.root, "Folder 空间");
+  await mkdir(path);
+  await writeFile(join(path, "private.txt"), "not uploaded");
+  const result = await f.run(path);
+  assert.deepEqual(result, { code: 0, stderr: "" });
+  assert.equal(f.receiver.messages.length, 1);
+  const message = f.receiver.messages[0]!;
+  assert.equal(message.type, "open-directory");
+  assert.equal(message.path, path);
+  assert.equal(message.uri, vscodeDirectoryUri({ hostName: "192.0.2.10", user: "fixture", port: 22 }, path));
+  assert.deepEqual(f.observations, { uploadedBytes: 0, aborted: 0, finalized: 0 });
+  assert.deepEqual(f.store.fileAssetIds(), []);
+});
+
+test("directory completion requires acknowledgement from the original socket and session", async t => {
+  const f = await fixture(t, { directoryAck: false });
+  let exited = false;
+  const running = f.run(f.root).then(result => { exited = true; return result; });
+  await waitFor(() => f.receiver.messages.some(message => message.type === "open-directory"), "directory request was not sent");
+  const id = String(f.receiver.messages.find(message => message.type === "open-directory")!.id);
+  assert.equal(f.service.directoryReceived(id, new FakeWebSocket() as never, "authenticated-session"), false);
+  assert.equal(f.service.directoryReceived(id, f.receiver as never, "other-session"), false);
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(exited, false);
+  assert.equal(f.service.directoryReceived(id, f.receiver as never, "authenticated-session"), true);
+  assert.deepEqual(await running, { code: 0, stderr: "" });
+  assert.equal(f.service.directoryReceived(id, f.receiver as never, "authenticated-session"), false);
+});
+
+test("unacknowledged directories time out and a missing browser fails immediately", async t => {
+  const timed = await fixture(t, { directoryAck: false, contextTimeoutMs: 60 });
+  const result = await timed.run(timed.root);
+  assert.equal(result.code, 1);
+  assert.equal(result.stderr, "canvas: browser did not receive this directory\n");
+  const missing = await fixture(t, { recipientAvailable: false });
+  const rejected = await missing.run(missing.root);
+  assert.equal(rejected.code, 1);
+  assert.equal(rejected.stderr, "canvas: no browser attached to this window\n");
+  assert.deepEqual(missing.receiver.messages, []);
+});
+
+test("directory resolution cannot deliver after timeout or a browser disconnect", async t => {
+  let resolveUri!: (value: string) => void;
+  const f = await fixture(t, { contextTimeoutMs: 60, directoryUri: () => new Promise(resolve => { resolveUri = resolve; }) });
+  const running = f.run(f.root);
+  await waitFor(() => !!resolveUri, "resolver never started");
+  f.receiver.readyState = 3;
+  f.receiver.emit("close");
+  assert.equal((await running).code, 1);
+  resolveUri(vscodeDirectoryUri({ hostName: "192.0.2.10" }, f.root));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.receiver.messages, []);
 });
 
 test("custom canvas copy adds one persistent card without starting a browser download", async t => {

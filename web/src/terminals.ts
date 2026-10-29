@@ -2,6 +2,8 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { uuid } from './api'
 import { clearDownloads, disconnectDownloads, receiveDownload } from './downloads'
+import { clearDirectories, receiveDirectory } from './directories'
+import { bindFileInput, preventFileNavigation, TerminalUploads, type TerminalUploadState } from './uploads'
 
 export type TerminalStatus = {
   status: 'connecting' | 'connected' | 'disconnected'
@@ -9,6 +11,8 @@ export type TerminalStatus = {
   readOnly?: boolean
   presentation?: { maximized: boolean; owned: boolean }
   focusResize?: { active: boolean; owned: boolean; reason?: string }
+  upload?: TerminalUploadState
+  draggingFile?: boolean
 }
 export interface TerminalGeometry { width: number; height: number; cols: number; rows: number }
 interface FocusResize { token: string; suspended: boolean; requested?: { cols: number; rows: number } }
@@ -27,6 +31,7 @@ interface Session {
   listeners: Set<(state: TerminalStatus) => void>
   geometryListeners: Set<(geometry: TerminalGeometry) => void>
   resource: { sourceId: string; spaceId: string; windowId: string }
+  uploads: TerminalUploads
 }
 const sessions = new Map<string, Session>()
 const scrollbarWidth = 6
@@ -71,6 +76,8 @@ function releaseMouseOwner() { mouseOwner = undefined }
 function installMouseCoordinates() {
   if (mouseCoordinatesInstalled) return
   for (const event of mouseEvents) document.addEventListener(event, normalizeMouseCoordinates, true)
+  document.addEventListener('dragover', preventFileNavigation)
+  document.addEventListener('drop', preventFileNavigation)
   window.addEventListener('blur', releaseMouseOwner)
   mouseCoordinatesInstalled = true
 }
@@ -106,6 +113,7 @@ function connect(session: Session) {
       try {
         const message = JSON.parse(event.data)
         if (receiveDownload(socket, message, session.resource)) return
+        if (receiveDirectory(socket, message) || session.uploads.receive(message)) return
         if (message.type === 'reset') session.term.write('\x1bc')
         else if (message.type === 'presentation') {
           const revision = session.presentationRevision = (session.presentationRevision || 0) + 1
@@ -148,7 +156,10 @@ function connect(session: Session) {
   }
   socket.onclose = () => {
     disconnectDownloads(socket)
-    if (session.socket === socket) setState(session, { status: 'disconnected', error: session.state.error })
+    if (session.socket === socket) {
+      session.uploads.disconnected()
+      setState(session, { ...session.state, status: 'disconnected', error: session.state.error })
+    }
   }
 }
 function availableSize(host: HTMLElement) {
@@ -254,7 +265,16 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     const surface = document.createElement('div')
     surface.className = 'terminal-surface'
     Object.assign(surface.style, { transformOrigin: 'top left', width: '100%', height: '100%' })
-    session = { term, fit, surface, opened: false, magnified: false, state: { status: 'connecting' }, listeners: new Set(), geometryListeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
+    const uploads = new TerminalUploads({
+      available: () => session!.state.status === 'connected' && !(session!.state.presentation?.maximized && !session!.state.presentation.owned),
+      focus: () => { claimFocus(session!); session!.term.focus() },
+      send: message => {
+        if (session!.socket?.readyState !== WebSocket.OPEN) return false
+        session!.socket.send(JSON.stringify(message)); return true
+      },
+      changed: upload => setState(session!, { ...session!.state, upload }),
+    })
+    session = { term, fit, surface, uploads, opened: false, magnified: false, state: { status: 'connecting' }, listeners: new Set(), geometryListeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
     const current = session
     function sendInput(data: string, binary = false) {
       // onData includes terminal query replies; passive viewers must never
@@ -293,20 +313,26 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   listener(session.state)
   if (!session.socket || session.socket.readyState === WebSocket.CLOSED) { session.term.reset(); connect(session) }
   const current = session
+  const removeFileInput = bindFileInput(host, current.uploads, draggingFile => {
+    if (current.host === host) setState(current, { ...current.state, draggingFile })
+  })
   const observer = new ResizeObserver(() => { if (current.host === host) schedulePresentation(current) })
   observer.observe(host)
   schedulePresentation(current)
   return {
     focus() { claimFocus(current); current.term.focus() },
     resize() { resize(current) },
+    cancelUpload() { current.uploads.cancel() },
     reconnect() {
       endFocusSize(current)
+      current.uploads.disconnected()
       current.socket?.close()
       current.socket = undefined
       current.term.reset()
       connect(current)
     },
     dispose() {
+      removeFileInput()
       observer.disconnect()
       current.listeners.delete(listener)
       if (onGeometry) current.geometryListeners.delete(onGeometry)
@@ -320,7 +346,9 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
 }
 export function clearTerminals() {
   clearDownloads()
+  clearDirectories()
   for (const session of sessions.values()) {
+    session.uploads.clear()
     endFocusSize(session)
     if (session.presentationFrame !== undefined) cancelAnimationFrame(session.presentationFrame)
     const socket = session.socket
@@ -330,6 +358,8 @@ export function clearTerminals() {
   }
   sessions.clear()
   for (const event of mouseEvents) document.removeEventListener(event, normalizeMouseCoordinates, true)
+  document.removeEventListener('dragover', preventFileNavigation)
+  document.removeEventListener('drop', preventFileNavigation)
   window.removeEventListener('blur', releaseMouseOwner)
   mouseCoordinatesInstalled = false
   mouseOwner = undefined

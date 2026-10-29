@@ -12,6 +12,7 @@ const helper = fileURLToPath(new URL("../cli/canvas", import.meta.url));
 interface Header {
   version: number; secret: string; provider: string; nativeSocket: string;
   paneId: string; filename: string; size: number; progress: boolean;
+  kind?: "directory"; path?: string;
 }
 
 async function fixture(t: TestContext) {
@@ -27,6 +28,7 @@ async function fixture(t: TestContext) {
     // exercises the same main/transport code without adding a production env knob.
     const setup = ["import runpy, sys", "module = runpy.run_path(sys.argv.pop(1))"];
     if (timeouts) setup.push(`module["transfer_file"].__defaults__ = (None, ${timeouts.start}, ${timeouts.idle})`);
+    if (timeouts) setup.push(`module["open_directory"].__defaults__ = (${timeouts.start},)`);
     if (tty) setup.push("sys.stderr.isatty = lambda: True");
     setup.push('sys.exit(module["main"]())');
     const args = timeouts || tty ? ["-c", setup.join("\n"), helper, "open", "--", path] : [helper, "open", "--", path];
@@ -43,7 +45,7 @@ async function fixture(t: TestContext) {
     reject?: boolean; finalReject?: boolean; provider?: string; nativeSocket?: string;
     protocol?: boolean; acceptDelay?: number; rejectReason?: unknown; browserAccepted?: boolean;
     cancelDelay?: number; pauseInput?: boolean; progressDelay?: number; neverComplete?: boolean;
-    repeatedProgress?: boolean;
+    repeatedProgress?: boolean; directoryDelay?: number;
   } = {}) {
     const socket = join(root, `${name}.sock`), record = join(registry, `${name}.json`);
     const secret = randomBytes(32).toString("base64url");
@@ -81,6 +83,13 @@ async function fixture(t: TestContext) {
         const { secret: ignored, ...publicHeader } = header;
         headers.push(publicHeader);
         assert.equal(data.length, end + 1, "helper waits before transferring bytes");
+        if (header.kind === "directory") {
+          if (options.neverComplete) return;
+          const received = () => client.end(JSON.stringify(options.reject || options.rejectReason !== undefined
+            ? { ok: false, reason: options.rejectReason } : { ok: true }) + "\n");
+          if (options.directoryDelay) later(received, options.directoryDelay); else received();
+          return;
+        }
         const accept = () => {
           if (options.reject || options.rejectReason !== undefined) {
             client.end(JSON.stringify({ ok: false, reason: options.rejectReason, error: "No active browser" }) + "\n"); return;
@@ -101,6 +110,7 @@ async function fixture(t: TestContext) {
         } else accept();
       });
       client.on("end", () => {
+        if (header?.kind === "directory") return;
         if (!accepted) { client.end(); return; }
         bodies.push(body);
         if (options.neverComplete) return;
@@ -176,13 +186,40 @@ test("canvas open rejects nonfiles and reports unavailable recipients without se
   await writeFile(join(f.root, "file"), "private fixture");
   const noFile = await f.run("missing");
   assert.equal(noFile.code, 1); assert.match(noFile.stderr, /file not found/u);
-  const directory = await f.run(".");
-  assert.equal(directory.code, 1); assert.match(directory.stderr, /regular file/u);
+  const nonFile = await f.run("/dev/null");
+  assert.equal(nonFile.code, 1); assert.match(nonFile.stderr, /file or directory/u);
   assert.equal(endpoint.headers.length, 0);
   const denied = await f.run("file");
   assert.equal(denied.code, 1); assert.match(denied.stderr, /no browser attached to this window/u);
   assert.equal(denied.stdout, ""); assert.equal(endpoint.bodies.length, 0);
   assert.equal(endpoint.headers.length, 1);
+});
+
+test("canvas open sends a canonical directory path without copying its contents", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("directory", { directoryDelay: 60 });
+  const directory = join(f.root, "目录 with spaces");
+  await mkdir(directory);
+  await writeFile(join(directory, "must-not-transfer.txt"), "private fixture");
+  await symlink(directory, join(f.root, "directory-link"));
+  const began = Date.now();
+  const result = await f.run("directory-link/.");
+  assert.deepEqual(result, { code: 0, stdout: "", stderr: "" });
+  assert(Date.now() - began >= 60, "success waits for the browser acknowledgement");
+  assert.deepEqual(endpoint.headers, [{ version: 1, provider: "herdr", nativeSocket: f.nativeSocket,
+    paneId: "w1:p2", kind: "directory", path: directory }]);
+  assert.deepEqual(endpoint.bodies, []);
+});
+
+test("canvas open directories fail promptly without a controlling browser and bound missing acknowledgements", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("directory", { rejectReason: "not-attached" });
+  const rejected = await f.run(".");
+  assert.equal(rejected.code, 1);
+  assert.equal(rejected.stderr, "canvas: no browser attached to this window\n");
+  await rm(endpoint.record);
+  await f.endpoint("unresponsive-directory", { neverComplete: true });
+  const timedOut = await f.run(".", {}, { start: 0.1, idle: 1 });
+  assert.equal(timedOut.code, 1);
+  assert.equal(timedOut.stderr, "canvas: directory open timed out\n");
 });
 
 test("canvas open never retries after transfer acceptance", async t => {

@@ -13,6 +13,20 @@ const status = ref<TerminalStatus>({ status: 'connecting' })
 const maximizedElsewhere = computed(() => !!status.value.presentation?.maximized && (!status.value.presentation.owned || !props.data.focus))
 const frameStatus = computed(() => !props.data.available || status.value.status === 'disconnected' ? 'error' : status.value.status === 'connecting' ? 'unknown' : props.data.status)
 const resizeState = computed(() => !props.data.focus ? 'passive' : !status.value.focusResize ? 'pending' : status.value.focusResize.owned ? 'owned' : 'passive')
+const uploadActive = computed(() => status.value.upload && ['preparing', 'uploading'].includes(status.value.upload.state))
+const uploadPercent = computed(() => {
+  const upload = status.value.upload
+  return upload?.total ? Math.min(100, Math.floor(upload.transferred / upload.total * 100)) : upload?.state === 'completed' ? 100 : 0
+})
+const uploadLabel = computed(() => {
+  const upload = status.value.upload
+  if (!upload) return ''
+  if (upload.cancelling) return '取消中…'
+  if (upload.state === 'failed') return upload.error || '上传失败'
+  if (upload.state === 'cancelled') return '已取消'
+  if (upload.state === 'completed') return '已插入路径'
+  return upload.state === 'preparing' ? '准备上传…' : `${uploadPercent.value}%`
+})
 const resizeNotes: Record<string, string> = { 'external-resize': '尺寸由外部终端调整', superseded: '尺寸由其他视图调整', unavailable: '终端暂不支持调整尺寸' }
 const title = computed(() => [props.data.name, props.data.subtitle, props.data.focus && resizeNotes[status.value.focusResize?.reason || '']].filter(Boolean).join('\n'))
 let terminal: ReturnType<typeof mountTerminal> | undefined
@@ -63,10 +77,30 @@ async function resized(event: { params: { width: number; height: number; x: numb
         <button v-if="data.focus" title="返回画布" aria-label="返回画布" @click.stop="action('unfocus')"><Icon name="close" :size="15" /></button>
       </div>
     </header>
-    <div v-if="data.available" ref="host" class="terminal-host nodrag nopan nowheel" :class="{ 'terminal-paused': maximizedElsewhere }" :style="data.focus ? { overflow: 'auto' } : undefined" @pointerdown.stop="terminal?.focus()" @mousedown.stop @wheel.stop @dblclick.stop />
+    <div v-if="data.available" ref="host" class="terminal-host nodrag nopan nowheel" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :style="data.focus ? { overflow: 'auto' } : undefined" @pointerdown.stop="terminal?.focus()" @mousedown.stop @wheel.stop @dblclick.stop />
+    <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">上传文件</div>
+    <div v-if="status.upload" class="terminal-upload nodrag nopan" :class="{ 'upload-failed': status.upload.state === 'failed' }" :data-upload-id="status.upload.id" :data-upload-state="status.upload.state" @pointerdown.stop @mousedown.stop>
+      <div class="terminal-upload-row"><span class="terminal-upload-name" :title="status.upload.name">{{ status.upload.name }}</span><small v-if="status.upload.queued">+{{ status.upload.queued }}</small><span class="terminal-upload-status" role="status">{{ uploadLabel }}</span><button :aria-label="uploadActive ? '取消上传' : '关闭上传状态'" :disabled="status.upload.cancelling" @click.stop="terminal?.cancelUpload()"><Icon name="close" :size="13" /></button></div>
+      <div v-if="uploadActive" class="terminal-upload-track" role="progressbar" :aria-valuenow="status.upload.transferred" :aria-valuemin="0" :aria-valuemax="status.upload.total" :aria-valuetext="`${uploadPercent}%`" aria-label="文件上传进度"><span :style="{ width: `${uploadPercent}%` }" /></div>
+    </div>
     <div v-if="data.available && maximizedElsewhere" class="terminal-maximized">已最大化</div>
     <div v-if="!data.available" class="terminal-unavailable"><Icon name="terminal" :size="28" /><strong>窗口不可用</strong></div>
     <div v-if="data.available && status.status === 'disconnected'" class="terminal-disconnected nodrag"><span>{{ status.error || '终端连接已断开' }}</span><button @click.stop="action('reconnect')"><Icon name="refresh" :size="13" />重连</button></div>
     <div v-if="data.available && status.status === 'connecting'" class="terminal-loading nodrag"><span class="spinner" />连接中</div>
   </article>
 </template>
+
+<style scoped>
+.terminal-drop-target{outline:1px solid var(--accent);outline-offset:-3px;background:#e9b18808}
+.terminal-file-drop{position:absolute;inset:30px 0 0;display:flex;align-items:center;justify-content:center;pointer-events:none;background:#12151aca;color:var(--accent);font-size:12px}
+.terminal-upload{position:absolute;bottom:6px;left:8px;right:8px;padding:4px 7px;border:1px solid #424a56;border-radius:4px;background:#242930f2;color:#b6c0ce;box-shadow:0 2px 8px #0003;font-size:10px}
+.terminal-upload-row{display:flex;align-items:center;gap:8px;min-height:19px}
+.terminal-upload-name{min-width:0;flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.terminal-upload-status{flex-shrink:0;font-variant-numeric:tabular-nums;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.terminal-upload-row>small{color:#7f8b9b;font-size:9px}
+.terminal-upload button{height:18px;width:18px;min-width:18px;padding:0;color:#8c98a9;border-radius:3px}
+.terminal-upload button:hover{color:#e3c9b5;background:#ffffff09}
+.terminal-upload-track{height:2px;margin-top:3px;border-radius:1px;background:#414a57;overflow:hidden}
+.terminal-upload-track>span{display:block;height:100%;background:var(--accent)}
+.upload-failed .terminal-upload-status{color:var(--danger)}
+</style>

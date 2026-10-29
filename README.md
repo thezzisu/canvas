@@ -94,6 +94,44 @@ If separate Canvas Server instances register the same native terminal, the
 helper refuses the ambiguous request instead of sending the file to multiple
 browsers. No custom herdr server or global SSH configuration is required.
 
+## Paste files into a terminal
+
+Paste a screenshot or copied files, or drop files onto a terminal's content area.
+Canvas uploads them to `~/.local/share/canvas/inbox` on that window's machine,
+using an eight-character random prefix followed by the original filename. Local
+and SSH windows follow the same behavior. Images retain their original bytes.
+
+After all files finish, Canvas inserts their quoted absolute paths into the
+original window in order, without pressing Enter. You can type `cat `, paste a
+file, then press Enter yourself. Start at an unquoted shell argument position;
+Canvas cannot infer shell quoting already typed into arbitrary terminal programs.
+Changing canvases does not redirect a pending upload; native pane selection stays
+with herdr/tmux. A closed target window fails instead of receiving input elsewhere.
+Progress and cancellation appear only inside the originating terminal card.
+Uploaded files remain in the managed inbox until removed; cancellation removes
+the unfinished batch. Directory drops are not supported.
+
+Plaintext paste remains native terminal behavior. File clipboard support depends
+on the browser and operating system: a file item or screenshot can be uploaded,
+but a copied local pathname alone does not grant access to that file. Dragging
+files from the file manager provides an alternative without clipboard permissions.
+
+## Continue in VS Code
+
+Run `canvas open <directory>` to send its absolute path to the current browser.
+Canvas displays a compact “在本地继续” dialog with one “在VSCode打开” button.
+The command exits when the browser receives the dialog; clicking the button
+opens VS Code Remote SSH with the source's hostname, username and port. Directory
+contents are not copied. The desktop needs VS Code, Remote SSH and SSH access to
+that machine; browser external-application confirmation may appear.
+
+Remote links do not include private keys or change SSH configuration. Existing
+desktop SSH configuration and credentials still apply. Local sources refer to
+the Canvas server machine, not necessarily the browser computer: their editor
+host defaults to the non-loopback `CANVAS_HOST` or the server hostname, its current
+user and SSH port 22. `CANVAS_PUBLIC_SSH_HOST` and `CANVAS_PUBLIC_SSH_PORT` can
+override that advertised address for a deployment behind a proxy or NAT.
+
 ## Window behavior
 
 - The first canvas is the live overview. Spaces run vertically, windows horizontally,

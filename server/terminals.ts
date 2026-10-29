@@ -197,6 +197,18 @@ class LiveTerminal {
     return ws && ws === this.controller && ws.readyState === 1 && this.clients.has(ws) &&
       (!this.maximized || this.maximized.owner === ws) ? ws : undefined;
   }
+  captureFilePaste(ws: WebSocket): ((text: string, signal: AbortSignal) => Promise<void>) | undefined {
+    if (this.closed || this.controller !== ws || !this.clients.has(ws) ||
+        ws.readyState !== 1 || (this.maximized && this.maximized.owner !== ws)) return;
+    // A file drop authorizes this window at its start. Canvas navigation and
+    // native pane selection do not redirect its eventual paste.
+    return async (text: string, signal: AbortSignal) => {
+      await this.queue;
+      signal.throwIfAborted();
+      if (this.closed) throw new Error("目标窗口已关闭");
+      this.proc.write(this.emulator.modes.bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text);
+    };
+  }
   private presentation(ws: WebSocket) {
     json(ws, {
       type: "presentation",
@@ -435,6 +447,11 @@ export class TerminalManager {
     const socket = terminal?.downloadRecipient();
     if (!terminal || !socket) return;
     return { socket, isCurrent: () => terminal.downloadRecipient() === socket };
+  }
+  async captureFilePaste(sourceId: string, windowId: string, ws: WebSocket) {
+    const pending = this.entries.get(`${sourceId}/${windowId}`);
+    const terminal = await pending?.catch(() => undefined);
+    return terminal?.captureFilePaste(ws);
   }
   async closeSource(sourceId: string) {
     this.closingSources.add(sourceId);

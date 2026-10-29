@@ -16,9 +16,12 @@ import {
   writeRemoteBridgeRegistry,
   installCanvasHelper,
   listResources,
+  editorAuthority,
 } from "./providers.ts";
 import { OpenDownloadService } from "./open-download.ts";
 import { AssetStore } from "./assets.ts";
+import { UploadService } from "./uploads.ts";
+import { vscodeDirectoryUri } from "./editor-links.ts";
 const dataDir =
   process.env.CANVAS_DATA_DIR ?? join(homedir(), ".local/share/canvas");
 const accountFile = join(dataDir, "auth.json");
@@ -30,9 +33,11 @@ const account: Account = JSON.parse(readFileSync(accountFile, "utf8"));
 const store = new Store(join(dataDir, "canvas.db"));
 const assets = new AssetStore(dataDir, store);
 const terminals = new TerminalManager();
+const uploads = new UploadService(terminals);
 const helperBytes = readFileSync(new URL("../cli/canvas", import.meta.url));
 const socketSessions = new WeakMap<import("ws").WebSocket, string>();
 const downloads = new OpenDownloadService({
+  directoryUri: async (source, path) => vscodeDirectoryUri(await editorAuthority(source), path),
   createUpload: metadata => assets.begin(metadata),
   readTemporary: id => assets.readTemporary(id),
   prepare: prepareOpenBridge,
@@ -50,8 +55,9 @@ const app = createApp(store, account, terminals, {
   secureCookie: process.env.CANVAS_SECURE_COOKIE === "1",
   openDownload: (ticket, session) => downloads.open(ticket, session),
   downloadAction: (ticket, session, action, context) => downloads.action(ticket, session, action, context),
-  closeOpenBridge: (sourceId) => downloads.closeSource(sourceId),
+  closeOpenBridge: (sourceId) => { uploads.closeSource(sourceId); return downloads.closeSource(sourceId); },
   assets,
+  uploads,
 });
 app.get("/api/*", (c) => c.json({ error: "Not found" }, 404));
 app.use("*", async (c, next) => {
@@ -122,6 +128,21 @@ server.on("upgrade", (request, socket, head) => {
   }
   wss.handleUpgrade(request, socket, head, (ws) => {
     socketSessions.set(ws, sessionCookie(request.headers.cookie));
+    ws.once("close", () => uploads.cancel(ws));
+    ws.on("message", (bytes, binary) => {
+      if (binary || Buffer.byteLength(bytes.toString()) > 128 * 1024) return;
+      const session = socketSessions.get(ws) || "";
+      if (!store.hasSession(session)) return;
+      try {
+        const message = JSON.parse(bytes.toString());
+        if (message.type === "upload-begin") {
+          const current = store.get<Source>("source", sourceId);
+          if (current && JSON.stringify(current) === JSON.stringify(source))
+            void uploads.begin(source, windowId, ws, session, { id: message.id, files: message.files });
+        } else if (message.type === "upload-cancel" && typeof message.id === "string") uploads.cancel(ws, message.id);
+        else if (message.type === "directory-received" && typeof message.id === "string") downloads.directoryReceived(message.id, ws, session);
+      } catch { /* Only named file-transfer messages are handled here. */ }
+    });
     ws.once("close", downloads.retainSource(sourceId));
     ws.on("error", () => ws.close());
     ws.send(JSON.stringify({ type: "status", status: "connecting" }));
@@ -151,6 +172,7 @@ async function stop() {
   stopping = true;
   clearInterval(heartbeat);
   closeStatusObservers();
+  await uploads.closeAll();
   await terminals.closeAll();
   await downloads.closeAll();
   await assets.close();

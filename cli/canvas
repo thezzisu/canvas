@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy a file to Canvas for the browser currently controlling this terminal."""
+"""Copy a file to Canvas or open a remote folder in VS Code."""
 
 import argparse
 import json
@@ -268,19 +268,94 @@ def transfer_file(connection, file, size, progress=None, start_timeout=70, idle_
         progress.finish()
 
 
+def open_directory(connection, header, timeout=15):
+    if sys.stderr.isatty():
+        print("Opening directory in Canvas...", file=sys.stderr, flush=True)
+    deadline = time.monotonic() + timeout
+    try:
+        encoded = json.dumps(header, ensure_ascii=True, separators=(",", ":")).encode("ascii") + b"\n"
+        if len(encoded) > 16384:
+            raise CanvasError("directory request is too long")
+        connection.settimeout(timeout)
+        connection.sendall(encoded)
+        connection.shutdown(socket.SHUT_WR)
+        line = bytearray()
+        while len(line) <= 8192:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CanvasError("directory open timed out")
+            connection.settimeout(remaining)
+            chunk = connection.recv(1)
+            if not chunk:
+                raise CanvasError("directory open timed out")
+            if chunk == b"\n":
+                try:
+                    result = json.loads(line)
+                except (ValueError, UnicodeError):
+                    raise CanvasError("invalid directory response") from None
+                if not isinstance(result, dict):
+                    raise CanvasError("invalid directory response")
+                if result.get("ok") is True:
+                    return
+                if result.get("ok") is False:
+                    if result.get("reason") == "editor-unavailable":
+                        raise CanvasError("VS Code connection is unavailable")
+                    if result.get("reason") == "not-started":
+                        raise CanvasError("browser did not receive this directory")
+                    raise rejected_response(result, False)
+                raise CanvasError("invalid directory response")
+            line.extend(chunk)
+        raise CanvasError("invalid directory response")
+    except TimeoutError:
+        raise CanvasError("directory open timed out") from None
+
+
 def open_file(path):
+    path = os.path.abspath(path)
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
         info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
+        is_directory = stat.S_ISDIR(info.st_mode)
+        if not is_directory and not stat.S_ISREG(info.st_mode):
             os.close(fd)
-            raise CanvasError("choose a regular file")
-        file = os.fdopen(fd, "rb")
+            raise CanvasError("choose a file or directory")
+        if is_directory:
+            os.close(fd)
+            path = os.path.realpath(path)
+            file = None
+        else:
+            file = os.fdopen(fd, "rb")
     except OSError as error:
         if isinstance(error, FileNotFoundError):
             raise CanvasError("file not found") from None
         raise CanvasError("cannot read this file") from None
-    with file:
+    def transfer(connection, entry, provider, native_socket, pane):
+        header = {
+            "version": 1,
+            "secret": entry["secret"],
+            "provider": provider,
+            "nativeSocket": native_socket,
+            "paneId": pane,
+        }
+        if is_directory:
+            if any(ord(char) < 32 or ord(char) == 127 for char in path):
+                raise CanvasError("invalid directory path")
+            open_directory(connection, {**header, "kind": "directory", "path": path})
+            return
+        with file:
+            header = {
+                **header,
+                "progress": True,
+                "filename": os.path.basename(path),
+                "size": info.st_size,
+            }
+            encoded = json.dumps(header, ensure_ascii=True, separators=(",", ":")).encode("ascii") + b"\n"
+            if len(encoded) > 16384:
+                raise CanvasError("copy request is too long")
+            connection.sendall(encoded)
+            transfer_file(connection, file, info.st_size)
+
+    try:
         entries = []
         for provider, native_socket, pane in terminal_identities():
             matches = registry_entries(provider, native_socket)
@@ -290,33 +365,21 @@ def open_file(path):
         if not entries:
             raise CanvasError("no browser attached to this window")
         entry, provider, native_socket, pane = entries[0]
-        # Registry discovery has already rejected ambiguous destinations. Never
-        # retry: a lost acknowledgement must not copy the same file twice.
+        # Registry discovery has already rejected ambiguous destinations.
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(30)
             connection.connect(entry["socket"])
-            header = {
-                "version": 1,
-                "progress": True,
-                "secret": entry["secret"],
-                "provider": provider,
-                "nativeSocket": native_socket,
-                "paneId": pane,
-                "filename": os.path.basename(os.path.abspath(path)),
-                "size": info.st_size,
-            }
-            encoded = json.dumps(header, ensure_ascii=True, separators=(",", ":")).encode("ascii") + b"\n"
-            if len(encoded) > 16384:
-                raise CanvasError("download request is too long")
-            connection.sendall(encoded)
-            transfer_file(connection, file, info.st_size)
+            transfer(connection, entry, provider, native_socket, pane)
+    finally:
+        if file:
+            file.close()
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="canvas", description="Copy a file to the active Canvas.")
+    parser = argparse.ArgumentParser(prog="canvas", description="Copy a file to Canvas or open a remote folder in VS Code.")
     commands = parser.add_subparsers(dest="command", required=True)
-    command = commands.add_parser("open", help="copy a file to Canvas")
-    command.add_argument("path", help="file to copy")
+    command = commands.add_parser("open", help="copy a file or open a folder")
+    command.add_argument("path", help="file or folder path")
     arguments = parser.parse_args()
     try:
         open_file(arguments.path)

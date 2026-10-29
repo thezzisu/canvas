@@ -2,7 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSocketTunnels, ensureSocketTunnel } from "./ssh-tunnels.ts";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
-import { hostname, tmpdir } from "node:os";
+import { hostname, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import type { Source } from "./state.ts";
 import {
@@ -302,6 +302,37 @@ function sshOptions(source: Source, tty = false): string[] {
       `UserKnownHostsFile="${source.sshKnownHostsFile.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`,
     );
   return [...options, "--", ssh.destination];
+}
+
+/** One scoped process for file transfer; no terminal or provider state is changed. */
+export function sourcePythonCommand(source: Source, script: string, args: string[]) {
+  validateSource(source);
+  const command = ["python3", "-c", script, ...args];
+  return source.transport === "local"
+    ? { file: command[0]!, args: command.slice(1), env: commandEnvironment() }
+    : { file: "ssh", args: [...sshOptions(source), `exec ${command.map(shellQuote).join(" ")}`], env: commandEnvironment() };
+}
+
+export async function editorAuthority(source: Source): Promise<{ hostName: string; user: string; port: number }> {
+  if (source.transport === "local") {
+    const listener = process.env.CANVAS_HOST;
+    const hostName = process.env.CANVAS_PUBLIC_SSH_HOST ||
+      (listener && !["0.0.0.0", "::", "127.0.0.1", "localhost", "::1"].includes(listener) ? listener : hostname());
+    return { hostName, user: userInfo().username, port: Number(process.env.CANVAS_PUBLIC_SSH_PORT || 22) };
+  }
+  // Resolve an existing source's SSH alias and defaults on the Canvas server.
+  // Only these three non-secret fields leave this function; identity paths,
+  // jump commands and the rest of the client's configuration never enter URLs.
+  const config = await execute({ file: "ssh", args: ["-G", ...sshOptions(source)] }, source.type);
+  const fields = new Map(config.split(/\r?\n/u).flatMap(line => {
+    const match = /^(hostname|user|port)\s+(.+)$/u.exec(line);
+    return match ? [[match[1]!, match[2]!] as const] : [];
+  }));
+  const hostName = fields.get("hostname")?.replace(/^\[|\]$/g, "");
+  const user = fields.get("user");
+  const port = Number(fields.get("port"));
+  if (!hostName || !user || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error("SSH editor address could not be resolved");
+  return { hostName, user, port };
 }
 
 function socketTunnelIdentity(

@@ -7,6 +7,7 @@ import { Writable, type Readable } from "node:stream";
 import type { WebSocket } from "ws";
 import type { FileAsset, Source } from "./state.ts";
 import type { SourceResource } from "./providers.ts";
+import { directoryPath } from "./editor-links.ts";
 
 const MAX_HEADER = 16 * 1024;
 const MAX_TRANSFERS_PER_SOURCE = 4;
@@ -52,6 +53,7 @@ export interface OpenDownloadOptions {
   progressTimeoutMs?: number;
   createUpload(metadata: { filename: string; size: number }): Promise<Upload>;
   readTemporary(id: string): Promise<{ body: Readable; asset: FileAsset } | undefined>;
+  directoryUri?(source: Source, path: string): Promise<string>;
   prepare(source: Source, localSocket: string): Promise<PreparedOpenBridge>;
   publishRemote?(source: Source, record: RegistryRecord): Promise<() => Promise<void>>;
   installHelper?(source: Source): Promise<void>;
@@ -99,6 +101,16 @@ interface DownloadTicket {
   removeCloseListener: () => void;
 }
 
+interface DirectoryTicket {
+  id: string;
+  sourceId: string;
+  sessionId: string;
+  socket: Socket;
+  recipient: WebSocket;
+  timer: ReturnType<typeof setTimeout>;
+  cleanup(): void;
+}
+
 function jsonLine(value: unknown) {
   return Buffer.from(JSON.stringify(value) + "\n");
 }
@@ -125,6 +137,7 @@ export class OpenDownloadService {
   private users = new Map<string, number>();
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private tickets = new Map<string, DownloadTicket>();
+  private directories = new Map<string, DirectoryTicket>();
   private finished = new Map<string, { sessionId: string; progress: DownloadProgress; expires: number }>();
   private staged = new Map<string, { sessionId: string; assetId: string; timer: ReturnType<typeof setTimeout> }>();
   private stopping = false;
@@ -287,10 +300,18 @@ export class OpenDownloadService {
     if (givenSecret.length !== expectedSecret.length || !timingSafeEqual(givenSecret, expectedSecret)) {
       socket.end(rejected); return;
     }
-    const filename = safeFilename(header.filename);
     if (header.version !== 1 || header.provider !== source.type || header.nativeSocket !== this.bridges.get(source.id)?.record.nativeSocket ||
-        typeof header.paneId !== "string" || !header.paneId || header.paneId.length > 256 ||
-        !Number.isSafeInteger(header.size) || (header.size as number) < 0 || !filename) {
+        typeof header.paneId !== "string" || !header.paneId || header.paneId.length > 256) {
+      socket.end(rejected); return;
+    }
+    const isDirectory = header.kind === "directory";
+    let path: string | undefined;
+    if (isDirectory) {
+      try { path = directoryPath(header.path); }
+      catch { socket.end(rejected); return; }
+      if (header.size !== undefined || header.filename !== undefined) { socket.end(rejected); return; }
+    } else if ((header.kind !== undefined && header.kind !== "file") ||
+        !Number.isSafeInteger(header.size) || (header.size as number) < 0 || !safeFilename(header.filename)) {
       socket.end(rejected); return;
     }
     const bridge = this.bridges.get(source.id);
@@ -313,6 +334,11 @@ export class OpenDownloadService {
     if (!recipient || !recipient.isCurrent() || recipient.socket.readyState !== 1 || !recipient.sessionId) {
       socket.end(jsonLine({ ok: false, reason: "not-attached" })); return;
     }
+    if (isDirectory) {
+      await this.sendDirectory(source, path!, socket, recipient);
+      return;
+    }
+    const filename = safeFilename(header.filename)!;
     const id = randomBytes(32).toString("base64url");
     const ticket: DownloadTicket = {
       id, sessionId: recipient.sessionId, socket, sourceId: source.id, windowId: target.windowId,
@@ -337,6 +363,59 @@ export class OpenDownloadService {
       recipient.socket.send(JSON.stringify({ type: "file-context", id, filename, size: ticket.size }));
       if (ticket.helperProgress) socket.write(jsonLine({ state: "offered", transferred: 0, size: ticket.size }));
     } catch { this.finish(ticket, "failed", "disconnected"); }
+  }
+
+  private async sendDirectory(source: Source, path: string, socket: Socket, recipient: DownloadRecipient): Promise<void> {
+    if (!this.options.directoryUri) { socket.end(jsonLine({ ok: false, reason: "editor-unavailable" })); return; }
+    const id = randomBytes(32).toString("base64url");
+    const release = this.retainSource(source.id);
+    const onClose = () => this.finishDirectory(id, "not-attached");
+    const onData = () => this.finishDirectory(id, "invalid-directory");
+    const timer = setTimeout(() => this.finishDirectory(id, "not-started"), this.options.contextTimeoutMs ?? CONTEXT_TIMEOUT);
+    timer.unref();
+    const ticket: DirectoryTicket = {
+      id, sourceId: source.id, sessionId: recipient.sessionId, socket, recipient: recipient.socket, timer,
+      cleanup: () => {
+        clearTimeout(timer);
+        socket.off("close", onClose);
+        socket.off("data", onData);
+        recipient.socket.off("close", onClose);
+        release();
+      },
+    };
+    this.directories.set(id, ticket);
+    socket.once("close", onClose);
+    socket.once("data", onData);
+    recipient.socket.once("close", onClose);
+    socket.setTimeout(0);
+    socket.resume();
+    try {
+      const uri = await this.options.directoryUri(source, path);
+      if (this.directories.get(id) !== ticket) return;
+      if (!recipient.isCurrent() || recipient.socket.readyState !== 1) {
+        this.finishDirectory(id, "not-attached"); return;
+      }
+      recipient.socket.send(JSON.stringify({ type: "open-directory", id, path, uri }));
+    } catch { this.finishDirectory(id, "editor-unavailable"); }
+  }
+
+  directoryReceived(id: string, socket: WebSocket, sessionId: string): boolean {
+    const ticket = this.directories.get(id);
+    if (!ticket || ticket.recipient !== socket || ticket.sessionId !== sessionId || socket.readyState !== 1) return false;
+    this.finishDirectory(id);
+    return true;
+  }
+
+  private finishDirectory(id: string, reason?: string): void {
+    const ticket = this.directories.get(id);
+    if (!ticket) return;
+    this.directories.delete(id);
+    ticket.cleanup();
+    if (!ticket.socket.destroyed && !ticket.socket.writableEnded)
+      ticket.socket.end(jsonLine(reason ? { ok: false, reason } : { ok: true }));
+    const timer = setTimeout(() => ticket.socket.destroy(), 500);
+    timer.unref();
+    ticket.socket.once("close", () => clearTimeout(timer));
   }
 
   private snapshot(ticket: DownloadTicket, reason?: DownloadReason): DownloadProgress {
@@ -487,6 +566,7 @@ export class OpenDownloadService {
     const sourceId = bridge.source.id;
     if (this.bridges.get(sourceId) === bridge) this.bridges.delete(sourceId);
     for (const [id, ticket] of this.tickets) if (ticket.sourceId === sourceId) this.cancelTicket(id);
+    for (const [id, ticket] of this.directories) if (ticket.sourceId === sourceId) this.finishDirectory(id, "not-attached");
     for (const socket of bridge.sockets) socket.destroy();
     await bridge.cleanupRegistry().catch(() => {});
     await bridge.cleanupProvider().catch(() => {});
@@ -502,6 +582,7 @@ export class OpenDownloadService {
     await Promise.all([...this.preparing.values()].map(({ promise }) => promise.catch(() => {})));
     await Promise.all([...this.bridges.keys()].map((id) => this.closeSource(id)));
     for (const id of this.tickets.keys()) this.cancelTicket(id);
+    for (const id of this.directories.keys()) this.finishDirectory(id, "not-attached");
     for (const staged of this.staged.values()) clearTimeout(staged.timer);
     this.staged.clear();
     this.finished.clear();
