@@ -1,4 +1,5 @@
 import type { Terminal } from '@xterm/xterm'
+import { isPasteShortcut } from './clipboard-shortcuts'
 
 const MAX_COPY_BYTES = 1024 * 1024
 const COPY_GESTURE_MS = 3000
@@ -109,10 +110,10 @@ export class TerminalClipboard {
   }
 
   key(event: KeyboardEvent): boolean {
-    const paste = event.code === 'KeyV' && !event.altKey && (event.ctrlKey || event.metaKey)
     // Returning false skips xterm's Ctrl+V -> SYN mapping without cancelling
-    // the browser's native paste event. It carries images even on HTTP.
-    if (paste) {
+    // the browser's native paste event. Windows clipboard history can supply
+    // the logical key without a physical code; images still arrive via paste.
+    if (isPasteShortcut(event)) {
       if (event.type === 'keydown' && event.isTrusted && !event.repeat && /Mac/.test(navigator.platform) && event.ctrlKey && !event.metaKey) this.notice('使用 ⌘V 粘贴')
       return false
     }

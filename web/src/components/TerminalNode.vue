@@ -74,7 +74,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
         <button v-else title="从画布移除" aria-label="从画布移除" @click.stop="action('remove')"><Icon name="minus" :size="15" /></button>
         <button v-if="!data.focus" title="聚焦窗口" aria-label="聚焦窗口" @click.stop="action('focus')"><Icon name="expand" :size="14" /></button>
         <button title="窗口操作" aria-label="窗口操作" @click.stop="action('menu')"><Icon name="more" :size="17" /></button>
-        <button v-if="data.focus" title="返回画布" aria-label="返回画布" @click.stop="action('unfocus')"><Icon name="close" :size="15" /></button>
+        <button v-if="data.focus" title="退出放大" aria-label="退出放大" @click.stop="action('unfocus')"><Icon name="collapse" :size="15" /></button>
       </div>
     </header>
     <div v-if="data.available" ref="host" class="terminal-host nodrag nopan nowheel" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :style="data.focus ? { overflow: 'auto' } : undefined" @pointerdown.stop="terminal?.focus()" @mousedown.stop @wheel.stop @dblclick.stop />

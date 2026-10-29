@@ -123,6 +123,8 @@ with the mouse copies on release. Ctrl+Shift+C (or Command+C on macOS) also copi
 a terminal selection, including on HTTP origins. When a terminal application owns
 mouse selection, its OSC52 copy response is accepted only for the focused window
 after the user's copy gesture. Clipboard queries never read back browser data.
+OS-injected paste shortcuts without a physical keyboard code, including the
+event shape used by Windows clipboard history, also retain native browser paste.
 
 ## Continue in VS Code
 
@@ -153,6 +155,8 @@ override that advertised address for a deployment behind a proxy or NAT.
 - Add a window to another canvas to create a reference, not another terminal.
 - A card has one title: the native window name. Its status dot opens pane
   details; source context is available in the title tooltip.
+- Selection and focus emphasize the existing status-colored border without an
+  extra outline. The inward-corner icon exits a maximized window.
 - Cards follow the attached client's aspect ratio. Width determines the display
   scale and height follows, keeping every pane visible without distortion.
 - Each native window has one backend PTY and one shared card size across all
