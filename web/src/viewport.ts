@@ -1,5 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 import type { CanvasViewport } from './mobile-layout'
+import { mobileKeyboardFrame, mobileKeyboardVisible } from './mobile-keyboard'
 
 export interface CanvasFrame { layoutWidth: number; width: number; height: number }
 function validCanvasFrame(value: unknown): value is CanvasFrame {
@@ -38,11 +39,9 @@ export function viewportFrame(layout: { width: number; height: number }, visual?
 export function useMobileViewport(mobile: Ref<boolean>) {
   const read = () => viewportFrame({ width: window.innerWidth, height: window.innerHeight }, window.visualViewport)
   const viewport = ref(read())
-  let frame = 0
-  const update = () => {
-    cancelAnimationFrame(frame)
-    frame = requestAnimationFrame(() => { viewport.value = read() })
-  }
+  // Read in the same event as keyboard recovery releases its held frame. A
+  // deferred read would briefly render the stale, keyboard-hidden height.
+  const update = () => { viewport.value = read() }
   onMounted(() => {
     window.addEventListener('resize', update)
     window.addEventListener('orientationchange', update)
@@ -50,15 +49,18 @@ export function useMobileViewport(mobile: Ref<boolean>) {
     window.visualViewport?.addEventListener('scroll', update)
   })
   onBeforeUnmount(() => {
-    cancelAnimationFrame(frame)
     window.removeEventListener('resize', update)
     window.removeEventListener('orientationchange', update)
     window.visualViewport?.removeEventListener('resize', update)
     window.visualViewport?.removeEventListener('scroll', update)
   })
-  const style = computed(() => mobile.value ? {
-    '--mobile-width': `${viewport.value.width}px`, '--mobile-height': `${viewport.value.height}px`,
-    '--mobile-top': `${viewport.value.top}px`, '--mobile-left': `${viewport.value.left}px`,
-  } : {})
+  const style = computed(() => {
+    if (!mobile.value) return {}
+    const frame = mobileKeyboardFrame.value || viewport.value
+    return { '--mobile-width': `${frame.width}px`, '--mobile-height': `${frame.height}px`,
+      '--mobile-top': `${frame.top}px`, '--mobile-left': `${frame.left}px`,
+      '--mobile-safe-bottom': mobileKeyboardVisible.value ? '0px' : 'env(safe-area-inset-bottom)',
+    }
+  })
   return { viewport, style }
 }

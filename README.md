@@ -55,6 +55,8 @@ built-in client connects through native sockets, forwarded over SSH remotely.
 - **Navigation:** scroll to pan, pinch to zoom, or use fullscreen for the canvas.
   On mobile, tap a terminal preview to interact in fullscreen; the auxiliary
   keyboard provides modifiers, navigation keys, clipboard and upload actions.
+  The header button controls the phone keyboard. Brief keyboard recovery keeps
+  the terminal size stable; a refused request returns the button to off.
   Modified Enter keys retain their modifiers; the terminal application controls
   their action.
 - **Status:** window colors summarize pane activity. Click the status indicator

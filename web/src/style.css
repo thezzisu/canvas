@@ -142,8 +142,9 @@
 .mobile-layout .source-panel>header h2{font-size:18px}
 .mobile-layout .source-panel .icon-button{min-width:34px;height:36px}
 .mobile-layout .source-panel-content{margin-top:14px}
-.mobile-layout .focus-overlay{position:absolute;inset:0;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);align-items:stretch;justify-content:flex-start;overflow:hidden;min-height:0}
+.mobile-layout .focus-overlay{position:absolute;inset:0;padding:env(safe-area-inset-top) env(safe-area-inset-right) var(--mobile-safe-bottom,env(safe-area-inset-bottom)) env(safe-area-inset-left);align-items:stretch;justify-content:flex-start;overflow:hidden;min-height:0}
 .mobile-layout .focus-overlay>.terminal-card{flex-shrink:0;border-radius:0}
+.mobile-layout .terminal-actions button[aria-pressed=true]{background:#d4aa8020;color:#e2bd99}
 .mobile-layout .modal-backdrop{position:absolute;padding:max(10px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left));align-items:center}
 .mobile-layout .modal{max-height:100%;padding:20px;border-radius:10px}
 .mobile-layout .modal input,.mobile-layout .modal select,.mobile-layout.login-screen input{font-size:16px}

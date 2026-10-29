@@ -211,7 +211,7 @@ function pasteFiles(event: ClipboardEvent) {
   emit('files', files)
   closeSheet()
 }
-function pickFiles() { more.value = false; fileInput.value?.click() }
+function pickFiles() { more.value = false; emit('reading', true); fileInput.value?.click() }
 function filesChanged(event: Event) {
   const input = event.target as HTMLInputElement
   const files = [...input.files || []]

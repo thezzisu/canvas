@@ -25,6 +25,7 @@ import { buildFontPresentation, ensureContentFont } from './fonts'
 import type { GlobalSettings } from '../../shared/settings'
 import { useCanvasNavigation } from './canvas-navigation'
 import { useMobileLayout } from './mobile-layout'
+import { hideMobileKeyboard } from './mobile-keyboard'
 import { canvasFrame, preserveCanvasCenter, useMobileViewport, type CanvasFrame } from './viewport'
 import { statusColor, statusLabel } from './status'
 import { overviewResources, overviewLayoutKey, overviewStatuses, type OverviewInteraction, type OverviewOrder } from './overview'
@@ -37,7 +38,6 @@ const mobile = useMobileLayout()
 const { viewport: visibleViewport, style: mobileViewportStyle } = useMobileViewport(mobile)
 const sidebarOpen = ref(false)
 const focusViewportElement = ref<HTMLElement>()
-let focusObserver: ResizeObserver | undefined
 let cameraObserver: ResizeObserver | undefined
 let cameraFrame: CanvasFrame | undefined
 let cameraResize = 0
@@ -881,16 +881,7 @@ function windowResize() {
   queueCameraResize()
   if (!mobile.value) {
     focusedSize.width = window.innerWidth - 32; focusedSize.height = window.innerHeight - 32
-    return
   }
-  const element = focusViewportElement.value
-  if (!element) {
-    focusedSize.width = visibleViewport.value.width; focusedSize.height = visibleViewport.value.height
-    return
-  }
-  const style = getComputedStyle(element)
-  focusedSize.width = Math.max(1, element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight))
-  focusedSize.height = Math.max(1, element.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom))
 }
 function queueCameraResize() {
   cancelAnimationFrame(cameraResize)
@@ -909,13 +900,8 @@ function queueCameraResize() {
     }
   })
 }
-watch([focusViewportElement, mobile], async () => {
-  focusObserver?.disconnect()
-  if (focusViewportElement.value && mobile.value) {
-    focusObserver = new ResizeObserver(windowResize)
-    focusObserver.observe(focusViewportElement.value)
-  }
-  await nextTick(); windowResize()
+watch([modalOpen, directoryRequest, downloadPreview], ([modal, directory, preview]) => {
+  if (modal || directory || preview) hideMobileKeyboard()
 })
 watch(graphSurface, element => {
   cameraObserver?.disconnect()
@@ -947,7 +933,7 @@ onMounted(async () => {
   finally { ready.value = true }
   refreshTimer = setInterval(() => { void refreshResources(true) }, 2000)
 })
-onBeforeUnmount(() => { for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; focusObserver?.disconnect(); cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('pointerdown', outsideCanvasMenu) })
+onBeforeUnmount(() => { for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('pointerdown', outsideCanvasMenu) })
 </script>
 
 <template>

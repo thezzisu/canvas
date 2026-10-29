@@ -10,6 +10,7 @@ import { emptyModifiers, hasModifiers, modifiedText, terminalKey, type TerminalM
 import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch'
 import { defaultContentFont, type ContentFontSettings } from '../../shared/settings'
 import { applyTerminalFontFeatures, type FontPresentation } from './fonts'
+import { bindMobileKeyboard } from './mobile-keyboard'
 
 export type TerminalStatus = {
   status: 'connecting' | 'connected' | 'disconnected'
@@ -37,6 +38,7 @@ interface Session {
   modifiers: TerminalModifiers
   touchMode: TerminalTouchMode
   keyboardRequested: boolean
+  keyboard?: ReturnType<typeof bindMobileKeyboard>
   suppressInput?: boolean
   nativeKey?: { id: string; key: string; modifiers: Partial<TerminalModifiers> }
   removeFontFeatures?: () => void
@@ -130,10 +132,8 @@ function setModifiers(session: Session, modifiers: Partial<TerminalModifiers> = 
 function focusTerminal(session: Session, keyboard?: boolean) {
   if (!interactive(session)) return
   claimFocus(session)
-  if (session.mobile && keyboard !== undefined) session.keyboardRequested = keyboard
-  if (session.term.textarea) session.term.textarea.inputMode = session.mobile && !session.keyboardRequested ? 'none' : 'text'
-  session.term.focus()
-  setState(session, { ...session.state, keyboardRequested: session.keyboardRequested })
+  if (session.mobile) session.keyboard?.focus(keyboard)
+  else session.term.focus()
 }
 export function focusWindow(sourceId: string, spaceId: string, windowId: string): boolean {
   const session = sessions.get(key(sourceId, spaceId, windowId))
@@ -147,7 +147,7 @@ function schedulePresentation(session: Session) {
     session.presentationFrame = undefined
     if (session.mobile && session.magnified && session.focusResize) {
       clearTimeout(session.resizeTimer)
-      session.resizeTimer = setTimeout(() => { session.resizeTimer = undefined; updateFocusSize(session) }, 80)
+      session.resizeTimer = setTimeout(() => { session.resizeTimer = undefined; updateFocusSize(session) }, 200)
     } else updateFocusSize(session)
     present(session)
   })
@@ -444,8 +444,16 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       },
     })
   }
+  if (!session.mobile && session.keyboard) { session.keyboard.dispose(); session.keyboard = undefined }
+  if (session.mobile && !session.keyboard && session.term.textarea) {
+    const current = session
+    session.keyboard = bindMobileKeyboard(session.term.textarea, {
+      active: () => current.mobile && current.magnified && !!current.host?.isConnected,
+      changed: requested => { current.keyboardRequested = requested; setState(current, { ...current.state }) },
+    })
+  }
   if (session.term.textarea) {
-    session.term.textarea.readOnly = !interactive(session)
+    session.term.textarea.readOnly = !interactive(session) || session.mobile && !session.keyboardRequested
     session.term.textarea.tabIndex = interactive(session) ? 0 : -1
     session.term.textarea.inputMode = session.mobile && !session.keyboardRequested ? 'none' : 'text'
     // Keep the hidden input large enough to avoid iOS focus zoom; xterm's
@@ -468,7 +476,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   schedulePresentation(current)
   return {
     focus(options: { keyboard?: boolean } = {}) { focusTerminal(current, options.keyboard) },
-    blur() { current.keyboardRequested = false; current.term.blur(); setModifiers(current); setState(current, { ...current.state, keyboardRequested: false }) },
+    blur() { if (current.mobile) current.keyboard?.blur(); else current.term.blur(); setModifiers(current) },
     setModifiers(modifiers: Partial<TerminalModifiers>) { setModifiers(current, modifiers) },
     sendKey(key: string, modifiers: Partial<TerminalModifiers> = current.modifiers) {
       sendTerminalKey(current, key, modifiers)
@@ -500,10 +508,10 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       if (onGeometry) current.geometryListeners.delete(onGeometry)
       if (current.host === host) {
         endFocusSize(current)
+        if (current.mobile) current.keyboard?.blur()
         current.host = undefined
         current.magnified = false
         current.keyboardRequested = false
-        if (current.mobile) current.term.blur()
       }
     },
   }
@@ -515,6 +523,7 @@ export function clearTerminals() {
     session.uploads.clear()
     session.removeTouch?.()
     session.removeFontFeatures?.()
+    session.keyboard?.dispose()
     endFocusSize(session)
     if (session.presentationFrame !== undefined) cancelAnimationFrame(session.presentationFrame)
     const socket = session.socket
