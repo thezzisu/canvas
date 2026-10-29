@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { defaultSettings, type GlobalSettings } from "../shared/settings.ts";
 import { settingsPatchSchema } from "./settings.ts";
+import { readLegacySettings } from "./settings-legacy.ts";
 
 export const sourceSchema = z
   .object({
@@ -206,10 +207,10 @@ export class Store extends EventEmitter {
     };
   }
   settings(): GlobalSettings {
-    const stored = this.get<GlobalSettings>("settings", "global");
+    const stored = this.get<unknown>("settings", "global");
     if (!stored) return defaultSettings();
     const parsed = settingsPatchSchema.safeParse(stored);
-    return parsed.success ? parsed.data : defaultSettings();
+    return parsed.success ? parsed.data : readLegacySettings(stored) ?? defaultSettings();
   }
   updateSettings(value: GlobalSettings): GlobalSettings {
     const settings = settingsPatchSchema.parse(value);

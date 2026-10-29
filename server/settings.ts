@@ -6,7 +6,7 @@ const familyName = z.string().trim().min(1).max(100)
   .regex(/^[\p{L}\p{N} _+.\-]+$/u, '请输入单个字体名称')
 export const contentFontSchema = z.object({
   ligatures: z.boolean(),
-  stack: z.array(z.object({ family: familyName, variant: z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9_-]+$/).optional() }).strict()).min(1).max(12).transform(fonts => {
+  stack: z.array(z.object({ family: familyName }).strict()).min(1).max(12).transform(fonts => {
     const seen = new Set<string>()
     return fonts.filter(font => {
       const id = font.family.toLowerCase()

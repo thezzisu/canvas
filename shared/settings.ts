@@ -1,4 +1,4 @@
-export interface FontSelection { family: string; variant?: string }
+export interface FontSelection { family: string }
 export interface ContentFontSettings { stack: FontSelection[]; ligatures: boolean }
 export interface GlobalSettings { contentFont: ContentFontSettings }
 export const defaultContentFont = (): ContentFontSettings => ({

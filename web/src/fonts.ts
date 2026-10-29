@@ -9,18 +9,13 @@ export interface ContentFontFace {
   weight: string
   style: 'normal' | 'italic'
 }
-export interface ContentFontVariant {
-  id: string
+export interface ContentFontCatalogEntry {
+  family: string
   label: string
   cssFamily: string
   /** Native half-width advance, divided by units per em. */
   latinAdvance: number
   faces: readonly ContentFontFace[]
-}
-export interface ContentFontCatalogEntry {
-  family: string
-  label: string
-  variants: readonly ContentFontVariant[]
 }
 
 function staticFaces(directory: string): ContentFontFace[] {
@@ -32,24 +27,23 @@ function staticFaces(directory: string): ContentFontFace[] {
   ]
 }
 
-/** Bundled families use the same stack/variant model as local system families. */
+/** Bundled and local fonts share one ordered list of family names. */
 export const FONT_CATALOG: readonly ContentFontCatalogEntry[] = [
   {
     family: 'Maple Mono NF CN', label: 'Maple Mono NF CN',
-    variants: [
-      { id: 'default', label: '标准', cssFamily: 'Canvas Maple Mono NF CN', latinAdvance: 600 / 1000, faces: staticFaces('maple') },
-      { id: 'normal', label: 'Normal', cssFamily: 'Canvas Maple Mono Normal NF CN', latinAdvance: 600 / 1000, faces: staticFaces('maple-normal') },
-    ],
+    cssFamily: 'Canvas Maple Mono NF CN', latinAdvance: 600 / 1000, faces: staticFaces('maple'),
+  },
+  {
+    family: 'Maple Mono Normal NF CN', label: 'Maple Mono Normal NF CN',
+    cssFamily: 'Canvas Maple Mono Normal NF CN', latinAdvance: 600 / 1000, faces: staticFaces('maple-normal'),
   },
   {
     family: 'Cascadia Code PL', label: 'Cascadia Code PL',
-    variants: [{
-      id: 'default', label: '标准', cssFamily: 'Canvas Cascadia Code PL', latinAdvance: 1200 / 2048,
-      faces: [
-        { url: '/fonts/cascadia/regular.woff2', weight: '200 700', style: 'normal' },
-        { url: '/fonts/cascadia/italic.woff2', weight: '200 700', style: 'italic' },
-      ],
-    }],
+    cssFamily: 'Canvas Cascadia Code PL', latinAdvance: 1200 / 2048,
+    faces: [
+      { url: '/fonts/cascadia/regular.woff2', weight: '200 700', style: 'normal' },
+      { url: '/fonts/cascadia/italic.woff2', weight: '200 700', style: 'italic' },
+    ],
   },
 ]
 const catalog = new Map(FONT_CATALOG.map(font => [font.family.toLowerCase(), font]))
@@ -60,7 +54,7 @@ function quoteFamily(name: string): string {
     : `"${name.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\x00-\x1f\x7f]/g, character => `\\${character.charCodeAt(0).toString(16)} `)}"`
 }
 
-interface ResolvedFont { family: string; variant?: ContentFontVariant; sizeAdjust?: string }
+interface ResolvedFont { family: string; bundled?: ContentFontCatalogEntry; sizeAdjust?: string }
 
 function fontChain(settings: ContentFontSettings): ResolvedFont[] {
   const seen = new Set<string>()
@@ -68,17 +62,16 @@ function fontChain(settings: ContentFontSettings): ResolvedFont[] {
   return settings.stack.flatMap((entry, index) => {
     const name = entry.family.trim()
     if (!name) return []
-    const available = catalog.get(name.toLowerCase())
-    const variant = available?.variants.find(item => item.id === (entry.variant || 'default')) || available?.variants[0]
-    if (index === 0) primaryAdvance = variant?.latinAdvance
+    const bundled = catalog.get(name.toLowerCase())
+    if (index === 0) primaryAdvance = bundled?.latinAdvance
     // A common, data-driven metric adaptation applies to every bundled fallback.
     // An unknown system family keeps native metrics; its advance is not guessed.
-    const scale = variant && primaryAdvance ? primaryAdvance / variant.latinAdvance : 1
-    const family = variant ? variant.cssFamily + (scale !== 1 ? ` @${scale.toFixed(8)}` : '') : name
+    const scale = bundled && primaryAdvance ? primaryAdvance / bundled.latinAdvance : 1
+    const family = bundled ? bundled.cssFamily + (scale !== 1 ? ` @${scale.toFixed(8)}` : '') : name
     const identity = family.toLowerCase()
     if (seen.has(identity)) return []
     seen.add(identity)
-    return [{ family, variant, ...(scale !== 1 ? { sizeAdjust: `${scale * 100}%` } : {}) }]
+    return [{ family, bundled, ...(scale !== 1 ? { sizeAdjust: `${scale * 100}%` } : {}) }]
   })
 }
 
@@ -101,7 +94,7 @@ function loadFamily(font: ResolvedFont): Promise<void> {
     // Load all native styles before applying the family. Otherwise the first
     // bold/italic terminal output can change fallback metrics after a resize.
     // A new FontFace on retry avoids reusing a permanently rejected load promise.
-    return Promise.all(font.variant!.faces.map(source => {
+    return Promise.all(font.bundled!.faces.map(source => {
       const url = source.url + (attempt ? `?retry=${attempt}` : '')
       const face = new FontFace(font.family, `url("${url}") format("woff2")`, {
         style: source.style, weight: source.weight,
@@ -126,7 +119,7 @@ function loadFamily(font: ResolvedFont): Promise<void> {
 /** Load only bundled families in the effective chain; no external font CDN. */
 export async function ensureContentFont(settings: ContentFontSettings): Promise<void> {
   if (typeof document === 'undefined' || !document.fonts) return
-  await Promise.all(fontChain(settings).filter(font => font.variant).map(font => loadFamily(font)))
+  await Promise.all(fontChain(settings).filter(font => font.bundled).map(font => loadFamily(font)))
 }
 
 // Documented programming sequences from Maple Mono and Cascadia Code. Grouping

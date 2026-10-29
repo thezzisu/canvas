@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import UModal from '@nuxt/ui/components/Modal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UInputMenu from '@nuxt/ui/components/InputMenu.vue'
-import USelect from '@nuxt/ui/components/Select.vue'
 import USwitch from '@nuxt/ui/components/Switch.vue'
 import type { ContentFontSettings, GlobalSettings } from '../../../shared/settings'
 import { FONT_CATALOG, buildFontPresentation, ensureContentFont } from '../fonts'
@@ -14,7 +13,7 @@ const props = defineProps<{ settings: GlobalSettings; portal?: HTMLElement }>()
 const emit = defineEmits<{ close: []; saved: [settings: GlobalSettings] }>()
 const clone = (value: ContentFontSettings): ContentFontSettings => ({ ...value, stack: value.stack.map(entry => ({ ...entry })) })
 const normalized = (value: ContentFontSettings): ContentFontSettings => ({
-  stack: value.stack.map(entry => ({ family: entry.family.trim(), ...(entry.variant && entry.variant !== 'default' ? { variant: entry.variant } : {}) })),
+  stack: value.stack.map(entry => ({ family: entry.family.trim() })),
   ligatures: value.ligatures,
 })
 const draft = reactive(clone(props.settings.contentFont))
@@ -58,20 +57,10 @@ watch(config, value => {
   loading.value = true
   previewTimer = setTimeout(() => { void loadPreview(clone(value), revision) }, 180)
 }, { immediate: true })
-function variants(family: string) {
-  return FONT_CATALOG.find(font => font.family.toLowerCase() === family.trim().toLowerCase())?.variants.map(variant => ({ label: variant.label, value: variant.id })) || []
-}
 function setFamily(index: number, family: string) {
   const entry = draft.stack[index]
   if (!entry || saving.value) return
   entry.family = family
-  if (entry.variant && !variants(family).some(variant => variant.value === entry.variant)) delete entry.variant
-}
-function setVariant(index: number, variant: string) {
-  const entry = draft.stack[index]
-  if (!entry || saving.value) return
-  if (variant === 'default') delete entry.variant
-  else entry.variant = variant
 }
 function addFont() {
   if (saving.value || draft.stack.length >= 12) return
@@ -117,13 +106,12 @@ onBeforeUnmount(() => { disposed = true; previewRevision++; clearTimeout(preview
           <li v-for="(entry, index) in draft.stack" :key="entryIds[index]" class="font-stack-entry">
             <div class="font-stack-row">
               <span class="font-order" :title="index === 0 ? '主字体' : '回退字体'">{{ index + 1 }}</span>
-              <UInputMenu :model-value="entry.family" mode="autocomplete" :items="families" :portal="portal || false" :disabled="saving" :open-on-focus="false" size="sm" class="font-family-input" :aria-label="`字体 ${index + 1}`" placeholder="选择或输入字体名称" :maxlength="100"
+              <UInputMenu :model-value="entry.family" mode="autocomplete" :items="families" :portal="portal || false" :disabled="saving" :open-on-focus="false" size="sm" class="font-family-input" :aria-label="`字体 ${index + 1}`" :title="entry.family" placeholder="选择或输入字体名称" :maxlength="100"
                 :ui="{ content: 'font-select-menu', item: 'font-select-item', viewport: 'font-select-viewport', trailing: 'font-family-trailing' }" @update:model-value="setFamily(index, $event)"><template #empty><span class="font-local-hint">使用本机字体</span></template></UInputMenu>
               <UButton type="button" color="neutral" variant="ghost" size="xs" class="font-order-button" :disabled="saving || index === 0" :aria-label="`上移字体 ${index + 1}`" @click="moveFont(index, -1)"><Icon name="down" :size="13" class="font-up" /></UButton>
               <UButton type="button" color="neutral" variant="ghost" size="xs" class="font-order-button" :disabled="saving || index === draft.stack.length - 1" :aria-label="`下移字体 ${index + 1}`" @click="moveFont(index, 1)"><Icon name="down" :size="13" /></UButton>
               <UButton type="button" color="neutral" variant="ghost" size="xs" class="font-order-button" :disabled="saving || draft.stack.length === 1" :aria-label="`删除字体 ${index + 1}`" @click="removeFont(index)"><Icon name="close" :size="13" /></UButton>
             </div>
-            <div v-if="variants(entry.family).length > 1" class="font-variant-row"><span>字形</span><USelect :model-value="entry.variant || 'default'" :items="variants(entry.family)" :portal="portal || false" :disabled="saving" size="sm" :aria-label="`字体变体 ${index + 1}`" class="font-select font-variant-select" :ui="{ content: 'font-select-menu', item: 'font-select-item', viewport: 'font-select-viewport', trailing: 'font-select-trailing' }" @update:model-value="setVariant(index, $event)" /></div>
           </li>
         </ol>
         <div class="font-options"><USwitch v-model="draft.ligatures" :disabled="saving" label="连字" aria-label="连字" size="sm" class="font-switch" /><span class="font-stack-hint">从上到下依次回退</span></div>

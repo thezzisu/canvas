@@ -144,6 +144,29 @@ test("global font settings broadcast to both browsers without altering canvas do
   assert.equal(f.terminalShutdowns, 0)
 })
 
+test("legacy font documents are normalized for browser snapshots without a migration write", async t => {
+  const f = fixture(t)
+  const original = JSON.stringify({ contentFont: { stack: [{ family: 'Maple Mono NF CN', variant: 'normal' }, { family: 'monospace' }], ligatures: true } })
+  f.store.db.prepare("INSERT INTO documents(kind,id,body) VALUES('settings','global',?)").run(original)
+  const canonical = { contentFont: { stack: [{ family: 'Maple Mono Normal NF CN' }, { family: 'monospace' }], ligatures: true } }
+  const first = await f.subscribe(), second = await f.subscribe('second')
+  const baseline = (await first.next()).state!
+  assert.deepEqual(baseline, (await second.next()).state)
+  assert.deepEqual(baseline.settings, canonical)
+  assert.equal((await f.request('/api/settings', 'PATCH', canonical)).status, 200)
+  assert.equal(f.store.revision, baseline.revision, 'readback save does not publish a spurious change')
+  assert.equal(f.store.db.prepare("SELECT body FROM documents WHERE kind='settings' AND id='global'").get()!.body, original)
+  const stale = await f.request('/api/settings', 'PATCH', JSON.parse(original))
+  assert.equal(stale.status, 400, 'stale variant-bearing clients cannot restore the retired representation')
+  const changed = { contentFont: { stack: [{ family: 'Maple Mono NF CN' }, ...canonical.contentFont.stack], ligatures: false } }
+  assert.equal((await f.request('/api/settings', 'PATCH', changed)).status, 200)
+  const a = (await first.next()).state!, b = (await second.next()).state!
+  assert.deepEqual(a, b)
+  assert.deepEqual(a.settings, changed)
+  assert.deepEqual(a.canvases, baseline.canvases)
+  assert.equal(f.terminalShutdowns, 0)
+})
+
 test("logout and expiry close only the affected browser subscriptions", async (t) => {
   const f = fixture(t),
     first = await f.subscribe(),

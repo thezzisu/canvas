@@ -240,19 +240,22 @@ software-keyboard behavior depend on the browser and operating system.
 
 Open Settings from the sidebar footer to configure the ordered content-font
 stack. The first family is preferred; later entries provide missing glyphs.
-Built-in suggestions and locally installed family names use the same list, with
-optional variants supplied by the font catalog. Changes preview inside the dialog
+Built-in suggestions and locally installed family names use the same list.
+Each entry is only a font name. Changes preview inside the dialog
 until saved, then synchronize across browsers. They apply to terminals, note text,
 text file previews and mobile selection/paste sheets, leaving application chrome
 unchanged.
 
-Maple Mono NF CN is the default. Its full Chinese/Nerd Fonts character set and
-Normal variant are bundled, alongside Cascadia Code PL. Built-in fonts load from
+Maple Mono NF CN is the default. Maple Mono Normal NF CN and Cascadia Code PL
+are separate bundled font names in the same list. Both Maple families retain
+their full Chinese/Nerd Fonts character sets. Built-in fonts load from
 Canvas, not a third-party CDN. Locally installed fonts depend on each browser
 computer; unavailable names fall through the configured list. Known bundled font
 metrics are aligned for mixed-script fallback. Ligatures are optional and off by
 default; they change glyph presentation without changing copied or terminal text.
-The font catalog can gain families and variants without changing the settings API.
+The font catalog can gain families without changing the settings API or adding
+special controls. Existing saved Normal preferences resolve to the complete
+Maple Mono Normal NF CN name; new preferences contain no variant field.
 
 Changing fonts preserves ordinary cards' native rows/columns and connections.
 Only the existing maximized owner may update its temporary geometry; an external
