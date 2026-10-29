@@ -85,7 +85,7 @@ onBeforeUnmount(() => {
       <p v-if="error" class="terminal-status-error">{{ error }}</p>
       <div v-if="available && panes.length" class="pane-status-list">
         <div v-for="pane in panes" :key="pane.id" class="pane-status-row" :class="{ active: pane.active }" :style="{ '--program-color': statusColor(pane.status) }" :data-pane-id="pane.id" :data-program-status="pane.status" :title="paneLabel(pane)">
-          <i class="program-dot" /><span class="pane-status-name">{{ paneName(pane) }}<small v-if="pane.agent && pane.agent !== pane.name">{{ pane.agent }}</small></span><span class="pane-status-value">{{ pane.progress === undefined ? statusLabel(pane.status) : `${pane.progress}%` }}</span>
+          <i class="program-dot" /><span class="pane-status-name">{{ paneName(pane) }}<small v-if="pane.agent && pane.agent !== pane.name">{{ pane.agent }}</small></span><span class="pane-status-value">{{ statusLabel(pane.status) }}</span>
         </div>
       </div>
     </div>

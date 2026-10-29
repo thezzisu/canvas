@@ -5,12 +5,11 @@ import { join, resolve } from "node:path";
 import { getRequestListener } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { WebSocketServer } from "ws";
-import { Store, type Source } from "./state.ts";
+import { Store, sourceConnectionKey, type Source } from "./state.ts";
 import { createApp, type Account } from "./app.ts";
 import { TerminalManager } from "./terminals.ts";
 import { sessionCookie } from "./auth.ts";
 import {
-  closeStatusObservers,
   closeProviderConnections,
   prepareOpenBridge,
   writeRemoteBridgeRegistry,
@@ -137,7 +136,7 @@ server.on("upgrade", (request, socket, head) => {
         const message = JSON.parse(bytes.toString());
         if (message.type === "upload-begin") {
           const current = store.get<Source>("source", sourceId);
-          if (current && JSON.stringify(current) === JSON.stringify(source))
+          if (current && sourceConnectionKey(current) === sourceConnectionKey(source))
             void uploads.begin(source, windowId, ws, session, { id: message.id, files: message.files });
         } else if (message.type === "upload-cancel" && typeof message.id === "string") uploads.cancel(ws, message.id);
         else if (message.type === "directory-received" && typeof message.id === "string") downloads.directoryReceived(message.id, ws, session);
@@ -171,7 +170,6 @@ async function stop() {
   if (stopping) return;
   stopping = true;
   clearInterval(heartbeat);
-  closeStatusObservers();
   await uploads.closeAll();
   await terminals.closeAll();
   await downloads.closeAll();

@@ -9,6 +9,7 @@ import { settingsPatchSchema } from "./settings.ts";
 import {
   Store,
   sourceSchema,
+  sourceConnectionKey,
   canvasSchema,
   itemSchema,
   nodeLayoutSchema,
@@ -27,7 +28,7 @@ import {
   BackgroundError,
   DEFAULT_BACKGROUND_OPACITY,
   backgroundContentType,
-  normalizeBackground,
+  validateBackground,
   readBackground,
   storedBackgroundContentType,
 } from "./backgrounds.ts";
@@ -70,8 +71,6 @@ const isInboxUpload = (method: string, path: string) =>
 export type Account = { username: string; passwordHash: string };
 export interface DownloadResponse {
   body: Readable;
-  size: number;
-  filename: string;
   headers: Record<string, string>;
   previewHeaders?: Record<string, string>;
 }
@@ -89,7 +88,7 @@ export function createApp(
   } = {},
 ) {
   const app = new Hono();
-  const attempts = new Map<string, { count: number; until: number }>();
+  let attempts: { count: number; until: number } | undefined;
   app.use("/api/*", async (c, next) => {
     c.header("Cache-Control", "no-store");
     c.header("X-Content-Type-Options", "nosniff");
@@ -186,9 +185,7 @@ export function createApp(
     const input = z
       .object({ username: z.string().max(200), password: z.string().max(1024) })
       .parse(await c.req.json());
-    const key = "account",
-      now = Date.now(),
-      prior = attempts.get(key);
+    const now = Date.now(), prior = attempts;
     if (prior && prior.until > now && prior.count >= 10)
       return c.json(
         { error: "Too many attempts. Try again in a minute." },
@@ -198,13 +195,13 @@ export function createApp(
       input.username !== account.username ||
       !verifyPassword(input.password, account.passwordHash)
     ) {
-      attempts.set(key, {
+      attempts = {
         count: prior && prior.until > now ? prior.count + 1 : 1,
         until: prior && prior.until > now ? prior.until : now + 60_000,
-      });
+      };
       return c.json({ error: "Incorrect username or password" }, 401);
     }
-    attempts.delete(key);
+    attempts = undefined;
     const old = getCookie(c, "canvas_session");
     if (old) store.removeSession(old);
     const token = randomBytes(32).toString("base64url");
@@ -327,10 +324,9 @@ export function createApp(
       id,
     });
     providers.validateSource({ ...s, id });
-    if ((Object.keys(s) as Array<keyof Source>).some(key => key !== "id" && key !== "name" && s[key] !== previous[key])) {
+    if (sourceConnectionKey({ ...s, id }) !== sourceConnectionKey(previous)) {
       await terminals.closeSource(id);
       await options.closeOpenBridge?.(id);
-      providers.disposeStatusSource(id);
       await providers.closeProviderConnections(id);
     }
     return c.json(store.put("source", s));
@@ -340,7 +336,6 @@ export function createApp(
     source(id);
     await terminals.closeSource(id);
     await options.closeOpenBridge?.(id);
-    providers.disposeStatusSource(id);
     await providers.closeProviderConnections(id);
     store.remove("source", id);
     return c.json({ ok: true });
@@ -471,11 +466,9 @@ export function createApp(
             .transform(Number)
             .pipe(opacitySchema)
             .parse(rawOpacity);
-    const image = await normalizeBackground(
-      await readBackground(c.req.raw),
-      backgroundContentType(c.req.header("content-type")),
-    );
-    // A canvas can be deleted while the image is being decoded.
+    const image = await readBackground(c.req.raw);
+    validateBackground(image, backgroundContentType(c.req.header("content-type")));
+    // A canvas can be deleted while the upload is being read.
     const canvas = store.get<Canvas>("canvas", id);
     if (!canvas) return c.json({ error: "Canvas not found" }, 404);
     store.setCanvasBackground(

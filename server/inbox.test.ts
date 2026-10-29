@@ -42,7 +42,7 @@ import { randomBytes } from 'node:crypto';
 import { writeInboxFile, removeInboxFiles, validateInboxFile } from './server/inbox.ts';
 const root = process.env.CANVAS_INBOX_TEST_ROOT;
 const inbox = join(root, 'inbox-home', '.local/share/canvas/inbox');
-const source = { id: 'fixture', name: 'Fixture', type: 'tmux', transport: 'local' };
+const source = { id: 'fixture', name: 'Fixture', transport: 'local' };
 async function* chunks(bytes, size = 17003) { for (let offset = 0; offset < bytes.length; offset += size) yield bytes.subarray(offset, offset + size); }
 async function waitFor(check) { for (let i = 0; i < 200; i++) { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 5)); } assert.fail('cleanup did not finish'); }
 ${body}

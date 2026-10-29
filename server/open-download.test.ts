@@ -19,11 +19,11 @@ import { OpenDownloadService, type OpenDownloadOptions } from "./open-download.t
 import { vscodeDirectoryUri } from "./editor-links.ts";
 
 const helper = fileURLToPath(new URL("../cli/canvas", import.meta.url));
-const source: Source = { id: randomUUID(), name: "Open", type: "herdr", transport: "local" };
+const source: Source = { id: randomUUID(), name: "Open", transport: "local" };
 const resources = {
-  id: source.id, name: source.name, type: source.type, host: "local", status: "online" as const,
-  spaces: [{ id: "space", name: "Space", windows: [{ id: "window", name: "Window", status: "unknown" as const, statusSource: "none" as const, panes: [{
-    id: "pane", name: "shell", active: true, status: "unknown" as const, statusSource: "none" as const,
+  id: source.id, name: source.name, status: "online" as const,
+  spaces: [{ id: "space", name: "Space", windows: [{ id: "window", name: "Window", status: "unknown" as const, panes: [{
+    id: "pane", name: "shell", active: true, status: "unknown" as const,
   }] }] }],
 };
 
@@ -54,12 +54,13 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
   const receiver = new FakeWebSocket();
   let resourceState = resources;
   const store = new Store(join(root, "canvas.db"));
+  store.put("source", source);
   const assets = new AssetStore(root, store);
   const canvas = store.put<Canvas>("canvas", { id: randomUUID(), name: "Files", nodes: [{
     id: "anchor", type: "terminal", sourceId: source.id, spaceId: "space", windowId: "window", x: 40, y: 50, width: 480, height: 302,
   }] });
   store.addSession("authenticated-session"); store.addSession("other-session");
-  const observations = { uploadedBytes: 0, aborted: 0, finalized: 0 };
+  const observations = { uploadedBytes: 0, aborted: 0, finalized: 0, bridgeStarts: 0, bridgeStops: 0, sourceCloses: 0 };
   const service = new OpenDownloadService({
     registryDirectory: registry,
     socketDirectory: sockets,
@@ -87,7 +88,10 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
       };
     },
     readTemporary: id => assets.readTemporary(id),
-    prepare: async (_source, localSocket) => ({ nativeSocket, remoteSocket: localSocket, cleanup: async () => {} }),
+    prepare: async (_source, localSocket) => {
+      observations.bridgeStarts++;
+      return { nativeSocket, remoteSocket: localSocket, cleanup: async () => { observations.bridgeStops++; } };
+    },
     resources: async () => resourceState,
     recipient: async () => options.recipientAvailable !== false ? {
       socket: receiver as never, sessionId: "authenticated-session", isCurrent: () => receiver.readyState === 1,
@@ -102,9 +106,12 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
     });
   };
   await service.ensureSource(source);
-  const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {} as TerminalManager, {
+  const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {
+    closeSource: async () => { observations.sourceCloses++; },
+  } as unknown as TerminalManager, {
     openDownload: (ticket, session) => service.open(ticket, session),
     prepareDownload: (ticket, session, context) => service.prepare(ticket, session, context),
+    closeOpenBridge: id => service.closeSource(id),
     assets,
   });
   t.after(async () => {
@@ -136,6 +143,7 @@ async function waitFor(check: () => boolean | Promise<boolean>, message: string)
 }
 
 async function sender(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, size: number) {
+  const messageMark = f.receiver.messages.length;
   const record = JSON.parse(await readFile(join(f.registry, (await readdir(f.registry))[0]!), "utf8"));
   const socket = createConnection(record.socket);
   socket.on("error", () => {});
@@ -143,10 +151,10 @@ async function sender(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, si
   let replies = "";
   socket.on("data", data => replies += data.toString());
   await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
-  socket.write(JSON.stringify({ version: 1, kind: "file", secret: record.secret, provider: "herdr", nativeSocket: f.nativeSocket,
+  socket.write(JSON.stringify({ version: 1, kind: "file", secret: record.secret, nativeSocket: f.nativeSocket,
     paneId: "pane", filename: "file.bin", size }) + "\n");
-  await waitFor(() => f.receiver.messages.some(message => message.type === "file-context"), "browser received no context request");
-  const context = f.receiver.messages.find(message => message.type === "file-context")!;
+  await waitFor(() => f.receiver.messages.slice(messageMark).some(message => message.type === "file-context"), "browser received no context request");
+  const context = f.receiver.messages.slice(messageMark).find(message => message.type === "file-context")!;
   return { socket, id: String(context.id), responses: () => replies.trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) };
 }
 
@@ -255,7 +263,9 @@ test("directories reach only their controlling browser and do not stage file byt
   assert.equal(message.type, "open-directory");
   assert.equal(message.path, path);
   assert.equal(message.uri, vscodeDirectoryUri({ hostName: "192.0.2.10", user: "fixture", port: 22 }, path));
-  assert.deepEqual(f.observations, { uploadedBytes: 0, aborted: 0, finalized: 0 });
+  assert.equal(f.observations.uploadedBytes, 0);
+  assert.equal(f.observations.aborted, 0);
+  assert.equal(f.observations.finalized, 0);
   assert.deepEqual(f.store.fileAssetIds(), []);
 });
 
@@ -434,6 +444,44 @@ test("copy retains its source until server staging finishes even after the last 
   await waitFor(async () => (await readdir(f.registry)).length === 0, "completed copy leaked the source lease");
 });
 
+test("renaming a source and attaching again preserve an active copy; endpoint edits close it", async t => {
+  const f = await fixture(t), releaseViewer = f.service.retainSource(source.id);
+  t.after(releaseViewer);
+  const patch = (body: unknown) => f.app.request(`http://canvas.test/api/sources/${source.id}`, {
+    method: "PATCH", headers: { Host: "canvas.test", Origin: "http://canvas.test", Cookie: "canvas_session=authenticated-session", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const transfer = await sender(t, f, 8);
+  await waitFor(() => transfer.responses().some(reply => reply.ok === true), "copy did not start");
+  transfer.socket.write("left");
+  await waitFor(() => f.observations.uploadedBytes === 4, "first copy chunk was not staged");
+  const registryBefore = await readdir(f.registry);
+  assert.equal((await patch({ ...source, name: "Renamed", target: "", sshIdentityFile: "", sshKnownHostsFile: "", herdrSession: "", herdrSocket: "" })).status, 200);
+  await f.service.ensureSource(f.store.get<Source>("source", source.id)!);
+  assert.deepEqual(await readdir(f.registry), registryBefore, "later attach recreated a renamed source's bridge");
+  assert.equal(f.observations.bridgeStarts, 1);
+  assert.equal(f.observations.bridgeStops, 0);
+  assert.equal(f.observations.sourceCloses, 0);
+  transfer.socket.end("over");
+  await waitFor(() => transfer.responses().some(reply => reply.state === "completed"), "rename interrupted the copy");
+  const download = await f.service.open(transfer.id, "authenticated-session");
+  assert.ok(download);
+  const parts: Buffer[] = [];
+  for await (const chunk of download.body) parts.push(Buffer.from(chunk));
+  assert.equal(Buffer.concat(parts).toString(), "leftover");
+
+  const interrupted = await sender(t, f, 4);
+  await waitFor(() => interrupted.responses().some(reply => reply.ok === true), "second copy did not start");
+  interrupted.socket.write("p");
+  await waitFor(() => f.observations.uploadedBytes === 9, "second copy chunk was not staged");
+  assert.equal((await patch({ herdrSocket: "/fixture/different.sock" })).status, 200);
+  await waitFor(() => interrupted.socket.destroyed && f.observations.aborted > 0, "endpoint edit did not cancel the old copy");
+  assert.equal(f.observations.sourceCloses, 1);
+  assert.equal(f.observations.bridgeStops, 1);
+  assert.deepEqual(await readdir(f.registry), []);
+  assert.equal(await f.service.open(interrupted.id, "authenticated-session"), undefined);
+});
+
 test("staging creation, write and commit failures fail the helper and clean partial data", async t => {
   for (const uploadFailure of ["create", "write", "complete"] as const) {
     await t.test(uploadFailure, async t => {
@@ -480,12 +528,12 @@ test("malformed and oversized socket headers cannot generate a file transfer", a
   await copyFile(f, "still-working", Buffer.from("ok"));
 });
 
-test("file transfer headers require an explicit kind and the current protocol version", async t => {
+test("file transfer headers require the current protocol and an exact native pane identity", async t => {
   const f = await fixture(t);
   const record = JSON.parse(await readFile(join(f.registry, (await readdir(f.registry))[0]!), "utf8"));
-  const header = { version: 1, kind: "file", secret: record.secret, provider: "herdr", nativeSocket: f.nativeSocket,
+  const header = { version: 1, kind: "file", secret: record.secret, nativeSocket: f.nativeSocket,
     paneId: "pane", filename: "file.bin", size: 0 };
-  for (const patch of [{ kind: undefined }, { kind: "unknown" }, { version: 0 }]) {
+  for (const patch of [{ kind: undefined }, { kind: "unknown" }, { version: 0 }, { paneId: "other:pane" }, { paneId: "" }]) {
     const socket = createConnection(record.socket);
     t.after(() => socket.destroy());
     socket.on("error", () => {});
@@ -498,13 +546,6 @@ test("file transfer headers require an explicit kind and the current protocol ve
   }
   assert.deepEqual(f.receiver.messages, []);
   assert.equal(f.observations.uploadedBytes, 0);
-});
-
-test("linked tmux references for one native window resolve to one destination", async t => {
-  const f = await fixture(t);
-  f.setResources({ ...resources, spaces: [...resources.spaces, { id: "linked-space", name: "Linked", windows: [{ ...resources.spaces[0]!.windows[0]!, panes: [...resources.spaces[0]!.windows[0]!.panes] }] }] });
-  await copyFile(f, "linked.bin", Buffer.from("one native window"));
-  assert.equal(f.receiver.messages.filter(message => message.type === "download").length, 1);
 });
 
 test("two independent Canvas backends on the same native socket fail closed", async t => {

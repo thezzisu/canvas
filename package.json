@@ -8,41 +8,48 @@
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "server": "node --import tsx server/main.ts",
-    "setup": "node --import tsx server/setup.ts",
-    "build": "vite build",
-    "start": "node --import tsx server/main.ts",
+    "server:dev": "node --import tsx server/main.ts",
+    "server": "node dist/server/main.js",
+    "setup": "node dist/server/setup.js",
+    "build:server": "node scripts/build-server.mjs",
+    "build:web": "vite build",
+    "build": "npm run build:server && npm run build:web",
+    "start": "node dist/server/main.js",
+    "prepack": "npm run build",
     "typecheck": "vue-tsc --noEmit",
     "test": "node --import tsx --test server/*.test.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.5",
-    "@nuxt/ui": "^4.12.0",
-    "@vue-flow/core": "^1.48.2",
-    "@vue-flow/minimap": "^1.5.4",
-    "@vue-flow/node-resizer": "^1.5.1",
-    "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/addon-unicode-graphemes": "0.4.0",
     "@xterm/headless": "^6.0.0",
-    "@xterm/xterm": "^6.0.0",
     "hono": "^4.13.14",
-    "node-pty": "^1.1.0",
-    "sharp": "^0.35.5",
-    "tailwindcss": "^4.3.3",
-    "vue": "^3.5.44",
     "ws": "^8.22.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@iconify-json/lucide": "^1.2.148",
+    "@nuxt/ui": "^4.12.0",
     "@types/node": "^26.6.5",
     "@types/ws": "^8.18.2",
     "@vitejs/plugin-vue": "^6.0.10",
+    "@vue-flow/core": "^1.48.2",
+    "@vue-flow/minimap": "^1.5.4",
+    "@vue-flow/node-resizer": "^1.5.1",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "prettier": "^3.9.10",
+    "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
     "typescript": "~5.9.3",
     "vite": "^8.3.5",
+    "vue": "^3.5.44",
     "vue-tsc": "^3.3.13"
-  }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ]
 }

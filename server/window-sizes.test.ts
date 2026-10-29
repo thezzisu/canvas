@@ -18,7 +18,7 @@ test("terminal presentation dimensions are shared across canvases while position
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const sourceId = randomUUID(), windowId = "generation:@1", key = `${sourceId}/${windowId}`;
-  store.put("source", { id: sourceId, name: "Source", type: "tmux", transport: "local" });
+  store.put("source", { id: sourceId, name: "Source", transport: "local" });
   const node = (id: string, width = 900) => ({ id, type: "terminal" as const, sourceId, spaceId: id, windowId, x: 10, y: 20, width, height: 600 });
   const create = async (name: string, nodes: unknown[]) => {
     const response = await request("/api/canvases", "POST", { name, nodes });

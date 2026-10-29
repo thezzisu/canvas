@@ -1,9 +1,18 @@
 import { createConnection, type Socket } from 'node:net'
 import { randomUUID } from 'node:crypto'
-import type { TerminalTransport } from '../terminal-transport.ts'
 import { HerdrInputRouter } from './input.ts'
 import { HerdrScreen, applySurfacePatch, validateSurface, type ScreenSelection } from './screen.ts'
 import { FrameReader, encodeClientMessage, type ClientMessage, type ClientShellSnapshot, type PaneSurfaceFrame, type ServerMessage } from './wire.ts'
+
+export interface HerdrClientTransport {
+  onData(listener: (data: string) => void): { dispose(): void }
+  onExit(listener: (event: { exitCode: number; signal?: number }) => void): { dispose(): void }
+  write(data: string | Buffer): void
+  resize(cols: number, rows: number): void
+  pause(): void
+  resume(): void
+  kill(): void
+}
 
 export interface HerdrClientOptions {
   socketPath: string; tabId: string; cols: number; rows: number; handshakeTimeoutMs?: number
@@ -13,7 +22,10 @@ export interface HerdrClientOptions {
 type Exit = { exitCode: number; signal?: number }
 interface Request { boot: string; chunks: Buffer[]; size: number; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
 const MAX_BUFFER = 8 * 1024 * 1024
-const INITIAL_MODES = '\x1b[?1049h\x1b[?7l\x1b[?1h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h'
+// Semantic surfaces always use cell-based SGR mouse reports. Native pane modes
+// are handled by the input router and never alter this outer terminal encoding.
+export const HERDR_MOUSE_ENCODING = '\x1b[?1016l\x1b[?1006h'
+const INITIAL_MODES = '\x1b[?1049h\x1b[?7l\x1b[?1h\x1b[?2004h\x1b[?1000h\x1b[?1002h' + HERDR_MOUSE_ENCODING + '\x1b[?1004h'
 
 function dimensions(cols: number, rows: number) {
   if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1 || cols > 4096 || rows > 4096 || cols * rows > 1_000_000) throw new Error('Invalid herdr viewport size')
@@ -27,7 +39,7 @@ function parseSnapshot(data: string): ClientShellSnapshot {
   return value
 }
 
-class HerdrClient implements TerminalTransport {
+class HerdrClient implements HerdrClientTransport {
   private readonly socket: Socket
   private readonly reader = new FrameReader()
   private readonly screen = new HerdrScreen()
@@ -61,8 +73,8 @@ class HerdrClient implements TerminalTransport {
   private cols: number
   private rows: number
   private readonly deadline: ReturnType<typeof setTimeout>
-  readonly connected: Promise<TerminalTransport>
-  private resolve!: (client: TerminalTransport) => void
+  readonly connected: Promise<HerdrClientTransport>
+  private resolve!: (client: HerdrClientTransport) => void
   private reject!: (error: Error) => void
 
   constructor(private readonly options: HerdrClientOptions) {
@@ -264,6 +276,12 @@ class HerdrClient implements TerminalTransport {
     if (this.closed || !this.initialized || !data.length) return
     const bytes = typeof data === 'string' ? Buffer.from(data) : Buffer.from(data)
     if (this.pendingInputBytes + bytes.length > MAX_BUFFER) { this.fail(new Error('Herdr input buffer exceeded its limit')); return }
+    // A passive browser blur must not focus this tab or mark completed work as
+    // seen. Keep it behind any user input already waiting for its focus barrier.
+    if (!this.pendingInputBytes && bytes.length === 3 && bytes.toString() === '\x1b[O') {
+      this.input.write(bytes)
+      return
+    }
     this.pendingInput.push(bytes); this.pendingInputBytes += bytes.length
     if (this.inputFocusPending || this.inputFocusReady) { this.flushInput(); return }
     // An independent native client/API can move the server-side view before its
@@ -314,7 +332,7 @@ class HerdrClient implements TerminalTransport {
   }
 }
 
-export async function createHerdrClient(options: HerdrClientOptions): Promise<TerminalTransport> {
+export async function createHerdrClient(options: HerdrClientOptions): Promise<HerdrClientTransport> {
   if (!options.socketPath || !options.tabId) throw new Error('Herdr socket and tab are required')
   return new HerdrClient(options).connected
 }

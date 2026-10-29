@@ -12,13 +12,10 @@ export const sourceSchema = z
   .object({
     id: z.string().uuid().optional(),
     name: z.string().trim().min(1).max(100),
-    type: z.enum(["tmux", "herdr"]),
     transport: z.enum(["local", "ssh"]),
     target: z.string().max(500).optional(),
     sshIdentityFile: z.string().max(1000).optional(),
     sshKnownHostsFile: z.string().max(1000).optional(),
-    binary: z.string().max(1000).optional(),
-    tmuxSocket: z.string().max(1000).optional(),
     herdrSession: z.preprocess(
       value => typeof value === "string" && !value.trim() ? undefined : value,
       z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9_.-]+$/u).refine(value => value !== "." && value !== "..").optional(),
@@ -34,6 +31,14 @@ export const sourceSchema = z
     "SSH target is required",
   );
 export type Source = z.infer<typeof sourceSchema> & { id: string };
+/** Display-name edits do not change the native connection or its transfers. */
+export function sourceConnectionKey(source: Source): string {
+  // Empty form fields select defaults. Nonempty paths remain literal, including
+  // spaces; local connections do not use any of the retained SSH form fields.
+  return JSON.stringify([source.id, source.transport,
+    ...(source.transport === "ssh" ? [source.target || null, source.sshIdentityFile || null, source.sshKnownHostsFile || null] : []),
+    source.herdrSession || null, source.herdrSocket || null]);
+}
 export const nodeLayoutSchema = z.object({
   id: z.string().min(1).max(150),
   x: z.number().finite().min(-1e7).max(1e7),

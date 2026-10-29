@@ -21,7 +21,7 @@ export const statusColors: Record<ProgramStatus, string> = {
 export function statusLabel(status?: ProgramStatus) { return labels[status || 'unknown'] }
 export function statusColor(status?: ProgramStatus) { return statusColors[status || 'unknown'] }
 export function paneLabel(pane: PaneResource) {
-  return [...new Set([paneName(pane), pane.agent, statusLabel(pane.status), pane.progress === undefined ? '' : `${pane.progress}%`].filter(Boolean))].join(' · ')
+  return [...new Set([paneName(pane), pane.agent, statusLabel(pane.status)].filter(Boolean))].join(' · ')
 }
 
 export function paneShortId(pane: PaneResource) { return pane.id.split(':').at(-1) || pane.id }

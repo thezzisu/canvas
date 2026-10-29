@@ -16,7 +16,7 @@ export type TerminalStatus = {
   error?: string
   readOnly?: boolean
   presentation?: { maximized: boolean; owned: boolean }
-  focusResize?: { active: boolean; owned: boolean; reason?: string }
+  focusResize?: { owned: boolean }
   upload?: TerminalUploadState
   draggingFile?: boolean
   clipboardError?: string
@@ -190,10 +190,10 @@ function connect(session: Session) {
           if (!request) return
           // A competing view's token can revoke our request, but a late ended
           // acknowledgement from an older request must not end the new one.
-          const revoked = !message.owned && ['external-resize', 'superseded', 'unavailable'].includes(message.reason)
+          const revoked = !message.owned && message.reason === 'superseded'
           if (message.token !== request.token && !revoked) return
           request.suspended = message.owned !== true
-          setState(session, { ...session.state, focusResize: { active: message.active === true, owned: message.owned === true, reason: message.reason } })
+          setState(session, { ...session.state, focusResize: { owned: message.owned === true } })
           schedulePresentation(session)
         }
       } catch { /* Terminal bytes arrive as binary; malformed control frames are ignored. */ }

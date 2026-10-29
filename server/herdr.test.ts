@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openTerminalTransport, type TerminalTransport } from "./terminal-transport.ts";
+import type { HerdrClientTransport } from "./herdr/client.ts";
 import headless from "@xterm/headless";
 import {
   createSpace,
@@ -66,7 +66,6 @@ test("native herdr transport works with an unmodified server: split rendering, k
   const source: Source = {
     id: "herdr-test",
     name: "Herdr test",
-    type: "herdr",
     transport: "local",
     herdrSocket: join(root, "config", "herdr", "sessions", session, "herdr.sock"),
     herdrSession: session,
@@ -75,8 +74,8 @@ test("native herdr transport works with an unmodified server: split rendering, k
     env,
     stdio: "ignore",
   });
-  let terminal: TerminalTransport | undefined;
-  let secondTerminal: TerminalTransport | undefined;
+  let terminal: HerdrClientTransport | undefined;
+  let secondTerminal: HerdrClientTransport | undefined;
   let command: Awaited<ReturnType<typeof openTerminal>> | undefined;
   let secondCommand: Awaited<ReturnType<typeof openTerminal>> | undefined;
   const screen = new headless.Terminal({
@@ -185,18 +184,14 @@ test("native herdr transport works with an unmodified server: split rendering, k
       "attention",
     );
     assert.equal(statusWindow.status, "attention");
-    assert.equal(statusWindow.statusSource, "herdr");
 
     await createWindow(source, space.id, "Other tab");
     const other = (await listResources(source)).spaces
       .find((s) => s.id === space.id)!
       .windows.find((w) => w.name === "Other tab")!;
     cli("tab", "focus", other.id);
-    command = await openTerminal(source, space.id, window.id, 90, 25);
-    assert.equal(command.geometryMode, "client");
-    assert.equal(command.readSize, undefined);
-    assert.equal(command.resize, undefined);
-    terminal = await openTerminalTransport(command, 90, 25);
+    command = await openTerminal(source, space.id, window.id);
+    terminal = await command.connect(90, 25);
     terminal.onData((chunk) => {
       screen.write(chunk);
     });
@@ -266,8 +261,8 @@ test("native herdr transport works with an unmodified server: split rendering, k
     screen.resize(112, 32);
     terminal.resize(112, 32);
     await assertSplitGeometry(112, 32);
-    secondCommand = await openTerminal(source, space.id, other.id, 90, 25);
-    secondTerminal = await openTerminalTransport(secondCommand, 90, 25);
+    secondCommand = await openTerminal(source, space.id, other.id);
+    secondTerminal = await secondCommand.connect(90, 25);
     secondTerminal.onData((chunk) => secondScreen.write(chunk));
     await waitFor(
       () => secondText().includes("sh-"),

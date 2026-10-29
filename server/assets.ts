@@ -219,7 +219,6 @@ export class AssetStore {
     const assets = this.store.fileAssetIds();
     for (const id of assets) {
       if (this.closed) return;
-      if (this.store.fileAssetReferenced(id)) continue;
       if (this.store.removeFileAssetIfUnreferenced(id))
         await rm(join(this.directory, id), { force: true }).catch(() => {});
     }

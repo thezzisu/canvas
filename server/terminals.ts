@@ -3,15 +3,9 @@ import { terminalUnicodeAddon } from "../shared/terminal-unicode.ts";
 import serialize from "@xterm/addon-serialize";
 import type { WebSocket } from "ws";
 import type { Source } from "./state.ts";
-import {
-  openTerminal,
-  NativeGeometryConflictError,
-  type NativeSize,
-  type TerminalCommand,
-} from "./providers.ts";
-import { GeometryController } from "./geometry.ts";
-import { TerminalMouseEncoding } from "./terminal-modes.ts";
-import { openTerminalTransport, type TerminalTransport } from "./terminal-transport.ts";
+import { openTerminal } from "./providers.ts";
+import { GeometryController, type Size } from "./geometry.ts";
+import { HERDR_MOUSE_ENCODING, type HerdrClientTransport } from "./herdr/client.ts";
 const { Terminal } = headless;
 const { SerializeAddon } = serialize;
 export type TerminalTarget = {
@@ -29,7 +23,6 @@ function json(ws: WebSocket, data: unknown) {
 class LiveTerminal {
   emulator: InstanceType<typeof Terminal>;
   serializer: InstanceType<typeof SerializeAddon>;
-  mouseEncoding: TerminalMouseEncoding;
   clients = new Set<WebSocket>();
   private rendered = new Set<WebSocket>();
   private maximized?: { owner: WebSocket; token: string };
@@ -41,8 +34,6 @@ class LiveTerminal {
   pendingBytes = 0;
   paused = false;
   geometry: GeometryController<WebSocket>;
-  geometryTimer?: ReturnType<typeof setInterval>;
-  unwatchGeometry?: () => void;
   closing?: Promise<void>;
   closed = false;
   cols: number;
@@ -54,7 +45,7 @@ class LiveTerminal {
     cols: number,
     rows: number,
     readonly onClose: () => void,
-    readonly proc: TerminalTransport,
+    readonly proc: HerdrClientTransport,
   ) {
     this.cols = cols;
     this.rows = rows;
@@ -67,36 +58,20 @@ class LiveTerminal {
     this.emulator.loadAddon(terminalUnicodeAddon());
     this.serializer = new SerializeAddon();
     this.emulator.loadAddon(this.serializer);
-    this.mouseEncoding = new TerminalMouseEncoding(this.emulator);
     this.geometry = new GeometryController(
-      handle.geometryMode === "client" ? this.clientViewport(handle) : handle,
-      handle.initialSize ?? { cols, rows, token: "initial" },
+      { cols, rows },
       (size) => this.adoptGeometry(size),
-      (_lease, reason) => {
+      (reason) => {
         for (const ws of this.clients)
           json(ws, {
             ...this.geometry.state(ws),
             ...(reason ? { reason } : {}),
           });
       },
-      (owner, error) => {
-        const message =
-          error instanceof Error ? error.message : "Terminal resize failed";
-        if (owner) json(owner, { type: "geometry-error", error: message });
-      },
+      () => { void this.close(); },
     );
-    this.unwatchGeometry = handle.watchSize?.(() => this.geometry.poll());
-    if (handle.readSize) {
-      this.geometryTimer = setInterval(() => this.geometry.poll(), 500);
-      this.geometryTimer.unref();
-    }
-    let connected = false;
     this.proc.onData((data) => {
       if (this.closed) return;
-      if (!connected) {
-        connected = true;
-        handle.connected?.();
-      }
       const bytes = Buffer.byteLength(data);
       this.pendingBytes += bytes;
       if (this.pendingBytes > 256 * 1024 && !this.paused) {
@@ -133,34 +108,6 @@ class LiveTerminal {
         });
     });
     this.proc.onExit(() => void this.close());
-  }
-  private clientViewport(handle: TerminalCommand): TerminalCommand {
-    // The upstream herdr server owns native arbitration. These tokens describe
-    // only our attached client's viewport, never native geometry or ownership.
-    let revision = 0;
-    const read = (): NativeSize => ({
-      cols: this.cols,
-      rows: this.rows,
-      token: String(revision),
-    });
-    const resize = async (cols: number, rows: number, expected?: string) => {
-      if (expected !== undefined && expected !== read().token)
-        throw new NativeGeometryConflictError();
-      if (cols !== this.cols || rows !== this.rows) {
-        this.adoptGeometry({ cols, rows, token: String(revision + 1) });
-        revision++;
-      }
-      return read();
-    };
-    return {
-      ...handle,
-      readSize: async () => read(),
-      resize,
-      restoreSize: async (before, expected) =>
-        expected === read().token
-          ? resize(before.cols, before.rows, expected)
-          : read(),
-    };
   }
   private canRender(ws: WebSocket) {
     return this.rendered.has(ws) && (!this.maximized || this.maximized.owner === ws);
@@ -201,7 +148,8 @@ class LiveTerminal {
     // serialized state and live output therefore form one ordered stream.
     json(ws, { type: "reset" });
     json(ws, { type: "resize", cols: this.cols, rows: this.rows });
-    ws.send(Buffer.from(this.serializer.serialize() + this.mouseEncoding.serialize(), "utf8"));
+    // SerializeAddon restores tracking but omits its wire encoding.
+    ws.send(Buffer.from(this.serializer.serialize() + HERDR_MOUSE_ENCODING, "utf8"));
     this.rendered.add(ws);
     this.presentation(ws);
   }
@@ -231,8 +179,8 @@ class LiveTerminal {
     const current = this.maximized;
     if (!current || current.owner !== ws || (token !== undefined && token !== current.token)) return;
     this.presentationRevision++;
-    // Keep every view paused until conditional geometry restoration completes.
-    // A new owner can take over while that read/restore is pending; snapshots
+    // Keep every view paused until viewport restoration completes.
+    // A new owner can take over while it is queued; snapshots
     // re-check the current owner and never release a newer request.
     this.rendered.clear();
     await this.geometry.end(ws, current.token);
@@ -302,7 +250,7 @@ class LiveTerminal {
               ? Buffer.from(msg.data, "latin1")
               : msg.data,
           );
-        if (msg.type === "resize") this.geometry.persistent(ws, size);
+        if (msg.type === "resize") this.geometry.persistent(size);
       } catch {
         /* Malformed messages cannot become terminal commands. */
       }
@@ -323,13 +271,11 @@ class LiveTerminal {
       }
     });
   }
-  adoptGeometry(size: NativeSize) {
+  adoptGeometry(size: Size) {
     if (this.cols === size.cols && this.rows === size.rows) return;
+    this.proc.resize(size.cols, size.rows);
     this.cols = size.cols;
     this.rows = size.rows;
-    // For native geometry providers this follows a confirmed size. For herdr
-    // this resizes its client viewport; the upstream server arbitrates panes.
-    this.proc.resize(size.cols, size.rows);
     this.emulator.resize(size.cols, size.rows);
     for (const ws of this.clients)
       if (this.canRender(ws)) json(ws, { type: "resize", cols: size.cols, rows: size.rows });
@@ -346,10 +292,8 @@ class LiveTerminal {
     if (this.closing) return this.closing;
     this.closed = true;
     clearTimeout(this.idle);
-    clearInterval(this.geometryTimer);
-    this.unwatchGeometry?.();
     this.closing = (async () => {
-      // Restore temporary focus while the native client and observer still exist.
+      // Restore the viewport before detaching this client.
       await this.geometry.close();
       for (const ws of this.clients) {
         json(ws, { type: "status", status: "closed" });
@@ -380,18 +324,11 @@ export class TerminalManager {
       if (this.entries.size >= 100)
         throw new Error("At most 100 active terminal windows are supported");
       const creating = (async () => {
-        const handle = await openTerminal(
-          source,
-          target.spaceId,
-          target.windowId,
-          100,
-          30,
-        );
-        let transport: TerminalTransport | undefined;
+        const handle = await openTerminal(source, target.spaceId, target.windowId);
+        let transport: HerdrClientTransport | undefined;
         try {
-          const cols = handle.initialSize?.cols ?? 100;
-          const rows = handle.initialSize?.rows ?? 30;
-          transport = await openTerminalTransport(handle, cols, rows);
+          const cols = 100, rows = 30;
+          transport = await handle.connect(cols, rows);
           return new LiveTerminal(
             key,
             source.id,

@@ -1,9 +1,13 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { WebSocket } from "ws";
 import { UploadService } from "./uploads.ts";
-import type { Source } from "./state.ts";
+import { Store, sourceConnectionKey, type Source } from "./state.ts";
+import { createApp } from "./app.ts";
 import type { TerminalManager } from "./terminals.ts";
 import type { SourceResource } from "./providers.ts";
 import { shellQuote } from "./providers.ts";
@@ -24,7 +28,7 @@ function uploadRequest(bytes: Uint8Array, signal?: AbortSignal) {
 }
 type Writer = typeof writeInboxFile;
 function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; beforePaste?: () => Promise<void>; capture?: () => Promise<void>; reportAfterAbort?: boolean } = {}) {
-  const source: Source = { id: randomUUID(), name: "Fixture", type: "tmux", transport: "local" };
+  const source: Source = { id: randomUUID(), name: "Fixture", transport: "local" };
   const socket = new FakeSocket(), other = new FakeSocket();
   const files = new Map<string, Buffer>(), removed: Array<{ sourceId: string; paths: string[] }> = [];
   const pasted: Array<{ sourceId: string; windowId: string; text: string }> = [];
@@ -69,8 +73,8 @@ function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; b
       removed.push({ sourceId: removedSource.id, paths: [...paths] });
       for (const path of paths) files.delete(path);
     },
-    resources: async () => ({ ...source, host: "fixture", status: "online", spaces: [{ id: "space", name: "Space",
-      windows: [...windows].map(id => ({ id, name: id, panes: [], status: "unknown", statusSource: "none" })),
+    resources: async () => ({ ...source, status: "online", spaces: [{ id: "space", name: "Space",
+      windows: [...windows].map(id => ({ id, name: id, panes: [], status: "unknown" })),
     }] }) as SourceResource,
   });
   t.after(() => service.closeAll());
@@ -131,6 +135,42 @@ test("progress only advances after the writer confirms bytes, and duplicate batc
   writing.resolve();
   assert.equal(await receiving, 204);
   assert.equal(f.socket.messages.at(-1)?.transferred, 4);
+});
+
+test("source renames preserve active uploads and future uploads from the same attached view", async t => {
+  const writing = gate(), f = fixture(t, { beforeWrite: () => writing.promise });
+  const root = mkdtempSync(join(tmpdir(), "canvas-upload-rename-")), store = new Store(join(root, "state.db"));
+  t.after(() => { store.close(); rmSync(root, { recursive: true, force: true }); });
+  store.put("source", f.source); store.addSession("session-a");
+  let closed = 0;
+  const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {
+    closeSource: async () => { closed++; },
+  } as unknown as TerminalManager, {
+    uploads: f.service,
+    closeOpenBridge: async id => f.service.closeSource(id),
+  });
+  const patch = (body: unknown) => app.request(`http://canvas.test/api/sources/${f.source.id}`, {
+    method: "PATCH", headers: { Host: "canvas.test", Origin: "http://canvas.test", Cookie: "canvas_session=session-a", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const [token] = await f.begin([{ name: "active", size: 4 }]);
+  const receiving = f.service.receive(token!, "session-a", uploadRequest(Buffer.from("data")));
+  assert.equal((await patch({ ...f.source, name: "Renamed", target: "", sshIdentityFile: "", sshKnownHostsFile: "", herdrSession: "", herdrSocket: "" })).status, 200);
+  assert.equal(closed, 0);
+  assert.equal(sourceConnectionKey(store.get<Source>("source", f.source.id)!), sourceConnectionKey(f.source), "the attached view must still authorize new uploads after rename");
+  writing.resolve();
+  assert.equal(await receiving, 204);
+  assert.equal(f.pasted.length, 1);
+  const [next] = await f.begin([{ name: "after-rename", size: 4 }], "window-a", "after-rename");
+  assert.equal(await f.service.receive(next!, "session-a", uploadRequest(Buffer.from("next"))), 204);
+  assert.equal(f.pasted.length, 2);
+
+  const [pending] = await f.begin([{ name: "old-endpoint", size: 4 }], "window-a", "old-endpoint");
+  assert.equal((await patch({ herdrSocket: "/fixture/changed.sock" })).status, 200);
+  assert.equal(closed, 1);
+  assert.notEqual(sourceConnectionKey(store.get<Source>("source", f.source.id)!), sourceConnectionKey(f.source));
+  assert.equal(await f.service.receive(pending!, "session-a", uploadRequest(Buffer.from("stop"))), 404);
+  assert.equal(f.pasted.length, 2);
 });
 
 test("short or oversized later files remove the earlier batch files and never paste partial results", async t => {

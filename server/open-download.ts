@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable, type Readable } from "node:stream";
 import type { WebSocket } from "ws";
-import type { FileAsset, Source } from "./state.ts";
+import { sourceConnectionKey, type FileAsset, type Source } from "./state.ts";
 import type { SourceResource } from "./providers.ts";
 import { directoryPath } from "./editor-links.ts";
 
@@ -54,7 +54,6 @@ export interface OpenDownloadOptions {
 
 interface RegistryRecord {
   version: 1;
-  provider: Source["type"];
   nativeSocket: string;
   socket: string;
   secret: string;
@@ -161,7 +160,7 @@ export class OpenDownloadService {
 
   async ensureSource(source: Source): Promise<void> {
     if (this.stopping) throw new Error("File transfer service is stopping");
-    const signature = JSON.stringify(source);
+    const signature = sourceConnectionKey(source);
     const closing = this.closing.get(source.id);
     if (closing) { await closing; return await this.ensureSource(source); }
     const pending = this.preparing.get(source.id);
@@ -206,7 +205,6 @@ export class OpenDownloadService {
       prepared = await this.options.prepare(source, localSocket);
       const record: RegistryRecord = {
         version: 1,
-        provider: source.type,
         nativeSocket: prepared.nativeSocket,
         socket: source.transport === "ssh" ? prepared.remoteSocket! : localSocket,
         secret,
@@ -289,7 +287,7 @@ export class OpenDownloadService {
     if (givenSecret.length !== expectedSecret.length || !timingSafeEqual(givenSecret, expectedSecret)) {
       socket.end(rejected); return;
     }
-    if (header.version !== 1 || header.provider !== source.type || header.nativeSocket !== this.bridges.get(source.id)?.record.nativeSocket ||
+    if (header.version !== 1 || header.nativeSocket !== this.bridges.get(source.id)?.record.nativeSocket ||
         typeof header.paneId !== "string" || !header.paneId || header.paneId.length > 256) {
       socket.end(rejected); return;
     }
@@ -310,15 +308,11 @@ export class OpenDownloadService {
     let resources: SourceResource;
     try { resources = await this.options.resources(source); }
     catch { socket.end(rejected); return; }
-    const matches = new Map(resources.spaces.flatMap((space) => space.windows
-      .filter((window) => window.panes.some((pane) =>
-        pane.id === header.paneId || (source.type === "tmux" && pane.id.endsWith(`:${header.paneId}`)),
-      ))
-      .map((window) => [window.id, { spaceId: space.id, windowId: window.id }] as const)));
-    if (matches.size !== 1) { socket.end(rejected); return; }
-    const target = matches.values().next().value as { spaceId: string; windowId: string } | undefined;
-    if (!target) { socket.end(rejected); return; }
-    const recipient = await this.options.recipient(source.id, target.windowId).catch(() => undefined);
+    const matches = resources.spaces.flatMap(space => space.windows)
+      .filter(window => window.panes.some(pane => pane.id === header.paneId));
+    if (matches.length !== 1) { socket.end(rejected); return; }
+    const windowId = matches[0]!.id;
+    const recipient = await this.options.recipient(source.id, windowId).catch(() => undefined);
     if (socket.destroyed) return;
     if (!recipient || !recipient.isCurrent() || recipient.socket.readyState !== 1 || !recipient.sessionId) {
       socket.end(jsonLine({ ok: false, reason: "not-attached" })); return;
@@ -330,7 +324,7 @@ export class OpenDownloadService {
     const filename = safeFilename(header.filename)!;
     const id = randomBytes(32).toString("base64url");
     const ticket: DownloadTicket = {
-      id, sessionId: recipient.sessionId, socket, sourceId: source.id, windowId: target.windowId,
+      id, sessionId: recipient.sessionId, socket, sourceId: source.id, windowId,
       filename, size: header.size as number, state: "offered", transferred: 0,
       recipient: recipient.socket,
       lastProgressAt: 0, releaseSource: this.retainSource(source.id), removeCloseListener: () => {},
@@ -511,7 +505,7 @@ export class OpenDownloadService {
     socket.pipe(body);
   }
 
-  async open(ticketId: string, sessionId: string): Promise<{ body: Readable; size: number; filename: string; headers: Record<string, string>; previewHeaders?: Record<string, string> } | undefined> {
+  async open(ticketId: string, sessionId: string): Promise<{ body: Readable; headers: Record<string, string>; previewHeaders?: Record<string, string> } | undefined> {
     const staged = this.staged.get(ticketId);
     if (!staged || staged.sessionId !== sessionId) return;
     const file = await this.options.readTemporary(staged.assetId);
@@ -532,7 +526,7 @@ export class OpenDownloadService {
         ? "default-src 'none'; frame-ancestors 'self'"
         : "default-src 'none'; sandbox; frame-ancestors 'self'",
     };
-    return { body: file.body, size: file.asset.size, filename: file.asset.filename, headers, previewHeaders };
+    return { body: file.body, headers, previewHeaders };
   }
 
   async closeSource(sourceId: string): Promise<void> {

@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const helper = fileURLToPath(new URL("../cli/canvas", import.meta.url));
 interface Header {
-  version: number; secret: string; provider: string; nativeSocket: string;
+  version: number; secret: string; nativeSocket: string;
   paneId: string; filename: string; size: number;
   kind: "file" | "directory"; path?: string;
 }
@@ -42,7 +42,7 @@ async function fixture(t: TestContext) {
     child.once("close", () => clearTimeout(timeout));
   });
   async function endpoint(name: string, options: {
-    reject?: boolean; finalReject?: boolean; provider?: string; nativeSocket?: string;
+    reject?: boolean; finalReject?: boolean; nativeSocket?: string;
     acceptDelay?: number; rejectReason?: unknown; startResponse?: unknown; finalResponse?: unknown;
     cancelDelay?: number; pauseInput?: boolean; progressDelay?: number; neverComplete?: boolean;
     repeatedProgress?: boolean; directoryDelay?: number;
@@ -122,7 +122,7 @@ async function fixture(t: TestContext) {
     });
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
     t.after(() => new Promise<void>(resolve => { for (const timer of timers) clearTimeout(timer); for (const client of clients) client.destroy(); server.close(() => resolve()); }));
-    await writeFile(record, JSON.stringify({ version: 1, provider: options.provider || "herdr", nativeSocket: options.nativeSocket || nativeSocket, socket, secret }), { mode: 0o600 });
+    await writeFile(record, JSON.stringify({ version: 1, nativeSocket: options.nativeSocket || nativeSocket, socket, secret }), { mode: 0o600 });
     return { headers, bodies, record };
   }
   return { root, registry, nativeSocket, run, endpoint };
@@ -134,38 +134,35 @@ test("canvas open streams binary files with relative, Unicode and spaced names",
   await writeFile(join(f.root, name), content);
   const result = await f.run(name);
   assert.deepEqual(result, { code: 0, stdout: "", stderr: "" });
-  assert.deepEqual(endpoint.headers, [{ version: 1, kind: "file", provider: "herdr", nativeSocket: f.nativeSocket, paneId: "w1:p2", filename: name, size: content.length }]);
+  assert.deepEqual(endpoint.headers, [{ version: 1, kind: "file", nativeSocket: f.nativeSocket, paneId: "w1:p2", filename: name, size: content.length }]);
   assert.equal(endpoint.bodies.length, 1);
   assert(endpoint.bodies[0]!.equals(content), "download preserves every byte");
 });
 
-test("canvas open transfers empty files and selects the inner tmux from inherited herdr env", async t => {
-  const f = await fixture(t), nativeSocket = join(f.root, "tmux,server");
-  const endpoint = await f.endpoint("inner", { provider: "tmux", nativeSocket });
+test("canvas open transfers empty files from its herdr pane", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("empty");
   await writeFile(join(f.root, "empty"), "");
-  const result = await f.run("empty", { TMUX: `${nativeSocket},123,0`, TMUX_PANE: "%7" });
+  const result = await f.run("empty");
   assert.equal(result.code, 0, result.stderr);
-  assert.equal(endpoint.headers[0]!.provider, "tmux");
-  assert.equal(endpoint.headers[0]!.paneId, "%7");
+  assert.equal(endpoint.headers[0]!.paneId, "w1:p2");
   assert.equal(endpoint.headers[0]!.size, 0);
   assert.equal(endpoint.bodies[0]!.length, 0);
 });
 
-test("canvas open prefers a registered inner tmux and falls back to the enclosing herdr", async t => {
-  const f = await fixture(t), tmuxSocket = join(f.root, "inner-tmux");
-  const outer = await f.endpoint("outer");
-  const file = "nested.bin"; await writeFile(join(f.root, file), "nested bytes");
-  const env = { TMUX: `${tmuxSocket},123,0`, TMUX_PANE: "%9" };
-  const fallback = await f.run(file, env);
-  assert.equal(fallback.code, 0, fallback.stderr);
-  assert.equal(outer.headers[0]!.provider, "herdr");
-
-  const inner = await f.endpoint("inner-tmux", { provider: "tmux", nativeSocket: tmuxSocket });
-  const preferred = await f.run(file, env);
-  assert.equal(preferred.code, 0, preferred.stderr);
-  assert.equal(inner.headers[0]!.provider, "tmux");
-  assert.equal(inner.headers[0]!.paneId, "%9");
-  assert.equal(outer.headers.length, 1, "outer bridge was not sent a duplicate file");
+test("canvas open requires a valid herdr pane identity before opening a bridge", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("active");
+  await writeFile(join(f.root, "file"), "must stay local");
+  for (const environment of [
+    { HERDR_SOCKET_PATH: "", HERDR_PANE_ID: "" },
+    { HERDR_SOCKET_PATH: "relative.sock" },
+    { HERDR_PANE_ID: "" },
+    { HERDR_PANE_ID: "pane\ncontrol" },
+  ]) {
+    const result = await f.run("file", environment);
+    assert.equal(result.code, 1);
+    assert.equal(result.stderr, "canvas: run this command inside a connected herdr pane\n");
+  }
+  assert.equal(endpoint.headers.length, 0);
 });
 
 test("canvas open canonicalizes native socket aliases and preserves leading-dash file names", async t => {
@@ -203,7 +200,7 @@ test("canvas open sends a canonical directory path without copying its contents"
   const result = await f.run("directory-link/.");
   assert.deepEqual(result, { code: 0, stdout: "", stderr: "" });
   assert(Date.now() - began >= 60, "success waits for the browser acknowledgement");
-  assert.deepEqual(endpoint.headers, [{ version: 1, provider: "herdr", nativeSocket: f.nativeSocket,
+  assert.deepEqual(endpoint.headers, [{ version: 1, nativeSocket: f.nativeSocket,
     paneId: "w1:p2", kind: "directory", path: directory }]);
   assert.deepEqual(endpoint.bodies, []);
 });

@@ -15,30 +15,16 @@ class CanvasError(Exception):
     pass
 
 
-def terminal_identities():
-    # Herdr removes inherited TMUX/TMUX_PANE when launching its panes. When
-    # both are present, tmux is inner. Prefer its Canvas source when registered;
-    # otherwise the enclosing herdr view is still the visible terminal.
-    identities = []
-    tmux = os.environ.get("TMUX", "")
-    tmux_pane = os.environ.get("TMUX_PANE", "")
-    if tmux and tmux_pane:
-        parts = tmux.rsplit(",", 2)
-        if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
-            native_socket = parts[0]
-            if os.path.isabs(native_socket) and tmux_pane.startswith("%") and tmux_pane[1:].isdigit():
-                identities.append(("tmux", os.path.realpath(native_socket), tmux_pane))
+def terminal_identity():
     native_socket = os.environ.get("HERDR_SOCKET_PATH", "")
     pane = os.environ.get("HERDR_PANE_ID", "")
     if native_socket and pane and os.path.isabs(native_socket) and len(pane) <= 256:
         if all(ord(char) >= 32 and ord(char) != 127 for char in pane):
-            identities.append(("herdr", os.path.realpath(native_socket), pane))
-    if not identities:
-        raise CanvasError("run this command inside a connected herdr or tmux pane")
-    return identities
+            return os.path.realpath(native_socket), pane
+    raise CanvasError("run this command inside a connected herdr pane")
 
 
-def registry_entries(provider, native_socket):
+def registry_entries(native_socket):
     directory = os.environ.get("CANVAS_BRIDGE_REGISTRY_DIR") or os.path.expanduser(
         "~/.local/state/canvas/bridges"
     )
@@ -63,7 +49,7 @@ def registry_entries(provider, native_socket):
                             or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 16384):
                         continue
                     entry = json.loads(record.read(16385))
-                if not isinstance(entry, dict) or entry.get("version") != 1 or entry.get("provider") != provider:
+                if not isinstance(entry, dict) or entry.get("version") != 1:
                     continue
                 registered_socket = entry.get("nativeSocket")
                 endpoint = entry.get("socket")
@@ -318,11 +304,10 @@ def open_file(path):
         if isinstance(error, FileNotFoundError):
             raise CanvasError("file not found") from None
         raise CanvasError("cannot read this file") from None
-    def transfer(connection, entry, provider, native_socket, pane):
+    def transfer(connection, entry, native_socket, pane):
         header = {
             "version": 1,
             "secret": entry["secret"],
-            "provider": provider,
             "nativeSocket": native_socket,
             "paneId": pane,
         }
@@ -345,20 +330,16 @@ def open_file(path):
             transfer_file(connection, file, info.st_size)
 
     try:
-        entries = []
-        for provider, native_socket, pane in terminal_identities():
-            matches = registry_entries(provider, native_socket)
-            if matches:
-                entries = [(entry, provider, native_socket, pane) for entry in matches]
-                break
+        native_socket, pane = terminal_identity()
+        entries = registry_entries(native_socket)
         if not entries:
             raise CanvasError("no browser attached to this window")
-        entry, provider, native_socket, pane = entries[0]
+        entry = entries[0]
         # Registry discovery has already rejected ambiguous destinations.
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(30)
             connection.connect(entry["socket"])
-            transfer(connection, entry, provider, native_socket, pane)
+            transfer(connection, entry, native_socket, pane)
     finally:
         if file:
             file.close()

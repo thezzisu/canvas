@@ -38,7 +38,7 @@ import { hostname, userInfo } from 'node:os';
 import { editorAuthority } from './server/providers.ts';
 import { vscodeDirectoryUri } from './server/editor-links.ts';
 const root = process.env.CANVAS_AUTHORITY_TEST_ROOT;
-const source = { id: 'fixture', name: 'Fixture', type: 'herdr', transport: 'ssh' };
+const source = { id: 'fixture', name: 'Fixture', transport: 'ssh' };
 ${body}
 `;
   await new Promise<void>((resolve, reject) => {

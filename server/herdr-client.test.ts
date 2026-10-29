@@ -19,7 +19,7 @@ function readHeader(payload: Buffer) {
 
 async function fixture(t: TestContext, options: { holdFocus?: boolean; badWelcome?: boolean; closeEarly?: boolean; readSelection?: (params: Record<string, unknown>) => Promise<unknown> } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'cv-native-')), path = join(directory, 'client.sock')
-  const sockets = new Set<Socket>(), requests: { id: string; method: string; params: Record<string, unknown> }[] = [], tags: number[] = []
+  const sockets = new Set<Socket>(), requests: { id: string; method: string; params: Record<string, unknown> }[] = [], tags: number[] = [], focuses: boolean[] = []
   let peer: Socket, pending = Buffer.alloc(0), hello: Record<string, unknown> | undefined
   const send = (writer: Writer) => peer.write(framed(writer.finish()))
   const control = (kind: string, value: unknown) => send(new Writer().uint(20).string(kind).string(JSON.stringify(value)))
@@ -60,13 +60,13 @@ async function fixture(t: TestContext, options: { holdFocus?: boolean; badWelcom
           assert.equal(header.string(), 'boot')
           requests.push(JSON.parse(header.string()))
           if (!options.holdFocus) response()
-        }
+        } else if (header.tag === 18) focuses.push(payload[1] === 1)
       }
     })
   })
   await new Promise<void>(resolve => server.listen(path, resolve))
   t.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(directory, { recursive: true, force: true }) })
-  return { path, requests, tags, snapshot, surface, response, control, send, peer: () => peer, hello: () => hello,
+  return { path, requests, tags, focuses, snapshot, surface, response, control, send, peer: () => peer, hello: () => hello,
     connect: (handshakeTimeoutMs = 300) => createHerdrClient({ socketPath: path, tabId: 'target', cols: 8, rows: 1, handshakeTimeoutMs, readSelection: options.readSelection }) }
 }
 
@@ -119,6 +119,31 @@ test('input waits behind a serialized tab-focus barrier and cannot escape before
   assert.equal(f.tags.includes(13), false)
   f.response(); await until(() => f.tags.includes(13))
   assert.equal(f.requests.length, 2, 'the pending input burst shares one focus request')
+})
+
+test('passive focus loss never focuses a tab and remains ordered behind already queued user input', async t => {
+  const f = await fixture(t, { holdFocus: true }), pending = f.connect()
+  await until(() => f.requests.length === 1); f.response(); const client = await pending
+  t.after(() => client.kill()); client.onData(() => {})
+  client.write('\x1b[O')
+  await until(() => f.focuses.length === 1)
+  client.write(Buffer.from('\x1b[O'))
+  await until(() => f.focuses.length === 2)
+  assert.deepEqual(f.focuses, [false, false])
+  assert.equal(f.requests.length, 1, 'passive focus loss must not send tab.focus')
+  assert.equal(f.tags.includes(13), false, 'focus reports are not pane input')
+
+  client.write('q')
+  await until(() => f.requests.length === 2)
+  const mark = f.tags.length
+  client.write('\x1b[O')
+  await delay(10)
+  assert.equal(f.focuses.length, 2, 'blur must not overtake an already queued key or mouse press')
+  f.response()
+  await until(() => f.focuses.length === 3)
+  assert.deepEqual(f.tags.slice(mark), [13, 18], 'queued user input precedes its focus loss')
+  assert.equal(f.requests.length, 2, 'only explicit user input claims tab focus')
+  assert.deepEqual(f.focuses, [false, false, false])
 })
 
 test('native client rejects incomplete handshakes and closes malformed established streams', async t => {

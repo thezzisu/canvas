@@ -32,8 +32,7 @@ const uploadLabel = computed(() => {
   if (upload.state === 'completed') return '已插入路径'
   return upload.state === 'preparing' ? '准备上传…' : `${uploadPercent.value}%`
 })
-const resizeNotes: Record<string, string> = { 'external-resize': '尺寸由外部终端调整', superseded: '尺寸由其他视图调整', unavailable: '终端暂不支持调整尺寸' }
-const title = computed(() => [props.data.name, props.data.subtitle, props.data.focus && resizeNotes[status.value.focusResize?.reason || '']].filter(Boolean).join('\n'))
+const title = computed(() => [props.data.name, props.data.subtitle].filter(Boolean).join('\n'))
 let terminal: ReturnType<typeof mountTerminal> | undefined
 let ownedPresentation = false
 let previewTap: { id: number; x: number; y: number; at: number } | undefined
@@ -112,7 +111,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
 </script>
 <template>
   <NodeResizer v-if="!data.mobile && !data.overview && !data.focus && !maximizedElsewhere" :is-visible="selected" :min-width="360" :min-height="220" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="resized" />
-  <article class="terminal-card" :class="[{ selected, unavailable: !data.available, focused: data.focus, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="data.available ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :data-resize-reason="status.focusResize?.reason" :style="{ '--program-color': statusColor(frameStatus), width: dimensions ? '100%' : `${data.width}px`, height: dimensions ? '100%' : `${data.height}px` }" :aria-label="`${data.name} · ${data.subtitle}`">
+  <article class="terminal-card" :class="[{ selected, unavailable: !data.available, focused: data.focus, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="data.available ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :style="{ '--program-color': statusColor(frameStatus), width: dimensions ? '100%' : `${data.width}px`, height: dimensions ? '100%' : `${data.height}px` }" :aria-label="`${data.name} · ${data.subtitle}`">
     <header class="terminal-header drag-handle">
       <PaneIndicators :panes="data.panes" :status="data.status" :available="data.available" :connection="status.status" :error="status.error" :read-only="status.readOnly" />
       <span class="terminal-name" :title="title">{{ data.name }}</span>

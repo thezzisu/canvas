@@ -1,45 +1,34 @@
 import type { GlobalSettings } from '../../shared/settings'
+import type { ProgramStatus } from '../../shared/status'
+export type { ProgramStatus } from '../../shared/status'
 
-export type SourceType = 'tmux' | 'herdr'
 export interface Source {
   id: string
   name: string
-  type: SourceType
   transport: 'local' | 'ssh'
   target?: string
   sshIdentityFile?: string
   sshKnownHostsFile?: string
-  binary?: string
-  tmuxSocket?: string
   herdrSession?: string
   herdrSocket?: string
 }
-export type ProgramStatus = 'error' | 'attention' | 'working' | 'done' | 'idle' | 'unknown'
-export type StatusSource = 'herdr' | 'osc9' | 'osc7501' | 'none'
 export interface PaneResource {
   id: string
   name: string
   active: boolean
   status: ProgramStatus
-  statusSource: StatusSource
-  nativeStatus?: string
   agent?: string
-  progress?: number
 }
 export interface WindowResource {
   id: string
   name: string
   status?: ProgramStatus
-  statusSource?: StatusSource
-  nativeStatus?: string
   panes?: PaneResource[]
 }
 export interface SpaceResource { id: string; name: string; windows: WindowResource[] }
 export interface SourceResource {
   id: string
   name: string
-  type: SourceType
-  host: string
   status: string
   error?: string
   spaces: SpaceResource[]
