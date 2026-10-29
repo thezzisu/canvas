@@ -201,12 +201,24 @@ stays open. Leaving full-screen follows the same shared-window and external-resi
 rules as desktop.
 
 The row above the keyboard provides Esc, Tab, one-shot Ctrl and arrow keys;
-hold an arrow to repeat. More contains Alt, navigation keys, Ctrl+C, file upload,
-text paste and text selection. Scroll mode moves terminal history or sends native
-scroll events. Switch to touch mouse mode when an application needs clicks or
-dragging. Text selection opens a read-only copy sheet. The paste sheet accepts
+hold an arrow to repeat. More opens a keyboard with letters, punctuation, function
+and navigation keys, without a number row. Shift, Ctrl, Alt and Meta can be combined;
+they clear after the next key, while holding a key repeats the original combination.
+Caps Lock controls letter case separately. Every key has its own visible keycap.
+File upload, text paste, text selection, Scroll and Mouse stay at the bottom of the
+expanded panel while its keyboard area scrolls.
+
+Scroll mode moves terminal history or sends native scroll events, without mouse
+clicks. Switch to Mouse when an application needs clicks or dragging. Text
+selection opens a read-only copy sheet. The paste sheet accepts
 native long-press paste; images and files use the same managed upload path as
 desktop. Pasting text never adds Enter.
+
+Combinations use traditional terminal encoding: Shift+Left is a modified arrow,
+while Ctrl+A and Ctrl+Shift+A have the same control character. Meta characters
+use the usual ESC prefix like Alt; a provider may also normalize Meta navigation
+keys to Alt. These keys target the terminal, not the browser or operating system.
+Canvas does not force an extended keyboard protocol on native applications.
 
 Mobile layout depends on the device's primary touch input, not just browser width.
 A narrow desktop window retains desktop controls. Actual clipboard formats and

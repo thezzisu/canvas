@@ -5,7 +5,7 @@ import { clearDownloads, disconnectDownloads, receiveDownload } from './download
 import { clearDirectories, receiveDirectory } from './directories'
 import { bindFileInput, preventFileNavigation, TerminalUploads, type TerminalUploadState } from './uploads'
 import { clipboardRestoringFocus, TerminalClipboard } from './clipboard'
-import { modifiedText, terminalKey, type TerminalModifiers } from './terminal-input'
+import { emptyModifiers, hasModifiers, modifiedText, terminalKey, type TerminalModifiers } from './terminal-input'
 import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch'
 
 export type TerminalStatus = {
@@ -34,6 +34,7 @@ interface Session {
   touchMode: TerminalTouchMode
   keyboardRequested: boolean
   suppressInput?: boolean
+  nativeKey?: { id: string; key: string; modifiers: Partial<TerminalModifiers> }
   resizeTimer?: ReturnType<typeof setTimeout>
   removeTouch?: () => void
   focusResize?: FocusResize
@@ -104,7 +105,7 @@ function setState(session: Session, state: TerminalStatus) {
 }
 function interactive(session: Session) { return !session.mobile || session.magnified }
 function setModifiers(session: Session, modifiers: Partial<TerminalModifiers> = {}) {
-  session.modifiers = { ctrl: modifiers.ctrl === true, alt: modifiers.alt === true }
+  session.modifiers = { shift: modifiers.shift === true, ctrl: modifiers.ctrl === true, alt: modifiers.alt === true, meta: modifiers.meta === true }
   setState(session, { ...session.state, modifiers: session.modifiers })
 }
 function focusTerminal(session: Session, keyboard?: boolean) {
@@ -279,6 +280,15 @@ function claimFocus(session: Session) {
   session.socket.send(JSON.stringify({ type: 'focus' }))
   setState(session, { ...session.state, readOnly: false })
 }
+function sendTerminalKey(session: Session, key: string, modifiers: Partial<TerminalModifiers>) {
+  if (!interactive(session) || session.socket?.readyState !== WebSocket.OPEN || session.state.status !== 'connected' || (session.state.presentation?.maximized && !session.state.presentation.owned)) return false
+  const data = terminalKey(key, modifiers, session.term.modes.applicationCursorKeysMode)
+  if (!data) return false
+  setModifiers(session)
+  claimFocus(session)
+  session.term.input(data, true)
+  return true
+}
 export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, onGeometry?: (geometry: TerminalGeometry) => void, options: { magnified?: boolean; mobile?: boolean } = {}) {
   installMouseCoordinates()
   const id = key(resource.sourceId, resource.spaceId, resource.windowId)
@@ -309,14 +319,14 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       changed: upload => setState(session!, { ...session!.state, upload }),
     })
     session = { term, fit, surface, uploads, opened: false, magnified: false, mobile: !!options.mobile,
-      modifiers: { ctrl: false, alt: false }, touchMode: 'scroll', keyboardRequested: false,
+      modifiers: emptyModifiers(), touchMode: 'scroll', keyboardRequested: false,
       state: { status: 'connecting' }, listeners: new Set(), geometryListeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
     const current = session
     function sendInput(data: string, binary = false) {
       // onData includes terminal query replies; passive viewers must never
       // claim control or send duplicate replies merely by rendering output.
       if (current.suppressInput || !interactive(current) || current.socket?.readyState !== WebSocket.OPEN || current.state.readOnly || current.state.status !== 'connected' || (current.state.presentation?.maximized && !current.state.presentation.owned)) return
-      if (current.mobile && !binary && data.length === 1 && (current.modifiers.ctrl || current.modifiers.alt)) {
+      if (current.mobile && !binary && data.length === 1 && hasModifiers(current.modifiers)) {
         data = modifiedText(data, current.modifiers)
         setModifiers(current)
       }
@@ -334,6 +344,36 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     term.attachCustomKeyEventHandler(event => {
       if (!interactive(current)) return false
       if (current.clipboard?.key(event) === false) return false
+      if (current.mobile) {
+        const id = event.code || event.key
+        if (event.type === 'keyup' && current.nativeKey?.id === id) current.nativeKey = undefined
+        if (event.isComposing || event.keyCode === 229 || ['Dead', 'AltGraph'].includes(event.key) || event.getModifierState('AltGraph')) {
+          current.nativeKey = undefined
+          setModifiers(current)
+          return true
+        }
+        if (event.type === 'keypress' && current.nativeKey) { event.preventDefault(); return false }
+        if (event.type === 'keydown') {
+          const repeat = event.repeat && current.nativeKey?.id === id ? current.nativeKey : undefined
+          if (!repeat) current.nativeKey = undefined
+          if (repeat || hasModifiers(current.modifiers)) {
+            // Printable DOM keys already include physical Shift/Caps/layout.
+            // Apply only an additional virtual Shift, never physical Shift twice.
+            const modifiers = repeat?.modifiers || {
+              shift: event.key.length === 1 ? current.modifiers.shift && !event.shiftKey : current.modifiers.shift || event.shiftKey,
+              ctrl: current.modifiers.ctrl || event.ctrlKey,
+              alt: current.modifiers.alt || event.altKey,
+              meta: current.modifiers.meta || event.metaKey,
+            }
+            const key = repeat?.key || event.key
+            if (sendTerminalKey(current, key, modifiers)) {
+              current.nativeKey = { id, key, modifiers }
+              event.preventDefault()
+              return false
+            }
+          }
+        }
+      }
       if (event.type === 'keydown' && current.state.readOnly) claimFocus(current)
       return true
     })
@@ -345,6 +385,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   session.host = host
   session.mobile = options.mobile === true
   session.magnified = options.magnified === true
+  session.nativeKey = undefined
   session.term.options.disableStdin = !interactive(session)
   if (!interactive(session)) { session.keyboardRequested = false; session.term.blur() }
   setModifiers(session)
@@ -355,10 +396,10 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     session.term.textarea?.addEventListener('focus', () => { if (!clipboardRestoringFocus()) claimFocus(current) })
     session.term.textarea?.addEventListener('paste', event => {
       if (!interactive(current)) { event.preventDefault(); event.stopImmediatePropagation(); return }
-      setModifiers(current); claimFocus(current)
+      current.nativeKey = undefined; setModifiers(current); claimFocus(current)
     }, { capture: true })
-    session.term.textarea?.addEventListener('compositionstart', () => setModifiers(current))
-    session.term.textarea?.addEventListener('blur', () => setModifiers(current))
+    session.term.textarea?.addEventListener('compositionstart', () => { current.nativeKey = undefined; setModifiers(current) })
+    session.term.textarea?.addEventListener('blur', () => { current.nativeKey = undefined; setModifiers(current) })
     session.removeTouch = bindTerminalTouch(session.surface, session.term, {
       active: () => current.mobile && current.magnified && current.state.status === 'connected' && !current.state.readOnly,
       mode: () => current.touchMode,
@@ -398,12 +439,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     blur() { current.keyboardRequested = false; current.term.blur(); setModifiers(current); setState(current, { ...current.state, keyboardRequested: false }) },
     setModifiers(modifiers: Partial<TerminalModifiers>) { setModifiers(current, modifiers) },
     sendKey(key: string, modifiers: Partial<TerminalModifiers> = current.modifiers) {
-      if (!interactive(current) || current.socket?.readyState !== WebSocket.OPEN || current.state.status !== 'connected' || (current.state.presentation?.maximized && !current.state.presentation.owned)) return
-      const data = terminalKey(key, modifiers, current.term.modes.applicationCursorKeysMode)
-      setModifiers(current)
-      if (!data) return
-      claimFocus(current)
-      current.socket.send(JSON.stringify({ type: 'input', data }))
+      sendTerminalKey(current, key, modifiers)
     },
     uploadFiles(files: File[]) { current.uploads.enqueue(files) },
     selectionText() { return current.term.getSelection() },

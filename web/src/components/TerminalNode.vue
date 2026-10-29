@@ -7,13 +7,14 @@ import PaneIndicators from './PaneIndicators.vue'
 import MobileKeyboard from './MobileKeyboard.vue'
 import { statusColor } from '../status'
 import { mountTerminal, type TerminalStatus } from '../terminals'
+import { emptyModifiers, type TerminalModifiers } from '../terminal-input'
 import type { TerminalData } from '../types'
 const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>>()
 const host = ref<HTMLElement>()
 const status = ref<TerminalStatus>({ status: 'connecting' })
 const mobilePreview = computed(() => !!props.data.mobile && !props.data.focus)
 const mobileFocus = computed(() => !!props.data.mobile && props.data.focus)
-const modifiers = computed(() => status.value.modifiers || { ctrl: false, alt: false })
+const modifiers = computed(() => status.value.modifiers || emptyModifiers())
 const maximizedElsewhere = computed(() => !!status.value.presentation?.maximized && (!status.value.presentation.owned || !props.data.focus))
 const frameStatus = computed(() => !props.data.available || status.value.status === 'disconnected' ? 'error' : status.value.status === 'connecting' ? 'unknown' : props.data.status)
 const resizeState = computed(() => !props.data.focus ? 'passive' : !status.value.focusResize ? 'pending' : status.value.focusResize.owned ? 'owned' : 'passive')
@@ -71,8 +72,8 @@ function toggleKeyboard() {
 function readText() { return terminal?.selectionText() || terminal?.viewportText() || '' }
 function copyText(text?: string) { return terminal?.copySelection(text) ?? false }
 function reading(active: boolean) { if (active) terminal?.blur() }
-function mobileKey(key: string, modifiers?: { ctrl?: boolean; alt?: boolean }) { terminal?.sendKey(key, modifiers) }
-function mobileModifiers(value: { ctrl: boolean; alt: boolean }) { terminal?.setModifiers(value) }
+function mobileKey(key: string, modifiers?: Partial<TerminalModifiers>) { terminal?.sendKey(key, modifiers) }
+function mobileModifiers(value: TerminalModifiers) { terminal?.setModifiers(value) }
 function mobileMode(mode: 'scroll' | 'mouse' | 'select') { terminal?.setTouchMode(mode) }
 function mobileFiles(files: File[]) { terminal?.uploadFiles(files) }
 function mobilePaste(text: string) { terminal?.pasteText(text) }
