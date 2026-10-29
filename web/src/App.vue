@@ -275,24 +275,18 @@ function flowNode(node: CanvasNode): Node {
 }
 function overviewNodes(): Node[] {
   const result: Node[] = []
-  const machines = new Map<string, SourceResource[]>()
-  for (const source of visibleOverview.value) {
-    const config = sources.value.find(item => item.id === source.id)
-    if (!config) continue
-    const host = config.transport === 'local' ? 'local' : config.target!
-    machines.set(host, [...(machines.get(host) || []), source])
-  }
   let y = 0
-  for (const [host, machineSources] of machines) {
-    const rowWidth = (source: SourceResource, space: SourceResource['spaces'][number]) => space.windows.reduce((sum, window) => sum + windowSize({ sourceId: source.id, windowId: window.id }).width + 16, 0)
-    const width = Math.max(528, ...machineSources.flatMap(source => source.spaces.map(space => rowWidth(source, space) + 32)))
-    const count = machineSources.reduce((total, source) => total + source.spaces.reduce((sum, space) => sum + space.windows.length, 0), 0)
-    const rows = machineSources.flatMap(source => source.spaces.map(space => ({ source, space, height: space.windows.length ? 54 + Math.max(...space.windows.map(window => windowHeight({ sourceId: source.id, windowId: window.id, ...windowSize({ sourceId: source.id, windowId: window.id }) }))) : 66 })))
+  for (const config of sources.value) {
+    const source = visibleOverview.value.find(item => item.id === config.id)
+    if (!source) continue
+    const width = Math.max(528, ...source.spaces.map(space => 32 + space.windows.reduce((sum, window) => sum + windowSize({ sourceId: source.id, windowId: window.id }).width + 16, 0)))
+    const count = source.spaces.reduce((sum, space) => sum + space.windows.length, 0)
+    const rows = source.spaces.map(space => ({ space, height: space.windows.length ? 54 + Math.max(...space.windows.map(window => windowHeight({ sourceId: source.id, windowId: window.id, ...windowSize({ sourceId: source.id, windowId: window.id }) }))) : 66 }))
     const height = Math.max(132, 78 + rows.reduce((sum, row) => sum + row.height, 0))
-    result.push({ id: `machine:${host}`, type: 'group', position: { x: 0, y }, data: { kind: 'machine', name: host === 'local' ? '本机' : host.replace(/^ssh:\/\//, ''), subtitle: host === 'local' ? 'LOCAL' : 'SSH', count, width, height }, draggable: false, selectable: false, style: { width: `${width}px`, height: `${height}px`, zIndex: '-1', pointerEvents: 'none' } })
+    result.push({ id: `source:${source.id}`, type: 'group', position: { x: 0, y }, data: { kind: 'source', name: config.name, subtitle: config.transport === 'local' ? 'LOCAL' : 'SSH', count, width, height }, draggable: false, selectable: false, style: { width: `${width}px`, height: `${height}px`, zIndex: '-1', pointerEvents: 'none' } })
     let rowY = y + 68
-    for (const { source, space, height: rowHeight } of rows) {
-      result.push({ id: `space:${source.id}:${space.id}`, type: 'group', position: { x: 24, y: rowY }, data: { kind: 'space', name: space.name, subtitle: source.name, count: space.windows.length }, draggable: false, selectable: false, style: { width: `${width - 48}px`, pointerEvents: 'none' } })
+    for (const { space, height: rowHeight } of rows) {
+      result.push({ id: `space:${source.id}:${space.id}`, type: 'group', position: { x: 24, y: rowY }, data: { kind: 'space', name: space.name, count: space.windows.length }, draggable: false, selectable: false, style: { width: `${width - 48}px`, pointerEvents: 'none' } })
       let windowX = 24
       for (const window of space.windows) {
         const target = { sourceId: source.id, windowId: window.id }

@@ -35,8 +35,8 @@ built-in client connects through native sockets, forwarded over SSH remotely.
 
 ## Using Canvas
 
-- **Overview:** machines are grouped together, spaces run vertically, and windows
-  run horizontally. Filter by agent status or sort each space by status; native
+- **Overview:** each connection has its own group, in connection-list order;
+  spaces run vertically and windows horizontally. Filter by agent status or sort each space by status; native
   tab order is the default; filters and ordering are remembered in this browser.
   The focused window remains visible until focus leaves, even if its status changes.
   Enable “逐窗浏览” in the bottom toolbar to center one window at a time; scroll or swipe horizontally between windows and vertically
