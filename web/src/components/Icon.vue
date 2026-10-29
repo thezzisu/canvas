@@ -2,6 +2,8 @@
 defineProps<{ name: string; size?: number }>()
 const paths: Record<string, string> = {
   menu: 'M4 6h16 M4 12h16 M4 18h16',
+  map: 'M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z M9 3v15 M15 6v15',
+  navigation: 'M4 4h16v16H4z M4 15h16 M8 15v5 M12 15v5 M16 15v5',
   pages: 'M7 4h10v16H7z M3 7v10 M21 7v10',
   canvas: 'M4 5h16v14H4z M4 10h16 M10 10v9',
   grid: 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z',
