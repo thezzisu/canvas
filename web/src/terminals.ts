@@ -368,7 +368,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     term.attachCustomKeyEventHandler(event => {
       if (!interactive(current)) return false
       if (current.clipboard?.key(event) === false) return false
-      if (current.mobile) {
+      const modifiedEnter = event.key === 'Enter' && (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey)
+      if (current.mobile || modifiedEnter || current.nativeKey?.key === 'Enter') {
         const id = event.code || event.key
         if (event.type === 'keyup' && current.nativeKey?.id === id) current.nativeKey = undefined
         if (event.isComposing || event.keyCode === 229 || ['Dead', 'AltGraph'].includes(event.key) || event.getModifierState('AltGraph')) {
@@ -380,7 +381,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
         if (event.type === 'keydown') {
           const repeat = event.repeat && current.nativeKey?.id === id ? current.nativeKey : undefined
           if (!repeat) current.nativeKey = undefined
-          if (repeat || hasModifiers(current.modifiers)) {
+          if (repeat || hasModifiers(current.modifiers) || modifiedEnter) {
             // Printable DOM keys already include physical Shift/Caps/layout.
             // Apply only an additional virtual Shift, never physical Shift twice.
             const modifiers = repeat?.modifiers || {

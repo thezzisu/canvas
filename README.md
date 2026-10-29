@@ -37,8 +37,9 @@ built-in client connects through native sockets, forwarded over SSH remotely.
 
 - **Overview:** machines are grouped together, spaces run vertically, and windows
   run horizontally. Filter by agent status or sort each space by status; native
-  tab order is the default. Enable “逐窗浏览” in the bottom toolbar to center one
-  window at a time; scroll or swipe horizontally between windows and vertically
+  tab order is the default; filters and ordering are remembered in this browser.
+  The focused window remains visible until focus leaves, even if its status changes.
+  Enable “逐窗浏览” in the bottom toolbar to center one window at a time; scroll or swipe horizontally between windows and vertically
   between spaces. This mode fits each window automatically and locks manual zoom.
 - **Custom canvases:** add windows from the overview, arrange cards, and add notes
   or files. Every canvas supports its own background image, stored unchanged.
@@ -50,6 +51,8 @@ built-in client connects through native sockets, forwarded over SSH remotely.
 - **Navigation:** scroll to pan, pinch to zoom, or use fullscreen for the canvas.
   On mobile, tap a terminal preview to interact in fullscreen; the auxiliary
   keyboard provides modifiers, navigation keys, clipboard and upload actions.
+  Modified Enter keys retain their modifiers; the terminal application controls
+  their action.
 - **Status:** window colors summarize pane activity. Click the status indicator
   for pane details. Mixed-pane windows prioritize attention, done, working, idle,
   then unreported status. Filtering uses that summary; equal statuses retain

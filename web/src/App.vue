@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { VueFlow, useVueFlow, type Node } from '@vue-flow/core'
+import { useActiveElement, useStorage } from '@vueuse/core'
 import { MiniMap } from '@vue-flow/minimap'
 import UApp from '@nuxt/ui/components/App.vue'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
@@ -25,7 +26,7 @@ import { useCanvasNavigation } from './canvas-navigation'
 import { useMobileLayout } from './mobile-layout'
 import { canvasFrame, preserveCanvasCenter, useMobileViewport, type CanvasFrame } from './viewport'
 import { statusColor, statusLabel } from './status'
-import { overviewResources, overviewLayoutKey, overviewStatuses, type OverviewOrder } from './overview'
+import { overviewResources, overviewLayoutKey, overviewStatuses, type OverviewInteraction, type OverviewOrder } from './overview'
 import { adjacentPage, pageViewport, retainPage, type OverviewPage, type PageDirection } from './overview-paging'
 import type { ProgramStatus } from '../../shared/status'
 import type { Canvas, CanvasNode, FileData, NoteData, NotePatch, SharedState, Source, SourceResource, TerminalCanvasNode, TerminalData, WindowSize } from './types'
@@ -154,12 +155,19 @@ function guardPageDrag(event: MouseEvent) {
 }
 function fitCanvas() { if (paging.value) void fitPage(true); else void fitView({ padding: .14, maxZoom: 1, duration: 200 }) }
 
-const overviewSelected = ref<ProgramStatus[]>([...overviewStatuses])
-const overviewOrder = ref<OverviewOrder>('native')
+const overviewSelected = useStorage<ProgramStatus[]>('canvas:overview:statuses', [...overviewStatuses])
+const overviewOrder = useStorage<OverviewOrder>('canvas:overview:order', 'native')
 const overviewMenuOpen = ref(false)
 const overviewFiltered = computed(() => overviewSelected.value.length !== overviewStatuses.length)
 const overviewChanged = computed(() => overviewFiltered.value || overviewOrder.value !== 'native')
-const visibleOverview = computed(() => overviewResources(resources.value, overviewSelected.value, overviewOrder.value))
+const activeElement = useActiveElement({ triggerOnRemoval: true })
+const overviewInteraction = computed<OverviewInteraction | undefined>(() => {
+  if (!isOverview.value) return
+  if (focused.value) return { sourceId: focused.value.sourceId, windowId: focused.value.windowId }
+  const card = activeElement.value?.closest<HTMLElement>('.terminal-card')
+  if (card?.dataset.sourceId && card.dataset.windowId) return { sourceId: card.dataset.sourceId, windowId: card.dataset.windowId }
+})
+const visibleOverview = computed(() => overviewResources(resources.value, overviewSelected.value, overviewOrder.value, overviewInteraction.value))
 const visibleOverviewCount = computed(() => visibleOverview.value.reduce((total, source) => total + source.spaces.reduce((sum, space) => sum + space.windows.length, 0), 0))
 function resetOverview() { overviewSelected.value = [...overviewStatuses]; overviewOrder.value = 'native' }
 const overviewMenu = computed<DropdownMenuItem[][]>(() => [
@@ -443,7 +451,7 @@ async function refreshResources(silent = false): Promise<void> {
           const config = sources.value.find(item => item.id === source.id)
           return [source.id, config?.transport, config?.target, source.spaces.map(space => [space.id, space.windows.map(window => window.id)])]
         }))
-        const overviewChanged = isOverview.value && overviewLayoutKey(visibleOverview.value) !== overviewLayoutKey(overviewResources(body.sources, overviewSelected.value, overviewOrder.value))
+        const overviewChanged = isOverview.value && overviewLayoutKey(visibleOverview.value) !== overviewLayoutKey(overviewResources(body.sources, overviewSelected.value, overviewOrder.value, overviewInteraction.value))
         resources.value = body.sources
         resourceSignature = signature
         if (layoutSignature !== resourceLayoutSignature || overviewChanged) { if (!layoutGesture) rebuildNodes() }
@@ -482,6 +490,7 @@ async function logout() {
 }
 function unauthorized() { void exitFullscreen(); stopStateEvents(); for (const timer of saveTimers.values()) clearTimeout(timer); saveTimers.clear(); pendingLayouts.clear(); clearNoteEdits(); authenticated.value = false; focused.value = null; settingsDialog.value = false; settings.value = null; fontRevision++; fontSignature = ''; fontLoading.value = false; latestState = undefined; clearTerminals() }
 watch(pageLayout, async () => { if (paging.value) { await nextTick(); await fitPage() } })
+watch(overviewInteraction, () => { if (isOverview.value) rebuildNodes() })
 watch([overviewSelected, overviewOrder], async () => { if (isOverview.value) { rebuildNodes(); await nextTick(); if (paging.value) await fitPage(); else void fitView({ padding: .14, maxZoom: 1, duration: 150 }) } })
 watch(activeId, async () => { overviewMenuOpen.value = false; layoutGesture = ''; focused.value = null; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
 function switchCanvas(id: string) { sidebarOpen.value = false; void flushNotes(activeId.value); saveViewport(); activeId.value = id }
@@ -577,7 +586,10 @@ function terminalAction(action: string, id: string) {
   else if (action === 'unfocus') void closeFocus()
   else if (action === 'menu') windowMenu.value = { node, name: resourceFor(node).window?.name || '窗口' }
 }
-async function closeFocus() { focused.value = null; graphKey.value++; await nextTick(); await restoreViewport() }
+async function closeFocus() {
+  if (document.activeElement instanceof HTMLElement && focusViewportElement.value?.contains(document.activeElement)) document.activeElement.blur()
+  focused.value = null; graphKey.value++; await nextTick(); await restoreViewport()
+}
 async function removeNode(id: string) {
   const canvas = currentCanvas.value
   if (!canvas) return
@@ -896,7 +908,7 @@ onBeforeUnmount(() => { fontRevision++; focusObserver?.disconnect(); cameraObser
         <VueFlow :snap-to-grid="!isOverview && !!currentCanvas?.snapToGrid" :snap-grid="[24, 24]" v-if="nodes.length && !focused" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && !mobile" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><MiniMap v-if="!mobile && !paging" :pannable="true" :zoomable="true" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? '#bba071' : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
         <div v-if="!nodes.length && isOverview" class="empty-state"><Icon name="server" :size="32" /><h2>{{ windowCount && overviewFiltered ? '没有匹配的窗口' : sources.length ? '暂无窗口' : '暂无连接' }}</h2><button v-if="windowCount && overviewFiltered" class="button subtle" @click="overviewSelected = [...overviewStatuses]">清除筛选</button><button v-else class="button primary" @click="sources.length ? sourcePanel = true : openSource()"><Icon :name="sources.length ? 'server' : 'plus'" :size="17" />{{ sources.length ? '连接' : '添加连接' }}</button></div>
         <div v-if="!nodes.length && !isOverview" class="empty-state"><Icon name="canvas" :size="32" /><h2>空画布</h2><button class="button primary" @click="openAdd()"><Icon name="plus" :size="17" />加入窗口</button></div>
-        <div v-if="!focused" class="canvas-toolbar"><button :title="canvasFullscreen ? '退出全屏画布' : '全屏画布'" :aria-label="canvasFullscreen ? '退出全屏画布' : '全屏画布'" :aria-pressed="canvasFullscreen" @click="toggleFullscreen"><Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button><button v-if="isOverview" title="逐窗浏览" aria-label="逐窗浏览" :aria-pressed="overviewPaged" @click="togglePaging"><Icon name="pages" :size="17" /></button><button v-if="!isOverview" title="网格吸附" aria-label="网格吸附" :aria-pressed="!!currentCanvas?.snapToGrid" @click="toggleSnap"><Icon name="grid" :size="15" /></button><template v-if="paging"><button v-for="item in pageDirections" :key="item.direction" :title="item.label" :aria-label="item.label" :disabled="!pageNeighbor(item.direction)" @click="movePage(item.direction)"><Icon :name="item.icon" :size="16" :style="{ transform: item.rotation }" /></button></template><button v-if="!paging" title="缩小" aria-label="缩小" @click="zoomOut({ duration: 150 })"><Icon name="minus" :size="17" /></button><button :title="paging ? '居中窗口' : '适合画布'" :aria-label="paging ? '居中窗口' : '适合画布'" @click="fitCanvas"><Icon name="fit" :size="17" /></button><button v-if="!paging" title="放大" aria-label="放大" @click="zoomIn({ duration: 150 })"><Icon name="plus" :size="17" /></button></div>
+        <div v-if="!focused" class="canvas-toolbar"><button :title="canvasFullscreen ? '退出全屏画布' : '全屏画布'" :aria-label="canvasFullscreen ? '退出全屏画布' : '全屏画布'" :aria-pressed="canvasFullscreen" @click="toggleFullscreen"><Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button><button v-if="isOverview" title="逐窗浏览" aria-label="逐窗浏览" :aria-pressed="overviewPaged" @click="togglePaging"><Icon name="pages" :size="17" /></button><button v-if="!isOverview" title="网格吸附" aria-label="网格吸附" :aria-pressed="!!currentCanvas?.snapToGrid" @click="toggleSnap"><Icon name="grid" :size="15" /></button><template v-if="paging"><button v-for="item in pageDirections" :key="item.direction" :title="item.label" :aria-label="item.label" :disabled="!pageNeighbor(item.direction)" @pointerdown.prevent @click="movePage(item.direction)"><Icon :name="item.icon" :size="16" :style="{ transform: item.rotation }" /></button></template><button v-if="!paging" title="缩小" aria-label="缩小" @click="zoomOut({ duration: 150 })"><Icon name="minus" :size="17" /></button><button :title="paging ? '居中窗口' : '适合画布'" :aria-label="paging ? '居中窗口' : '适合画布'" @click="fitCanvas"><Icon name="fit" :size="17" /></button><button v-if="!paging" title="放大" aria-label="放大" @click="zoomIn({ duration: 150 })"><Icon name="plus" :size="17" /></button></div>
       </div>
     </main>
     <Transition name="slide"><aside v-if="sourcePanel" class="source-panel"><header><div><h2>连接与窗口</h2></div><button class="icon-button" aria-label="关闭连接面板" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />添加连接</button><div class="source-panel-content"><div v-for="source in sources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small>{{ source.transport === 'local' ? '本机' : source.target }}</small></span></button><button class="icon-button" title="编辑连接" aria-label="编辑连接" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" title="移除连接" aria-label="移除连接" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><div v-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" title="新建窗口" aria-label="新建窗口" @click="windowAction({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="plus" :size="14" /></button><button class="icon-button" title="重命名 Space" aria-label="重命名 Space" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" title="关闭 Space" aria-label="关闭 Space" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :style="{ '--program-color': statusColor(window.status) }" :title="statusLabel(window.status)" /><span>{{ window.name }}</span><button class="icon-button" title="加入画布" aria-label="加入画布" @click="openAdd({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 })"><Icon name="plus" :size="14" /></button><button class="icon-button" title="窗口操作" aria-label="窗口操作" @click="windowMenu = { name: window.name, node: { type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" @click="spaceAction(resources.find(item => item.id === source.id) || { ...source, status: '', spaces: [] }, undefined, 'create')"><Icon name="plus" :size="14" />新建 space</button></template></div><p v-if="!sources.length" class="panel-empty">暂无连接</p></div></aside></Transition>

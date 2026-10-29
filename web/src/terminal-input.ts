@@ -34,6 +34,9 @@ export function terminalKey(key: string, modifiers: Partial<TerminalModifiers> =
   if (tilde[key]) return `\x1b[${tilde[key]}${modifier > 1 ? `;${modifier}` : ''}~`
   const fn: Record<string, string> = { F1: 'P', F2: 'Q', F3: 'R', F4: 'S' }
   if (fn[key]) return modifier > 1 ? `\x1b[1;${modifier}${fn[key]}` : `\x1bO${fn[key]}`
+  // Preserve Enter modifiers on the Canvas→herdr link. Herdr chooses the
+  // child application's negotiated keyboard encoding from this semantic key.
+  if (key === 'Enter' && (modifiers.shift || modifiers.ctrl || modifiers.meta)) return `\x1b[13;${modifier}u`
   if (key === 'BackTab' || (key === 'Tab' && modifiers.shift)) return '\x1b[Z'
   const basic: Record<string, string> = { Escape: '\x1b', Tab: '\t', Enter: '\r', Backspace: modifiers.ctrl ? '\b' : '\x7f' }
   if (basic[key]) return (modifiers.alt || modifiers.meta ? '\x1b' : '') + basic[key]

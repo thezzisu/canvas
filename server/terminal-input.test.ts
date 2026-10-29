@@ -64,11 +64,17 @@ test("virtual Shift and Caps affect letters and symbols before terminal control 
   assert.equal(terminalKey("b", { meta: true }), "\x1bb");
 });
 
-test("basic keys keep traditional terminal semantics rather than inventing an extended protocol", () => {
+test("modified Enter preserves its semantic modifiers for the native client", () => {
+  for (let mask = 0; mask < 16; mask++) {
+    const modifiers = { shift: !!(mask & 1), alt: !!(mask & 2), ctrl: !!(mask & 4), meta: !!(mask & 8) };
+    assert.equal(terminalKey("Enter", modifiers), !mask ? "\r" : mask === 2 ? "\x1b\r" : `\x1b[13;${mask + 1}u`);
+  }
+});
+
+test("other basic keys keep traditional terminal semantics", () => {
   assert.equal(terminalKey("Tab", { shift: true }), "\x1b[Z");
   assert.equal(terminalKey("Tab", { shift: true, ctrl: true, alt: true, meta: true }), "\x1b[Z");
   assert.equal(terminalKey("Tab", { ctrl: true }), "\t");
-  assert.equal(terminalKey("Enter", { shift: true }), "\r");
   assert.equal(terminalKey("Backspace", { shift: true }), "\x7f");
   assert.equal(terminalKey("Backspace", { ctrl: true, alt: true }), "\x1b\b");
   assert.equal(terminalKey("Escape", { meta: true }), "\x1b\x1b");

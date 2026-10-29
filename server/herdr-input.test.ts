@@ -95,6 +95,14 @@ test('CSI-u and modifyOtherKeys retain modifiers; terminal responses and invalid
   for (const event of invalid) assert.doesNotThrow(() => encodeClientMessage({ ClientShellPaneInput: { pane_id: 'a', events: [event] } }));
 });
 
+test('every Enter modifier combination survives the browser link as a native semantic key', () => {
+  for (let mask = 0; mask < 16; mask++) {
+    const mods = { shift: !!(mask & 1), alt: !!(mask & 2), ctrl: !!(mask & 4), meta: !!(mask & 8) };
+    const native = (mods.shift ? 1 : 0) | (mods.ctrl ? 2 : 0) | (mods.alt ? 4 : 0) | (mods.meta ? 8 : 0);
+    assert.deepEqual(events(parse(terminalKey('Enter', mods))).map(keyShape), [{ code: 'Enter', modifiers: native }]);
+  }
+});
+
 test('SGR and byte-oriented X10 mouse parsing survives fragmentation and high coordinates', () => {
   assert.deepEqual(parse('\x1b[<20;', '10;12M', '\x1b[<0;10;12m', '\x1b[I\x1b[O', Buffer.from([27, 91, 77, 32, 200]), Buffer.from([100])), [
     { mouse: { kind: { Down: 'Left' }, column: 9, row: 11, modifiers: 3 } },

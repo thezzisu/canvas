@@ -41,3 +41,26 @@ test('status changes alter layout only when filtering or priority ordering chang
   changed[0]!.spaces[0]!.windows[0]!.name = 'renamed'
   assert.equal(key(resources, overviewStatuses, 'native'), key(changed, overviewStatuses, 'native'))
 })
+
+test('the interacting native window remains visible after done is acknowledged as idle until interaction ends', () => {
+  const resources = fixture(), interaction = { sourceId: 'a', windowId: 'done-1' }
+  const before = overviewResources(resources, ['done'], 'native', interaction)
+  resources[0]!.spaces[0]!.windows.find(window => window.id === 'done-1')!.status = 'idle'
+  const during = overviewResources(resources, ['done'], 'native', interaction)
+  assert.equal(overviewLayoutKey(during), overviewLayoutKey(before))
+  assert.equal(during[0]!.spaces[0]!.windows.find(window => window.id === 'done-1')?.status, 'idle')
+  assert.equal(overviewResources(resources, ['done'], 'native')[0]!.spaces[0]!.windows.some(window => window.id === 'done-1'), false)
+})
+
+test('interaction exemption matches both source and native window, preserving grouping, status ordering and filter choices', () => {
+  const resources = fixture(), selected = ['done'] as const
+  resources[1]!.spaces[0]!.windows.push(window('working-1', 'working'))
+  const original = structuredClone(resources)
+  const visible = overviewResources(resources, selected, 'status', { sourceId: 'a', windowId: 'working-1' })
+  assert.deepEqual(visible.map(source => source.id), ['a'])
+  assert.deepEqual(visible[0]!.spaces[0]!.windows.map(window => window.id), ['done-1', 'done-2', 'working-1'])
+  assert.deepEqual(overviewResources(resources, [], 'native', { sourceId: 'b', windowId: 'working-1' }).map(source => [source.id, source.spaces.map(space => space.windows.map(window => window.id))]), [['b', [['working-1']]]])
+  assert.deepEqual(overviewResources(resources, [], 'native', { sourceId: 'a', windowId: 'missing' }), [])
+  assert.deepEqual(resources, original)
+  assert.deepEqual(selected, ['done'])
+})
