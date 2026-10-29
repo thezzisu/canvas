@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { adjacentPage, pageViewport, PageWheelGesture, retainPage, swipePage, type OverviewPage } from '../web/src/overview-paging.ts'
+import { adjacentPage, pageViewport, pageDragOffset, PageWheelGesture, retainPage, swipePage, type OverviewPage } from '../web/src/overview-paging.ts'
 
 const page = (id: string, row: string, x: number, y: number, width = 800, height = 450): OverviewPage => ({ id, row, x, y, width, height })
 const pages = [page('a', 'one', 0, 0), page('b', 'one', 820, 0), page('c', 'one', 1640, 0),
@@ -77,4 +77,48 @@ test('touch swipes use the dominant direction and taps or short drags do not adv
   assert.equal(swipePage(65, -22), 'left')
   assert.equal(swipePage(-22, -65), 'down')
   assert.equal(swipePage(22, 65), 'up')
+})
+
+
+test('small drag feedback follows its signed axis while edge and long-pull feedback stay bounded', () => {
+  assert.deepEqual(pageDragOffset(8, 1, 800, false), { x: -8, y: 0 })
+  assert.deepEqual(pageDragOffset(-20, 2, 800, false), { x: 20, y: 0 })
+  assert.deepEqual(pageDragOffset(1, -18, 600, false), { x: 0, y: 18 })
+  let last = 0
+  for (const distance of [1, 8, 28, 48, 120, 500, 10000]) {
+    const edge = -pageDragOffset(distance, 0, 800, true).x
+    assert(edge > last && edge < distance && edge <= 48)
+    last = edge
+  }
+  const longPull = -pageDragOffset(10000, 0, 800, false).x
+  assert(longPull > 120 && longPull <= 162)
+})
+
+test('a wheel gesture locks one axis and reverses net displacement without diagonal flips', () => {
+  const wheel = new PageWheelGesture()
+  assert.equal(wheel.consume(8, 2, 0), undefined)
+  assert.deepEqual(wheel.displacement, { x: 8, y: 0 })
+  assert.equal(wheel.consume(0, 90, 16), undefined)
+  assert.deepEqual(wheel.displacement, { x: 8, y: 0 })
+  assert.equal(wheel.consume(-20, 0, 32), undefined)
+  assert.deepEqual(wheel.displacement, { x: -12, y: 0 })
+  assert.equal(wheel.consume(-40, 0, 48), 'left')
+  assert.equal(wheel.pending, false)
+  assert.equal(wheel.isIdle(300), true)
+  assert.equal(wheel.consume(0, 12, 300), undefined)
+  assert.deepEqual(wheel.displacement, { x: 0, y: 12 })
+  assert.equal(wheel.pending, true)
+})
+
+
+test('cancellation consumes existing momentum without postponing the next independent gesture', () => {
+  const wheel = new PageWheelGesture()
+  wheel.consume(20, 0, 0)
+  wheel.block()
+  assert.equal(wheel.consume(8, 0, 50), undefined)
+  assert.equal(wheel.pending, false)
+  assert.equal(wheel.isIdle(300), true)
+  assert.equal(wheel.consume(12, 0, 300), undefined)
+  assert.equal(wheel.pending, true)
+  assert.deepEqual(wheel.displacement, { x: 12, y: 0 })
 })

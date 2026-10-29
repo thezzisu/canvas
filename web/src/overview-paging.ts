@@ -46,24 +46,49 @@ export function swipePage(dx: number, dy: number): PageDirection | undefined {
   return Math.abs(dx) > Math.abs(dy) ? dx > 0 ? 'left' : 'right' : dy > 0 ? 'up' : 'down'
 }
 
+export const PAGE_GESTURE_IDLE_MS = 220
+
+/** Follow small movements directly; soften long pulls and resist unavailable edges. */
+export function pageDragOffset(x: number, y: number, extent: number, atEdge: boolean): { x: number; y: number } {
+  const horizontal = Math.abs(x) > Math.abs(y)
+  const distance = horizontal ? x : y
+  const limit = Math.max(24, Math.min(120, extent * .22))
+  const magnitude = Math.abs(distance)
+  const amount = atEdge ? limit * .4 * (1 - Math.exp(-magnitude / limit))
+    : magnitude <= limit ? magnitude : limit + limit * .35 * (1 - Math.exp(-(magnitude - limit) / limit))
+  const offset = -Math.sign(distance) * amount
+  return horizontal ? { x: offset, y: 0 } : { x: 0, y: offset }
+}
+
 /** One wheel gesture, including its momentum tail, advances at most one window. */
 export class PageWheelGesture {
   private last = -Infinity
   private x = 0
   private y = 0
   private consumed = false
+  private axis?: 'x' | 'y'
 
-  reset() { this.last = -Infinity; this.x = 0; this.y = 0; this.consumed = false }
-  block(now: number) { this.last = now; this.consumed = true }
+  get pending() { return Number.isFinite(this.last) && !this.consumed }
+  get displacement() {
+    const horizontal = this.axis ? this.axis === 'x' : Math.abs(this.x) > Math.abs(this.y)
+    return horizontal ? { x: this.x, y: 0 } : { x: 0, y: this.y }
+  }
+
+  reset() { this.last = -Infinity; this.x = 0; this.y = 0; this.consumed = false; this.axis = undefined }
+  block(now = this.last) { this.last = now; this.consumed = true }
+
+  isIdle(now: number) { return now - this.last > PAGE_GESTURE_IDLE_MS }
 
   consume(dx: number, dy: number, now: number): PageDirection | undefined {
-    if (now - this.last > 220) this.reset()
+    if (this.isIdle(now)) this.reset()
     this.last = now
     if (this.consumed) return undefined
     this.x += dx
     this.y += dy
-    if (Math.max(Math.abs(this.x), Math.abs(this.y)) < 48) return undefined
+    if (!this.axis && Math.max(Math.abs(this.x), Math.abs(this.y)) >= 8) this.axis = Math.abs(this.x) > Math.abs(this.y) ? 'x' : 'y'
+    const { x, y } = this.displacement
+    if (Math.max(Math.abs(x), Math.abs(y)) < 48) return undefined
     this.consumed = true
-    return Math.abs(this.x) > Math.abs(this.y) ? this.x > 0 ? 'right' : 'left' : this.y > 0 ? 'down' : 'up'
+    return x ? x > 0 ? 'right' : 'left' : y > 0 ? 'down' : 'up'
   }
 }

@@ -1,8 +1,8 @@
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { terminalConsumesWheel } from './terminals'
 import { touchViewport, type TouchPosition } from './mobile-layout'
 import { canvasFrame, preserveCanvasCenter, type CanvasFrame } from './viewport'
-import { PageWheelGesture, swipePage, type PageDirection } from './overview-paging'
+import { PageWheelGesture, swipePage, pageDragOffset, PAGE_GESTURE_IDLE_MS, type PageDirection } from './overview-paging'
 
 type Viewport = { x: number; y: number; zoom: number }
 export function useCanvasNavigation(options: {
@@ -13,7 +13,7 @@ export function useCanvasNavigation(options: {
   blocked(): boolean
   beforeFullscreen(): void
   mobile(): boolean
-  paging?: { enabled(): boolean; move(direction: PageDirection): void; recenter(): Promise<unknown> }
+  paging?: { enabled(): boolean; canMove(direction: PageDirection): boolean; move(direction: PageDirection): void; recenter(animate?: boolean): Promise<unknown> }
 }) {
   const surface = ref<HTMLElement>()
   const app = ref<HTMLElement>()
@@ -21,12 +21,55 @@ export function useCanvasNavigation(options: {
   let previous: { canvasId: string; viewport: Viewport; width: number; height: number; frame?: CanvasFrame } | undefined
   let saveTimer: ReturnType<typeof setTimeout> | undefined
   let changing = false
-  let gesture: { count: number; viewport: Viewport; point: TouchPosition; distance: number; paged: boolean; multi: boolean; latest: TouchPosition } | undefined
+  let gesture: { count: number; viewport: Viewport; point: TouchPosition; distance: number; paged: boolean; multi: boolean; latest: TouchPosition; axis?: 'x' | 'y' } | undefined
   const pageWheel = new PageWheelGesture()
   let moved = false
   let suppressClickUntil = 0
   let lastTouch: TouchPosition | undefined
   let editorScroll: { element: HTMLElement; point: TouchPosition; left: number; top: number } | undefined
+
+  let preview: { base: Viewport; x: number; y: number } | undefined
+  let previewFrame = 0
+  let pageSettle: ReturnType<typeof setTimeout> | undefined
+
+  // Invalidate delayed writes before any external camera change. Keep a consumed
+  // wheel gesture consumed, so its momentum cannot advance the next window.
+  function resetPagingFeedback() {
+    const active = !!preview
+    clearTimeout(pageSettle); pageSettle = undefined
+    cancelAnimationFrame(previewFrame); previewFrame = 0
+    preview = undefined
+    if (pageWheel.pending) pageWheel.block()
+    if (gesture?.paged) gesture.multi = true
+    return active
+  }
+  function cancelFeedback(animate = true) {
+    if (resetPagingFeedback() && options.paging?.enabled()) void options.paging.recenter(animate)
+  }
+  function flushPreview() {
+    cancelAnimationFrame(previewFrame); previewFrame = 0
+    if (!preview || !options.paging?.enabled() || options.blocked()) return
+    void options.setViewport({ ...preview.base, x: preview.base.x + preview.x, y: preview.base.y + preview.y })
+  }
+  function previewPage(x: number, y: number) {
+    if (!surface.value || !options.paging?.enabled()) return
+    const horizontal = Math.abs(x) > Math.abs(y)
+    const direction = horizontal ? x > 0 ? 'right' : 'left' : y > 0 ? 'down' : 'up'
+    const offset = pageDragOffset(x, y, horizontal ? surface.value.clientWidth : surface.value.clientHeight, !options.paging.canMove(direction))
+    preview ??= { base: { ...options.getViewport() }, x: 0, y: 0 }
+    Object.assign(preview, offset)
+    if (!previewFrame) previewFrame = requestAnimationFrame(flushPreview)
+  }
+  function finishPage(direction?: PageDirection) {
+    flushPreview()
+    resetPagingFeedback()
+    if (direction && options.paging?.canMove(direction)) options.paging.move(direction)
+    else if (options.paging?.enabled()) void options.paging.recenter(true)
+  }
+  watch([options.getCanvasId, () => options.paging?.enabled(), options.blocked], () => {
+    cancelFeedback(false)
+    if (!options.paging?.enabled()) { pageWheel.reset(); gesture = undefined }
+  }, { flush: 'sync' })
 
   function touchPosition(touches: TouchList) {
     const box = surface.value!.getBoundingClientRect()
@@ -50,14 +93,23 @@ export function useCanvasNavigation(options: {
     editorScroll = undefined
     if (!gesture && !target?.closest('.terminal-preview-button') &&
         target?.closest('button, a, input, select, .file-preview, .canvas-toolbar, .vue-flow__minimap')) return
-    if (!gesture) moved = false
+    if (!gesture) {
+      moved = false
+      if (options.paging?.enabled()) {
+        // Freeze any returning camera where the finger actually landed.
+        const base = { ...options.getViewport() }
+        resetPagingFeedback()
+        void options.setViewport(base)
+        preview = { base, x: 0, y: 0 }
+      }
+    }
     const position = touchPosition(event.touches)
     if (gesture?.paged) {
-      if (position.count > 1) { gesture.multi = true; moved = true; suppressClickUntil = performance.now() + 500 }
+      if (position.count > 1) { gesture.multi = true; moved = true; suppressClickUntil = performance.now() + 500; cancelFeedback() }
       return
     }
     gesture = { ...position, viewport: { ...options.getViewport() }, paged: !!options.paging?.enabled(), multi: position.count > 1, latest: position.point }
-    if (gesture.count > 1) { moved = true; suppressClickUntil = performance.now() + 500 }
+    if (gesture.count > 1) { moved = true; suppressClickUntil = performance.now() + 500; if (gesture.paged) cancelFeedback() }
   }
   function touchMove(event: TouchEvent) {
     if (editorScroll && event.touches.length === 1) {
@@ -75,6 +127,10 @@ export function useCanvasNavigation(options: {
     if (gesture.paged) {
       gesture.latest = current.point
       gesture.multi ||= current.count > 1
+      const dx = gesture.point.x - current.point.x, dy = gesture.point.y - current.point.y
+      if (!gesture.axis && Math.max(Math.abs(dx), Math.abs(dy)) >= 8) gesture.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
+      if (gesture.multi) cancelFeedback()
+      else previewPage(gesture.axis === 'y' ? 0 : dx, gesture.axis === 'x' ? 0 : dy)
       if (Math.hypot(current.point.x - gesture.point.x, current.point.y - gesture.point.y) >= 6 || gesture.multi) {
         moved = true
         suppressClickUntil = performance.now() + 500
@@ -102,13 +158,17 @@ export function useCanvasNavigation(options: {
       suppressClickUntil = performance.now() + 500
       const ended = event.changedTouches[0]
       if (ended) lastTouch = { x: ended.clientX, y: ended.clientY }
-      if (paged) {
-        const direction = !gesture.multi && swipePage(gesture.latest.x - gesture.point.x, gesture.latest.y - gesture.point.y)
-        if (direction && options.paging?.enabled() && !options.blocked()) options.paging.move(direction)
-      } else {
-        clearTimeout(saveTimer)
-        saveTimer = setTimeout(options.saveViewport, 160)
-      }
+    }
+    if (paged) {
+      const direction = !gesture.multi && swipePage(gesture.axis === 'y' ? 0 : gesture.latest.x - gesture.point.x,
+        gesture.axis === 'x' ? 0 : gesture.latest.y - gesture.point.y)
+      gesture = undefined
+      if (preview && options.paging?.enabled() && !options.blocked()) finishPage(direction || undefined)
+      return
+    }
+    if (moved) {
+      clearTimeout(saveTimer)
+      saveTimer = setTimeout(options.saveViewport, 160)
     }
     gesture = event.touches.length && surface.value
       ? { ...gesture, ...touchPosition(event.touches), viewport: { ...options.getViewport() } } : undefined
@@ -117,6 +177,7 @@ export function useCanvasNavigation(options: {
     if (gesture && moved && !gesture.paged) options.saveViewport()
     gesture = undefined
     editorScroll = undefined
+    cancelFeedback()
   }
   function click(event: MouseEvent) {
     const target = event.target instanceof Element ? event.target : undefined
@@ -129,21 +190,38 @@ export function useCanvasNavigation(options: {
   }
 
   function wheel(event: WheelEvent) {
-    if (options.blocked() || !surface.value) return
+    if (options.blocked() || !surface.value) { cancelFeedback(false); return }
+    // A moving preview may bring a focused terminal beneath a stationary
+    // pointer. The gesture keeps its original canvas owner through its tail.
+    const ownsWheel = options.paging?.enabled() && !pageWheel.isIdle(performance.now())
     // Editors retain ordinary text scrolling; pinch remains a canvas gesture.
-    if (!event.ctrlKey && (event.target as HTMLElement)?.closest('.note-content, .file-preview, .file-text-preview, .vue-flow__minimap, .canvas-toolbar')) return
-    if (terminalConsumesWheel(event)) return
+    if (!ownsWheel && !event.ctrlKey && (event.target as HTMLElement)?.closest('.note-content, .file-preview, .file-text-preview, .vue-flow__minimap, .canvas-toolbar')) { cancelFeedback(); return }
+    if (!ownsWheel && terminalConsumesWheel(event)) { cancelFeedback(); return }
     event.preventDefault()
     event.stopPropagation()
     const box = surface.value.getBoundingClientRect()
     const unit = event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? box.height : 1
     if (options.paging?.enabled()) {
       // Pinch is deliberately inert in paging mode, including its wheel tail.
-      if (event.ctrlKey) { pageWheel.block(performance.now()); return }
+      if (event.ctrlKey) { cancelFeedback(); pageWheel.block(performance.now()); return }
+      const now = performance.now()
+      if (pageWheel.isIdle(now)) {
+        flushPreview()
+        pageWheel.reset()
+        resetPagingFeedback()
+      }
       const horizontal = event.shiftKey && !event.deltaX
       const direction = pageWheel.consume((horizontal ? event.deltaY : event.deltaX) * unit,
-        (horizontal ? 0 : event.deltaY) * unit, performance.now())
-      if (direction) options.paging.move(direction)
+        (horizontal ? 0 : event.deltaY) * unit, now)
+      if (direction || pageWheel.pending) {
+        const offset = pageWheel.displacement
+        previewPage(offset.x, offset.y)
+        if (direction) finishPage(direction)
+        else {
+          clearTimeout(pageSettle)
+          pageSettle = setTimeout(() => { pageWheel.reset(); cancelFeedback() }, PAGE_GESTURE_IDLE_MS)
+        }
+      }
       return
     }
     pageWheel.reset()
@@ -171,6 +249,7 @@ export function useCanvasNavigation(options: {
     if (!fullscreen.value) return
     const saved = previous
     previous = undefined
+    resetPagingFeedback()
     fullscreen.value = false
     await settle()
     if (options.paging?.enabled()) await options.paging.recenter()
@@ -192,6 +271,7 @@ export function useCanvasNavigation(options: {
     try {
       if (fullscreen.value) { await exitFullscreen(); return }
       if (!surface.value || !app.value) return
+      cancelFeedback(false)
       options.beforeFullscreen()
       previous = { canvasId: options.getCanvasId(), viewport: { ...options.getViewport() }, width: surface.value.clientWidth, height: surface.value.clientHeight,
         frame: options.mobile() ? canvasFrame(surface.value) : undefined }
@@ -216,14 +296,18 @@ export function useCanvasNavigation(options: {
       event.preventDefault(); event.stopImmediatePropagation(); void restore()
     }
   }
+  function blurPaging() { cancelFeedback(false) }
   onMounted(() => {
     document.addEventListener('fullscreenchange', fullscreenChanged)
     window.addEventListener('keydown', escape, true)
+    window.addEventListener('blur', blurPaging)
   })
   onBeforeUnmount(() => {
     clearTimeout(saveTimer)
+    resetPagingFeedback()
     document.removeEventListener('fullscreenchange', fullscreenChanged)
     window.removeEventListener('keydown', escape, true)
+    window.removeEventListener('blur', blurPaging)
   })
-  return { surface, app, fullscreen, wheel, touchStart, touchMove, touchEnd, touchCancel, click, toggleFullscreen, exitFullscreen }
+  return { surface, app, fullscreen, resetPagingFeedback, wheel, touchStart, touchMove, touchEnd, touchCancel, click, toggleFullscreen, exitFullscreen }
 }

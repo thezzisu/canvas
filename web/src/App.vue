@@ -124,14 +124,19 @@ const pageDirections = [
 ] as const
 function pageNeighbor(direction: PageDirection) { return adjacentPage(pages.value, currentPage.value?.id || '', direction) }
 async function fitPage(animate = false) {
+  resetPagingFeedback()
   const frame = graphSurface.value
   if (!paging.value || focused.value || !frame?.clientWidth || !frame.clientHeight) return
   const page = retainPage(pages.value, currentPage.value?.id || '', currentPage.value, getViewport(), { width: frame.clientWidth, height: frame.clientHeight })
   currentPage.value = page
   if (!page) return
-  await setViewport(pageViewport(page, { width: frame.clientWidth, height: frame.clientHeight }), {
-    duration: animate && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 180 : 0,
+  const duration = animate && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 200 : 0
+  const transition = setViewport(pageViewport(page, { width: frame.clientWidth, height: frame.clientHeight }), {
+    duration, interpolate: 'linear', ease: value => 1 - (1 - value) ** 3,
   })
+  // VueFlow does not resolve an interrupted animation. Only immediate camera
+  // writes can be awaited by mode/fullscreen lifecycle code.
+  if (!duration) await transition
 }
 function movePage(direction: PageDirection) {
   if (!paging.value || focused.value) return
@@ -142,6 +147,7 @@ function movePage(direction: PageDirection) {
   void fitPage(true)
 }
 async function togglePaging() {
+  resetPagingFeedback()
   if (!overviewPaged.value) saveViewport()
   overviewPaged.value = !overviewPaged.value
   await nextTick()
@@ -187,11 +193,11 @@ const windowCount = computed(() => allWindows.value.length)
 const onlineCount = computed(() => resources.value.filter(source => !source.error && !['offline', 'error', 'disconnected'].includes(source.status)).length)
 const filteredWindows = computed(() => allWindows.value.filter(item => `${item.source.name} ${item.space.name} ${item.window.name}`.toLowerCase().includes(addSearch.value.toLowerCase())))
 const modalOpen = computed(() => sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || windowMenu.value || backgroundCanvas.value || settingsDialog.value)
-const { surface: graphSurface, app: appElement, fullscreen: canvasFullscreen, wheel: canvasWheel, touchStart: canvasTouchStart, touchMove: canvasTouchMove, touchEnd: canvasTouchEnd, touchCancel: canvasTouchCancel, click: canvasClick, toggleFullscreen, exitFullscreen } = useCanvasNavigation({
+const { surface: graphSurface, app: appElement, fullscreen: canvasFullscreen, resetPagingFeedback, wheel: canvasWheel, touchStart: canvasTouchStart, touchMove: canvasTouchMove, touchEnd: canvasTouchEnd, touchCancel: canvasTouchCancel, click: canvasClick, toggleFullscreen, exitFullscreen } = useCanvasNavigation({
   getCanvasId: () => activeId.value, getViewport, setViewport, saveViewport,
   blocked: () => overviewMenuOpen.value || !!modalOpen.value || !!directoryRequest.value || !!downloadPreview.value || !!focused.value || (mobile.value && (sidebarOpen.value || sourcePanel.value)),
   mobile: () => mobile.value,
-  paging: { enabled: () => paging.value, move: movePage, recenter: () => fitPage() },
+  paging: { enabled: () => paging.value, canMove: direction => !!pageNeighbor(direction), move: movePage, recenter: fitPage },
   beforeFullscreen: () => { sourcePanel.value = false; sidebarOpen.value = false; canvasMenu.value = false },
 })
 const currentBackground = computed(() => isOverview.value ? overviewBackground.value : currentCanvas.value?.background)
