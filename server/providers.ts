@@ -710,10 +710,22 @@ async function requireResource(
 
 export async function createSpace(
   source: Source,
-  label: string,
-): Promise<void> {
-  label = name(label);
-  await requestHerdr(source, "workspace.create", { label, focus: false });
+  label?: string,
+  sourceSpaceId?: string,
+): Promise<{ spaceId: string; windowId: string }> {
+  if (sourceSpaceId) await requireResource(source, sourceSpaceId);
+  return createdWindow(await requestHerdr(source, "workspace.create", {
+    ...(label?.trim() ? { label: name(label) } : {}),
+    ...(sourceSpaceId ? { source_workspace_id: sourceSpaceId } : {}),
+    focus: false,
+  }));
+}
+
+function createdWindow(response: Record<string, unknown>): { spaceId: string; windowId: string } {
+  const tab = response.tab as { workspace_id?: unknown; tab_id?: unknown } | undefined;
+  if (typeof tab?.workspace_id !== "string" || !tab.workspace_id || typeof tab.tab_id !== "string" || !tab.tab_id)
+    throw new Error("Unexpected herdr creation response");
+  return { spaceId: tab.workspace_id, windowId: tab.tab_id };
 }
 export async function renameSpace(
   source: Source,
@@ -741,11 +753,14 @@ export async function closeSpace(
 export async function createWindow(
   source: Source,
   spaceId: string,
-  label: string,
-): Promise<void> {
-  label = name(label);
+  label?: string,
+): Promise<{ spaceId: string; windowId: string }> {
   await requireResource(source, spaceId);
-  await requestHerdr(source, "tab.create", { workspace_id: spaceId, label, focus: false });
+  return createdWindow(await requestHerdr(source, "tab.create", {
+    workspace_id: spaceId,
+    ...(label?.trim() ? { label: name(label) } : {}),
+    focus: false,
+  }));
 }
 export async function renameWindow(
   source: Source,

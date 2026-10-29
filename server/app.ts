@@ -35,6 +35,8 @@ import {
 const nameSchema = z
   .object({ name: z.string().trim().min(1).max(100) })
   .strict();
+const createWindowSchema = z.object({ name: z.string().trim().max(100).optional() }).strict();
+const createSpaceSchema = createWindowSchema.extend({ sourceSpaceId: z.string().min(1).max(100).optional() });
 const opacitySchema = z.number().finite().min(0).max(1);
 const backgroundOpacitySchema = z.object({ opacity: opacitySchema }).strict();
 const nodeListSchema = z
@@ -506,9 +508,8 @@ export function createApp(
     return c.body(image as Uint8Array<ArrayBuffer>);
   });
   app.post("/api/sources/:id/spaces", async (c) => {
-    const { name } = nameSchema.parse(await c.req.json());
-    await providers.createSpace(source(c.req.param("id")), name);
-    return c.json({ ok: true });
+    const { name, sourceSpaceId } = createSpaceSchema.parse(await c.req.json());
+    return c.json(await providers.createSpace(source(c.req.param("id")), name, sourceSpaceId), 201);
   });
   app.patch("/api/sources/:id/spaces/:space", async (c) => {
     const { name } = nameSchema.parse(await c.req.json());
@@ -524,13 +525,12 @@ export function createApp(
     return c.json({ ok: true });
   });
   app.post("/api/sources/:id/spaces/:space/windows", async (c) => {
-    const { name } = nameSchema.parse(await c.req.json());
-    await providers.createWindow(
+    const { name } = createWindowSchema.parse(await c.req.json());
+    return c.json(await providers.createWindow(
       source(c.req.param("id")),
       c.req.param("space"),
       name,
-    );
-    return c.json({ ok: true });
+    ), 201);
   });
   app.patch("/api/sources/:id/spaces/:space/windows/:window", async (c) => {
     const { name } = nameSchema.parse(await c.req.json());

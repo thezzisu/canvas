@@ -13,13 +13,14 @@ import FileNode from './components/FileNode.vue'
 import { downloadPreview, setDownloadContext } from './downloads'
 import { isTerminalNode } from './types'
 import GroupNode from './components/GroupNode.vue'
+import OverviewCreateNode from './components/OverviewCreateNode.vue'
 import BackgroundDialog from './components/BackgroundDialog.vue'
 import DirectoryDialog from './components/DirectoryDialog.vue'
 import DownloadPreviewDialog from './components/DownloadPreviewDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import { directoryRequest } from './directories'
 import { api, segment, uuid, write } from './api'
-import { clearTerminals, setContentFont } from './terminals'
+import { clearTerminals, focusWindow, setContentFont } from './terminals'
 import { buildFontPresentation, ensureContentFont } from './fonts'
 import type { GlobalSettings } from '../../shared/settings'
 import { useCanvasNavigation } from './canvas-navigation'
@@ -76,13 +77,26 @@ const canvasMenu = ref(false)
 const canvasMenuElement = ref<HTMLElement>()
 const canvasDraft = reactive({ id: '', name: '' })
 const dialogError = ref('')
-const actionDialog = ref<{ title: string; description: string; label?: string; value: string; danger?: boolean; button: string; submit: (value: string) => Promise<void> } | null>(null)
+const actionDialog = ref<{ title: string; description: string; label?: string; optional?: boolean; value: string; danger?: boolean; button: string; submit: (value: string) => Promise<void> } | null>(null)
 const addDialog = ref(false)
 const addTarget = ref('')
 const addSearch = ref('')
 const selectedWindows = ref<string[]>([])
 const windowMenu = ref<{ node: TerminalCanvasNode; name: string } | null>(null)
 const focused = ref<TerminalCanvasNode | null>(null)
+const creating = reactive(new Set<string>())
+const pendingCreatedWindow = shallowRef<{ sourceId: string; spaceId: string; windowId: string }>()
+let createdCameraReady = false
+let creationIntent = 0
+let lastOverviewInteraction: OverviewInteraction | undefined
+function cancelCreatedReveal() { creationIntent++; pendingCreatedWindow.value = undefined }
+function creationNavigation(event: Event) {
+  if (actionDialog.value && busy.value) return
+  const control = event.target instanceof Element ? event.target.closest<HTMLElement>('.overview-create') : null
+  if (control?.dataset.sourceId && creating.has(creationId(control.dataset.sourceId, control.dataset.spaceId)) &&
+      (event.type === 'pointerdown' || (event instanceof KeyboardEvent && ['Enter', ' '].includes(event.key)))) return
+  cancelCreatedReveal()
+}
 const focusedSize = reactive({ width: mobile.value ? visibleViewport.value.width : window.innerWidth - 32, height: mobile.value ? visibleViewport.value.height : window.innerHeight - 32 })
 type WindowGeometry = { ratio: number; insetX: number; insetY: number }
 const windowGeometry = reactive(new Map<string, WindowGeometry>())
@@ -111,9 +125,10 @@ const isOverview = computed(() => activeId.value === 'overview')
 const overviewPaged = ref(false)
 const paging = computed(() => isOverview.value && overviewPaged.value)
 const currentPage = shallowRef<OverviewPage>()
-const pages = computed<OverviewPage[]>(() => nodes.value.filter(node => node.type === 'terminal').map(node => ({
-  id: `${node.data.sourceId}/${node.data.windowId}`, row: `${node.data.sourceId}/${node.data.spaceId}`,
+const pages = computed<OverviewPage[]>(() => nodes.value.filter(node => node.type === 'terminal' || node.type === 'create').map(node => ({
+  id: node.type === 'terminal' ? `${node.data.sourceId}/${node.data.windowId}` : node.id, row: node.data.spaceId ? `${node.data.sourceId}/${node.data.spaceId}` : node.id,
   ...node.position, width: node.data.width, height: node.data.height,
+  ...(node.type === 'create' && !node.data.spaceId ? { y: node.position.y - 64, width: 480, height: 160 } : {}),
 })))
 const pageLayout = computed(() => paging.value ? JSON.stringify(pages.value) : '')
 const pageDirections = [
@@ -127,7 +142,8 @@ async function fitPage(animate = false) {
   resetPagingFeedback()
   const frame = graphSurface.value
   if (!paging.value || focused.value || !frame?.clientWidth || !frame.clientHeight) return
-  const page = retainPage(pages.value, currentPage.value?.id || '', currentPage.value, getViewport(), { width: frame.clientWidth, height: frame.clientHeight })
+  const initial = currentPage.value ? pages.value : pages.value.filter(page => !page.id.startsWith('create-'))
+  const page = retainPage(initial.length ? initial : pages.value, currentPage.value?.id || '', currentPage.value, getViewport(), { width: frame.clientWidth, height: frame.clientHeight })
   currentPage.value = page
   if (!page) return
   const duration = animate && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 200 : 0
@@ -143,6 +159,7 @@ function movePage(direction: PageDirection) {
   const page = pageNeighbor(direction)
   if (!page) return
   if (document.activeElement instanceof HTMLElement && document.activeElement.closest('.terminal-host')) document.activeElement.blur()
+  pendingCreatedWindow.value = undefined
   currentPage.value = page
   void fitPage(true)
 }
@@ -169,6 +186,7 @@ const overviewChanged = computed(() => overviewFiltered.value || overviewOrder.v
 const activeElement = useActiveElement({ triggerOnRemoval: true })
 const overviewInteraction = computed<OverviewInteraction | undefined>(() => {
   if (!isOverview.value) return
+  if (pendingCreatedWindow.value) return pendingCreatedWindow.value
   if (focused.value) return { sourceId: focused.value.sourceId, windowId: focused.value.windowId }
   const card = activeElement.value?.closest<HTMLElement>('.terminal-card')
   if (card?.dataset.sourceId && card.dataset.windowId) return { sourceId: card.dataset.sourceId, windowId: card.dataset.windowId }
@@ -273,19 +291,36 @@ function flowNode(node: CanvasNode): Node {
     style: { width: `${node.width}px`, height: `${node.minimized ? 30 : node.height}px` },
     draggable: !mobile.value, selectable: !mobile.value, dragHandle: '.drag-handle' }
 }
+function creationId(sourceId: string, spaceId?: string) { return spaceId ? `create-tab:${sourceId}:${spaceId}` : `create-space:${sourceId}` }
+function overviewCreateNode(source: SourceResource, spaceId: string | undefined, x: number, y: number, width: number, height: number): Node {
+  const id = creationId(source.id, spaceId)
+  return { id, type: 'create', position: { x, y }, draggable: false, selectable: false,
+    style: { width: `${width}px`, height: `${height}px` },
+    data: { sourceId: source.id, spaceId, width, height,
+      context: [source.name, source.spaces.find(space => space.id === spaceId)?.name].filter(Boolean).join(' / '),
+      available: !source.error && !['offline', 'error', 'disconnected'].includes(source.status), pending: () => creating.has(id),
+      create: () => spaceId ? createTab(source.id, spaceId) : void createResource(source.id).catch(showError) } }
+}
 function overviewNodes(): Node[] {
   const result: Node[] = []
   let y = 0
   for (const config of sources.value) {
-    const source = visibleOverview.value.find(item => item.id === config.id)
+    const source = resources.value.find(item => item.id === config.id)
     if (!source) continue
-    const width = Math.max(528, ...source.spaces.map(space => 32 + space.windows.reduce((sum, window) => sum + windowSize({ sourceId: source.id, windowId: window.id }).width + 16, 0)))
-    const count = source.spaces.reduce((sum, space) => sum + space.windows.length, 0)
-    const rows = source.spaces.map(space => ({ space, height: space.windows.length ? 54 + Math.max(...space.windows.map(window => windowHeight({ sourceId: source.id, windowId: window.id, ...windowSize({ sourceId: source.id, windowId: window.id }) }))) : 66 }))
-    const height = Math.max(132, 78 + rows.reduce((sum, row) => sum + row.height, 0))
+    const visible = visibleOverview.value.find(item => item.id === config.id)
+    const rows = source.spaces.map(space => {
+      const windows = visible?.spaces.find(item => item.id === space.id)?.windows || []
+      const last = windows.at(-1)
+      const cardWidth = last ? windowSize({ sourceId: source.id, windowId: last.id }).width : 480
+      const cardHeight = windows.length ? Math.max(...windows.map(window => windowHeight({ sourceId: source.id, windowId: window.id, ...windowSize({ sourceId: source.id, windowId: window.id }) }))) : 302
+      return { space: { ...space, windows }, cardWidth, cardHeight, height: 54 + cardHeight }
+    })
+    const width = Math.max(528, ...rows.map(row => 48 + row.cardWidth + row.space.windows.reduce((sum, window) => sum + windowSize({ sourceId: source.id, windowId: window.id }).width + 16, 0)))
+    const count = rows.reduce((sum, row) => sum + row.space.windows.length, 0)
+    const height = 132 + rows.reduce((sum, row) => sum + row.height, 0)
     result.push({ id: `source:${source.id}`, type: 'group', position: { x: 0, y }, data: { kind: 'source', name: config.name, subtitle: config.transport === 'local' ? 'LOCAL' : 'SSH', count, width, height }, draggable: false, selectable: false, style: { width: `${width}px`, height: `${height}px`, zIndex: '-1', pointerEvents: 'none' } })
     let rowY = y + 68
-    for (const { space, height: rowHeight } of rows) {
+    for (const { space, height: rowHeight, cardWidth, cardHeight } of rows) {
       result.push({ id: `space:${source.id}:${space.id}`, type: 'group', position: { x: 24, y: rowY }, data: { kind: 'space', name: space.name, count: space.windows.length }, draggable: false, selectable: false, style: { width: `${width - 48}px`, pointerEvents: 'none' } })
       let windowX = 24
       for (const window of space.windows) {
@@ -293,8 +328,10 @@ function overviewNodes(): Node[] {
         result.push(terminalFlowNode({ type: 'terminal', id: `window:${source.id}:${space.id}:${window.id}`, ...target, spaceId: space.id, x: windowX, y: rowY + 34, ...windowSize(target) }, true))
         windowX += windowSize(target).width + 16
       }
+      result.push(overviewCreateNode(source, space.id, windowX, rowY + 34, cardWidth, cardHeight))
       rowY += rowHeight
     }
+    result.push(overviewCreateNode(source, undefined, 24, rowY + 4, width - 48, 32))
     y += height + 48
   }
   return result
@@ -415,11 +452,27 @@ function focusNewNote(attempt = 0) {
   }
   if (attempt < 30) requestAnimationFrame(() => focusNewNote(attempt + 1))
 }
+function focusCreatedWindow(attempt = 0, target = pendingCreatedWindow.value) {
+  if (!target || target !== pendingCreatedWindow.value || !isOverview.value || !createdCameraReady) return
+  if (!modalOpen.value) {
+    const card = document.querySelector<HTMLElement>(`[data-source-id="${target.sourceId}"][data-window-id="${target.windowId}"].terminal-card`)
+    if (card?.checkVisibility() && (mobile.value || focusWindow(target.sourceId, target.spaceId, target.windowId))) {
+      if (mobile.value) card.focus({ preventScroll: true })
+      void nextTick().then(() => {
+        if (pendingCreatedWindow.value !== target) return
+        if (card.contains(document.activeElement)) pendingCreatedWindow.value = undefined
+        else if (attempt < 30) requestAnimationFrame(() => focusCreatedWindow(attempt + 1, target))
+      })
+      return
+    }
+  }
+  if (attempt < 30) requestAnimationFrame(() => focusCreatedWindow(attempt + 1, target))
+}
 function nodesInitialized() {
   if (pendingViewport === activeId.value) void restoreViewport()
   // VueFlow mounts new node components after its own node-store update.
   // Waiting for that mount keeps focus from falling back to the document body.
-  void nextTick().then(() => focusNewNote())
+  void nextTick().then(() => { focusNewNote(); focusCreatedWindow() })
 }
 function saveViewport() {
   if (paging.value || pendingViewport || (mobile.value && focused.value)) return
@@ -490,9 +543,9 @@ async function logout() {
 }
 function unauthorized() { void exitFullscreen(); stopStateEvents(); for (const timer of saveTimers.values()) clearTimeout(timer); saveTimers.clear(); pendingLayouts.clear(); clearNoteEdits(); authenticated.value = false; focused.value = null; settingsDialog.value = false; settings.value = null; fontRevision++; fontSignature = ''; fontLoading.value = false; latestState = undefined; clearTerminals() }
 watch(pageLayout, async () => { if (paging.value) { await nextTick(); await fitPage() } })
-watch(overviewInteraction, () => { if (isOverview.value) rebuildNodes() })
+watch(overviewInteraction, value => { if (value) lastOverviewInteraction = value; if (isOverview.value) rebuildNodes() })
 watch([overviewSelected, overviewOrder], async () => { if (isOverview.value) { rebuildNodes(); await nextTick(); if (paging.value) await fitPage(); else void fitView({ padding: .14, maxZoom: 1, duration: 150 }) } })
-watch(activeId, async () => { overviewMenuOpen.value = false; layoutGesture = ''; focused.value = null; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
+watch(activeId, async () => { cancelCreatedReveal(); lastOverviewInteraction = undefined; overviewMenuOpen.value = false; layoutGesture = ''; focused.value = null; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
 function switchCanvas(id: string) { sidebarOpen.value = false; void flushNotes(activeId.value); saveViewport(); activeId.value = id }
 function backgroundSaved(_updated: Canvas) { void syncState().catch(showError) }
 function openSettings() { sidebarOpen.value = false; canvasMenu.value = false; sourcePanel.value = false; settingsDialog.value = true }
@@ -552,24 +605,60 @@ function deleteSource(source: Source) {
   actionDialog.value = { title: `移除「${source.name}」`, description: '移除连接，保留运行中的会话。', value: '', danger: true, button: '移除连接', submit: async () => { await write(`/api/sources/${segment(source.id)}`, 'DELETE'); await syncState(); await refreshResources() } }
 }
 function basePath(sourceId: string) { return `/api/sources/${segment(sourceId)}` }
+async function createResource(sourceId: string, spaceId?: string, name?: string) {
+  const id = creationId(sourceId, spaceId)
+  if (creating.has(id)) return
+  creating.add(id)
+  cancelCreatedReveal()
+  const intent = creationIntent
+  const origin = activeId.value, pageBefore = currentPage.value?.id
+  const context = overviewInteraction.value || lastOverviewInteraction
+  const reference = context?.sourceId === sourceId ? context.windowId : nodes.value.find(node => `${node.data.sourceId}/${node.data.windowId}` === currentPage.value?.id && node.data.sourceId === sourceId)?.data.windowId
+  const sourceSpaceId = reference ? resources.value.find(source => source.id === sourceId)?.spaces.find(space => space.windows.some(window => window.id === reference))?.id : undefined
+  try {
+    const created = await write<{ spaceId: string; windowId: string }>(`${basePath(sourceId)}/spaces${spaceId ? `/${segment(spaceId)}/windows` : ''}`, 'POST', { ...(name?.trim() ? { name: name.trim() } : {}), ...(!spaceId && sourceSpaceId ? { sourceSpaceId } : {}) })
+    const target = { sourceId, ...created }
+    const reveal = intent === creationIntent && origin === 'overview' && isOverview.value && currentPage.value?.id === pageBefore && !focused.value
+    if (reveal) { createdCameraReady = false; pendingCreatedWindow.value = target }
+    await refreshResources()
+    if (!reveal || intent !== creationIntent || pendingCreatedWindow.value !== target || !isOverview.value) return
+    rebuildNodes()
+    await nextTick()
+    const page = pages.value.find(page => page.id === `${sourceId}/${created.windowId}`)
+    if (page && graphSurface.value) {
+      currentPage.value = page
+      if (paging.value) await fitPage(true)
+      else void setViewport(pageViewport(page, { width: graphSurface.value.clientWidth, height: graphSurface.value.clientHeight }), { duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 200, interpolate: 'linear' })
+    }
+    createdCameraReady = true
+    focusCreatedWindow()
+  } finally { creating.delete(id) }
+}
+function createTab(sourceId: string, spaceId: string) {
+  if (creating.has(creationId(sourceId, spaceId))) return
+  const source = resources.value.find(item => item.id === sourceId)
+  actionDialog.value = { title: '新建 Tab', description: [source?.name, source?.spaces.find(space => space.id === spaceId)?.name].filter(Boolean).join(' / '), label: '名称', optional: true, value: '', button: '新建 Tab', submit: name => createResource(sourceId, spaceId, name) }
+}
 function spaceAction(source: SourceResource, spaceId: string | undefined, operation: 'create' | 'rename' | 'close') {
+  if (operation === 'create') { void createResource(source.id).catch(showError); return }
   const space = source.spaces.find(item => item.id === spaceId)
   const noun = 'space'
-  const actionName = operation === 'create' ? '新建' : operation === 'rename' ? '重命名' : '关闭'
-  actionDialog.value = { title: `${actionName} ${noun}`, description: operation === 'close' ? `将关闭「${space?.name}」及其中运行的窗口。` : source.name, label: operation === 'close' ? undefined : '名称', value: operation === 'rename' ? space?.name || '' : '', danger: operation === 'close', button: `${actionName} ${noun}`, submit: async name => { await write(`${basePath(source.id)}/spaces${spaceId ? `/${segment(spaceId)}` : ''}`, operation === 'create' ? 'POST' : operation === 'rename' ? 'PATCH' : 'DELETE', operation === 'close' ? undefined : { name }); await refreshResources() } }
+  const actionName = operation === 'rename' ? '重命名' : '关闭'
+  actionDialog.value = { title: `${actionName} ${noun}`, description: operation === 'close' ? `将关闭「${space?.name}」及其中运行的窗口。` : source.name, label: operation === 'close' ? undefined : '名称', value: operation === 'rename' ? space?.name || '' : '', danger: operation === 'close', button: `${actionName} ${noun}`, submit: async name => { await write(`${basePath(source.id)}/spaces${spaceId ? `/${segment(spaceId)}` : ''}`, operation === 'rename' ? 'PATCH' : 'DELETE', operation === 'close' ? undefined : { name }); await refreshResources() } }
 }
 function windowAction(node: TerminalCanvasNode, operation: 'create' | 'rename' | 'close') {
+  if (operation === 'create') { createTab(node.sourceId, node.spaceId); return }
   const { source, space, window } = resourceFor(node)
-  const actionName = operation === 'create' ? '新建' : operation === 'rename' ? '重命名' : '关闭'
+  const actionName = operation === 'rename' ? '重命名' : '关闭'
   windowMenu.value = null
-  actionDialog.value = { title: `${actionName}窗口`, description: operation === 'close' ? `将结束「${window?.name}」及其所有 pane 中的进程。` : `${source?.name || ''} / ${space?.name || ''}`, label: operation === 'close' ? undefined : '窗口名称', value: operation === 'rename' ? window?.name || '' : '', danger: operation === 'close', button: `${actionName}窗口`, submit: async name => { await write(`${basePath(node.sourceId)}/spaces/${segment(node.spaceId)}/windows${operation === 'create' ? '' : `/${segment(node.windowId)}`}`, operation === 'create' ? 'POST' : operation === 'rename' ? 'PATCH' : 'DELETE', operation === 'close' ? undefined : { name }); await refreshResources() } }
+  actionDialog.value = { title: `${actionName}窗口`, description: operation === 'close' ? `将结束「${window?.name}」及其所有 pane 中的进程。` : `${source?.name || ''} / ${space?.name || ''}`, label: operation === 'close' ? undefined : '窗口名称', value: operation === 'rename' ? window?.name || '' : '', danger: operation === 'close', button: `${actionName}窗口`, submit: async name => { await write(`${basePath(node.sourceId)}/spaces/${segment(node.spaceId)}/windows/${segment(node.windowId)}`, operation === 'rename' ? 'PATCH' : 'DELETE', operation === 'close' ? undefined : { name }); await refreshResources() } }
 }
 async function submitAction() {
   const dialog = actionDialog.value
-  if (!dialog) return
+  if (!dialog || busy.value) return
   busy.value = true; dialogError.value = ''
-  try { await dialog.submit(dialog.value.trim()); actionDialog.value = null }
-  catch (reason) { dialogError.value = reason instanceof Error ? reason.message : String(reason) }
+  try { await dialog.submit(dialog.value.trim()); if (actionDialog.value === dialog) actionDialog.value = null }
+  catch (reason) { if (actionDialog.value === dialog) dialogError.value = reason instanceof Error ? reason.message : String(reason) }
   finally { busy.value = false }
 }
 watch(actionDialog, () => { dialogError.value = '' })
@@ -774,7 +863,7 @@ function keydown(event: KeyboardEvent) {
     if (sidebarOpen.value) sidebarOpen.value = false
     else if (canvasMenu.value) { canvasMenu.value = false; canvasMenuElement.value?.querySelector<HTMLButtonElement>('.canvas-menu-trigger')?.focus() }
     else if (windowMenu.value) windowMenu.value = null
-    else if (actionDialog.value) actionDialog.value = null
+    else if (actionDialog.value) { if (!busy.value) actionDialog.value = null }
     else if (sourceDialog.value) sourceDialog.value = false
     else if (canvasDialog.value) canvasDialog.value = false
     else if (addDialog.value) addDialog.value = false
@@ -847,6 +936,7 @@ setDownloadContext(resource => {
   return canvas && anchor ? { canvasId: canvas.id, anchorId: anchor.id } : undefined
 })
 onMounted(async () => {
+  for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.addEventListener(event, creationNavigation, { capture: true, passive: true })
   window.addEventListener('canvas:unauthorized', unauthorized)
   window.addEventListener('keydown', keydown)
   window.addEventListener('resize', windowResize)
@@ -857,7 +947,7 @@ onMounted(async () => {
   finally { ready.value = true }
   refreshTimer = setInterval(() => { void refreshResources(true) }, 2000)
 })
-onBeforeUnmount(() => { fontRevision++; focusObserver?.disconnect(); cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('pointerdown', outsideCanvasMenu) })
+onBeforeUnmount(() => { for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; focusObserver?.disconnect(); cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('pointerdown', outsideCanvasMenu) })
 </script>
 
 <template>
@@ -905,7 +995,7 @@ onBeforeUnmount(() => { fontRevision++; focusObserver?.disconnect(); cameraObser
       </header>
       <div ref="graphSurface" class="graph-wrap" :class="{ 'has-background': currentBackground, paged: paging }" :data-page-window="paging ? currentPage?.id : undefined" @mousedown.capture="guardPageDrag" @wheel.capture="canvasWheel" @touchstart.capture="canvasTouchStart" @touchmove.capture="canvasTouchMove" @touchend.capture="canvasTouchEnd" @touchcancel.capture="canvasTouchCancel" @click.capture="canvasClick">
         <img v-if="currentBackground" class="canvas-background" :src="currentBackground.url" :style="{ opacity: currentBackground.opacity }" alt="" aria-hidden="true" />
-        <VueFlow :snap-to-grid="!isOverview && !!currentCanvas?.snapToGrid" :snap-grid="[24, 24]" v-if="nodes.length && !focused" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && !mobile" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><MiniMap v-if="!mobile && !paging" :pannable="true" :zoomable="true" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? '#bba071' : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
+        <VueFlow :snap-to-grid="!isOverview && !!currentCanvas?.snapToGrid" :snap-grid="[24, 24]" v-if="nodes.length && !focused" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && !mobile" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><template #node-create="nodeProps"><OverviewCreateNode v-bind="nodeProps" /></template><MiniMap v-if="!mobile && !paging" :pannable="true" :zoomable="true" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? '#bba071' : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
         <div v-if="!nodes.length && isOverview" class="empty-state"><Icon name="server" :size="32" /><h2>{{ windowCount && overviewFiltered ? '没有匹配的窗口' : sources.length ? '暂无窗口' : '暂无连接' }}</h2><button v-if="windowCount && overviewFiltered" class="button subtle" @click="overviewSelected = [...overviewStatuses]">清除筛选</button><button v-else class="button primary" @click="sources.length ? sourcePanel = true : openSource()"><Icon :name="sources.length ? 'server' : 'plus'" :size="17" />{{ sources.length ? '连接' : '添加连接' }}</button></div>
         <div v-if="!nodes.length && !isOverview" class="empty-state"><Icon name="canvas" :size="32" /><h2>空画布</h2><button class="button primary" @click="openAdd()"><Icon name="plus" :size="17" />加入窗口</button></div>
         <div v-if="!focused" class="canvas-toolbar"><button :title="canvasFullscreen ? '退出全屏画布' : '全屏画布'" :aria-label="canvasFullscreen ? '退出全屏画布' : '全屏画布'" :aria-pressed="canvasFullscreen" @click="toggleFullscreen"><Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button><button v-if="isOverview" title="逐窗浏览" aria-label="逐窗浏览" :aria-pressed="overviewPaged" @click="togglePaging"><Icon name="pages" :size="17" /></button><button v-if="!isOverview" title="网格吸附" aria-label="网格吸附" :aria-pressed="!!currentCanvas?.snapToGrid" @click="toggleSnap"><Icon name="grid" :size="15" /></button><template v-if="paging"><button v-for="item in pageDirections" :key="item.direction" :title="item.label" :aria-label="item.label" :disabled="!pageNeighbor(item.direction)" @pointerdown.prevent @click="movePage(item.direction)"><Icon :name="item.icon" :size="16" :style="{ transform: item.rotation }" /></button></template><button v-if="!paging" title="缩小" aria-label="缩小" @click="zoomOut({ duration: 150 })"><Icon name="minus" :size="17" /></button><button :title="paging ? '居中窗口' : '适合画布'" :aria-label="paging ? '居中窗口' : '适合画布'" @click="fitCanvas"><Icon name="fit" :size="17" /></button><button v-if="!paging" title="放大" aria-label="放大" @click="zoomIn({ duration: 150 })"><Icon name="plus" :size="17" /></button></div>
@@ -920,7 +1010,7 @@ onBeforeUnmount(() => { fontRevision++; focusObserver?.disconnect(); cameraObser
     <div v-if="modalOpen && !backgroundCanvas && !settingsDialog" class="modal-backdrop" @click.self="!busy && (sourceDialog = false, canvasDialog = false, actionDialog = null, addDialog = false, windowMenu = null)">
       <section v-if="sourceDialog" class="modal source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title"><header><div><h2 id="source-title">{{ sourceDraft.id ? '编辑连接' : '添加连接' }}</h2></div><button class="icon-button" aria-label="关闭对话框" @click="sourceDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitSource"><label>连接名称<input v-model="sourceDraft.name" name="sourceName" required placeholder="例如：开发机器" /></label><div class="segmented-control"><button type="button" :class="{ selected: sourceDraft.transport === 'local' }" @click="sourceDraft.transport = 'local'"><Icon name="server" :size="15" />本机</button><button type="button" :class="{ selected: sourceDraft.transport === 'ssh' }" @click="sourceDraft.transport = 'ssh'"><Icon name="globe" :size="15" />远程 SSH</button></div><label v-if="sourceDraft.transport === 'ssh'">SSH 地址<input v-model="sourceDraft.target" name="target" placeholder="ssh://user@hostname:22" :required="sourceDraft.transport === 'ssh'" /></label><label>Session <span class="optional">可选</span><input v-model="sourceDraft.herdrSession" name="herdrSession" placeholder="default" /></label><details><summary>高级设置</summary><template v-if="sourceDraft.transport === 'ssh'"><label>SSH 私钥路径（Server） <span class="optional">可选</span><input v-model="sourceDraft.sshIdentityFile" name="sshIdentityFile" placeholder="/path/to/id_ed25519" /></label><label>SSH known_hosts 路径（Server） <span class="optional">可选</span><input v-model="sourceDraft.sshKnownHostsFile" name="sshKnownHostsFile" placeholder="/path/to/known_hosts" /></label></template><label>Socket 路径 <span class="optional">可选</span><input v-model="sourceDraft.herdrSocket" name="herdrSocket" placeholder="/path/to/herdr.sock" /></label></details><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="sourceDialog = false">取消</button><button class="button primary" type="submit" :disabled="busy"><span v-if="busy" class="spinner" />{{ busy ? '保存中…' : '保存' }}</button></footer></form></section>
       <section v-else-if="canvasDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="canvas-title"><header><div><h2 id="canvas-title">{{ canvasDraft.id ? '重命名画布' : '新建画布' }}</h2></div><button class="icon-button" aria-label="关闭对话框" @click="canvasDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitCanvas"><label>画布名称<input v-model="canvasDraft.name" name="canvasName" required autofocus placeholder="例如：日常开发" maxlength="80" /></label><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="canvasDialog = false">取消</button><button class="button primary" :disabled="busy" type="submit">{{ canvasDraft.id ? '保存' : '创建画布' }}</button></footer></form></section>
-      <section v-else-if="actionDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="action-title"><header><h2 id="action-title">{{ actionDialog.title }}</h2><button class="icon-button" aria-label="关闭对话框" @click="actionDialog = null"><Icon name="close" /></button></header><p v-if="actionDialog.description">{{ actionDialog.description }}</p><form @submit.prevent="submitAction"><label v-if="actionDialog.label">{{ actionDialog.label }}<input v-model="actionDialog.value" name="resourceName" required autofocus maxlength="120" /></label><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="actionDialog = null">取消</button><button class="button" :class="actionDialog.danger ? 'danger' : 'primary'" :disabled="busy" type="submit">{{ actionDialog.button }}</button></footer></form></section>
+      <section v-else-if="actionDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="action-title"><header><h2 id="action-title">{{ actionDialog.title }}</h2><button class="icon-button" aria-label="关闭对话框" :disabled="busy" @click="actionDialog = null"><Icon name="close" /></button></header><p v-if="actionDialog.description">{{ actionDialog.description }}</p><form @submit.prevent="submitAction"><label v-if="actionDialog.label">{{ actionDialog.label }}<input v-model="actionDialog.value" name="resourceName" :required="!actionDialog.optional" :placeholder="actionDialog.optional ? '自动命名' : undefined" autofocus maxlength="100" /></label><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" :disabled="busy" @click="actionDialog = null">取消</button><button class="button" :class="actionDialog.danger ? 'danger' : 'primary'" :disabled="busy" type="submit">{{ actionDialog.button }}</button></footer></form></section>
       <section v-else-if="addDialog" class="modal add-modal" role="dialog" aria-modal="true" aria-labelledby="add-title"><header><div><h2 id="add-title">加入窗口</h2></div><button class="icon-button" aria-label="关闭对话框" @click="addDialog = false"><Icon name="close" /></button></header><label>目标画布<select v-model="addTarget"><option v-for="canvas in canvases" :key="canvas.id" :value="canvas.id">{{ canvas.name }}</option><option value="">新建「我的画布」</option></select></label><div class="search-field"><Icon name="search" :size="16" /><input v-model="addSearch" aria-label="搜索窗口" placeholder="搜索连接、Space 或窗口…" /></div><div class="window-picker"><button v-for="item in filteredWindows" :key="item.key" class="window-pick" :class="{ selected: selectedWindows.includes(item.key) }" @click="toggleSelection(item.key)"><span class="checkbox"><Icon v-if="selectedWindows.includes(item.key)" name="check" :size="12" /></span><span><strong><i class="program-dot" :style="{ '--program-color': statusColor(item.window.status) }" :title="statusLabel(item.window.status)" />{{ item.window.name }}</strong><small>{{ item.source.name }} / {{ item.space.name }}</small></span></button><p v-if="!filteredWindows.length" class="panel-empty">{{ windowCount ? '没有匹配的窗口' : '暂无可用窗口' }}</p></div><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><span class="selection-count">已选 {{ selectedWindows.length }} 个窗口</span><button class="button primary" :disabled="busy || !selectedWindows.length" @click="submitAdd">加入画布<Icon name="arrow" :size="16" /></button></footer></section>
       <section v-else-if="windowMenu" class="modal window-menu" role="dialog" aria-modal="true" aria-labelledby="window-title"><header><h2 id="window-title">{{ windowMenu.name }}</h2><button class="icon-button" aria-label="关闭对话框" @click="windowMenu = null"><Icon name="close" /></button></header><button @click="openAdd(windowMenu.node); windowMenu = null"><Icon name="plus" />加入其他画布</button><button @click="windowAction(windowMenu.node, 'rename')"><Icon name="edit" />重命名窗口</button><button class="danger-text" @click="windowAction(windowMenu.node, 'close')"><Icon name="trash" />关闭窗口</button></section>
     </div>

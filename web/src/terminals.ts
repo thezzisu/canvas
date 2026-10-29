@@ -135,6 +135,12 @@ function focusTerminal(session: Session, keyboard?: boolean) {
   session.term.focus()
   setState(session, { ...session.state, keyboardRequested: session.keyboardRequested })
 }
+export function focusWindow(sourceId: string, spaceId: string, windowId: string): boolean {
+  const session = sessions.get(key(sourceId, spaceId, windowId))
+  if (!session?.host?.isConnected || !interactive(session)) return false
+  focusTerminal(session)
+  return session.term.element?.contains(document.activeElement) === true
+}
 function schedulePresentation(session: Session) {
   if (session.presentationFrame !== undefined) return
   session.presentationFrame = requestAnimationFrame(() => {

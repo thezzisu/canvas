@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HerdrClientTransport } from "./herdr/client.ts";
+import { herdrApiRequest } from "./herdr/api.ts";
 import headless from "@xterm/headless";
 import {
   createSpace,
@@ -134,12 +135,32 @@ test("native herdr transport works with an unmodified server: split rendering, k
       async () => (await listResources(source)).status === "online",
       "isolated herdr server did not start",
     );
-    await createSpace(source, "Synthetic");
+    const created = await createSpace(source, "Synthetic");
     let space = (await listResources(source)).spaces.find(
       (s) => s.name === "Synthetic",
     )!;
     assert.ok(space);
     const window = space.windows[0]!;
+    assert.deepEqual(created, { spaceId: space.id, windowId: window.id });
+    const focusedBeforeCreation = snapshot().focused_tab_id;
+    const automaticTab = await createWindow(source, space.id);
+    const automaticWindow = (await listResources(source)).spaces.find(s => s.id === space.id)!.windows.find(w => w.id === automaticTab.windowId)!;
+    assert.equal(automaticWindow.name, "2");
+    assert.equal(automaticTab.spaceId, space.id);
+    assert.equal(snapshot().focused_tab_id, focusedBeforeCreation, "creating a tab must not move native focus");
+    await closeWindow(source, automaticTab.spaceId, automaticTab.windowId);
+    const inheritedCwd = join(root, "inherited-directory");
+    mkdirSync(inheritedCwd);
+    const parent = await herdrApiRequest(source.herdrSocket!, "workspace.create", { cwd: inheritedCwd, focus: false });
+    const parentId = (parent.tab as { workspace_id: string }).workspace_id;
+    const automaticSpace = await createSpace(source, "  ", parentId);
+    const newSpace = (await listResources(source)).spaces.find(s => s.id === automaticSpace.spaceId)!;
+    assert.equal(newSpace.name, "inherited-directory", "native workspace naming follows its inherited directory");
+    assert.equal(newSpace.windows[0]!.id, automaticSpace.windowId);
+    assert.equal(snapshot().panes.find((p: { tab_id: string }) => p.tab_id === automaticSpace.windowId).cwd, inheritedCwd);
+    assert.equal(snapshot().focused_tab_id, focusedBeforeCreation, "creating a space must not move native focus");
+    await closeSpace(source, automaticSpace.spaceId);
+    await closeSpace(source, parentId);
     let data = snapshot();
     const pane = data.panes.find(
       (p: { tab_id: string }) => p.tab_id === window.id,

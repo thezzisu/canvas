@@ -91,7 +91,7 @@ export function useCanvasNavigation(options: {
       return
     }
     editorScroll = undefined
-    if (!gesture && !target?.closest('.terminal-preview-button') &&
+    if (!gesture && !target?.closest('.terminal-preview-button, .overview-create') &&
         target?.closest('button, a, input, select, .file-preview, .canvas-toolbar, .vue-flow__minimap')) return
     if (!gesture) {
       moved = false
@@ -181,7 +181,7 @@ export function useCanvasNavigation(options: {
   }
   function click(event: MouseEvent) {
     const target = event.target instanceof Element ? event.target : undefined
-    if (!target?.closest('.terminal-preview-button') && target?.closest('button, a, input, select, .canvas-toolbar')) return
+    if (!target?.closest('.terminal-preview-button, .overview-create') && target?.closest('button, a, input, select, .canvas-toolbar')) return
     if (options.mobile() && event.detail > 0 && lastTouch && performance.now() < suppressClickUntil &&
         Math.hypot(event.clientX - lastTouch.x, event.clientY - lastTouch.y) < 24) {
       event.preventDefault()

@@ -6,7 +6,9 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverHerdrPython, herdrApiRequest, herdrSocketPaths, localHerdrSockets, parseHerdrSockets, validateHerdrLocation } from "./herdr/api.ts";
-import type { Source } from "./state.ts";
+import { createApp } from "./app.ts";
+import { Store, type Source } from "./state.ts";
+import type { TerminalManager } from "./terminals.ts";
 
 test("herdr socket paths follow release session/XDG rules with explicit overrides", () => {
   const environment = { HOME: "/fixture/user", XDG_CONFIG_HOME: "/fixture/config" };
@@ -78,12 +80,17 @@ test("herdr provider discovers sockets and performs resource CRUD without execut
     panes: [{ tab_id: "w1:t1", pane_id: "w1:p1", agent_status: "working", focused: true },
       { tab_id: "w1:t1", pane_id: "w1:p2", agent_status: "done", focused: false }],
   };
+  let malformedCreation = false;
   const api = createServer(socket => {
     clients.add(socket); socket.on("close", () => clients.delete(socket)); socket.on("error", () => {});
     let input = ""; socket.on("data", chunk => {
       input += chunk.toString(); if (!input.includes("\n")) return;
       const request = JSON.parse(input.split("\n")[0]!); requests.push({ method: request.method, params: request.params });
-      socket.end(JSON.stringify({ id: request.id, result: request.method === "session.snapshot" ? { type: "session_snapshot", snapshot } : { type: "ok" } }) + "\n");
+      const result = request.method === "session.snapshot" ? { type: "session_snapshot", snapshot }
+        : request.method === "workspace.create" && !malformedCreation ? { type: "workspace_created", tab: { workspace_id: "w2", tab_id: "w2:t1" } }
+        : request.method === "tab.create" && !malformedCreation ? { type: "tab_created", tab: { workspace_id: request.params.workspace_id, tab_id: `${request.params.workspace_id}:t3` } }
+        : { type: "ok" };
+      socket.end(JSON.stringify({ id: request.id, result }) + "\n");
     });
   });
   const endpoint = createServer(socket => { clients.add(socket); socket.on("close", () => clients.delete(socket)); socket.on("error", () => {}); });
@@ -105,10 +112,49 @@ test("herdr provider discovers sockets and performs resource CRUD without execut
   const handle = await openTerminal(source, "w1", "w1:t1");
   assert.equal(typeof handle.connect, "function"); await handle.cleanup();
   const label = "name ' ; $() 中文";
-  await createSpace(source, label); await renameSpace(source, "w1", label); await createWindow(source, "w1", label); await renameWindow(source, "w1", "w1:t1", label); await closeWindow(source, "w1", "w1:t1"); await closeSpace(source, "w1");
+  assert.deepEqual(await createSpace(source, label), { spaceId: "w2", windowId: "w2:t1" });
+  await renameSpace(source, "w1", label);
+  assert.deepEqual(await createWindow(source, "w1", label), { spaceId: "w1", windowId: "w1:t3" });
+  await renameWindow(source, "w1", "w1:t1", label); await closeWindow(source, "w1", "w1:t1"); await closeSpace(source, "w1");
   assert.deepEqual(requests.filter(request => request.method !== "session.snapshot"), [
     { method: "workspace.create", params: { label, focus: false } }, { method: "workspace.rename", params: { workspace_id: "w1", label } },
     { method: "tab.create", params: { workspace_id: "w1", label, focus: false } }, { method: "tab.rename", params: { tab_id: "w1:t1", label } },
     { method: "tab.close", params: { tab_id: "w1:t1" } }, { method: "workspace.close", params: { workspace_id: "w1" } },
   ]);
+  await createSpace(source);
+  assert.deepEqual(requests.at(-1), { method: "workspace.create", params: { focus: false } });
+  await createSpace(source, "  ", "w1");
+  assert.deepEqual(requests.at(-1), { method: "workspace.create", params: { source_workspace_id: "w1", focus: false } });
+  await createWindow(source, "w1", "  ");
+  assert.deepEqual(requests.at(-1), { method: "tab.create", params: { workspace_id: "w1", focus: false } });
+  await assert.rejects(createSpace(source, undefined, "missing"), /Space no longer exists/u);
+  assert.equal(requests.at(-1)?.method, "session.snapshot", "a stale parent must not create in another workspace");
+  malformedCreation = true;
+  await assert.rejects(createWindow(source, "w1"), /Unexpected herdr creation response/u);
+  malformedCreation = false;
+
+  const store = new Store(join(root, "state.db"));
+  try {
+    store.put("source", source);
+    store.addSession("creation-fixture");
+    const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {} as TerminalManager);
+    const call = (path: string, method: string, body: unknown) => app.request(`http://localhost/api/sources/${source.id}/${path}`, {
+      method,
+      headers: { Host: "localhost", Origin: "http://localhost", Cookie: "canvas_session=creation-fixture", "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    for (const body of [{}, { name: "  ", sourceSpaceId: "w1" }]) {
+      const response = await call("spaces", "POST", body);
+      assert.equal(response.status, 201);
+      assert.deepEqual(await response.json(), { spaceId: "w2", windowId: "w2:t1" });
+      assert.equal(Object.hasOwn(requests.at(-1)!.params, "label"), false, "blank names preserve native automatic naming");
+    }
+    const createdTab = await call("spaces/w1/windows", "POST", {});
+    assert.equal(createdTab.status, 201);
+    assert.deepEqual(await createdTab.json(), { spaceId: "w1", windowId: "w1:t3" });
+    for (const path of ["spaces/w1", "spaces/w1/windows/w1:t1"])
+      for (const body of [{}, { name: "  " }]) assert.equal((await call(path, "PATCH", body)).status, 400, "renaming still requires a name");
+    assert.equal((await call("spaces", "POST", { sourceSpaceId: "missing" })).status, 400);
+    assert.equal((await call("spaces/w1/windows", "POST", { name: 42 })).status, 400);
+  } finally { store.close(); }
 });

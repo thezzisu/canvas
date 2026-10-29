@@ -42,6 +42,9 @@ built-in client connects through native sockets, forwarded over SSH remotely.
   Enable “逐窗浏览” in the bottom toolbar to center one window at a time; scroll or swipe horizontally between windows and vertically
   between spaces. Scrolling follows immediately, springs back below the threshold,
   and snaps one window beyond it. This mode fits windows and locks manual zoom.
+  Each space ends with a new-tab card; each connection ends with a new-space row.
+  Both are reachable while paging. Tab names are optional; spaces open directly.
+  Creation controls remain available when status filters hide windows.
 - **Custom canvases:** add windows from the overview, arrange cards, and add notes
   or files. Every canvas supports its own background image, stored unchanged.
 - **Windows:** references share one native terminal and one card size. Maximizing
