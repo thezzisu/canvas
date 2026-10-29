@@ -38,7 +38,7 @@ export function useCanvasNavigation(options: {
     const target = event.target instanceof Element ? event.target : undefined
     // A fresh touch is an independent tap, even immediately after panning.
     if (!gesture && event.touches.length === 1) suppressClickUntil = 0
-    const editor = target?.closest<HTMLElement>('.note-content, .file-preview-text')
+    const editor = target?.closest<HTMLElement>('.note-content, .file-text-preview')
     if (!gesture && editor && event.touches.length === 1) {
       const first = event.touches[0]!
       editorScroll = { element: editor, point: { x: first.clientX, y: first.clientY }, left: editor.scrollLeft, top: editor.scrollTop }
@@ -106,7 +106,7 @@ export function useCanvasNavigation(options: {
   function wheel(event: WheelEvent) {
     if (options.blocked() || !surface.value) return
     // Editors retain ordinary text scrolling; pinch remains a canvas gesture.
-    if (!event.ctrlKey && (event.target as HTMLElement)?.closest('.note-content, .file-preview, .vue-flow__minimap, .canvas-toolbar')) return
+    if (!event.ctrlKey && (event.target as HTMLElement)?.closest('.note-content, .file-preview, .file-text-preview, .vue-flow__minimap, .canvas-toolbar')) return
     if (terminalConsumesWheel(event)) return
     event.preventDefault()
     event.stopPropagation()

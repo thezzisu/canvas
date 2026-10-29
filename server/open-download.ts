@@ -16,23 +16,14 @@ const CONTEXT_TIMEOUT = 10_000;
 const STAGED_LIFETIME = 60 * 60_000;
 const rejected = Buffer.from('{"ok":false}\n');
 
-type DownloadState = "offered" | "accepted" | "transferring" | "completed" | "cancelled" | "failed";
-type DownloadReason = "cancelled" | "not-started" | "timed-out" | "disconnected" | "invalid-transfer" | "not-attached";
+type DownloadState = "offered" | "accepted" | "transferring";
+type DownloadReason = "cancelled" | "timed-out" | "disconnected" | "invalid-transfer" | "not-attached";
 export interface DownloadContext { canvasId?: string; anchorId?: string }
 interface Upload {
   write(chunk: Buffer): Promise<void>;
   complete(target: { canvasId?: string; anchorId?: string; sourceId: string; windowId: string }): Promise<FileAsset & { temporary: boolean }>;
   abort(): Promise<void>;
 }
-export interface DownloadProgress {
-  type: "download-progress";
-  id: string;
-  state: DownloadState;
-  transferred: number;
-  size: number;
-  reason?: DownloadReason;
-}
-
 export interface PreparedOpenBridge {
   nativeSocket: string;
   remoteSocket?: string;
@@ -91,7 +82,6 @@ interface DownloadTicket {
   state: DownloadState;
   transferred: number;
   recipient: WebSocket;
-  helperProgress: boolean;
   lastProgressAt: number;
   body?: Writable;
   upload?: Upload;
@@ -138,7 +128,6 @@ export class OpenDownloadService {
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private tickets = new Map<string, DownloadTicket>();
   private directories = new Map<string, DirectoryTicket>();
-  private finished = new Map<string, { sessionId: string; progress: DownloadProgress; expires: number }>();
   private staged = new Map<string, { sessionId: string; assetId: string; timer: ReturnType<typeof setTimeout> }>();
   private stopping = false;
   private readonly registryDirectory: string;
@@ -310,7 +299,7 @@ export class OpenDownloadService {
       try { path = directoryPath(header.path); }
       catch { socket.end(rejected); return; }
       if (header.size !== undefined || header.filename !== undefined) { socket.end(rejected); return; }
-    } else if ((header.kind !== undefined && header.kind !== "file") ||
+    } else if (header.kind !== "file" ||
         !Number.isSafeInteger(header.size) || (header.size as number) < 0 || !safeFilename(header.filename)) {
       socket.end(rejected); return;
     }
@@ -343,7 +332,7 @@ export class OpenDownloadService {
     const ticket: DownloadTicket = {
       id, sessionId: recipient.sessionId, socket, sourceId: source.id, windowId: target.windowId,
       filename, size: header.size as number, state: "offered", transferred: 0,
-      recipient: recipient.socket, helperProgress: header.progress === true,
+      recipient: recipient.socket,
       lastProgressAt: 0, releaseSource: this.retainSource(source.id), removeCloseListener: () => {},
     };
     const onClose = () => this.finish(ticket, "failed", "disconnected");
@@ -361,7 +350,7 @@ export class OpenDownloadService {
     this.deadline(ticket, this.options.contextTimeoutMs ?? CONTEXT_TIMEOUT, "not-attached");
     try {
       recipient.socket.send(JSON.stringify({ type: "file-context", id, filename, size: ticket.size }));
-      if (ticket.helperProgress) socket.write(jsonLine({ state: "offered", transferred: 0, size: ticket.size }));
+      socket.write(jsonLine({ state: "offered", transferred: 0, size: ticket.size }));
     } catch { this.finish(ticket, "failed", "disconnected"); }
   }
 
@@ -418,11 +407,6 @@ export class OpenDownloadService {
     ticket.socket.once("close", () => clearTimeout(timer));
   }
 
-  private snapshot(ticket: DownloadTicket, reason?: DownloadReason): DownloadProgress {
-    return { type: "download-progress", id: ticket.id, state: ticket.state,
-      transferred: ticket.transferred, size: ticket.size, ...(reason ? { reason } : {}) };
-  }
-
   private deadline(ticket: DownloadTicket, milliseconds: number, reason: DownloadReason): void {
     clearTimeout(ticket.timer);
     ticket.timer = setTimeout(() => this.finish(ticket, "failed", reason), milliseconds);
@@ -432,14 +416,9 @@ export class OpenDownloadService {
   private finish(ticket: DownloadTicket, state: "completed" | "cancelled" | "failed", reason?: DownloadReason): void {
     if (this.tickets.get(ticket.id) !== ticket) return;
     this.tickets.delete(ticket.id);
-    ticket.state = state;
     clearTimeout(ticket.timer);
     ticket.removeCloseListener();
     ticket.releaseSource();
-    const now = Date.now();
-    for (const [id, result] of this.finished) if (result.expires <= now) this.finished.delete(id);
-    this.finished.set(ticket.id, { sessionId: ticket.sessionId, progress: this.snapshot(ticket, reason), expires: now + 60_000 });
-    while (this.finished.size > 256) this.finished.delete(this.finished.keys().next().value!);
     const socket = ticket.socket;
     if (!socket.destroyed && !socket.writableEnded) {
       socket.end(jsonLine({ ok: state === "completed", state, transferred: ticket.transferred,
@@ -461,20 +440,16 @@ export class OpenDownloadService {
     if (ticket) this.finish(ticket, "cancelled", "cancelled");
   }
 
-  action(ticketId: string, sessionId: string, action: "prepare", context?: DownloadContext): DownloadProgress | undefined {
+  prepare(ticketId: string, sessionId: string, context?: DownloadContext): boolean {
     const ticket = this.tickets.get(ticketId);
-    if (!ticket) {
-      const result = this.finished.get(ticketId);
-      return result && result.sessionId === sessionId && result.expires > Date.now() ? result.progress : undefined;
-    }
-    if (ticket.sessionId !== sessionId || action !== "prepare") return;
+    if (!ticket || ticket.sessionId !== sessionId) return false;
     if (ticket.state === "offered") {
       ticket.context = { ...context };
       ticket.state = "accepted";
       this.deadline(ticket, this.options.progressTimeoutMs ?? 60_000, "timed-out");
       void this.copy(ticket).catch(() => this.finish(ticket, "failed", "invalid-transfer"));
     }
-    return this.snapshot(ticket);
+    return true;
   }
 
   private async copy(ticket: DownloadTicket): Promise<void> {
@@ -495,7 +470,7 @@ export class OpenDownloadService {
           const now = Date.now();
           if (now - ticket.lastProgressAt >= 100) {
             ticket.lastProgressAt = now;
-            if (ticket.helperProgress && !socket.destroyed) socket.write(jsonLine({ state: "transferring", transferred: received, size: ticket.size }));
+            if (!socket.destroyed) socket.write(jsonLine({ state: "transferring", transferred: received, size: ticket.size }));
           }
           callback();
         }, error => callback(error));
@@ -598,6 +573,5 @@ export class OpenDownloadService {
     for (const id of this.directories.keys()) this.finishDirectory(id, "not-attached");
     for (const staged of this.staged.values()) clearTimeout(staged.timer);
     this.staged.clear();
-    this.finished.clear();
   }
 }

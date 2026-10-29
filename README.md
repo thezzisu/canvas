@@ -254,8 +254,7 @@ computer; unavailable names fall through the configured list. Known bundled font
 metrics are aligned for mixed-script fallback. Ligatures are optional and off by
 default; they change glyph presentation without changing copied or terminal text.
 The font catalog can gain families without changing the settings API or adding
-special controls. Existing saved Normal preferences resolve to the complete
-Maple Mono Normal NF CN name; new preferences contain no variant field.
+special controls. Preferences contain only family names and the ligature switch.
 
 Changing fonts preserves ordinary cards' native rows/columns and connections.
 Only the existing maximized owner may update its temporary geometry; an external

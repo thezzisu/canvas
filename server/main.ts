@@ -54,7 +54,7 @@ const downloads = new OpenDownloadService({
 const app = createApp(store, account, terminals, {
   secureCookie: process.env.CANVAS_SECURE_COOKIE === "1",
   openDownload: (ticket, session) => downloads.open(ticket, session),
-  downloadAction: (ticket, session, action, context) => downloads.action(ticket, session, action, context),
+  prepareDownload: (ticket, session, context) => downloads.prepare(ticket, session, context),
   closeOpenBridge: (sourceId) => { uploads.closeSource(sourceId); return downloads.closeSource(sourceId); },
   assets,
   uploads,

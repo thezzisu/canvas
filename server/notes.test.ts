@@ -30,11 +30,11 @@ function fixture(t: TestContext) {
   }
   return { store, request, delayed, app };
 }
-const terminal = () => ({ id: "terminal", sourceId: randomUUID(), spaceId: "space", windowId: "window", x: 0, y: 0, width: 500, height: 300 });
+const terminal = () => ({ id: "terminal", type: "terminal" as const, sourceId: randomUUID(), spaceId: "space", windowId: "window", x: 0, y: 0, width: 500, height: 300 });
 const note = () => ({ id: "note", type: "note" as const, title: "A", content: "A", color: "yellow" as const, minimized: false, x: 0, y: 0, width: 320, height: 240 });
 const findNote = (canvas: Canvas, id = "note") => canvas.nodes.filter(node => node.type === "note").find(node => node.id === id)!;
 
-test("notes persist alongside legacy terminals with validated editable fields", async (t) => {
+test("notes persist alongside terminal nodes with validated editable fields", async (t) => {
   const f = fixture(t);
   const created = await f.request("/api/canvases", "POST", { name: "Ideas", nodes: [terminal()] });
   assert.equal(created.status, 201);
@@ -45,7 +45,7 @@ test("notes persist alongside legacy terminals with validated editable fields", 
   const noteCanvas = (await response.json()) as Canvas;
   const added = noteCanvas.nodes.find(node => node.type === "note")!;
   assert.equal(added.width, 320);
-  assert.equal(noteCanvas.nodes[0]?.type, undefined);
+  assert.equal(noteCanvas.nodes[0]?.type, "terminal");
   assert.equal((await f.request(`${path}/notes/${added.id}`, "PATCH", { content: "second", minimized: true })).status, 200);
   const stored = f.store.get<Canvas>("canvas", canvas.id)!;
   assert.equal(findNote(stored, added.id).title, "Ship");
@@ -56,6 +56,15 @@ test("notes persist alongside legacy terminals with validated editable fields", 
   assert.equal((await f.request(`${path}/notes/terminal`, "PATCH", { content: "bad" })).status, 404);
   assert.equal((await f.request(`${path}`, "PATCH", { snapToGrid: true })).status, 200);
   assert.equal(f.store.get<Canvas>("canvas", canvas.id)!.snapToGrid, true);
+});
+
+test("canvas nodes require an explicit supported type before persistence", async t => {
+  const f = fixture(t), { type: _type, ...untyped } = terminal();
+  for (const node of [untyped, { ...untyped, type: "unknown" }]) {
+    const response = await f.request("/api/canvases", "POST", { name: "Invalid", nodes: [node] });
+    assert.equal(response.status, 400);
+  }
+  assert.equal(f.store.list<Canvas>("canvas").length, 0);
 });
 
 test("note creation and edits require authentication and overview remains immutable", async (t) => {

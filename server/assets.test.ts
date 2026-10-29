@@ -42,7 +42,7 @@ async function fixture(t: TestContext, options: { temporaryTtlMs?: number } = {}
   });
   const sourceId = randomUUID(), windowId = "w1";
   const canvas = store.put<Canvas>("canvas", { id: randomUUID(), name: "Files", nodes: [{
-    id: "terminal-card", sourceId, spaceId: "space", windowId, x: 40, y: 60, width: 480, height: 302,
+    id: "terminal-card", type: "terminal", sourceId, spaceId: "space", windowId, x: 40, y: 60, width: 480, height: 302,
   }] });
   const begin = (filename: string, size: number) => assets.begin({ filename, size });
   const context = (canvasId = canvas.id, anchorId = "terminal-card") => ({ canvasId, anchorId, sourceId, windowId });

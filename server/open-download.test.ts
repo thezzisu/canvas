@@ -56,7 +56,7 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
   const store = new Store(join(root, "canvas.db"));
   const assets = new AssetStore(root, store);
   const canvas = store.put<Canvas>("canvas", { id: randomUUID(), name: "Files", nodes: [{
-    id: "anchor", sourceId: source.id, spaceId: "space", windowId: "window", x: 40, y: 50, width: 480, height: 302,
+    id: "anchor", type: "terminal", sourceId: source.id, spaceId: "space", windowId: "window", x: 40, y: 50, width: 480, height: 302,
   }] });
   store.addSession("authenticated-session"); store.addSession("other-session");
   const observations = { uploadedBytes: 0, aborted: 0, finalized: 0 };
@@ -97,14 +97,14 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
     if (message.type === "open-directory" && options.directoryAck !== false)
       queueMicrotask(() => service.directoryReceived(String(message.id), receiver as never, "authenticated-session"));
     if (message.type === "file-context" && options.autoContext !== false) queueMicrotask(() => {
-      if (receiver.readyState === 1) service.action(String(message.id), "authenticated-session", "prepare",
+      if (receiver.readyState === 1) service.prepare(String(message.id), "authenticated-session",
         options.customCanvas ? { canvasId: canvas.id, anchorId: "anchor" } : undefined);
     });
   };
   await service.ensureSource(source);
   const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {} as TerminalManager, {
     openDownload: (ticket, session) => service.open(ticket, session),
-    downloadAction: (ticket, session, action, context) => service.action(ticket, session, action, context),
+    prepareDownload: (ticket, session, context) => service.prepare(ticket, session, context),
     assets,
   });
   t.after(async () => {
@@ -135,7 +135,7 @@ async function waitFor(check: () => boolean | Promise<boolean>, message: string)
   assert.fail(message);
 }
 
-async function sender(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, size: number, progress = true) {
+async function sender(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, size: number) {
   const record = JSON.parse(await readFile(join(f.registry, (await readdir(f.registry))[0]!), "utf8"));
   const socket = createConnection(record.socket);
   socket.on("error", () => {});
@@ -143,7 +143,7 @@ async function sender(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, si
   let replies = "";
   socket.on("data", data => replies += data.toString());
   await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
-  socket.write(JSON.stringify({ version: 1, progress, secret: record.secret, provider: "herdr", nativeSocket: f.nativeSocket,
+  socket.write(JSON.stringify({ version: 1, kind: "file", secret: record.secret, provider: "herdr", nativeSocket: f.nativeSocket,
     paneId: "pane", filename: "file.bin", size }) + "\n");
   await waitFor(() => f.receiver.messages.some(message => message.type === "file-context"), "browser received no context request");
   const context = f.receiver.messages.find(message => message.type === "file-context")!;
@@ -185,8 +185,8 @@ test("overview copy succeeds before any HTTP request and stages exact retryable 
     assert.match(response.headers.get("content-disposition")!, /filename\*=UTF-8''/u);
     assert.deepEqual(Buffer.from(await response.arrayBuffer()), content);
   }
-  assert.equal(f.service.action(String(notice.id), "authenticated-session", "prepare")?.state, "completed");
-  assert.equal(f.service.action(String(notice.id), "other-session", "prepare"), undefined);
+  assert.equal(f.service.prepare(String(notice.id), "authenticated-session"), false, "completed transfers do not retain a separate HTTP status ticket");
+  assert.equal(f.service.prepare(String(notice.id), "other-session"), false);
 });
 
 test("overview completion exposes sniffed preview metadata and owner-only inline bytes", async t => {
@@ -201,7 +201,7 @@ test("overview completion exposes sniffed preview metadata and owner-only inline
     const notice = f.receiver.messages.find(message => message.type === "download")!;
     assert.equal(notice.preview, sample.preview);
     assert.equal(notice.mime, sample.mime);
-    assert.equal(f.service.action(String(notice.id), "authenticated-session", "prepare")?.state, "completed",
+    assert.equal(f.observations.finalized, 1,
       "CLI completes without a preview acknowledgement");
     const url = `http://canvas.test${notice.url}?preview=1`;
     assert.equal((await f.app.request(url)).status, 401);
@@ -314,14 +314,14 @@ test("custom canvas copy adds one persistent card without starting a browser dow
 test("browser context is bound once and copying never starts through a GET request", async t => {
   const f = await fixture(t, { autoContext: false }), transfer = await sender(t, f, 4);
   assert.equal(await f.service.open(transfer.id, "authenticated-session"), undefined);
-  assert.equal(f.service.action(transfer.id, "other-session", "prepare"), undefined);
+  assert.equal(f.service.prepare(transfer.id, "other-session"), false);
   assert.equal(f.observations.uploadedBytes, 0);
   const response = await f.app.request(`http://canvas.test/api/downloads/${transfer.id}`, {
     method: "POST", headers: { Cookie: "canvas_session=authenticated-session", "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "prepare", canvasId: f.canvas.id, anchorId: "anchor" }),
+    body: JSON.stringify({ canvasId: f.canvas.id, anchorId: "anchor" }),
   });
-  assert.equal(response.status, 200);
-  f.service.action(transfer.id, "authenticated-session", "prepare", undefined);
+  assert.equal(response.status, 204);
+  assert.equal(f.service.prepare(transfer.id, "authenticated-session"), true);
   await waitFor(() => transfer.responses().some(reply => reply.ok === true), "copy did not start after context binding");
   transfer.socket.end("done");
   await waitFor(() => transfer.responses().some(reply => reply.state === "completed"), "copy did not finish");
@@ -464,15 +464,6 @@ test("truncated and disconnected helpers cannot publish a file", async t => {
   }
 });
 
-test("legacy helpers receive only actual copy start and completion acknowledgements", async t => {
-  const f = await fixture(t), transfer = await sender(t, f, 4, false);
-  await waitFor(() => transfer.responses().length === 1, "legacy helper received no copy acknowledgement");
-  assert.equal(transfer.responses()[0].ok, true);
-  transfer.socket.end("done");
-  await waitFor(() => transfer.responses().length === 2, "legacy helper received no copy completion");
-  assert.deepEqual(transfer.responses().map(reply => reply.ok), [true, true]);
-});
-
 test("malformed and oversized socket headers cannot generate a file transfer", async t => {
   const f = await fixture(t);
   const record = JSON.parse(await readFile(join(f.registry, (await readdir(f.registry))[0]!), "utf8"));
@@ -487,6 +478,26 @@ test("malformed and oversized socket headers cannot generate a file transfer", a
   }
   assert.deepEqual(f.receiver.messages, []);
   await copyFile(f, "still-working", Buffer.from("ok"));
+});
+
+test("file transfer headers require an explicit kind and the current protocol version", async t => {
+  const f = await fixture(t);
+  const record = JSON.parse(await readFile(join(f.registry, (await readdir(f.registry))[0]!), "utf8"));
+  const header = { version: 1, kind: "file", secret: record.secret, provider: "herdr", nativeSocket: f.nativeSocket,
+    paneId: "pane", filename: "file.bin", size: 0 };
+  for (const patch of [{ kind: undefined }, { kind: "unknown" }, { version: 0 }]) {
+    const socket = createConnection(record.socket);
+    t.after(() => socket.destroy());
+    socket.on("error", () => {});
+    let reply = "";
+    socket.on("data", data => reply += data.toString());
+    await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
+    socket.end(JSON.stringify({ ...header, ...patch }) + "\n");
+    await waitFor(() => socket.destroyed, "invalid file header was not closed");
+    assert.equal(JSON.parse(reply).ok, false);
+  }
+  assert.deepEqual(f.receiver.messages, []);
+  assert.equal(f.observations.uploadedBytes, 0);
 });
 
 test("linked tmux references for one native window resolve to one destination", async t => {

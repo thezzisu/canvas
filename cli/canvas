@@ -165,8 +165,6 @@ def transfer_file(connection, file, size, progress=None, start_timeout=70, idle_
     progress = progress if progress is not None else DownloadProgress()
     connection.setblocking(False)
     started = False
-    browser_accepted = False
-    reported_progress = False
     acknowledged = 0
     remaining = size
     pending = memoryview(b"")
@@ -207,27 +205,21 @@ def transfer_file(connection, file, size, progress=None, start_timeout=70, idle_
                             raise rejected_response(result, started)
                         state = result.get("state")
                         if not started:
-                            if state in ("offered", "accepted") and "ok" not in result:
+                            if state == "offered" and "ok" not in result:
                                 if result.get("transferred") != 0 or result.get("size") != size:
                                     raise CanvasError("invalid copy response")
-                                if state == "accepted" and not browser_accepted:
-                                    browser_accepted = True
-                                    # The browser has chosen a destination but
-                                    # its download request has not arrived yet.
-                                    deadline = time.monotonic() + min(start_timeout, 20)
                                 continue
-                            if result.get("ok") is not True or state not in (None, "transferring"):
+                            if result.get("ok") is not True or state != "transferring":
                                 raise CanvasError("invalid copy response")
-                            reported_progress = state == "transferring"
-                            if reported_progress and (result.get("transferred") != 0 or result.get("size") != size):
+                            if result.get("transferred") != 0 or result.get("size") != size:
                                 raise CanvasError("invalid copy response")
                             started = True
                             deadline = time.monotonic() + idle_timeout
                             progress.update(0, size)
                             continue
-                        if result.get("ok") is True and state in (None, "completed"):
+                        if result.get("ok") is True and state == "completed":
                             if (remaining or pending or not write_closed
-                                    or (state == "completed" and (result.get("transferred") != size or result.get("size") != size))):
+                                    or result.get("transferred") != size or result.get("size") != size):
                                 raise CanvasError("invalid copy response")
                             progress.update(size, size)
                             return
@@ -258,9 +250,6 @@ def transfer_file(connection, file, size, progress=None, start_timeout=70, idle_
                     if sent:
                         pending = pending[sent:]
                         remaining -= sent
-                        # Older servers only acknowledge the start and finish.
-                        if not reported_progress:
-                            deadline = time.monotonic() + idle_timeout
                 if not remaining and not pending:
                     connection.shutdown(socket.SHUT_WR)
                     write_closed = True
@@ -345,7 +334,7 @@ def open_file(path):
         with file:
             header = {
                 **header,
-                "progress": True,
+                "kind": "file",
                 "filename": os.path.basename(path),
                 "size": info.st_size,
             }

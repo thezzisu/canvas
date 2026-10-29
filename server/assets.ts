@@ -153,10 +153,6 @@ export class AssetStore {
     };
   }
 
-  metadata(id: string): FileAsset | undefined {
-    return this.store.fileAsset(id);
-  }
-
   async read(id: string): Promise<{ body: Readable; asset: FileAsset } | undefined> {
     if (this.closed) return undefined;
     await this.initialize();

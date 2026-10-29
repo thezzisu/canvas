@@ -19,7 +19,7 @@ test("terminal presentation dimensions are shared across canvases while position
   });
   const sourceId = randomUUID(), windowId = "generation:@1", key = `${sourceId}/${windowId}`;
   store.put("source", { id: sourceId, name: "Source", type: "tmux", transport: "local" });
-  const node = (id: string, width = 900) => ({ id, sourceId, spaceId: id, windowId, x: 10, y: 20, width, height: 600 });
+  const node = (id: string, width = 900) => ({ id, type: "terminal" as const, sourceId, spaceId: id, windowId, x: 10, y: 20, width, height: 600 });
   const create = async (name: string, nodes: unknown[]) => {
     const response = await request("/api/canvases", "POST", { name, nodes });
     assert.equal(response.status, 201);
@@ -39,7 +39,7 @@ test("terminal presentation dimensions are shared across canvases while position
   const state = await (await request("/api/state")).json() as SharedState;
   assert.deepEqual(state.windowSizes[key], { width: 720, height: 410 });
   for (const canvas of state.canvases) {
-    const terminal = canvas.nodes.find(item => item.type !== "note")!;
+    const terminal = canvas.nodes.find(item => item.type === "terminal")!;
     assert.equal(terminal.width, 720);
     assert.equal(terminal.height, 410);
   }
@@ -55,24 +55,25 @@ test("terminal presentation dimensions are shared across canvases while position
   assert.equal(store.snapshot().windowSizes[key], undefined);
 });
 
-test("legacy sizes are seeded once from the first existing reference and remain authoritative after restart", () => {
-  const dir = mkdtempSync(join(tmpdir(), "canvas-size-migration-")), path = join(dir, "state.db");
+test("canonical window sizes persist across restarts and missing sizes stay at the shared default", () => {
+  const dir = mkdtempSync(join(tmpdir(), "canvas-size-persistence-")), path = join(dir, "state.db");
   let store = new Store(path);
   const sourceId = randomUUID(), windowId = "tab", key = `${sourceId}/${windowId}`;
   try {
-    store.db.prepare("DELETE FROM documents WHERE kind='migration' AND id='window-sizes-v1'").run();
+    assert.deepEqual(store.windowSize(sourceId, windowId), { width: 480, height: 302 });
     for (const [index, width] of [640, 800].entries()) {
       const id = randomUUID();
-      store.db.prepare("INSERT INTO documents(kind,id,body) VALUES('canvas',?,?)").run(id, JSON.stringify({ id, name: `Legacy ${index}`, nodes: [{ id: `node-${index}`, sourceId, spaceId: "s", windowId, x: index * 100, y: 0, width, height: 420 }] }));
+      store.put<Canvas>("canvas", { id, name: `Canvas ${index}`, nodes: [{ id: `node-${index}`, type: "terminal", sourceId, spaceId: "s", windowId, x: index * 100, y: 0, width, height: 420 }] });
     }
     store.close(); store = new Store(path);
-    assert.deepEqual(store.snapshot().windowSizes[key], { width: 640, height: 420 });
-    assert.ok(store.snapshot().canvases.every(canvas => canvas.nodes[0]!.width === 640));
-    store.setWindowSize(sourceId, windowId, { width: 700 });
+    assert.equal(store.snapshot().windowSizes[key], undefined, "opening a store does not create dimensions from canvas references");
+    assert.ok(store.snapshot().canvases.every(canvas => canvas.nodes[0]!.width === 480 && canvas.nodes[0]!.height === 302));
+    store.setWindowSize(sourceId, windowId, { width: 700, height: 420 });
     store.close(); store = new Store(path);
     assert.deepEqual(store.snapshot().windowSizes[key], { width: 700, height: 420 });
     store.remove("source", sourceId);
     store.close(); store = new Store(path);
     assert.equal(store.snapshot().windowSizes[key], undefined, "orphan canvas refs recreated a removed source's size");
+    assert.deepEqual(store.windowSize(sourceId, windowId), { width: 480, height: 302 });
   } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
 });

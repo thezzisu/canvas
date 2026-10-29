@@ -51,7 +51,7 @@ export interface NodeLayout {
   height: number
 }
 export interface TerminalCanvasNode extends NodeLayout {
-  type?: 'terminal'
+  type: 'terminal'
   sourceId: string
   spaceId: string
   windowId: string
@@ -78,7 +78,7 @@ export interface FileCanvasNode extends NodeLayout {
   asset: FileAsset
 }
 export type CanvasNode = TerminalCanvasNode | NoteCanvasNode | FileCanvasNode
-export const isTerminalNode = (node: CanvasNode): node is TerminalCanvasNode => node.type === undefined || node.type === 'terminal'
+export const isTerminalNode = (node: CanvasNode): node is TerminalCanvasNode => node.type === 'terminal'
 export type NotePatch = Partial<Pick<NoteCanvasNode, 'title' | 'content' | 'color' | 'minimized'>>
 export interface Canvas { id: string; name: string; nodes: CanvasNode[]; snapToGrid?: boolean; background?: { url: string; opacity: number } | null }
 export interface WindowSize { width: number; height: number }
@@ -89,7 +89,6 @@ export interface TerminalData {
   windowId: string
   name: string
   subtitle: string
-  type: SourceType
   width: number
   height: number
   available: boolean

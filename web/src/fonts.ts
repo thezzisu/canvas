@@ -1,6 +1,5 @@
 import type { Terminal } from '@xterm/xterm'
 import type { ContentFontSettings } from '../../shared/settings.ts'
-import './fonts.css'
 
 export interface FontPresentation { family: string; features: string }
 
@@ -11,7 +10,6 @@ export interface ContentFontFace {
 }
 export interface ContentFontCatalogEntry {
   family: string
-  label: string
   cssFamily: string
   /** Native half-width advance, divided by units per em. */
   latinAdvance: number
@@ -30,15 +28,15 @@ function staticFaces(directory: string): ContentFontFace[] {
 /** Bundled and local fonts share one ordered list of family names. */
 export const FONT_CATALOG: readonly ContentFontCatalogEntry[] = [
   {
-    family: 'Maple Mono NF CN', label: 'Maple Mono NF CN',
+    family: 'Maple Mono NF CN',
     cssFamily: 'Canvas Maple Mono NF CN', latinAdvance: 600 / 1000, faces: staticFaces('maple'),
   },
   {
-    family: 'Maple Mono Normal NF CN', label: 'Maple Mono Normal NF CN',
+    family: 'Maple Mono Normal NF CN',
     cssFamily: 'Canvas Maple Mono Normal NF CN', latinAdvance: 600 / 1000, faces: staticFaces('maple-normal'),
   },
   {
-    family: 'Cascadia Code PL', label: 'Cascadia Code PL',
+    family: 'Cascadia Code PL',
     cssFamily: 'Canvas Cascadia Code PL', latinAdvance: 1200 / 2048,
     faces: [
       { url: '/fonts/cascadia/regular.woff2', weight: '200 700', style: 'normal' },

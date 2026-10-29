@@ -602,17 +602,14 @@ current=hashlib.sha256(current_body).hexdigest() if current_body is not None els
 marker_body,_=read(marker,True)
 managed=None
 if marker_body is not None:
- raw=marker_body.decode('ascii').strip()
- if re.fullmatch('[a-f0-9]{64}',raw): managed={'version':1,'current':raw,'history':[]}
- else:
-  try: managed=json.loads(raw)
-  except ValueError: raise SystemExit(refusal)
-  if not isinstance(managed,dict) or managed.get('version')!=1: raise SystemExit(refusal)
-  for key in ('current','pending'):
-   value=managed.get(key)
-   if value is not None and (not isinstance(value,str) or not re.fullmatch('[a-f0-9]{64}',value)): raise SystemExit(refusal)
-  history=managed.get('history')
-  if not isinstance(history,list) or len(history)>256 or any(not isinstance(value,str) or not re.fullmatch('[a-f0-9]{64}',value) for value in history): raise SystemExit(refusal)
+ try: managed=json.loads(marker_body)
+ except ValueError: raise SystemExit(refusal)
+ if not isinstance(managed,dict) or managed.get('version')!=1: raise SystemExit(refusal)
+ for key in ('current','pending'):
+  value=managed.get(key)
+  if value is not None and (not isinstance(value,str) or not re.fullmatch('[a-f0-9]{64}',value)): raise SystemExit(refusal)
+ history=managed.get('history')
+ if not isinstance(history,list) or len(history)>256 or any(not isinstance(value,str) or not re.fullmatch('[a-f0-9]{64}',value) for value in history): raise SystemExit(refusal)
 if managed and managed.get('pending')==current and current is not None:
  history=managed['history'][:]
  if managed.get('current') and managed['current']!=current and managed['current'] not in history: history.append(managed['current'])

@@ -1,5 +1,4 @@
 import { test, type TestContext } from "node:test";
-import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";

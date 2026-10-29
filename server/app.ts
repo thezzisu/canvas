@@ -20,7 +20,7 @@ import {
 } from "./state.ts";
 import * as providers from "./providers.ts";
 import type { TerminalManager } from "./terminals.ts";
-import type { DownloadContext, DownloadProgress } from "./open-download.ts";
+import type { DownloadContext } from "./open-download.ts";
 import type { AssetStore } from "./assets.ts";
 import type { UploadService } from "./uploads.ts";
 import {
@@ -82,7 +82,7 @@ export function createApp(
   options: {
     secureCookie?: boolean;
     openDownload?: (ticket: string, sessionId: string) => Promise<DownloadResponse | undefined>;
-    downloadAction?: (ticket: string, sessionId: string, action: "prepare", context?: DownloadContext) => DownloadProgress | undefined;
+    prepareDownload?: (ticket: string, sessionId: string, context?: DownloadContext) => boolean;
     closeOpenBridge?: (sourceId: string) => Promise<void>;
     assets?: AssetStore;
     uploads?: UploadService;
@@ -151,13 +151,11 @@ export function createApp(
     return c.newResponse(Readable.toWeb(download.body) as ReadableStream, 200, headers);
   });
   app.post("/api/downloads/:ticket", async (c) => {
-    const { action, ...context } = z.object({
-      action: z.literal("prepare"),
+    const context = z.object({
       canvasId: z.union([z.string().uuid(), z.literal("overview")]).optional(), anchorId: z.string().max(150).optional(),
     }).strict().parse(await c.req.json());
-    const progress = options.downloadAction?.(c.req.param("ticket"), getCookie(c, "canvas_session") ?? "", action, context);
-    if (!progress) return c.json({ error: "Download expired" }, 404);
-    return c.json(progress);
+    const prepared = options.prepareDownload?.(c.req.param("ticket"), getCookie(c, "canvas_session") ?? "", context);
+    return prepared ? c.body(null, 204) : c.json({ error: "Download expired" }, 404);
   });
   app.on(["GET", "HEAD"], "/api/files/:id", async (c) => {
     const file = await options.assets?.read(c.req.param("id"));

@@ -234,7 +234,7 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
       <div class="mobile-key-deck" role="group" aria-label="完整键盘" @scroll.capture="stopRepeat" @contextmenu.prevent>
         <div v-for="row in deckRows" :key="row.name" class="mobile-key-deck-row" :class="row.class" role="group" :aria-label="row.name">
           <button v-for="key in row.keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :title="key.label" :aria-pressed="keyPressed(key.key)" :style="key.span ? { gridColumn: `span ${key.span}` } : undefined"
-            :class="{ 'arrow-key': key.key.startsWith('Arrow'), 'letter-key': key.key.length === 1, 'shift-key': key.key.startsWith('Shift'), 'backspace-key': key.key === 'Backspace', 'space-key': key.key === ' ', 'enter-key': key.key === 'Enter', 'symbol-key': ['Meta', 'Home', 'End'].includes(key.key) }"
+            :class="{ 'letter-key': key.key.length === 1, 'shift-key': key.key.startsWith('Shift'), 'backspace-key': key.key === 'Backspace', 'space-key': key.key === ' ', 'enter-key': key.key === 'Enter', 'symbol-key': ['Meta', 'Home', 'End'].includes(key.key) }"
             @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ keyLabel(key) }}</button>
         </div>
       </div>
@@ -265,7 +265,7 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
 
 <style scoped>
 .mobile-keyboard{position:relative;flex:0 0 auto;min-width:0;border-top:1px solid #353c47;background:#1a1e25;padding:4px;color:#cbd2dd;z-index:6;touch-action:manipulation}
-.mobile-key-row{position:relative;z-index:3;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:3px;overflow:hidden;min-height:40px;background:#1a1e25}.mobile-key-row button{min-width:0;padding:0;min-height:40px;height:44px}
+.mobile-key-row{position:relative;z-index:3;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:3px;overflow:hidden;min-height:40px;background:#1a1e25}
 .mobile-keyboard button{min-height:44px;min-width:44px;padding:0 6px;border:1px solid #3a4350;border-bottom-color:#48515e;border-radius:5px;background:#2b323d;box-shadow:inset 0 1px 0 #ffffff05,0 1px 1px #0003;color:#cbd2dd;font-size:12px;line-height:1;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;white-space:nowrap;-webkit-tap-highlight-color:transparent}
 .mobile-key-row>button{min-width:0;min-height:40px;padding:0;height:44px}
 .mobile-keyboard button:active{background:#414955;border-color:#637082;box-shadow:inset 0 1px 2px #0003}
@@ -285,7 +285,6 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
 .mobile-key-bottom button{padding:0;font-size:clamp(8px,2.4cqw,11px);letter-spacing:-.25px}
 .mobile-key-bottom .symbol-key{font-size:clamp(12px,3.6cqw,18px);font-family:system-ui,sans-serif;letter-spacing:0}
 .mobile-key-deck .shift-key,.mobile-key-deck .backspace-key,.mobile-key-deck .enter-key{font-size:clamp(14px,4cqw,20px);background:#252c36}
-.mobile-key-deck .arrow-key{font-size:clamp(13px,4cqw,20px)}
 .mobile-key-deck .shift-key[aria-pressed=true]{background:#493b31}
 .mobile-key-actions{flex:0 0 auto;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;padding:6px;border-top:1px solid #3c4552;background:#191e25}
 .mobile-key-actions button{min-width:0;min-height:44px;padding:0;background:#252d37;border-color:#35414f;color:#b7c3d2}

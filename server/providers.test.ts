@@ -171,18 +171,18 @@ test("Canvas helper installation preserves a command created while waiting for i
   }
 });
 
-test("Canvas helper installation recovers both pending marker crash points and legacy ownership", async () => {
+test("Canvas helper installation recovers pending installation journal crash points", async () => {
   const root = mkdtempSync(join(tmpdir(), "canvas-helper-recovery-")), previousHome = process.env.HOME;
   const source: Source = { id: "helper-recovery", name: "Helper", type: "tmux", transport: "local" };
   const before = Buffer.from("#!/bin/sh\nprintf before\n"), after = Buffer.from("#!/bin/sh\nprintf after\n");
   const hash = (value: Buffer) => createHash("sha256").update(value).digest("hex");
   try {
-    for (const point of ["before-target", "after-target", "initial-link", "legacy"]) {
+    for (const point of ["before-target", "after-target", "initial-link"]) {
       const home = join(root, point); mkdirSync(home); process.env.HOME = home;
       const bin = join(home, ".local/bin"); mkdirSync(bin, { recursive: true, mode: 0o700 });
       writeFileSync(join(bin, "canvas"), point === "after-target" || point === "initial-link" ? after : before, { mode: 0o755 });
       if (point === "initial-link") linkSync(join(bin, "canvas"), join(bin, ".canvas.interrupted.tmp"));
-      writeFileSync(join(bin, ".canvas-managed-sha256"), point === "legacy" ? `${hash(before)}\n` : JSON.stringify({ version: 1, current: point === "initial-link" ? null : hash(before), pending: hash(after), history: [] }), { mode: 0o600 });
+      writeFileSync(join(bin, ".canvas-managed-sha256"), JSON.stringify({ version: 1, current: point === "initial-link" ? null : hash(before), pending: hash(after), history: [] }), { mode: 0o600 });
       await installCanvasHelper(source, after);
       assert.deepEqual(readFileSync(join(bin, "canvas")), after);
       const record = JSON.parse(readFileSync(join(bin, ".canvas-managed-sha256"), "utf8"));

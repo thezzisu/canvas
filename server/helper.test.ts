@@ -11,8 +11,8 @@ import { fileURLToPath } from "node:url";
 const helper = fileURLToPath(new URL("../cli/canvas", import.meta.url));
 interface Header {
   version: number; secret: string; provider: string; nativeSocket: string;
-  paneId: string; filename: string; size: number; progress: boolean;
-  kind?: "directory"; path?: string;
+  paneId: string; filename: string; size: number;
+  kind: "file" | "directory"; path?: string;
 }
 
 async function fixture(t: TestContext) {
@@ -43,7 +43,7 @@ async function fixture(t: TestContext) {
   });
   async function endpoint(name: string, options: {
     reject?: boolean; finalReject?: boolean; provider?: string; nativeSocket?: string;
-    protocol?: boolean; acceptDelay?: number; rejectReason?: unknown; browserAccepted?: boolean;
+    acceptDelay?: number; rejectReason?: unknown; startResponse?: unknown; finalResponse?: unknown;
     cancelDelay?: number; pauseInput?: boolean; progressDelay?: number; neverComplete?: boolean;
     repeatedProgress?: boolean; directoryDelay?: number;
   } = {}) {
@@ -61,10 +61,10 @@ async function fixture(t: TestContext) {
       client.on("close", () => clients.delete(client));
       client.on("error", () => {});
       let data = Buffer.alloc(0), accepted = false, body = Buffer.alloc(0), header: Header | undefined;
-      const send = (message: object) => { if (!client.destroyed) client.write(JSON.stringify(message) + "\n"); };
+      const send = (message: unknown) => { if (!client.destroyed) client.write(JSON.stringify(message) + "\n"); };
       const consume = (chunk: Buffer) => {
         body = Buffer.concat([body, chunk]);
-        if (options.protocol && !options.progressDelay) send({ state: "transferring", transferred: body.length, size: header!.size });
+        if (!options.progressDelay) send({ state: "transferring", transferred: body.length, size: header!.size });
         if (options.progressDelay) {
           client.pause();
           later(() => { send({ state: "transferring", transferred: body.length, size: header!.size }); client.resume(); }, options.progressDelay);
@@ -95,7 +95,7 @@ async function fixture(t: TestContext) {
             client.end(JSON.stringify({ ok: false, reason: options.rejectReason, error: "No active browser" }) + "\n"); return;
           }
           accepted = true;
-          send(options.protocol ? { ok: true, state: "transferring", transferred: 0, size: header!.size } : { ok: true });
+          send(options.startResponse ?? { ok: true, state: "transferring", transferred: 0, size: header!.size });
           if (options.pauseInput) client.pause();
           if (options.cancelDelay !== undefined) later(() => send({ ok: false, state: "cancelled", reason: "cancelled" }), options.cancelDelay);
           if (options.repeatedProgress) {
@@ -105,7 +105,6 @@ async function fixture(t: TestContext) {
         };
         if (options.acceptDelay !== undefined) {
           send({ state: "offered", transferred: 0, size: header.size });
-          if (options.browserAccepted) send({ state: "accepted", transferred: 0, size: header.size });
           later(accept, options.acceptDelay);
         } else accept();
       });
@@ -116,8 +115,7 @@ async function fixture(t: TestContext) {
         if (options.neverComplete) return;
         const complete = () => {
           if (options.finalReject) client.end('{"ok":false}\n');
-          else if (options.protocol) client.end(JSON.stringify({ ok: true, state: "completed", transferred: body.length, size: header!.size }) + "\n");
-          else client.end('{"ok":true}\n');
+          else client.end(JSON.stringify(options.finalResponse ?? { ok: true, state: "completed", transferred: body.length, size: header!.size }) + "\n");
         };
         complete();
       });
@@ -136,7 +134,7 @@ test("canvas open streams binary files with relative, Unicode and spaced names",
   await writeFile(join(f.root, name), content);
   const result = await f.run(name);
   assert.deepEqual(result, { code: 0, stdout: "", stderr: "" });
-  assert.deepEqual(endpoint.headers, [{ version: 1, progress: true, provider: "herdr", nativeSocket: f.nativeSocket, paneId: "w1:p2", filename: name, size: content.length }]);
+  assert.deepEqual(endpoint.headers, [{ version: 1, kind: "file", provider: "herdr", nativeSocket: f.nativeSocket, paneId: "w1:p2", filename: name, size: content.length }]);
   assert.equal(endpoint.bodies.length, 1);
   assert(endpoint.bodies[0]!.equals(content), "download preserves every byte");
 });
@@ -232,8 +230,8 @@ test("canvas open never retries after transfer acceptance", async t => {
   assert.equal(endpoint.headers.length, 1);
 });
 
-test("canvas open waits for server readiness and tolerates legacy offer and acceptance messages", async t => {
-  const f = await fixture(t), endpoint = await f.endpoint("delayed", { protocol: true, acceptDelay: 180, browserAccepted: true });
+test("canvas open waits for server readiness before sending file bytes", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("delayed", { acceptDelay: 180 });
   const content = randomBytes(256 * 1024);
   await writeFile(join(f.root, "file"), content);
   const result = await f.run("file");
@@ -243,7 +241,7 @@ test("canvas open waits for server readiness and tolerates legacy offer and acce
 });
 
 test("canvas open exits promptly when the server rejects the copy", async t => {
-  const f = await fixture(t), endpoint = await f.endpoint("declined", { protocol: true, acceptDelay: 100, rejectReason: "cancelled" });
+  const f = await fixture(t), endpoint = await f.endpoint("declined", { acceptDelay: 100, rejectReason: "cancelled" });
   await writeFile(join(f.root, "file"), randomBytes(1024 * 1024));
   const result = await f.run("file");
   assert.equal(result.code, 1);
@@ -251,8 +249,8 @@ test("canvas open exits promptly when the server rejects the copy", async t => {
   assert.equal(endpoint.bodies.length, 0, "no file bytes were sent after rejection");
 });
 
-test("canvas open bounds a legacy server that never starts accepting file bytes", async t => {
-  const f = await fixture(t), endpoint = await f.endpoint("unanswered", { protocol: true, acceptDelay: 500 });
+test("canvas open bounds a server that never starts accepting file bytes", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("unanswered", { acceptDelay: 500 });
   await writeFile(join(f.root, "file"), "not accepted");
   const result = await f.run("file", {}, { start: 0.15, idle: 1 });
   assert.equal(result.code, 1);
@@ -261,7 +259,8 @@ test("canvas open bounds a legacy server that never starts accepting file bytes"
 });
 
 test("canvas open reads cancellation while its output is backpressured", async t => {
-  const f = await fixture(t), endpoint = await f.endpoint("cancelled", { protocol: true, pauseInput: true, cancelDelay: 80 });
+  const f = await fixture(t);
+  await f.endpoint("cancelled", { pauseInput: true, cancelDelay: 80 });
   await writeFile(join(f.root, "file"), randomBytes(16 * 1024 * 1024));
   const began = Date.now();
   const result = await f.run("file");
@@ -270,17 +269,8 @@ test("canvas open reads cancellation while its output is backpressured", async t
   assert(Date.now() - began < 2000, "cancel is not blocked behind pending file data");
 });
 
-test("canvas open accepts old servers with only start and completion acknowledgements", async t => {
-  const f = await fixture(t), endpoint = await f.endpoint("legacy");
-  const content = randomBytes(128 * 1024);
-  await writeFile(join(f.root, "file"), content);
-  const result = await f.run("file");
-  assert.equal(result.code, 0, result.stderr);
-  assert(endpoint.bodies[0]!.equals(content));
-});
-
 test("canvas open uses reported byte progress instead of a total file duration limit", async t => {
-  const f = await fixture(t), endpoint = await f.endpoint("slow-progress", { protocol: true, progressDelay: 80 });
+  const f = await fixture(t), endpoint = await f.endpoint("slow-progress", { progressDelay: 80 });
   const content = randomBytes(512 * 1024);
   await writeFile(join(f.root, "file"), content);
   const began = Date.now();
@@ -292,22 +282,42 @@ test("canvas open uses reported byte progress instead of a total file duration l
 
 test("canvas open does not count repeated status messages as download progress", async t => {
   const f = await fixture(t);
-  await f.endpoint("no-progress", { protocol: true, pauseInput: true, repeatedProgress: true });
+  await f.endpoint("no-progress", { pauseInput: true, repeatedProgress: true });
   await writeFile(join(f.root, "file"), randomBytes(1024 * 1024));
   const result = await f.run("file", {}, { start: 1, idle: 0.2 });
   assert.equal(result.code, 1);
   assert.match(result.stderr, /copy timed out/u);
 });
 
-test("canvas open bounds a missing final acknowledgement for new and legacy servers", async t => {
-  for (const protocol of [true, false]) {
-    await t.test(protocol ? "progress server" : "legacy server", async t => {
-      const f = await fixture(t), endpoint = await f.endpoint("no-final", { protocol, neverComplete: true });
-      await writeFile(join(f.root, "file"), "all bytes sent");
-      const result = await f.run("file", {}, { start: 1, idle: 0.2 });
+test("canvas open bounds a missing final acknowledgement", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("no-final", { neverComplete: true });
+  await writeFile(join(f.root, "file"), "all bytes sent");
+  const result = await f.run("file", {}, { start: 1, idle: 0.2 });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /copy timed out/u);
+  assert(endpoint.bodies[0]!.equals(Buffer.from("all bytes sent")));
+});
+
+test("canvas open validates transfer state and byte counts before accepting acknowledgements", async t => {
+  for (const response of [{ ok: true }, { ok: true, state: "ready", transferred: 0, size: 7 },
+    { ok: true, state: "transferring", transferred: 1, size: 7 }]) {
+    await t.test(JSON.stringify(response), async t => {
+      const f = await fixture(t), endpoint = await f.endpoint("invalid-start", { startResponse: response });
+      await writeFile(join(f.root, "file"), "fixture");
+      const result = await f.run("file");
       assert.equal(result.code, 1);
-      assert.match(result.stderr, /copy timed out/u);
-      assert(endpoint.bodies[0]!.equals(Buffer.from("all bytes sent")));
+      assert.match(result.stderr, /invalid copy response/u);
+      assert(endpoint.bodies.every(body => body.length === 0), "invalid acknowledgement never releases file bytes");
+    });
+  }
+  for (const response of [{ ok: true }, { ok: true, state: "completed", transferred: 6, size: 7 }]) {
+    await t.test(JSON.stringify(response), async t => {
+      const f = await fixture(t);
+      await f.endpoint("invalid-complete", { finalResponse: response });
+      await writeFile(join(f.root, "file"), "fixture");
+      const result = await f.run("file");
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /invalid copy response/u);
     });
   }
 });
@@ -343,7 +353,8 @@ test("canvas open exits promptly when the server has only passive browser viewer
 });
 
 test("canvas open bounds a transfer that stops reporting progress", async t => {
-  const f = await fixture(t), endpoint = await f.endpoint("stalled", { protocol: true, pauseInput: true });
+  const f = await fixture(t);
+  await f.endpoint("stalled", { pauseInput: true });
   await writeFile(join(f.root, "file"), randomBytes(4 * 1024 * 1024));
   const began = Date.now();
   const result = await f.run("file", {}, { start: 1, idle: 0.2 });
@@ -353,7 +364,8 @@ test("canvas open bounds a transfer that stops reporting progress", async t => {
 });
 
 test("canvas open displays server copy progress only on a terminal", async t => {
-  const f = await fixture(t), endpoint = await f.endpoint("tty", { protocol: true, acceptDelay: 30 });
+  const f = await fixture(t);
+  await f.endpoint("tty", { acceptDelay: 30 });
   await writeFile(join(f.root, "file"), randomBytes(32 * 1024));
   const result = await f.run("file", {}, undefined, true);
   assert.equal(result.code, 0, result.stderr);

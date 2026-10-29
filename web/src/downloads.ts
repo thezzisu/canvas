@@ -40,7 +40,7 @@ async function prepare(socket: WebSocket, path: string, context: DownloadContext
   try {
     const response = await fetch(path, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'prepare', ...context }), signal: controller.signal,
+      body: JSON.stringify(context), signal: controller.signal,
     })
     if (response.status === 401) window.dispatchEvent(new Event('canvas:unauthorized'))
   } catch {

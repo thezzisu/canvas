@@ -23,7 +23,7 @@ export type TerminalStatus = {
   touchMode?: TerminalTouchMode
   keyboardRequested?: boolean
 }
-export interface TerminalGeometry { width: number; height: number; cols: number; rows: number }
+export interface TerminalGeometry { width: number; height: number }
 interface FocusResize { token: string; suspended: boolean; requested?: { cols: number; rows: number } }
 interface Session {
   term: Terminal
@@ -176,7 +176,6 @@ function connect(session: Session) {
           if (presentation.maximized && !presentation.owned) update()
           else session.term.write('', update)
         }
-        else if (message.type === 'output') session.term.write(message.data)
         else if (message.type === 'status') {
           setState(session, { ...session.state, status: message.status === 'closed' || message.status === 'error' ? 'disconnected' : message.status, error: message.error, readOnly: message.readOnly })
           schedulePresentation(session)
@@ -196,9 +195,7 @@ function connect(session: Session) {
           setState(session, { ...session.state, focusResize: { active: message.active === true, owned: message.owned === true, reason: message.reason } })
           schedulePresentation(session)
         }
-        else if (message.type === 'error') setState(session, { status: 'disconnected', error: message.error || message.message })
-        else if (message.type === 'exit') setState(session, { status: 'disconnected', error: message.message || '终端连接已结束' })
-      } catch { session.term.write(event.data) }
+      } catch { /* Terminal bytes arrive as binary; malformed control frames are ignored. */ }
     }
   }
   socket.onerror = () => {
@@ -230,7 +227,7 @@ function present(session: Session) {
   // even when hidden so output/scrollback never alters the native geometry.
   const width = screen.offsetWidth + scrollbarWidth, height = screen.offsetHeight
   if (session.state.status === 'connected') {
-    for (const listener of session.geometryListeners) listener({ width, height, cols: session.term.cols, rows: session.term.rows })
+    for (const listener of session.geometryListeners) listener({ width, height })
   }
   const scale = session.magnified ? 1 : Math.min(available.width / width, available.height / height)
   if (!(scale > 0)) return

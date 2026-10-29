@@ -7,7 +7,6 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { defaultSettings, type GlobalSettings } from "../shared/settings.ts";
 import { settingsPatchSchema } from "./settings.ts";
-import { readLegacySettings } from "./settings-legacy.ts";
 
 export const sourceSchema = z
   .object({
@@ -36,8 +35,7 @@ export const nodeLayoutSchema = z.object({
   height: z.number().min(160).max(3000),
 }).strict();
 export const terminalNodeSchema = nodeLayoutSchema.extend({
-  // Existing saved canvases omit type; they remain terminal nodes.
-  type: z.literal("terminal").optional(),
+  type: z.literal("terminal"),
   sourceId: z.string().uuid(),
   spaceId: z.string().max(300),
   windowId: z.string().max(300),
@@ -63,7 +61,7 @@ export const fileNodeSchema = nodeLayoutSchema.extend({
   assetId: z.string().uuid(),
   asset: fileAssetSchema.optional(),
 }).strict();
-export const itemSchema = z.union([terminalNodeSchema, noteNodeSchema, fileNodeSchema]);
+export const itemSchema = z.discriminatedUnion("type", [terminalNodeSchema, noteNodeSchema, fileNodeSchema]);
 export type TerminalNode = z.infer<typeof terminalNodeSchema>;
 export type NoteNode = z.infer<typeof noteNodeSchema>;
 export type FileNode = z.infer<typeof fileNodeSchema>;
@@ -84,7 +82,7 @@ export type FileNodeContext = {
   windowId: string;
 };
 export const isTerminalNode = (node: CanvasNode): node is TerminalNode =>
-  node.type === undefined || node.type === "terminal";
+  node.type === "terminal";
 export const canvasSchema = z
   .object({
     id: z.string().uuid().optional(),
@@ -129,24 +127,6 @@ export class Store extends EventEmitter {
         "INSERT OR IGNORE INTO documents(kind,id,body) VALUES('canvas','overview',?)",
       )
       .run(JSON.stringify({ id: "overview", name: "总览", nodes: [] }));
-    // Existing references establish one shared presentation size. Later stale
-    // canvas documents must never become writers of that size merely by saving.
-    if (!this.get("migration", "window-sizes-v1")) {
-      const seed = this.db.prepare(
-        "INSERT OR IGNORE INTO documents(kind,id,body) VALUES('window-size',?,?)",
-      );
-      this.db.exec("BEGIN IMMEDIATE");
-      try {
-        for (const canvas of this.list<Canvas>("canvas"))
-          for (const node of canvas.nodes)
-            if (isTerminalNode(node)) {
-              const id = `${node.sourceId}/${node.windowId}`;
-              seed.run(id, JSON.stringify({ id, width: node.width, height: node.height }));
-            }
-        this.db.prepare("INSERT INTO documents(kind,id,body) VALUES('migration','window-sizes-v1','{}')").run();
-        this.db.exec("COMMIT");
-      } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-    }
   }
   list<T>(kind: string): T[] {
     return this.db
@@ -208,9 +188,7 @@ export class Store extends EventEmitter {
   }
   settings(): GlobalSettings {
     const stored = this.get<unknown>("settings", "global");
-    if (!stored) return defaultSettings();
-    const parsed = settingsPatchSchema.safeParse(stored);
-    return parsed.success ? parsed.data : readLegacySettings(stored) ?? defaultSettings();
+    return stored === undefined ? defaultSettings() : settingsPatchSchema.parse(stored);
   }
   updateSettings(value: GlobalSettings): GlobalSettings {
     const settings = settingsPatchSchema.parse(value);
