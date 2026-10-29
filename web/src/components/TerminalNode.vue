@@ -8,6 +8,7 @@ import MobileKeyboard from './MobileKeyboard.vue'
 import { statusColor } from '../status'
 import { mountTerminal, type TerminalStatus } from '../terminals'
 import { emptyModifiers, type TerminalModifiers } from '../terminal-input'
+import { terminalInsets } from '../terminal-geometry'
 import type { TerminalData } from '../types'
 const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>>()
 const host = ref<HTMLElement>()
@@ -92,10 +93,8 @@ function mount() {
     const element = host.value
     const card = element?.closest<HTMLElement>('.terminal-card')
     if (!element || !card) return
-    const style = getComputedStyle(element)
-    const insetX = card.offsetWidth - element.clientWidth + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
-    const insetY = card.offsetHeight - element.clientHeight + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
-    props.data.onGeometry(props.data.sourceId, props.data.windowId, geometry.height / geometry.width, insetX, insetY)
+    const inset = terminalInsets(card, element)
+    props.data.onGeometry(props.data.sourceId, props.data.windowId, geometry.height / geometry.width, inset.x, inset.y)
   }, { magnified: props.data.focus, mobile: props.data.mobile })
   if (mobileFocus.value) { terminal?.setTouchMode('scroll'); terminal?.focus({ keyboard: false }) }
 }
@@ -117,9 +116,9 @@ async function resized(event: { params: { width: number; height: number; x: numb
   let { width, height, x, y } = event.params
   const element = host.value, card = element?.closest<HTMLElement>('.terminal-card')
   if (geometry && element && card) {
-    const style = getComputedStyle(element)
-    const snappedWidth = geometry.width + card.offsetWidth - element.clientWidth + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
-    const snappedHeight = geometry.height + card.offsetHeight - element.clientHeight + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
+    const inset = terminalInsets(card, element)
+    const snappedWidth = geometry.width + inset.x
+    const snappedHeight = geometry.height + inset.y
     // A left/top handle keeps the opposite edge anchored when snapping.
     if (resizeOrigin && x !== resizeOrigin.x) x += width - snappedWidth
     if (resizeOrigin && y !== resizeOrigin.y) y += height - snappedHeight

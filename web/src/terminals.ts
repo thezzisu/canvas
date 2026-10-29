@@ -1,5 +1,4 @@
 import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
 import { terminalUnicodeAddon } from '../../shared/terminal-unicode'
 import { uuid } from './api'
 import { clearDownloads, disconnectDownloads, receiveDownload } from './downloads'
@@ -11,6 +10,7 @@ import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch'
 import { defaultContentFont, type ContentFontSettings } from '../../shared/settings'
 import { applyTerminalFontFeatures, type FontPresentation } from './fonts'
 import { bindMobileKeyboard } from './mobile-keyboard'
+import { fitTerminalGrid, terminalBox } from './terminal-geometry'
 
 export type TerminalStatus = {
   status: 'connecting' | 'connected' | 'disconnected'
@@ -30,7 +30,6 @@ export interface TerminalGeometry { width: number; height: number }
 interface FocusResize { token: string; suspended: boolean; requested?: { cols: number; rows: number } }
 interface Session {
   term: Terminal
-  fit: FitAddon
   surface: HTMLDivElement
   host?: HTMLElement
   magnified: boolean
@@ -49,6 +48,7 @@ interface Session {
   presentationRevision?: number
   socket?: WebSocket
   opened: boolean
+  rendered?: TerminalGeometry & { cols: number; rows: number }
   state: TerminalStatus
   listeners: Set<(state: TerminalStatus) => void>
   geometryListeners: Set<(geometry: TerminalGeometry) => void>
@@ -64,6 +64,7 @@ export function setContentFont(settings: ContentFontSettings, presentation: Font
   contentFont = { ...settings, stack: settings.stack.map(font => ({ ...font })) }
   fontPresentation = presentation
   for (const session of sessions.values()) {
+    session.rendered = undefined
     session.term.options.fontFamily = presentation.family
     if (session.opened) session.removeFontFeatures = applyTerminalFontFeatures(session.term, contentFont)
     // Fonts alter cell metrics, not the shared native grid. Only an existing
@@ -219,17 +220,14 @@ function connect(session: Session) {
   }
 }
 function availableSize(host: HTMLElement) {
-  const style = getComputedStyle(host)
-  return {
-    width: host.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
-    height: host.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom),
-  }
+  const box = terminalBox(host)
+  return { width: box.contentWidth, height: box.contentHeight }
 }
 function terminalGeometry(session: Session): TerminalGeometry | undefined {
   const screen = session.term.element?.querySelector<HTMLElement>('.xterm-screen')
-  if (!screen?.offsetWidth || !screen.offsetHeight) return
-  // Use the renderer's actual grid, including its device-pixel rounding.
-  return { width: screen.offsetWidth + scrollbarWidth, height: screen.offsetHeight }
+  if (!screen) return
+  const { width, height } = terminalBox(screen)
+  if (width > 0 && height > 0) return { width, height }
 }
 /** A view is a scaled projection of the shared native window, not its size owner. */
 function present(session: Session) {
@@ -238,34 +236,21 @@ function present(session: Session) {
   const geometry = terminalGeometry(session)
   if (!geometry) return
   const available = availableSize(session.host)
-  // The viewport's scrollbar belongs beside the terminal cells. Keep its space
-  // even when hidden so output/scrollback never alters the native geometry.
+  // xterm's scrollbar overlays the grid; it does not reserve a permanent gutter.
   const { width, height } = geometry
   if (session.state.status === 'connected') {
     for (const listener of session.geometryListeners) listener({ width, height })
   }
-  const scale = session.magnified ? 1 : Math.min(available.width / width, available.height / height)
+  const scale = session.magnified ? 1 : available.width / width
   if (!(scale > 0)) return
   Object.assign(session.surface.style, { width: `${width}px`, height: `${height}px`, transform: session.magnified ? 'none' : `scale(${scale})` })
 }
 function proposedSize(session: Session) {
   if (!session.host?.isConnected || !session.opened) return
   const available = availableSize(session.host)
-  if (session.magnified) {
-    // The previous grid may overflow while the viewport is shrinking. Its
-    // temporary scrollbars must not make us request an unnecessarily small
-    // grid, then grow it again after the scrollbars disappear.
-    const style = getComputedStyle(session.host)
-    available.width = session.host.offsetWidth - parseFloat(style.borderLeftWidth) - parseFloat(style.borderRightWidth) - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
-    available.height = session.host.offsetHeight - parseFloat(style.borderTopWidth) - parseFloat(style.borderBottomWidth) - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)
-  }
+  if (!session.rendered) return
   if (!(available.width > 0 && available.height > 0)) return
-  Object.assign(session.surface.style, { width: `${available.width}px`, height: `${available.height}px`, transform: 'none' })
-  const proposed = session.fit.proposeDimensions()
-  if (proposed && Number.isFinite(proposed.cols) && Number.isFinite(proposed.rows)) return {
-    cols: Math.max(20, Math.min(500, proposed.cols)),
-    rows: Math.max(5, Math.min(200, proposed.rows)),
-  }
+  return fitTerminalGrid(available, session.rendered)
 }
 function updateFocusSize(session: Session) {
   if (!session.magnified || session.focusResize?.suspended || session.state.status !== 'connected' || session.socket?.readyState !== WebSocket.OPEN) return
@@ -331,11 +316,9 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       scrollback: 5000,
       overviewRuler: { width: scrollbarWidth },
       allowProposedApi: true,
-      theme: { background: '#111317', foreground: '#d5d7dd', cursor: '#e8b183', selectionBackground: '#415168', black: '#20242b', red: '#f08080', green: '#9ecb8f', yellow: '#e5c285', blue: '#8daed7', magenta: '#c7a0df', cyan: '#8fc5c4', white: '#d5d7dd', brightBlack: '#66707f', brightWhite: '#f6f6f7' },
+      theme: { overviewRulerBorder: 'transparent', background: '#111317', foreground: '#d5d7dd', cursor: '#e8b183', selectionBackground: '#415168', black: '#20242b', red: '#f08080', green: '#9ecb8f', yellow: '#e5c285', blue: '#8daed7', magenta: '#c7a0df', cyan: '#8fc5c4', white: '#d5d7dd', brightBlack: '#66707f', brightWhite: '#f6f6f7' },
     })
     term.loadAddon(terminalUnicodeAddon())
-    const fit = new FitAddon()
-    term.loadAddon(fit)
     const surface = document.createElement('div')
     surface.className = 'terminal-surface'
     Object.assign(surface.style, { transformOrigin: 'top left', width: '100%', height: '100%' })
@@ -348,10 +331,20 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       },
       changed: upload => setState(session!, { ...session!.state, upload }),
     })
-    session = { term, fit, surface, uploads, opened: false, magnified: false, mobile: !!options.mobile,
+    session = { term, surface, uploads, opened: false, magnified: false, mobile: !!options.mobile,
       modifiers: emptyModifiers(), touchMode: 'scroll', keyboardRequested: false,
       state: { status: 'connecting' }, listeners: new Set(), geometryListeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
     const current = session
+    // Offscreen xterm buffers can resize before the DOM renderer catches up.
+    // Keep each measured grid paired with the dimensions that actually painted it.
+    term.onRender(() => {
+      const grid = terminalGeometry(current)
+      if (!grid) return
+      const previous = current.rendered
+      if (previous?.width === grid.width && previous.height === grid.height && previous.cols === term.cols && previous.rows === term.rows) return
+      current.rendered = { ...grid, cols: term.cols, rows: term.rows }
+      schedulePresentation(current)
+    })
     function sendInput(data: string, binary = false) {
       // onData includes terminal query replies; passive viewers must never
       // claim control or send duplicate replies merely by rendering output.

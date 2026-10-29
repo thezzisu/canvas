@@ -51,6 +51,7 @@ built-in client connects through native sockets, forwarded over SSH remotely.
   a window resizes its client viewport to the available area; its other views show “已最大化”.
   Removing a card keeps the native window running. Closing a window ends its
   processes after confirmation. Card resizing snaps to complete terminal cells.
+  Terminal content fills the card; scrollbars overlay the grid.
   Each header keeps the tab name beside the active pane’s distinct terminal title.
 - **Navigation:** scroll to pan, pinch to zoom, or use fullscreen for the canvas.
   On mobile, tap a terminal preview to interact in fullscreen; the auxiliary
