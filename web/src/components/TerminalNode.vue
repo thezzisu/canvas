@@ -79,6 +79,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     </header>
     <div v-if="data.available" ref="host" class="terminal-host nodrag nopan nowheel" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :style="data.focus ? { overflow: 'auto' } : undefined" @pointerdown.stop="terminal?.focus()" @mousedown.stop @wheel.stop @dblclick.stop />
     <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">上传文件</div>
+    <span v-if="status.clipboardError" class="terminal-copy-notice" :class="{ 'copy-failed': status.clipboardError === '复制失败' }" role="status">{{ status.clipboardError }}</span>
     <div v-if="status.upload" class="terminal-upload nodrag nopan" :class="{ 'upload-failed': status.upload.state === 'failed' }" :data-upload-id="status.upload.id" :data-upload-state="status.upload.state" @pointerdown.stop @mousedown.stop>
       <div class="terminal-upload-row"><span class="terminal-upload-name" :title="status.upload.name">{{ status.upload.name }}</span><small v-if="status.upload.queued">+{{ status.upload.queued }}</small><span class="terminal-upload-status" role="status">{{ uploadLabel }}</span><button :aria-label="uploadActive ? '取消上传' : '关闭上传状态'" :disabled="status.upload.cancelling" @click.stop="terminal?.cancelUpload()"><Icon name="close" :size="13" /></button></div>
       <div v-if="uploadActive" class="terminal-upload-track" role="progressbar" :aria-valuenow="status.upload.transferred" :aria-valuemin="0" :aria-valuemax="status.upload.total" :aria-valuetext="`${uploadPercent}%`" aria-label="文件上传进度"><span :style="{ width: `${uploadPercent}%` }" /></div>
@@ -92,6 +93,8 @@ async function resized(event: { params: { width: number; height: number; x: numb
 
 <style scoped>
 .terminal-drop-target{outline:1px solid var(--accent);outline-offset:-3px;background:#e9b18808}
+.terminal-copy-notice{position:absolute;bottom:8px;right:9px;padding:4px 7px;border:1px solid #424a56;border-radius:4px;background:#242930f2;color:#b6c0ce;font-size:10px;pointer-events:none}
+.terminal-copy-notice.copy-failed{border-color:#79545470;background:#33262bf2;color:#d6aaaa}
 .terminal-file-drop{position:absolute;inset:30px 0 0;display:flex;align-items:center;justify-content:center;pointer-events:none;background:#12151aca;color:var(--accent);font-size:12px}
 .terminal-upload{position:absolute;bottom:6px;left:8px;right:8px;padding:4px 7px;border:1px solid #424a56;border-radius:4px;background:#242930f2;color:#b6c0ce;box-shadow:0 2px 8px #0003;font-size:10px}
 .terminal-upload-row{display:flex;align-items:center;gap:8px;min-height:19px}

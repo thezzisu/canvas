@@ -4,6 +4,7 @@ import { uuid } from './api'
 import { clearDownloads, disconnectDownloads, receiveDownload } from './downloads'
 import { clearDirectories, receiveDirectory } from './directories'
 import { bindFileInput, preventFileNavigation, TerminalUploads, type TerminalUploadState } from './uploads'
+import { clipboardRestoringFocus, TerminalClipboard } from './clipboard'
 
 export type TerminalStatus = {
   status: 'connecting' | 'connected' | 'disconnected'
@@ -13,6 +14,7 @@ export type TerminalStatus = {
   focusResize?: { active: boolean; owned: boolean; reason?: string }
   upload?: TerminalUploadState
   draggingFile?: boolean
+  clipboardError?: string
 }
 export interface TerminalGeometry { width: number; height: number; cols: number; rows: number }
 interface FocusResize { token: string; suspended: boolean; requested?: { cols: number; rows: number } }
@@ -32,6 +34,7 @@ interface Session {
   geometryListeners: Set<(geometry: TerminalGeometry) => void>
   resource: { sourceId: string; spaceId: string; windowId: string }
   uploads: TerminalUploads
+  clipboard?: TerminalClipboard
 }
 const sessions = new Map<string, Session>()
 const scrollbarWidth = 6
@@ -286,12 +289,14 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     // Legacy mouse coordinates are bytes, not UTF-8 text. Encoding them as
     // Unicode changes bytes above 127 and leaves stray characters in the PTY.
     term.onBinary(data => sendInput(data, true))
+    current.clipboard = new TerminalClipboard(term, surface, {
+      visible: () => !!current.host?.isConnected && !(current.state.presentation?.maximized && (!current.state.presentation.owned || !current.magnified)),
+      controlsInput: () => current.state.status === 'connected' && !current.state.readOnly,
+      copyError: clipboardError => setState(current, { ...current.state, clipboardError }),
+    })
     term.attachCustomKeyEventHandler(event => {
+      if (current.clipboard?.key(event) === false) return false
       if (event.type === 'keydown' && current.state.readOnly) claimFocus(current)
-      if (event.type === 'keydown' && (event.ctrlKey || event.metaKey) && event.shiftKey && event.code === 'KeyC' && term.hasSelection()) {
-        void navigator.clipboard?.writeText(term.getSelection())
-        return false
-      }
       return true
     })
     sessions.set(id, session)
@@ -305,7 +310,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   if (!session.opened) {
     session.term.open(session.surface); session.opened = true
     const current = session
-    session.term.textarea?.addEventListener('focus', () => claimFocus(current))
+    session.term.textarea?.addEventListener('focus', () => { if (!clipboardRestoringFocus()) claimFocus(current) })
     session.term.textarea?.addEventListener('paste', () => claimFocus(current), { capture: true })
   }
   session.listeners.add(listener)
@@ -354,6 +359,7 @@ export function clearTerminals() {
     const socket = session.socket
     session.socket = undefined
     socket?.close()
+    session.clipboard?.dispose()
     session.term.dispose()
   }
   sessions.clear()

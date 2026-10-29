@@ -68,8 +68,22 @@ test("real inbox writes preserve quoted Unicode names, arbitrary bytes and priva
 const name = "原始 O'Brian (final).bin", bytes = randomBytes(300000);
 const progress = [];
 const path = await writeInboxFile(source, { name, size: bytes.length }, chunks(bytes), new AbortController().signal, received => {
-  const partial = readdirSync(inbox).find(name => name.endsWith('.part'));
-  if (partial) assert(statSync(join(inbox, partial)).size >= received, 'reported progress must already be written to disk');
+  let observed = false;
+  for (let attempt = 0; attempt < 2 && !observed; attempt++) {
+    const candidates = readdirSync(inbox).filter(entry => entry.endsWith('.part') ||
+      (/^[a-f0-9]{8}_/.test(entry) && entry.slice(9) === name));
+    for (const entry of candidates) {
+      let info;
+      try { info = statSync(join(inbox, entry)); }
+      catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      assert(info.isFile() && info.size >= received, 'reported progress must already be written to disk');
+      observed = true;
+      break;
+    }
+    // The writer links the completed name before removing .part. If that
+    // removal raced stat(), a fresh listing must find the committed file.
+  }
+  assert(observed, 'progress requires an existing partial or committed file');
   progress.push(received);
 });
 assert.match(basename(path), /^[a-f0-9]{8}_/);

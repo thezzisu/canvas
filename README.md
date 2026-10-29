@@ -116,6 +116,14 @@ on the browser and operating system: a file item or screenshot can be uploaded,
 but a copied local pathname alone does not grant access to that file. Dragging
 files from the file manager provides an alternative without clipboard permissions.
 
+Use the browser's paste shortcut: Ctrl+V on Windows/Linux or Command+V on macOS.
+Canvas handles that shortcut before terminal key encoding, so a remote program
+does not attempt to read the server machine's clipboard instead. Selecting text
+with the mouse copies on release. Ctrl+Shift+C (or Command+C on macOS) also copies
+a terminal selection, including on HTTP origins. When a terminal application owns
+mouse selection, its OSC52 copy response is accepted only for the focused window
+after the user's copy gesture. Clipboard queries never read back browser data.
+
 ## Continue in VS Code
 
 Run `canvas open <directory>` to send its absolute path to the current browser.
