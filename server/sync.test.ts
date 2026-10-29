@@ -130,6 +130,20 @@ test("slow readers receive the latest state without an unbounded mutation queue"
   assert.equal(latest.revision, 50);
 });
 
+test("global font settings broadcast to both browsers without altering canvas documents", async t => {
+  const f = fixture(t), first = await f.subscribe(), second = await f.subscribe('second')
+  const baseline = (await first.next()).state!
+  await second.next()
+  const settings = { contentFont: { stack: [{ family: 'Example Local Mono' }, { family: 'monospace' }], ligatures: true } }
+  assert.equal((await f.request('/api/settings', 'PATCH', settings)).status, 200)
+  const a = (await first.next()).state!, b = (await second.next()).state!
+  assert.deepEqual(a, b)
+  assert.deepEqual(a.settings, settings)
+  assert.deepEqual(a.canvases, baseline.canvases)
+  assert.deepEqual(a.windowSizes, baseline.windowSizes)
+  assert.equal(f.terminalShutdowns, 0)
+})
+
 test("logout and expiry close only the affected browser subscriptions", async (t) => {
   const f = fixture(t),
     first = await f.subscribe(),

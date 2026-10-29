@@ -78,7 +78,9 @@ cancellation does not affect it. There is no confirmation or notification UI.
 If no browser can receive the file, the command exits nonzero immediately with
 `canvas: no browser attached to this window`. Ctrl+C cancels an unfinished copy.
 
-In Overview, completion starts a native browser download. Its staged file remains
+In Overview, images, PDFs and text open in a preview dialog with a Download button.
+Closing the dialog does not download; multiple files are previewed in order.
+Other file types start a native browser download. The staged file remains
 available to that login session for one hour and is cleared when Canvas restarts.
 In a custom canvas, completion adds a file card beside its originating window.
 Images, PDFs and text have previews; every card has a download button. Cards can
@@ -200,13 +202,18 @@ The terminal resizes to the remaining visible area, including when the keyboard
 stays open. Leaving full-screen follows the same shared-window and external-resize
 rules as desktop.
 
-The row above the keyboard provides Esc, Tab, one-shot Ctrl and arrow keys;
-hold an arrow to repeat. More opens a keyboard with letters, punctuation, function
-and navigation keys, without a number row. Shift, Ctrl, Alt and Meta can be combined;
+The row above the keyboard provides equally sized Esc, Tab, Ctrl and arrow keys
+without horizontal scrolling; hold an arrow to repeat. More opens a keyboard with
+a number/symbol row, letters, punctuation, function and navigation keys, without
+a separate number pad. F1–F12 fit on one row. Shift, Ctrl, Alt and Meta can be combined;
 they clear after the next key, while holding a key repeats the original combination.
-Caps Lock controls letter case separately. Every key has its own visible keycap.
-File upload, text paste, text selection, Scroll and Mouse stay at the bottom of the
-expanded panel while its keyboard area scrolls.
+Holding a modifier with one finger also works with keys tapped by another finger.
+Caps Lock controls letter case separately, and Shift updates letter and symbol
+keycaps immediately, for example 4 becomes $. Every key has its own visible keycap.
+File upload, text paste, text selection, Scroll and Mouse use icon buttons at the
+bottom of the expanded panel while its keyboard area scrolls vertically when
+needed. Navigation and modifiers share a bottom key row with a wider, unlabelled
+Space; Escape and arrows remain on the compact row.
 
 Scroll mode moves terminal history or sends native scroll events, without mouse
 clicks. Switch to Mouse when an application needs clicks or dragging. Text
@@ -223,6 +230,33 @@ Canvas does not force an extended keyboard protocol on native applications.
 Mobile layout depends on the device's primary touch input, not just browser width.
 A narrow desktop window retains desktop controls. Actual clipboard formats and
 software-keyboard behavior depend on the browser and operating system.
+
+## Content fonts
+
+Open Settings from the sidebar footer to configure the ordered content-font
+stack. The first family is preferred; later entries provide missing glyphs.
+Built-in suggestions and locally installed family names use the same list, with
+optional variants supplied by the font catalog. Changes preview inside the dialog
+until saved, then synchronize across browsers. They apply to terminals, note text,
+text file previews and mobile selection/paste sheets, leaving application chrome
+unchanged.
+
+Maple Mono NF CN is the default. Its full Chinese/Nerd Fonts character set and
+Normal variant are bundled, alongside Cascadia Code PL. Built-in fonts load from
+Canvas, not a third-party CDN. Locally installed fonts depend on each browser
+computer; unavailable names fall through the configured list. Known bundled font
+metrics are aligned for mixed-script fallback. Ligatures are optional and off by
+default; they change glyph presentation without changing copied or terminal text.
+The font catalog can gain families and variants without changing the settings API.
+
+Changing fonts preserves ordinary cards' native rows/columns and connections.
+Only the existing maximized owner may update its temporary geometry; an external
+resize that revoked ownership is not overridden. Native herdr size arbitration
+keeps its existing client-only limits. Loading errors retain the last usable font.
+
+Text file previews show up to the first 1 MiB as plain text, with a download link
+to the complete original. Image and PDF previews retain their native behavior.
+Bundled font provenance and licenses are in `web/public/fonts/README.md`.
 
 ## Notes
 

@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { TerminalModifiers } from '../terminal-input'
 import Icon from './Icon.vue'
 
 type TouchMode = 'scroll' | 'mouse' | 'select'
-interface Keycap { key: string; label: string; symbol?: string }
+interface Keycap { key: string; label: string; symbol?: string; span?: number }
 const props = defineProps<{
   sessionKey: string
   disabled?: boolean
@@ -44,42 +44,55 @@ const keys: Keycap[] = [
   { key: 'Escape', label: 'Esc' }, { key: 'Tab', label: 'Tab' },
   { key: 'Control', label: 'Ctrl' }, ...arrows,
 ]
-const modifierKeys: Record<string, keyof TerminalModifiers> = { Shift: 'shift', Control: 'ctrl', Alt: 'alt', Meta: 'meta' }
-const shiftedSymbols: Record<string, string> = { '`': '~', '-': '_', '=': '+', '[': '{', ']': '}', '\\': '|', ';': ':', "'": '"', ',': '<', '.': '>', '/': '?' }
+const modifierKeys: Record<string, keyof TerminalModifiers> = { Shift: 'shift', ShiftRight: 'shift', Control: 'ctrl', ControlRight: 'ctrl', Alt: 'alt', AltRight: 'alt', Meta: 'meta' }
+const shiftedSymbols: Record<string, string> = { '`': '~', '1': '!', '2': '@', '3': '#', '4': '$', '5': '%', '6': '^', '7': '&', '8': '*', '9': '(', '0': ')', '-': '_', '=': '+', '[': '{', ']': '}', '\\': '|', ';': ':', "'": '"', ',': '<', '.': '>', '/': '?' }
 const characters = (text: string): Keycap[] => [...text].map(key => ({ key, label: /[a-z]/.test(key) ? key.toUpperCase() : key }))
 const deckRows = [
-  { name: 'QWERTY', class: 'mobile-key-letters', keys: characters('qwertyuiop') },
-  { name: 'ASDF', class: 'mobile-key-home', keys: characters('asdfghjkl') },
-  { name: 'ZXCV', class: 'mobile-key-lower', keys: [
-    { key: 'Shift', label: 'Shift', symbol: '⇧' }, ...characters('zxcvbnm'), { key: 'Backspace', label: 'Backspace', symbol: '⌫' },
-  ] },
-  { name: '修改键', class: 'mobile-key-modifiers', keys: [
-    { key: 'CapsLock', label: 'Caps Lock', symbol: 'Caps' }, { key: 'Control', label: 'Ctrl' },
-    { key: 'Alt', label: 'Alt' }, { key: 'Meta', label: 'Meta' },
-    { key: ' ', label: 'Space', symbol: '空格' }, { key: 'Enter', label: 'Enter', symbol: '↵' },
-  ] },
-  { name: '标点', class: 'mobile-key-symbols', keys: characters('`-=[]\\;\',./') },
-  { name: '符号', class: 'mobile-key-letters', keys: characters('!@#$%^&*()') },
-  { name: '导航', class: 'mobile-key-strip', keys: [
-    ...arrows, { key: 'Home', label: 'Home' }, { key: 'End', label: 'End' },
-    { key: 'PageUp', label: 'Page Up', symbol: 'PgUp' }, { key: 'PageDown', label: 'Page Down', symbol: 'PgDn' },
-    { key: 'Insert', label: 'Insert', symbol: 'Ins' }, { key: 'Delete', label: 'Delete', symbol: 'Del' },
-  ] },
-  { name: '功能键', class: 'mobile-key-strip', keys: [
-    { key: 'Escape', label: 'Esc' }, { key: 'Tab', label: 'Tab' },
-    ...Array.from({ length: 12 }, (_, index) => ({ key: `F${index + 1}`, label: `F${index + 1}` })),
+  { name: '功能键', class: 'mobile-key-functions', keys: Array.from({ length: 12 }, (_, index) => ({ key: `F${index + 1}`, label: `F${index + 1}` })) as Keycap[] },
+  { name: '数字和符号', class: 'mobile-key-standard', keys: [...characters('`1234567890-='), { key: 'Backspace', label: 'Backspace', symbol: '⌫' }] },
+  { name: 'QWERTY', class: 'mobile-key-standard', keys: [{ key: 'Tab', label: 'Tab', symbol: '⇥' }, ...characters('qwertyuiop[]\\')] },
+  { name: 'ASDF', class: 'mobile-key-standard', keys: [{ key: 'CapsLock', label: 'Caps Lock', symbol: 'Caps' }, ...characters("asdfghjkl;'"), { key: 'Enter', label: 'Enter', symbol: '↵', span: 2 }] },
+  { name: 'ZXCV', class: 'mobile-key-standard', keys: [{ key: 'Shift', label: 'Shift', symbol: '⇧', span: 2 }, ...characters('zxcvbnm,./'), { key: 'ShiftRight', label: '右 Shift', symbol: '⇧', span: 2 }] },
+  { name: '修改键和导航', class: 'mobile-key-standard mobile-key-bottom', keys: [
+    { key: 'Control', label: 'Ctrl' }, { key: 'Meta', label: 'Meta', symbol: '⊞' }, { key: 'Alt', label: 'Alt' },
+    { key: ' ', label: 'Space', symbol: '', span: 3 }, { key: 'AltRight', label: '右Alt', symbol: 'Alt' }, { key: 'ControlRight', label: '右Ctrl', symbol: 'Ctrl' },
+    { key: 'PageUp', label: 'Page Up', symbol: 'Pg↑' }, { key: 'PageDown', label: 'Page Down', symbol: 'Pg↓' },
+    { key: 'Home', label: 'Home', symbol: '↤' }, { key: 'End', label: 'End', symbol: '↦' }, { key: 'Insert', label: 'Insert', symbol: 'Ins' }, { key: 'Delete', label: 'Delete', symbol: 'Del' },
   ] },
 ]
+const modifierPresses = ref(new Map<number, { key: keyof TerminalModifiers; previous: boolean; value: boolean; used: boolean; target: HTMLElement }>())
+const activeModifiers = computed(() => {
+  const value = { ...props.modifiers }
+  for (const press of modifierPresses.value.values()) value[press.key] = press.value
+  return value
+})
+function releaseModifier(id: number, cancelled = false) {
+  const press = modifierPresses.value.get(id)
+  if (!press) return false
+  modifierPresses.value.delete(id)
+  if (press.target.hasPointerCapture(id)) press.target.releasePointerCapture(id)
+  if (cancelled && !press.used) emit('modifiers', { ...props.modifiers, [press.key]: press.previous })
+  return true
+}
+function cancelPress(event?: Event) {
+  if (event instanceof PointerEvent) {
+    releaseModifier(event.pointerId, true)
+    if (held?.pointer === event.pointerId) stopRepeat()
+  } else {
+    for (const id of [...modifierPresses.value.keys()]) releaseModifier(id, true)
+    stopRepeat()
+  }
+}
 
 function keyLabel(key: Keycap) {
-  if (key.symbol) return key.symbol
-  if (/^[a-z]$/.test(key.key)) return caps.value !== !!props.modifiers.shift ? key.key.toUpperCase() : key.key
-  return props.modifiers.shift ? shiftedSymbols[key.key] || key.label : key.label
+  if (key.symbol !== undefined) return key.symbol
+  if (/^[a-z]$/.test(key.key)) return caps.value !== !!activeModifiers.value.shift ? key.key.toUpperCase() : key.key
+  return activeModifiers.value.shift ? shiftedSymbols[key.key] || key.label : key.label
 }
 function keyPressed(key: string) {
   if (key === 'CapsLock') return caps.value
   const modifier = modifierKeys[key]
-  return modifier ? props.modifiers[modifier] : undefined
+  return modifier ? activeModifiers.value[modifier] : undefined
 }
 function stopRepeat() {
   clearTimeout(repeatDelay)
@@ -93,6 +106,7 @@ function send(key: string, modifiers?: Partial<TerminalModifiers>) {
   if (key === 'CapsLock') { caps.value = !caps.value; return }
   const modifier = modifierKeys[key]
   if (modifier) { emit('modifiers', { ...props.modifiers, [modifier]: !props.modifiers[modifier] }); return }
+  for (const press of modifierPresses.value.values()) press.used = true
   emit('key', key, modifiers)
 }
 function press(event: PointerEvent, key: string) {
@@ -100,9 +114,17 @@ function press(event: PointerEvent, key: string) {
   event.preventDefault()
   event.stopPropagation()
   stopRepeat()
-  if (!event.isPrimary) return
   const target = event.currentTarget as HTMLElement
-  const chord = { ...props.modifiers }
+  const modifier = modifierKeys[key]
+  if (modifier) {
+    const previous = activeModifiers.value[modifier]
+    modifierPresses.value.set(event.pointerId, { key: modifier, previous, value: !previous, used: false, target })
+    target.setPointerCapture(event.pointerId)
+    emit('modifiers', { ...props.modifiers, [modifier]: !previous })
+    return
+  }
+  if (!event.isPrimary && !modifierPresses.value.size) return
+  const chord = { ...activeModifiers.value }
   // A touch may become a scroll. Commit only on release or a stationary hold.
   const deferred = event.pointerType === 'touch'
   const value = caps.value && /^[a-z]$/.test(key) ? key.toUpperCase() : key
@@ -118,12 +140,19 @@ function press(event: PointerEvent, key: string) {
   }, 400)
 }
 function movePress(event: PointerEvent) {
+  const modifier = modifierPresses.value.get(event.pointerId)
+  if (modifier) {
+    const box = modifier.target.getBoundingClientRect()
+    if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) releaseModifier(event.pointerId, true)
+    return
+  }
   if (!held || event.pointerId !== held.pointer) return
   const bounds = held.target.getBoundingClientRect()
   if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom
     || held.deferred && Math.hypot(event.clientX - held.x, event.clientY - held.y) > 6) stopRepeat()
 }
 function releasePress(event: PointerEvent) {
+  if (releaseModifier(event.pointerId)) return
   const press = held
   if (!press || press.pointer !== event.pointerId) return
   if (press.deferred && !press.sent
@@ -131,7 +160,7 @@ function releasePress(event: PointerEvent) {
   stopRepeat()
 }
 function keyboardClick(event: MouseEvent, key: string) {
-  if (event.detail === 0) send(caps.value && /^[a-z]$/.test(key) ? key.toUpperCase() : key, { ...props.modifiers })
+  if (event.detail === 0) send(caps.value && /^[a-z]$/.test(key) ? key.toUpperCase() : key, { ...activeModifiers.value })
 }
 function toggleMore() { stopRepeat(); more.value = !more.value }
 function chooseMode(mode: TouchMode) { emit('mode', mode); more.value = false }
@@ -190,12 +219,12 @@ function filesChanged(event: Event) {
   if (files.length) emit('files', files)
 }
 function escape() { if (sheet.value) closeSheet(); else more.value = false; stopRepeat() }
-function reset() { stopRepeat(); more.value = false; caps.value = false; closeSheet(); emit('modifiers', { shift: false, ctrl: false, alt: false, meta: false }) }
-function visibilityChanged() { if (document.hidden) stopRepeat() }
+function reset() { cancelPress(); more.value = false; caps.value = false; closeSheet(); emit('modifiers', { shift: false, ctrl: false, alt: false, meta: false }) }
+function visibilityChanged() { if (document.hidden) cancelPress() }
 watch(() => props.sessionKey, reset)
 watch(() => props.disabled, disabled => { if (disabled) reset() })
-onMounted(() => { window.addEventListener('blur', stopRepeat); document.addEventListener('visibilitychange', visibilityChanged) })
-onBeforeUnmount(() => { stopRepeat(); clearTimeout(copyTimer); window.removeEventListener('blur', stopRepeat); document.removeEventListener('visibilitychange', visibilityChanged) })
+onMounted(() => { window.addEventListener('blur', cancelPress); document.addEventListener('visibilitychange', visibilityChanged) })
+onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEventListener('blur', cancelPress); document.removeEventListener('visibilitychange', visibilityChanged) })
 </script>
 
 <template>
@@ -204,21 +233,21 @@ onBeforeUnmount(() => { stopRepeat(); clearTimeout(copyTimer); window.removeEven
     <div v-if="more" class="mobile-keys-more" role="menu" aria-label="更多按键" @wheel.stop>
       <div class="mobile-key-deck" role="group" aria-label="完整键盘" @scroll.capture="stopRepeat" @contextmenu.prevent>
         <div v-for="row in deckRows" :key="row.name" class="mobile-key-deck-row" :class="row.class" role="group" :aria-label="row.name">
-          <button v-for="key in row.keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :aria-pressed="keyPressed(key.key)"
-            :class="{ 'arrow-key': key.key.startsWith('Arrow'), 'letter-key': key.key.length === 1, 'shift-key': key.key === 'Shift', 'backspace-key': key.key === 'Backspace', 'space-key': key.key === ' ', 'enter-key': key.key === 'Enter' }"
-            @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="stopRepeat" @lostpointercapture="stopRepeat" @click="keyboardClick($event, key.key)">{{ keyLabel(key) }}</button>
+          <button v-for="key in row.keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :title="key.label" :aria-pressed="keyPressed(key.key)" :style="key.span ? { gridColumn: `span ${key.span}` } : undefined"
+            :class="{ 'arrow-key': key.key.startsWith('Arrow'), 'letter-key': key.key.length === 1, 'shift-key': key.key.startsWith('Shift'), 'backspace-key': key.key === 'Backspace', 'space-key': key.key === ' ', 'enter-key': key.key === 'Enter', 'symbol-key': ['Meta', 'Home', 'End'].includes(key.key) }"
+            @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ keyLabel(key) }}</button>
         </div>
       </div>
       <div class="mobile-key-actions" role="toolbar" aria-label="终端操作">
-        <button type="button" :disabled="disabled" aria-label="上传文件" @pointerdown.prevent @click="pickFiles"><Icon name="file" :size="17" /><span>上传文件</span></button>
-        <button type="button" :disabled="disabled" aria-label="粘贴文本" @pointerdown.prevent @click="openSheet('paste')"><Icon name="copy" :size="17" /><span>粘贴文本</span></button>
-        <button type="button" aria-label="选择文本" @pointerdown.prevent @click="openSheet('select')"><Icon name="note" :size="17" /><span>选择文本</span></button>
-        <button type="button" :aria-pressed="touchMode === 'scroll'" aria-label="触控滚动" @pointerdown.prevent @click="chooseMode('scroll')"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18 M8 7l4-4 4 4 M8 17l4 4 4-4" /></svg><span>滚动</span></button>
-        <button type="button" :disabled="disabled" :aria-pressed="touchMode === 'mouse'" aria-label="触控鼠标" @pointerdown.prevent @click="chooseMode('mouse')"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="6" /><path d="M12 3v6" /></svg><span>鼠标</span></button>
+        <button type="button" :disabled="disabled" aria-label="上传文件" title="上传文件" @pointerdown.prevent @click="pickFiles"><Icon name="file" :size="18" /></button>
+        <button type="button" :disabled="disabled" aria-label="粘贴文本" title="粘贴文本" @pointerdown.prevent @click="openSheet('paste')"><Icon name="copy" :size="18" /></button>
+        <button type="button" aria-label="选择文本" title="选择文本" @pointerdown.prevent @click="openSheet('select')"><Icon name="note" :size="18" /></button>
+        <button type="button" :aria-pressed="touchMode === 'scroll'" aria-label="触控滚动" title="触控滚动" @pointerdown.prevent @click="chooseMode('scroll')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18 M8 7l4-4 4 4 M8 17l4 4 4-4" /></svg></button>
+        <button type="button" :disabled="disabled" :aria-pressed="touchMode === 'mouse'" aria-label="触控鼠标" title="触控鼠标" @pointerdown.prevent @click="chooseMode('mouse')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="6" /><path d="M12 3v6" /></svg></button>
       </div>
     </div>
     <div class="mobile-key-row" role="toolbar" aria-label="终端辅助键" @contextmenu.prevent>
-      <button v-for="key in keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :aria-pressed="keyPressed(key.key)" :class="{ 'arrow-key': key.symbol }" @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="stopRepeat" @lostpointercapture="stopRepeat" @click="keyboardClick($event, key.key)">{{ key.symbol || key.label }}</button>
+      <button v-for="key in keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :aria-pressed="keyPressed(key.key)" :class="{ 'arrow-key': key.symbol }" @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ key.symbol || key.label }}</button>
       <button type="button" aria-label="更多按键" :aria-expanded="more" :class="{ active: more || modifiers.shift || modifiers.alt || modifiers.meta }" @pointerdown.prevent @click="toggleMore"><Icon name="more" :size="19" /></button>
     </div>
     <input ref="fileInput" class="mobile-file-input" type="file" multiple tabindex="-1" aria-label="上传文件" @change="filesChanged" />
@@ -236,9 +265,9 @@ onBeforeUnmount(() => { stopRepeat(); clearTimeout(copyTimer); window.removeEven
 
 <style scoped>
 .mobile-keyboard{position:relative;flex:0 0 auto;min-width:0;border-top:1px solid #353c47;background:#1a1e25;padding:4px;color:#cbd2dd;z-index:6;touch-action:manipulation}
-.mobile-key-row{position:relative;z-index:3;display:grid;grid-template-columns:repeat(8,minmax(44px,1fr));gap:3px;overflow-x:auto;overscroll-behavior-x:contain;min-height:44px;background:#1a1e25;scrollbar-width:none}
-.mobile-key-row::-webkit-scrollbar{display:none}
+.mobile-key-row{position:relative;z-index:3;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:3px;overflow:hidden;min-height:40px;background:#1a1e25}.mobile-key-row button{min-width:0;padding:0;min-height:40px;height:44px}
 .mobile-keyboard button{min-height:44px;min-width:44px;padding:0 6px;border:1px solid #3a4350;border-bottom-color:#48515e;border-radius:5px;background:#2b323d;box-shadow:inset 0 1px 0 #ffffff05,0 1px 1px #0003;color:#cbd2dd;font-size:12px;line-height:1;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;white-space:nowrap;-webkit-tap-highlight-color:transparent}
+.mobile-key-row>button{min-width:0;min-height:40px;padding:0;height:44px}
 .mobile-keyboard button:active{background:#414955;border-color:#637082;box-shadow:inset 0 1px 2px #0003}
 .mobile-keyboard button[aria-pressed=true],.mobile-keyboard button.active{background:#493b31;border-color:#977254;color:#f2c5a2;box-shadow:inset 0 1px 0 #e9b18812}
 .mobile-keyboard button:focus-visible{outline:2px solid #d9ab87;outline-offset:-3px}
@@ -246,23 +275,20 @@ onBeforeUnmount(() => { stopRepeat(); clearTimeout(copyTimer); window.removeEven
 .mobile-keyboard .arrow-key{font-size:21px;font-family:system-ui,sans-serif}
 .mobile-keys-dismiss{position:fixed;inset:0;z-index:1;background:transparent}
 .mobile-keys-more{position:absolute;left:50%;bottom:calc(100% + 5px);width:min(760px,calc(100% - 8px));transform:translateX(-50%);z-index:2;display:flex;flex-direction:column;max-height:min(460px,calc(var(--mobile-height,100dvh) - 110px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));overflow:hidden;background:#20252d;border:1px solid #48515e;border-radius:9px;box-shadow:0 8px 32px #0008}
-.mobile-key-deck{flex:1 1 auto;min-height:0;overflow:auto;padding:6px;overscroll-behavior:contain;touch-action:pan-x pan-y;scrollbar-width:thin;scrollbar-color:#515c6b transparent}
-.mobile-key-deck-row{display:grid;gap:3px;margin-bottom:4px}
+.mobile-key-deck{container-type:inline-size;flex:1 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;padding:6px;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:thin;scrollbar-color:#515c6b transparent}
+.mobile-key-deck-row{display:grid;gap:2px;margin-bottom:4px;min-width:0}
 .mobile-key-deck-row:last-child{margin-bottom:0}
-.mobile-key-deck button{min-width:0;height:44px;padding:0 2px;touch-action:pan-x pan-y;font-size:11px}
-.mobile-key-deck .letter-key{font-size:16px}
-.mobile-key-letters{grid-template-columns:repeat(10,minmax(0,1fr))}
-.mobile-key-home{grid-template-columns:repeat(9,minmax(0,1fr));margin-left:5%;margin-right:5%}
-.mobile-key-lower{grid-template-columns:1.5fr repeat(7,minmax(0,1fr)) 1.5fr}
-.mobile-key-modifiers{grid-template-columns:repeat(4,minmax(40px,1fr)) minmax(44px,2fr) minmax(44px,1.2fr)}
-.mobile-key-deck .shift-key,.mobile-key-deck .backspace-key,.mobile-key-deck .enter-key{font-size:20px;background:#252c36}
-.mobile-key-deck .space-key{font-size:11px;color:#acb6c4}
+.mobile-key-deck button{min-width:0;min-height:0;height:clamp(28px,8cqw,44px);padding:0 1px;touch-action:pan-y;font-size:clamp(8px,2.4cqw,12px);border-radius:4px}
+.mobile-key-deck .letter-key{font-size:clamp(11px,3.3cqw,16px)}
+.mobile-key-standard{grid-template-columns:repeat(14,minmax(0,1fr))}
+.mobile-key-functions{grid-template-columns:repeat(12,minmax(0,1fr))}
+.mobile-key-bottom button{padding:0;font-size:clamp(8px,2.4cqw,11px);letter-spacing:-.25px}
+.mobile-key-bottom .symbol-key{font-size:clamp(12px,3.6cqw,18px);font-family:system-ui,sans-serif;letter-spacing:0}
+.mobile-key-deck .shift-key,.mobile-key-deck .backspace-key,.mobile-key-deck .enter-key{font-size:clamp(14px,4cqw,20px);background:#252c36}
+.mobile-key-deck .arrow-key{font-size:clamp(13px,4cqw,20px)}
 .mobile-key-deck .shift-key[aria-pressed=true]{background:#493b31}
-.mobile-key-symbols{grid-template-columns:repeat(11,minmax(0,1fr))}
-.mobile-key-strip{grid-auto-flow:column;grid-auto-columns:minmax(44px,1fr);overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none}
-.mobile-key-strip::-webkit-scrollbar{display:none}
 .mobile-key-actions{flex:0 0 auto;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;padding:6px;border-top:1px solid #3c4552;background:#191e25}
-.mobile-key-actions button{min-width:0;min-height:48px;flex-direction:column;gap:5px;padding:4px 0;font-size:10px;background:#252d37;border-color:#35414f;color:#b7c3d2}
+.mobile-key-actions button{min-width:0;min-height:44px;padding:0;background:#252d37;border-color:#35414f;color:#b7c3d2}
 .mobile-key-actions button[aria-pressed=true]{background:#3d342e;border-color:#886b54;color:#e8bc9a}
 .mobile-key-actions button:active{background:#3b4654}
 .mobile-file-input{display:none}
@@ -270,7 +296,7 @@ onBeforeUnmount(() => { stopRepeat(); clearTimeout(copyTimer); window.removeEven
 .mobile-text-sheet{width:min(600px,100%);max-height:100%;height:min(520px,80%);display:flex;flex-direction:column;overflow:hidden;border:1px solid #48515f;border-radius:9px;background:#20252d;box-shadow:0 16px 50px #0008}
 .mobile-text-sheet header{display:flex;align-items:center;justify-content:space-between;flex:0 0 48px;padding:0 6px 0 15px;border-bottom:1px solid #353e4b}
 .mobile-text-sheet strong{font-size:14px;font-weight:500}
-.mobile-text-sheet textarea{display:block;flex:1;min-height:0;resize:none;width:100%;padding:12px;margin:0;color:#d7dce5;border:0;border-radius:0;outline:none;box-shadow:none;background:#15191f;font-family:'JetBrains Mono',monospace;font-size:16px;line-height:1.5;white-space:pre-wrap;overflow:auto;user-select:text;-webkit-user-select:text;touch-action:pan-y;-webkit-touch-callout:default}
+.mobile-text-sheet textarea{display:block;flex:1;min-height:0;resize:none;width:100%;padding:12px;margin:0;color:#d7dce5;border:0;border-radius:0;outline:none;box-shadow:none;background:#15191f;font-family:var(--content-font-family,monospace);font-feature-settings:var(--content-font-features,normal);font-size:16px;line-height:1.5;white-space:pre-wrap;overflow:auto;user-select:text;-webkit-user-select:text;touch-action:pan-y;-webkit-touch-callout:default}
 .mobile-text-sheet footer{display:flex;align-items:center;justify-content:flex-end;gap:5px;flex:0 0 52px;padding:2px 8px;border-top:1px solid #353e4b}
 .mobile-text-sheet footer>span{margin-right:auto;color:#a0b6a9;font-size:11px}
 .mobile-text-sheet footer button{background:#333c49;color:#d4dfed;font-size:12px}

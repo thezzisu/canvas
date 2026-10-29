@@ -1,5 +1,19 @@
+import { computed, shallowRef } from 'vue'
+
 export interface DownloadContext { canvasId?: string; anchorId?: string }
 export interface DownloadResource { sourceId: string; windowId: string }
+export interface DownloadPreview {
+  id: string
+  filename: string
+  size: number
+  preview: 'image' | 'pdf' | 'text'
+  url: string
+}
+
+const previews = shallowRef<DownloadPreview[]>([])
+export const downloadPreview = computed(() => previews.value[0])
+export const downloadPreviewCount = computed(() => previews.value.length)
+export function dismissDownloadPreview() { previews.value = previews.value.slice(1) }
 
 const requests = new Map<AbortController, WebSocket>()
 let received = new WeakMap<WebSocket, Set<string>>()
@@ -55,6 +69,12 @@ export function receiveDownload(socket: WebSocket, message: Record<string, unkno
   try { url = new URL(message.url, location.href) } catch { return true }
   if (url.origin !== location.origin || url.pathname !== path || url.search || url.hash) return true
   if (!firstMessage(socket, message.type, message.id)) return true
+  if ((message.preview === 'image' || message.preview === 'pdf' || message.preview === 'text')
+      && Number.isSafeInteger(message.size) && (message.size as number) >= 0) {
+    previews.value = [...previews.value, { id: message.id, filename: message.filename,
+      size: message.size as number, preview: message.preview, url: path }]
+    return true
+  }
   // This URL serves an already-staged file. Browser download policy can no
   // longer hold the remote helper or its terminal session open.
   const anchor = document.createElement('a')
@@ -79,4 +99,5 @@ export function clearDownloads() {
   for (const controller of requests.keys()) controller.abort()
   requests.clear()
   received = new WeakMap()
+  previews.value = []
 }

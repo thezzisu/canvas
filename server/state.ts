@@ -3,7 +3,10 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
+import { defaultSettings, type GlobalSettings } from "../shared/settings.ts";
+import { settingsPatchSchema } from "./settings.ts";
 
 export const sourceSchema = z
   .object({
@@ -98,6 +101,7 @@ export type CanvasView = Omit<Canvas, "nodes"> & {
 export type WindowSize = { width: number; height: number };
 const defaultWindowSize: WindowSize = { width: 480, height: 302 };
 export type SharedState = {
+  settings: GlobalSettings;
   instanceId: string;
   revision: number;
   sources: Source[];
@@ -187,6 +191,7 @@ export class Store extends EventEmitter {
   }
   snapshot(): SharedState {
     return {
+      settings: this.settings(),
       instanceId: this.instanceId,
       revision: this.revision,
       sources: this.list<Source>("source"),
@@ -199,6 +204,20 @@ export class Store extends EventEmitter {
       windowSizes: Object.fromEntries(this.list<WindowSize & { id: string }>("window-size")
         .map(({ id, width, height }) => [id, { width, height }])),
     };
+  }
+  settings(): GlobalSettings {
+    const stored = this.get<GlobalSettings>("settings", "global");
+    if (!stored) return defaultSettings();
+    const parsed = settingsPatchSchema.safeParse(stored);
+    return parsed.success ? parsed.data : defaultSettings();
+  }
+  updateSettings(value: GlobalSettings): GlobalSettings {
+    const settings = settingsPatchSchema.parse(value);
+    if (isDeepStrictEqual(settings, this.settings())) return settings;
+    this.db.prepare("INSERT INTO documents(kind,id,body) VALUES('settings','global',?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body")
+      .run(JSON.stringify(settings));
+    this.changed();
+    return settings;
   }
   canvasView(canvas: Canvas): CanvasView {
     const background = this.db

@@ -1,3 +1,5 @@
+import type { GlobalSettings } from '../../shared/settings'
+
 export type SourceType = 'tmux' | 'herdr'
 export interface Source {
   id: string
@@ -80,7 +82,7 @@ export const isTerminalNode = (node: CanvasNode): node is TerminalCanvasNode => 
 export type NotePatch = Partial<Pick<NoteCanvasNode, 'title' | 'content' | 'color' | 'minimized'>>
 export interface Canvas { id: string; name: string; nodes: CanvasNode[]; snapToGrid?: boolean; background?: { url: string; opacity: number } | null }
 export interface WindowSize { width: number; height: number }
-export interface SharedState { instanceId: string; revision: number; sources: Source[]; canvases: Canvas[]; overviewBackground: Canvas['background']; windowSizes: Record<string, WindowSize> }
+export interface SharedState { instanceId: string; revision: number; sources: Source[]; canvases: Canvas[]; overviewBackground: Canvas['background']; windowSizes: Record<string, WindowSize>; settings: GlobalSettings }
 export interface TerminalData {
   sourceId: string
   spaceId: string

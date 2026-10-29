@@ -8,14 +8,18 @@ import Icon from './components/Icon.vue'
 import TerminalNode from './components/TerminalNode.vue'
 import NoteNode from './components/NoteNode.vue'
 import FileNode from './components/FileNode.vue'
-import { setDownloadContext } from './downloads'
+import { downloadPreview, setDownloadContext } from './downloads'
 import { isTerminalNode } from './types'
 import GroupNode from './components/GroupNode.vue'
 import BackgroundDialog from './components/BackgroundDialog.vue'
 import DirectoryDialog from './components/DirectoryDialog.vue'
+import DownloadPreviewDialog from './components/DownloadPreviewDialog.vue'
+import SettingsDialog from './components/SettingsDialog.vue'
 import { directoryRequest } from './directories'
 import { api, segment, uuid, write } from './api'
-import { clearTerminals } from './terminals'
+import { clearTerminals, setContentFont } from './terminals'
+import { buildFontPresentation, ensureContentFont } from './fonts'
+import type { GlobalSettings } from '../../shared/settings'
 import { useCanvasNavigation } from './canvas-navigation'
 import { useMobileLayout } from './mobile-layout'
 import { canvasFrame, preserveCanvasCenter, useMobileViewport, type CanvasFrame } from './viewport'
@@ -55,6 +59,14 @@ const sourceDialog = ref(false)
 const sourceDraft = reactive<Source>({ id: '', name: '', type: 'tmux', transport: 'local', target: '', binary: '', tmuxSocket: '', herdrSession: '', sshIdentityFile: '', sshKnownHostsFile: '' })
 const canvasDialog = ref(false)
 const backgroundCanvas = ref<Canvas | null>(null)
+const settingsDialog = ref(false)
+const settings = ref<GlobalSettings | null>(null)
+const contentFontStyle = ref<Record<string, string>>({})
+const appliedContentFont = ref('')
+const fontLoading = ref(false)
+let fontSignature = ''
+let fontRevision = 0
+let fontApplication = Promise.resolve()
 const canvasMenu = ref(false)
 const canvasMenuElement = ref<HTMLElement>()
 const canvasDraft = reactive({ id: '', name: '' })
@@ -96,10 +108,10 @@ const allWindows = computed(() => resources.value.flatMap(source => source.space
 const windowCount = computed(() => allWindows.value.length)
 const onlineCount = computed(() => resources.value.filter(source => !source.error && !['offline', 'error', 'disconnected'].includes(source.status)).length)
 const filteredWindows = computed(() => allWindows.value.filter(item => `${item.source.name} ${item.space.name} ${item.window.name}`.toLowerCase().includes(addSearch.value.toLowerCase())))
-const modalOpen = computed(() => sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || windowMenu.value || backgroundCanvas.value)
+const modalOpen = computed(() => sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || windowMenu.value || backgroundCanvas.value || settingsDialog.value)
 const { surface: graphSurface, app: appElement, fullscreen: canvasFullscreen, wheel: canvasWheel, touchStart: canvasTouchStart, touchMove: canvasTouchMove, touchEnd: canvasTouchEnd, touchCancel: canvasTouchCancel, click: canvasClick, toggleFullscreen, exitFullscreen } = useCanvasNavigation({
   getCanvasId: () => activeId.value, getViewport, setViewport, saveViewport,
-  blocked: () => !!modalOpen.value || !!directoryRequest.value || !!focused.value || (mobile.value && (sidebarOpen.value || sourcePanel.value)),
+  blocked: () => !!modalOpen.value || !!directoryRequest.value || !!downloadPreview.value || !!focused.value || (mobile.value && (sidebarOpen.value || sourcePanel.value)),
   mobile: () => mobile.value,
   beforeFullscreen: () => { sourcePanel.value = false; sidebarOpen.value = false; canvasMenu.value = false },
 })
@@ -211,9 +223,31 @@ function rebuildNodes() {
   const previous = new Map(nodes.value.map(node => [node.id, node as Node & { selected?: boolean }]))
   nodes.value = (isOverview.value ? overviewNodes() : (currentCanvas.value?.nodes || []).map(flowNode)).map(node => ({ ...node, selected: previous.get(node.id)?.selected }))
 }
+function applySettings(value: GlobalSettings) {
+  settings.value = value
+  const signature = JSON.stringify(value.contentFont)
+  if (signature === fontSignature) return
+  fontSignature = signature
+  const revision = ++fontRevision
+  const config = { ...value.contentFont, stack: value.contentFont.stack.map(entry => ({ ...entry })) }
+  fontLoading.value = true
+  fontApplication = (async () => {
+    try {
+      await ensureContentFont(config)
+      if (revision !== fontRevision) return
+      const presentation = buildFontPresentation(config)
+      contentFontStyle.value = { '--content-font-family': presentation.family, '--content-font-features': presentation.features }
+      appliedContentFont.value = config.stack[0]?.family || ''
+      setContentFont(config, presentation)
+    } catch (reason) {
+      if (revision === fontRevision) { fontSignature = ''; showError(reason) }
+    } finally { if (revision === fontRevision) fontLoading.value = false }
+  })()
+}
 function applySharedState(state: SharedState) {
   if (latestState?.instanceId === state.instanceId && state.revision < latestState.revision) return
   latestState = state
+  applySettings(state.settings)
   const sourceChanged = JSON.stringify(sources.value) !== JSON.stringify(state.sources)
   const previousNodes = JSON.stringify(currentCanvas.value?.nodes)
   const nextSizes = { ...state.windowSizes }
@@ -354,6 +388,7 @@ async function refreshResources(silent = false): Promise<void> {
 }
 async function load() {
   await syncState()
+  await fontApplication
   await refreshResources()
   rebuildNodes()
   await restoreViewport()
@@ -371,10 +406,12 @@ async function logout() {
   await exitFullscreen()
   await write('/api/logout', 'POST'); unauthorized()
 }
-function unauthorized() { void exitFullscreen(); stopStateEvents(); for (const timer of saveTimers.values()) clearTimeout(timer); saveTimers.clear(); pendingLayouts.clear(); clearNoteEdits(); authenticated.value = false; focused.value = null; latestState = undefined; clearTerminals() }
+function unauthorized() { void exitFullscreen(); stopStateEvents(); for (const timer of saveTimers.values()) clearTimeout(timer); saveTimers.clear(); pendingLayouts.clear(); clearNoteEdits(); authenticated.value = false; focused.value = null; settingsDialog.value = false; settings.value = null; fontRevision++; fontSignature = ''; fontLoading.value = false; latestState = undefined; clearTerminals() }
 watch(activeId, async () => { layoutGesture = ''; focused.value = null; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
 function switchCanvas(id: string) { sidebarOpen.value = false; void flushNotes(activeId.value); saveViewport(); activeId.value = id }
 function backgroundSaved(_updated: Canvas) { void syncState().catch(showError) }
+function openSettings() { sidebarOpen.value = false; canvasMenu.value = false; sourcePanel.value = false; settingsDialog.value = true }
+function settingsSaved(_settings: GlobalSettings) { void syncState().catch(showError) }
 function openBackground() { canvasMenu.value = false; backgroundCanvas.value = isOverview.value ? { id: 'overview', name: '总览', nodes: [], background: overviewBackground.value } : currentCanvas.value || null }
 function closeBackgroundDialog() {
   backgroundCanvas.value = null
@@ -634,7 +671,9 @@ function resizeNode(id: string, width: number, height: number, x?: number, y?: n
 }
 function keydown(event: KeyboardEvent) {
   if (directoryRequest.value) return
+  if (downloadPreview.value) return
   if (backgroundCanvas.value) return
+  if (settingsDialog.value) return
   if ((event.target as HTMLElement)?.closest('.xterm, .note-card input, .note-card textarea') && !modalOpen.value) return
   if (event.key === 'Escape') {
     if (sidebarOpen.value) sidebarOpen.value = false
@@ -722,7 +761,7 @@ onMounted(async () => {
   finally { ready.value = true }
   refreshTimer = setInterval(() => { void refreshResources(true) }, 2000)
 })
-onBeforeUnmount(() => { focusObserver?.disconnect(); cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('pointerdown', outsideCanvasMenu) })
+onBeforeUnmount(() => { fontRevision++; focusObserver?.disconnect(); cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('pointerdown', outsideCanvasMenu) })
 </script>
 
 <template>
@@ -739,7 +778,7 @@ onBeforeUnmount(() => { focusObserver?.disconnect(); cameraObserver?.disconnect(
       </form>
     </main>
   </div>
-  <div v-else ref="appElement" class="app-shell" :class="{ 'canvas-fullscreen': canvasFullscreen, 'mobile-layout': mobile }" :style="mobileViewportStyle">
+  <div v-else ref="appElement" class="app-shell" :class="{ 'canvas-fullscreen': canvasFullscreen, 'mobile-layout': mobile }" :style="[mobileViewportStyle, contentFontStyle]" :data-content-font="appliedContentFont">
     <button v-if="mobile && sidebarOpen" class="sidebar-backdrop" aria-label="关闭画布列表" @click="sidebarOpen = false" />
     <aside v-show="!mobile || sidebarOpen" id="canvas-sidebar" class="sidebar" :class="{ 'sidebar-open': sidebarOpen }">
       <div class="brand"><span class="brand-symbol"><Icon name="canvas" :size="24" /></span><span>canvas</span><button v-if="mobile" class="icon-button sidebar-close" aria-label="关闭画布列表" @click="sidebarOpen = false"><Icon name="close" :size="19" /></button></div>
@@ -751,7 +790,7 @@ onBeforeUnmount(() => { focusObserver?.disconnect(); cameraObserver?.disconnect(
       <div class="sidebar-divider" />
       <div class="nav-section-label"><span>连接</span><button class="icon-button" title="添加连接" aria-label="添加连接" @click="openSource()"><Icon name="plus" :size="16" /></button></div>
       <div class="source-nav"><button v-for="source in sources" :key="source.id" class="source-nav-item" :title="`${source.name} · ${source.type} · ${source.transport === 'local' ? '本机' : source.target?.replace(/^ssh:\/\//, '')}`" @click="sourcePanel = true; expandedSource = source.id"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}</span><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : 'connected'" /></button><button v-if="!sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="15" />添加连接</button></div>
-      <div class="sidebar-footer"><button class="sidebar-account" @click="sourcePanel = true"><span class="avatar">{{ username.slice(0, 1).toUpperCase() || 'C' }}</span><span>{{ username || '工作台' }}<small>{{ onlineCount }} 个连接在线</small></span></button><button class="icon-button" title="退出登录" aria-label="退出登录" @click="logout"><Icon name="logout" :size="17" /></button></div>
+      <div class="sidebar-footer"><button class="sidebar-account" @click="sourcePanel = true"><span class="avatar">{{ username.slice(0, 1).toUpperCase() || 'C' }}</span><span>{{ username || '工作台' }}<small>{{ onlineCount }} 个连接在线</small></span></button><button class="icon-button sidebar-settings" title="设置" aria-label="设置" :aria-busy="fontLoading" :disabled="!settings" @click="openSettings"><span v-if="fontLoading" class="spinner" /><svg v-else width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.5 3-.6 2.3-2 .9-2.1-.7-2.5 4.3 1.7 1.6v2.3L2.3 15l2.5 4.3 2.1-.7 2 .9.6 2.3h5l.6-2.3 2-.9 2.1.7 2.5-4.3-1.7-1.6v-2.3l1.7-1.6-2.5-4.3-2.1.7-2-.9-.6-2.3z" /><circle cx="12" cy="12" r="3" /></svg></button><button class="icon-button" title="退出登录" aria-label="退出登录" @click="logout"><Icon name="logout" :size="17" /></button></div>
     </aside>
     <main class="workspace">
       <header class="workspace-header">
@@ -775,7 +814,9 @@ onBeforeUnmount(() => { focusObserver?.disconnect(); cameraObserver?.disconnect(
     <div v-if="focused" ref="focusViewportElement" class="focus-overlay"><TerminalNode :id="focused.id" :data="{ ...terminalData(focused, true), ...focusedSize, overview: true, focus: true }" /></div>
     <BackgroundDialog v-if="backgroundCanvas" :canvas="backgroundCanvas" @close="closeBackgroundDialog" @saved="backgroundSaved" />
     <DirectoryDialog :portal="appElement" />
-    <div v-if="modalOpen && !backgroundCanvas" class="modal-backdrop" @click.self="!busy && (sourceDialog = false, canvasDialog = false, actionDialog = null, addDialog = false, windowMenu = null)">
+    <DownloadPreviewDialog :portal="appElement" />
+    <SettingsDialog v-if="settingsDialog && settings" :settings="settings" :portal="appElement" @close="settingsDialog = false" @saved="settingsSaved" />
+    <div v-if="modalOpen && !backgroundCanvas && !settingsDialog" class="modal-backdrop" @click.self="!busy && (sourceDialog = false, canvasDialog = false, actionDialog = null, addDialog = false, windowMenu = null)">
       <section v-if="sourceDialog" class="modal source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title"><header><div><h2 id="source-title">{{ sourceDraft.id ? '编辑连接' : '添加连接' }}</h2></div><button class="icon-button" aria-label="关闭对话框" @click="sourceDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitSource"><div class="type-options"><button v-for="type in (['tmux', 'herdr'] as const)" :key="type" type="button" :class="{ selected: sourceDraft.type === type }" @click="sourceDraft.type = type"><strong>{{ type }}</strong><Icon v-if="sourceDraft.type === type" name="check" :size="16" /></button></div><label>连接名称<input v-model="sourceDraft.name" name="sourceName" required placeholder="例如：开发机器" /></label><div class="segmented-control"><button type="button" :class="{ selected: sourceDraft.transport === 'local' }" @click="sourceDraft.transport = 'local'"><Icon name="server" :size="15" />本机</button><button type="button" :class="{ selected: sourceDraft.transport === 'ssh' }" @click="sourceDraft.transport = 'ssh'"><Icon name="globe" :size="15" />远程 SSH</button></div><label v-if="sourceDraft.transport === 'ssh'">SSH 地址<input v-model="sourceDraft.target" name="target" placeholder="ssh://user@hostname:22" :required="sourceDraft.transport === 'ssh'" /></label><label v-if="sourceDraft.type === 'tmux'">Socket 名称或路径 <span class="optional">可选</span><input v-model="sourceDraft.tmuxSocket" name="tmuxSocket" placeholder="default" /></label><label v-else>herdr session <span class="optional">可选</span><input v-model="sourceDraft.herdrSession" name="herdrSession" placeholder="default" /></label><details><summary>高级设置</summary><template v-if="sourceDraft.transport === 'ssh'"><label>SSH 私钥路径（Server） <span class="optional">可选</span><input v-model="sourceDraft.sshIdentityFile" name="sshIdentityFile" placeholder="/path/to/id_ed25519" /></label><label>SSH known_hosts 路径（Server） <span class="optional">可选</span><input v-model="sourceDraft.sshKnownHostsFile" name="sshKnownHostsFile" placeholder="/path/to/known_hosts" /></label></template><label>程序路径（目标机器） <span class="optional">可选</span><input v-model="sourceDraft.binary" name="binary" :placeholder="sourceDraft.type" /></label></details><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="sourceDialog = false">取消</button><button class="button primary" type="submit" :disabled="busy"><span v-if="busy" class="spinner" />{{ busy ? '保存中…' : '保存' }}</button></footer></form></section>
       <section v-else-if="canvasDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="canvas-title"><header><div><h2 id="canvas-title">{{ canvasDraft.id ? '重命名画布' : '新建画布' }}</h2></div><button class="icon-button" aria-label="关闭对话框" @click="canvasDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitCanvas"><label>画布名称<input v-model="canvasDraft.name" name="canvasName" required autofocus placeholder="例如：日常开发" maxlength="80" /></label><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="canvasDialog = false">取消</button><button class="button primary" :disabled="busy" type="submit">{{ canvasDraft.id ? '保存' : '创建画布' }}</button></footer></form></section>
       <section v-else-if="actionDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="action-title"><header><h2 id="action-title">{{ actionDialog.title }}</h2><button class="icon-button" aria-label="关闭对话框" @click="actionDialog = null"><Icon name="close" /></button></header><p v-if="actionDialog.description">{{ actionDialog.description }}</p><form @submit.prevent="submitAction"><label v-if="actionDialog.label">{{ actionDialog.label }}<input v-model="actionDialog.value" name="resourceName" required autofocus maxlength="120" /></label><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="actionDialog = null">取消</button><button class="button" :class="actionDialog.danger ? 'danger' : 'primary'" :disabled="busy" type="submit">{{ actionDialog.button }}</button></footer></form></section>

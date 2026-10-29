@@ -7,6 +7,8 @@ import { bindFileInput, preventFileNavigation, TerminalUploads, type TerminalUpl
 import { clipboardRestoringFocus, TerminalClipboard } from './clipboard'
 import { emptyModifiers, hasModifiers, modifiedText, terminalKey, type TerminalModifiers } from './terminal-input'
 import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch'
+import { defaultContentFont, type ContentFontSettings } from '../../shared/settings'
+import { applyTerminalFontFeatures, type FontPresentation } from './fonts'
 
 export type TerminalStatus = {
   status: 'connecting' | 'connected' | 'disconnected'
@@ -35,6 +37,7 @@ interface Session {
   keyboardRequested: boolean
   suppressInput?: boolean
   nativeKey?: { id: string; key: string; modifiers: Partial<TerminalModifiers> }
+  removeFontFeatures?: () => void
   resizeTimer?: ReturnType<typeof setTimeout>
   removeTouch?: () => void
   focusResize?: FocusResize
@@ -50,6 +53,20 @@ interface Session {
   clipboard?: TerminalClipboard
 }
 const sessions = new Map<string, Session>()
+let contentFont = defaultContentFont()
+// The authenticated app loads bundled fonts before applying this presentation.
+let fontPresentation: FontPresentation = { family: 'monospace', features: '"calt" 0, "liga" 0, "dlig" 0' }
+export function setContentFont(settings: ContentFontSettings, presentation: FontPresentation) {
+  contentFont = { ...settings, stack: settings.stack.map(font => ({ ...font })) }
+  fontPresentation = presentation
+  for (const session of sessions.values()) {
+    session.term.options.fontFamily = presentation.family
+    if (session.opened) session.removeFontFeatures = applyTerminalFontFeatures(session.term, contentFont)
+    // Fonts alter cell metrics, not the shared native grid. Only an existing
+    // magnified owner may update its temporary geometry through the usual lease.
+    schedulePresentation(session)
+  }
+}
 const scrollbarWidth = 6
 let mouseOwner: Session | undefined
 let mouseCoordinatesInstalled = false
@@ -297,11 +314,11 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 12,
-      fontFamily: '"JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace',
+      fontFamily: fontPresentation.family,
       lineHeight: 1,
       scrollback: 5000,
       overviewRuler: { width: scrollbarWidth },
-      allowProposedApi: false,
+      allowProposedApi: true,
       theme: { background: '#111317', foreground: '#d5d7dd', cursor: '#e8b183', selectionBackground: '#415168', black: '#20242b', red: '#f08080', green: '#9ecb8f', yellow: '#e5c285', blue: '#8daed7', magenta: '#c7a0df', cyan: '#8fc5c4', white: '#d5d7dd', brightBlack: '#66707f', brightWhite: '#f6f6f7' },
     })
     const fit = new FitAddon()
@@ -392,6 +409,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   host.appendChild(session.surface)
   if (!session.opened) {
     session.term.open(session.surface); session.opened = true
+    session.removeFontFeatures = applyTerminalFontFeatures(session.term, contentFont)
     const current = session
     session.term.textarea?.addEventListener('focus', () => { if (!clipboardRestoringFocus()) claimFocus(current) })
     session.term.textarea?.addEventListener('paste', event => {
@@ -482,6 +500,7 @@ export function clearTerminals() {
   for (const session of sessions.values()) {
     session.uploads.clear()
     session.removeTouch?.()
+    session.removeFontFeatures?.()
     endFocusSize(session)
     if (session.presentationFrame !== undefined) cancelAnimationFrame(session.presentationFrame)
     const socket = session.socket

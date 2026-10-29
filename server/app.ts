@@ -5,6 +5,7 @@ import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { verifyPassword } from "./auth.ts";
+import { settingsPatchSchema } from "./settings.ts";
 import {
   Store,
   sourceSchema,
@@ -72,6 +73,7 @@ export interface DownloadResponse {
   size: number;
   filename: string;
   headers: Record<string, string>;
+  previewHeaders?: Record<string, string>;
 }
 export function createApp(
   store: Store,
@@ -144,7 +146,9 @@ export function createApp(
       getCookie(c, "canvas_session") ?? "",
     );
     if (!download) return c.json({ error: "Download expired" }, 404);
-    return c.newResponse(Readable.toWeb(download.body) as ReadableStream, 200, download.headers);
+    const headers = c.req.query("preview") === "1" && c.req.query("download") !== "1"
+      ? download.previewHeaders ?? download.headers : download.headers;
+    return c.newResponse(Readable.toWeb(download.body) as ReadableStream, 200, headers);
   });
   app.post("/api/downloads/:ticket", async (c) => {
     const { action, ...context } = z.object({
@@ -227,6 +231,8 @@ export function createApp(
     return result;
   };
   app.get("/api/state", (c) => c.json(store.snapshot()));
+  app.get("/api/settings", c => c.json(store.settings()));
+  app.patch("/api/settings", async c => c.json(store.updateSettings(settingsPatchSchema.parse(await c.req.json()))));
   app.get("/api/events", (c) => {
     const session = getCookie(c, "canvas_session") ?? "";
     const encoder = new TextEncoder();

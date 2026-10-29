@@ -1,0 +1,81 @@
+/* Bundled upstream fonts. Origins, licenses and checksums: /fonts/README.md. */
+
+@font-face {
+  font-family: "Canvas Maple Mono NF CN";
+  src: url("/fonts/maple/regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Canvas Maple Mono NF CN";
+  src: url("/fonts/maple/bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Canvas Maple Mono NF CN";
+  src: url("/fonts/maple/italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Canvas Maple Mono NF CN";
+  src: url("/fonts/maple/bold-italic.woff2") format("woff2");
+  font-weight: 700;
+  font-style: italic;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Canvas Maple Mono Normal NF CN";
+  src: url("/fonts/maple-normal/regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Canvas Maple Mono Normal NF CN";
+  src: url("/fonts/maple-normal/bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Canvas Maple Mono Normal NF CN";
+  src: url("/fonts/maple-normal/italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Canvas Maple Mono Normal NF CN";
+  src: url("/fonts/maple-normal/bold-italic.woff2") format("woff2");
+  font-weight: 700;
+  font-style: italic;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Canvas Cascadia Code PL";
+  src: url("/fonts/cascadia/regular.woff2") format("woff2");
+  font-weight: 200 700;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Canvas Cascadia Code PL";
+  src: url("/fonts/cascadia/italic.woff2") format("woff2");
+  font-weight: 200 700;
+  font-style: italic;
+  font-display: block;
+}

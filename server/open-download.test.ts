@@ -189,6 +189,60 @@ test("overview copy succeeds before any HTTP request and stages exact retryable 
   assert.equal(f.service.action(String(notice.id), "other-session", "prepare"), undefined);
 });
 
+test("overview completion exposes sniffed preview metadata and owner-only inline bytes", async t => {
+  const samples = [
+    { filename: "photo.png", content: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), preview: "image", mime: "image/png" },
+    { filename: "document.pdf", content: Buffer.from("%PDF-1.4\nfixture\n%%EOF\n"), preview: "pdf", mime: "application/pdf" },
+    { filename: "notes.txt", content: Buffer.from("中文 <b>plain text</b>\n"), preview: "text", mime: "text/plain; charset=utf-8" },
+  ];
+  for (const sample of samples) await t.test(sample.preview, async t => {
+    const f = await fixture(t);
+    await copyFile(f, sample.filename, sample.content);
+    const notice = f.receiver.messages.find(message => message.type === "download")!;
+    assert.equal(notice.preview, sample.preview);
+    assert.equal(notice.mime, sample.mime);
+    assert.equal(f.service.action(String(notice.id), "authenticated-session", "prepare")?.state, "completed",
+      "CLI completes without a preview acknowledgement");
+    const url = `http://canvas.test${notice.url}?preview=1`;
+    assert.equal((await f.app.request(url)).status, 401);
+    assert.equal((await f.app.request(url, { headers: { Cookie: "canvas_session=other-session" } })).status, 404);
+    const preview = await f.app.request(url, { headers: { Cookie: "canvas_session=authenticated-session" } });
+    assert.equal(preview.status, 200);
+    assert.equal(preview.headers.get("content-type"), sample.mime);
+    assert.match(preview.headers.get("content-disposition")!, /^inline;/u);
+    assert.equal(preview.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(preview.headers.get("cross-origin-resource-policy"), "same-origin");
+    const csp = preview.headers.get("content-security-policy")!;
+    assert.match(csp, /default-src 'none';/u);
+    assert.equal(csp.includes("sandbox"), sample.preview !== "pdf", "native PDF viewer must remain available");
+    assert.deepEqual(Buffer.from(await preview.arrayBuffer()), sample.content);
+    for (const query of ["", "?download=1", "?preview=1&download=1"]) {
+      const download = await f.app.request(`http://canvas.test${notice.url}${query}`, { headers: { Cookie: "canvas_session=authenticated-session" } });
+      assert.match(download.headers.get("content-disposition")!, /^attachment;/u);
+      assert.equal(download.headers.get("content-type"), "application/octet-stream");
+      assert.deepEqual(Buffer.from(await download.arrayBuffer()), sample.content);
+    }
+  });
+});
+
+test("overview inline mode never promotes opaque or active files to browser previews", async t => {
+  for (const sample of [
+    { filename: "binary.txt", content: Buffer.from([0, 255, 127, 1]) },
+    { filename: "page.html", content: Buffer.from("<!doctype html><script>fixture</script>") },
+    { filename: "drawing.svg", content: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>') },
+    { filename: "script.js", content: Buffer.from("console.log('fixture')") },
+  ]) await t.test(sample.filename, async t => {
+    const f = await fixture(t);
+    await copyFile(f, sample.filename, sample.content);
+    const notice = f.receiver.messages.find(message => message.type === "download")!;
+    assert.equal(notice.preview, "file");
+    const response = await f.app.request(`http://canvas.test${notice.url}?preview=1`, { headers: { Cookie: "canvas_session=authenticated-session" } });
+    assert.match(response.headers.get("content-disposition")!, /^attachment;/u);
+    assert.equal(response.headers.get("content-type"), "application/octet-stream");
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), sample.content);
+  });
+});
+
 test("directories reach only their controlling browser and do not stage file bytes", async t => {
   const f = await fixture(t);
   const path = join(f.root, "Folder 空间");

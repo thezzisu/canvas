@@ -122,12 +122,12 @@ function safeFilename(value: unknown): string | undefined {
   return value;
 }
 
-function contentDisposition(filename: string): string {
+function contentDisposition(filename: string, mode: "attachment" | "inline" = "attachment"): string {
   const fallback = filename.replace(/[^\x20-\x7e]|["\\]/gu, "_");
   const encoded = encodeURIComponent(filename).replace(/[!'()*]/gu, (char) =>
     `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
   );
-  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+  return `${mode}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 export class OpenDownloadService {
@@ -515,7 +515,8 @@ export class OpenDownloadService {
           this.finish(ticket, "completed");
           if (asset.temporary && ticket.recipient.readyState === 1) {
             try { ticket.recipient.send(JSON.stringify({ type: "download", id: ticket.id,
-              url: `/api/downloads/${ticket.id}`, filename: ticket.filename, size: ticket.size })); } catch {}
+              url: `/api/downloads/${ticket.id}`, filename: ticket.filename, size: ticket.size,
+              preview: asset.preview, mime: asset.mime })); } catch {}
           }
           callback();
         };
@@ -535,16 +536,28 @@ export class OpenDownloadService {
     socket.pipe(body);
   }
 
-  async open(ticketId: string, sessionId: string): Promise<{ body: Readable; size: number; filename: string; headers: Record<string, string> } | undefined> {
+  async open(ticketId: string, sessionId: string): Promise<{ body: Readable; size: number; filename: string; headers: Record<string, string>; previewHeaders?: Record<string, string> } | undefined> {
     const staged = this.staged.get(ticketId);
     if (!staged || staged.sessionId !== sessionId) return;
     const file = await this.options.readTemporary(staged.assetId);
     if (!file) { clearTimeout(staged.timer); this.staged.delete(ticketId); return; }
-    return { body: file.body, size: file.asset.size, filename: file.asset.filename, headers: {
+    const headers = {
       "Cache-Control": "private, no-store", "Content-Disposition": contentDisposition(file.asset.filename),
       "Content-Length": String(file.asset.size), "Content-Type": "application/octet-stream",
       "X-Content-Type-Options": "nosniff", "Cross-Origin-Resource-Policy": "same-origin",
-    } };
+      "Referrer-Policy": "no-referrer",
+    };
+    // Inline content is classified from staged bytes, never from a helper URL
+    // or an untrusted filename alone. The ticket stays bound to its owner.
+    const previewHeaders = file.asset.preview === "file" ? undefined : {
+      ...headers,
+      "Content-Type": file.asset.mime,
+      "Content-Disposition": contentDisposition(file.asset.filename, "inline"),
+      "Content-Security-Policy": file.asset.preview === "pdf"
+        ? "default-src 'none'; frame-ancestors 'self'"
+        : "default-src 'none'; sandbox; frame-ancestors 'self'",
+    };
+    return { body: file.body, size: file.asset.size, filename: file.asset.filename, headers, previewHeaders };
   }
 
   async closeSource(sourceId: string): Promise<void> {
