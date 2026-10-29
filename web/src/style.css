@@ -135,7 +135,7 @@
 .mobile-layout .terminal-card:not(.focused) .terminal-host{cursor:default;user-select:none;-webkit-user-select:none}
 .mobile-layout .terminal-card:not(.focused) .xterm{pointer-events:none}
 .mobile-layout .terminal-header{cursor:default}
-.mobile-layout .vue-flow__minimap{display:block;width:96px;height:64px;right:8px!important;bottom:62px!important;touch-action:none}.mobile-layout .vue-flow__minimap svg{width:96px;height:64px}
+.mobile-layout .vue-flow__minimap{display:block;width:96px;height:64px;right:max(8px,env(safe-area-inset-right))!important;top:8px!important;bottom:auto!important;touch-action:none}.mobile-layout .vue-flow__minimap svg{width:96px;height:64px}
 .mobile-layout .canvas-toolbar{left:max(10px,env(safe-area-inset-left));bottom:max(10px,env(safe-area-inset-bottom));gap:2px;padding:3px;border-radius:7px}
 .mobile-layout .canvas-toolbar button{width:38px;height:38px}
 .mobile-layout .source-panel{position:absolute;inset:0 0 0 auto;width:min(100%,390px);padding:max(16px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) env(safe-area-inset-bottom) max(16px,env(safe-area-inset-left));z-index:43}
@@ -143,7 +143,7 @@
 .mobile-layout .source-panel>header h2{font-size:18px}
 .mobile-layout .source-panel .icon-button{min-width:34px;height:36px}
 .mobile-layout .source-panel-content{margin-top:14px}
-.mobile-layout .focus-overlay{position:absolute;inset:0;padding:env(safe-area-inset-top) env(safe-area-inset-right) var(--mobile-safe-bottom,env(safe-area-inset-bottom)) env(safe-area-inset-left);align-items:stretch;justify-content:flex-start;overflow:hidden;min-height:0}
+.mobile-layout .focus-overlay{position:absolute;inset:0;padding:0 env(safe-area-inset-right) 0 env(safe-area-inset-left);align-items:stretch;justify-content:flex-start;overflow:hidden;min-height:0}
 .mobile-layout .focus-overlay>.terminal-card{flex-shrink:0;border-radius:0}
 .mobile-layout .terminal-actions button[aria-pressed=true]{background:#d4aa8020;color:#e2bd99}
 .mobile-layout .modal-backdrop{position:absolute;padding:max(10px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left));align-items:center}

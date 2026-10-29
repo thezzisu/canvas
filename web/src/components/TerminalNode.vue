@@ -186,14 +186,14 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-mobile-preview .terminal-host{pointer-events:none}
 .terminal-mobile-preview .terminal-actions{visibility:hidden}
 .terminal-mobile.focused{min-height:0;border-radius:0;box-shadow:none}
-.terminal-mobile.focused .terminal-header{height:44px;min-height:44px;flex:0 0 44px;padding:0 4px;gap:3px;cursor:default}
+.terminal-mobile.focused .terminal-header{height:calc(44px + var(--mobile-safe-top,0px));min-height:calc(44px + var(--mobile-safe-top,0px));flex:0 0 calc(44px + var(--mobile-safe-top,0px));padding:var(--mobile-safe-top,0px) 4px 0;gap:3px;cursor:default}
 .terminal-mobile.focused .terminal-name{font-size:13px}
 .terminal-mobile.focused .terminal-actions{opacity:1;pointer-events:auto;gap:0}
 .terminal-mobile.focused .terminal-actions button{width:44px;height:44px;min-width:44px;border-radius:4px}
 .terminal-mobile.focused :deep(.terminal-status-trigger){width:44px;height:44px;min-width:44px}
 .terminal-mobile.focused .terminal-host{min-height:0;flex:1;touch-action:none}
-.terminal-mobile.focused .terminal-loading,.terminal-mobile.focused .terminal-maximized,.terminal-mobile.focused .terminal-file-drop{top:44px;bottom:49px}
-.terminal-mobile.focused .terminal-upload{bottom:55px}
-.terminal-mobile.focused .terminal-copy-notice{bottom:57px}
-.terminal-mobile.focused .terminal-disconnected{bottom:49px}
+.terminal-mobile.focused .terminal-loading,.terminal-mobile.focused .terminal-maximized,.terminal-mobile.focused .terminal-file-drop{top:calc(44px + var(--mobile-safe-top,0px));bottom:calc(49px + var(--mobile-safe-bottom,0px))}
+.terminal-mobile.focused .terminal-upload{bottom:calc(55px + var(--mobile-safe-bottom,0px))}
+.terminal-mobile.focused .terminal-copy-notice{bottom:calc(57px + var(--mobile-safe-bottom,0px))}
+.terminal-mobile.focused .terminal-disconnected{bottom:calc(49px + var(--mobile-safe-bottom,0px))}
 </style>

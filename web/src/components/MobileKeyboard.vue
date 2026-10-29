@@ -264,7 +264,7 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
 </template>
 
 <style scoped>
-.mobile-keyboard{position:relative;flex:0 0 auto;min-width:0;border-top:1px solid #353c47;background:#1a1e25;padding:4px;color:#cbd2dd;z-index:6;touch-action:manipulation}
+.mobile-keyboard{position:relative;flex:0 0 auto;min-width:0;border-top:1px solid #353c47;background:#1a1e25;padding:4px 4px calc(4px + var(--mobile-safe-bottom,0px));color:#cbd2dd;z-index:6;touch-action:manipulation}
 .mobile-key-row{position:relative;z-index:3;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:3px;overflow:hidden;min-height:40px;background:#1a1e25}
 .mobile-keyboard button{min-height:44px;min-width:44px;padding:0 6px;border:1px solid #3a4350;border-bottom-color:#48515e;border-radius:5px;background:#2b323d;box-shadow:inset 0 1px 0 #ffffff05,0 1px 1px #0003;color:#cbd2dd;font-size:12px;line-height:1;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;white-space:nowrap;-webkit-tap-highlight-color:transparent}
 .mobile-key-row>button{min-width:0;min-height:40px;padding:0;height:44px}
@@ -274,7 +274,7 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
 .mobile-keyboard button:disabled{opacity:.4;cursor:default}
 .mobile-keyboard .arrow-key{font-size:21px;font-family:system-ui,sans-serif}
 .mobile-keys-dismiss{position:fixed;inset:0;z-index:1;background:transparent}
-.mobile-keys-more{position:absolute;left:50%;bottom:calc(100% + 5px);width:min(760px,calc(100% - 8px));transform:translateX(-50%);z-index:2;display:flex;flex-direction:column;max-height:min(460px,calc(var(--mobile-height,100dvh) - 110px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));overflow:hidden;background:#20252d;border:1px solid #48515e;border-radius:9px;box-shadow:0 8px 32px #0008}
+.mobile-keys-more{position:absolute;left:50%;bottom:calc(100% + 5px);width:min(760px,calc(100% - 8px));transform:translateX(-50%);z-index:2;display:flex;flex-direction:column;max-height:min(460px,calc(var(--mobile-height,100dvh) - 110px - var(--mobile-safe-top,0px) - var(--mobile-safe-bottom,0px)));overflow:hidden;background:#20252d;border:1px solid #48515e;border-radius:9px;box-shadow:0 8px 32px #0008}
 .mobile-key-deck{container-type:inline-size;flex:1 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;padding:6px;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:thin;scrollbar-color:#515c6b transparent}
 .mobile-key-deck-row{display:grid;gap:2px;margin-bottom:4px;min-width:0}
 .mobile-key-deck-row:last-child{margin-bottom:0}

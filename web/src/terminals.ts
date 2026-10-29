@@ -87,7 +87,7 @@ export function setContentFont(settings: ContentFontSettings, presentation: Font
 }
 const scrollbarWidth = 6
 let mouseOwner: Session | undefined
-let mouseCoordinatesInstalled = false
+let terminalEventsInstalled = false
 const mouseEvents = ['mousedown', 'mousemove', 'mouseup', 'wheel'] as const
 export function terminalConsumesWheel(event: WheelEvent): boolean {
   if (event.ctrlKey) return false
@@ -124,13 +124,14 @@ function normalizeMouseCoordinates(event: MouseEvent) {
   })
 }
 function releaseMouseOwner() { mouseOwner = undefined }
-function installMouseCoordinates() {
-  if (mouseCoordinatesInstalled) return
+function installTerminalEvents() {
+  if (terminalEventsInstalled) return
   for (const event of mouseEvents) document.addEventListener(event, normalizeMouseCoordinates, true)
   document.addEventListener('dragover', preventFileNavigation)
   document.addEventListener('drop', preventFileNavigation)
+  document.addEventListener('visibilitychange', terminalVisibilityChanged)
   window.addEventListener('blur', releaseMouseOwner)
-  mouseCoordinatesInstalled = true
+  terminalEventsInstalled = true
 }
 const key = (sourceId: string, spaceId: string, windowId: string) => `${sourceId}\u0000${spaceId}\u0000${windowId}`
 function setState(session: Session, state: TerminalStatus) {
@@ -182,6 +183,21 @@ function connectionFailed(session: Session, error = '终端连接已断开', ret
   session.connectionError = error
   session.reconnect?.failed(retry)
 }
+function terminalVisibilityChanged() {
+  for (const session of sessions.values()) {
+    if (document.hidden) {
+      session.reconnect?.pause()
+      // Keep healthy sockets alive. Pending authentication and handshakes are
+      // restarted in the foreground instead of timing out behind the user.
+      if (session.state.status !== 'connected') disconnect(session)
+    } else if (session.host?.isConnected) {
+      if (session.state.status === 'connected') {
+        if (session.socket?.readyState === WebSocket.OPEN) session.reconnect?.connected()
+        else connectionFailed(session)
+      } else session.reconnect?.resume()
+    }
+  }
+}
 async function connect(session: Session, probe: boolean) {
   const revision = ++session.connectionRevision
   if (probe) {
@@ -206,7 +222,7 @@ async function connect(session: Session, probe: boolean) {
       return
     } finally { if (session.connectionProbe === controller) session.connectionProbe = undefined }
   }
-  if (session.connectionRevision !== revision || !session.host?.isConnected) return
+  if (session.connectionRevision !== revision || !session.host?.isConnected || document.hidden) return
   const url = new URL('/api/terminal', location.href)
   url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
   for (const [name, value] of Object.entries(session.resource)) url.searchParams.set(name, value)
@@ -357,7 +373,7 @@ function sendTerminalKey(session: Session, key: string, modifiers: Partial<Termi
   return true
 }
 export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, onGeometry?: (geometry: TerminalGeometry) => void, options: { magnified?: boolean; mobile?: boolean } = {}) {
-  installMouseCoordinates()
+  installTerminalEvents()
   const id = key(resource.sourceId, resource.spaceId, resource.windowId)
   let session = sessions.get(id)
   if (!session) {
@@ -389,7 +405,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       state: { status: 'connecting' }, listeners: new Set(), geometryListeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
     const current = session
     current.reconnect = new TerminalReconnect({
-      active: () => !!current.host?.isConnected,
+      active: () => !!current.host?.isConnected && !document.hidden,
       connect: probe => { void connect(current, probe) },
       waiting: attempt => setState(current, { ...current.state, status: 'connecting', error: undefined, retryAttempt: attempt || undefined }),
       failed: () => setState(current, { ...current.state, status: 'disconnected', error: current.connectionError, retryAttempt: undefined }),
@@ -616,6 +632,7 @@ export function clearTerminals() {
   document.removeEventListener('dragover', preventFileNavigation)
   document.removeEventListener('drop', preventFileNavigation)
   window.removeEventListener('blur', releaseMouseOwner)
-  mouseCoordinatesInstalled = false
+  document.removeEventListener('visibilitychange', terminalVisibilityChanged)
+  terminalEventsInstalled = false
   mouseOwner = undefined
 }

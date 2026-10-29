@@ -130,7 +130,13 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       if (!options.active()) return
       if (owner !== controller) { owner?.blur(); owner = controller }
       if (value !== undefined && value !== requested) {
-        cancelTimers(); lastVisible = undefined; updateIntent(value)
+        cancelTimers(); lastVisible = undefined
+        // Android caches rich-input support when focus changes. End the old
+        // noneditable focus before enabling the editor, then focus it again
+        // within the same user gesture so IME opening and image MIME types agree.
+        changingFocus = true
+        try { textarea.blur() } finally { changingFocus = false }
+        updateIntent(value)
         if (value) {
           baseline = { width: window.innerWidth, height: Math.max(baseline.height, window.innerHeight, read().height) }
           confirmOpening()
@@ -144,11 +150,11 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     blur() {
       cancelTimers(); lastVisible = undefined; updateIntent(false)
       if (options.active() || owner === controller) {
-        inputMode()
         changingFocus = true
         try {
-          try { keyboard?.hide() } catch { /* Readonly and blur also close the native input. */ }
           textarea.blur()
+          inputMode()
+          try { keyboard?.hide() } catch { /* Readonly and blur also close the native input. */ }
         } finally { changingFocus = false }
       }
       if (owner === controller) mobileKeyboardVisible.value = options.active() && !document.hidden && occluded(read())

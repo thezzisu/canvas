@@ -262,8 +262,8 @@ export function useCanvasNavigation(options: {
   }
   async function exitFullscreen() {
     try {
-      if (document.fullscreenElement === app.value) await document.exitFullscreen()
-    } catch { /* Removing the authenticated app can already end native fullscreen. */ }
+      if (document.fullscreenElement === document.documentElement) await document.exitFullscreen()
+    } catch { /* The browser may already have left fullscreen. */ }
     await restore()
   }
   async function toggleFullscreen() {
@@ -277,12 +277,14 @@ export function useCanvasNavigation(options: {
       previous = { canvasId: options.getCanvasId(), viewport: { ...options.getViewport() }, width: surface.value.clientWidth, height: surface.value.clientHeight,
         frame: options.mobile() ? canvasFrame(surface.value) : undefined }
       fullscreen.value = true
-      // Invoke before yielding so mobile browsers receive the original tap's
-      // user activation. Embedded browsers can still use the expanded page.
+      // Fullscreen the document so the app can still follow the visual viewport:
+      // browsers force non-root fullscreen elements to fill the layout viewport.
+      // Invoke before yielding to retain the original tap's user activation.
       try {
-        await app.value.requestFullscreen?.({ navigationUI: 'hide' })
-        if (document.fullscreenElement !== app.value) throw new Error('Fullscreen unavailable')
+        await document.documentElement.requestFullscreen?.({ navigationUI: 'hide' })
+        if (document.fullscreenElement !== document.documentElement) throw new Error('Fullscreen unavailable')
       } catch { options.onError('浏览器未允许系统全屏，已切换网页全屏') }
+      if (!fullscreen.value || !app.value) { await exitFullscreen(); return }
       await settle()
       if (fullscreen.value && options.paging?.enabled()) await options.paging.recenter()
       else if (previous && fullscreen.value) await options.setViewport({ ...previous.viewport,

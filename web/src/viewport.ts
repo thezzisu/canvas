@@ -59,6 +59,7 @@ export function useMobileViewport(mobile: Ref<boolean>) {
     const frame = mobileKeyboardFrame.value || viewport.value
     return { '--mobile-width': `${frame.width}px`, '--mobile-height': `${frame.height}px`,
       '--mobile-top': `${frame.top}px`, '--mobile-left': `${frame.left}px`,
+      '--mobile-safe-top': `max(0px, calc(env(safe-area-inset-top) - ${frame.top}px))`,
       '--mobile-safe-bottom': mobileKeyboardVisible.value ? '0px' : 'env(safe-area-inset-bottom)',
     }
   })

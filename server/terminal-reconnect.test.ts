@@ -13,6 +13,7 @@ function fixture(t: TestContext) {
   })
   t.after(() => control.pause())
   return { control, attempts, waiting, exhausted: () => exhausted, timeouts: () => timeouts,
+    setActive: (value: boolean) => { active = value },
     detach: () => { active = false; control.pause() }, attach: () => { active = true; control.resume() } }
 }
 
@@ -82,6 +83,38 @@ test('detaching cancels timers and remounting resumes the remaining retry budget
   assert.equal(f.attempts.length, 2)
   f.attach(); t.mock.timers.tick(1500)
   assert.equal(f.attempts.length, 3)
+})
+
+test('background transport loss waits without spending retries until the view returns', t => {
+  const f = fixture(t); f.control.resume(); f.control.connected(); t.mock.timers.tick(5000)
+  f.detach(); f.control.failed(); t.mock.timers.tick(60_000)
+  assert.equal(f.attempts.length, 1); assert.equal(f.exhausted(), 0)
+  assert.equal(f.waiting.at(-1), 1)
+  f.attach(); t.mock.timers.tick(500)
+  assert.deepEqual(f.attempts, [false, true])
+  f.control.failed(); assert.equal(f.waiting.at(-1), 2)
+})
+
+test('a last-attempt failure arriving while hidden stays available for foreground retry', t => {
+  const f = fixture(t); f.control.resume()
+  for (const delay of [500, 1500, 3000]) { f.control.failed(); t.mock.timers.tick(delay) }
+  f.detach(); f.control.failed(); t.mock.timers.tick(60_000)
+  assert.equal(f.exhausted(), 0); assert.equal(f.attempts.length, 4)
+  f.attach(); t.mock.timers.tick(3000)
+  assert.equal(f.attempts.length, 5)
+  f.control.failed(); assert.equal(f.exhausted(), 1)
+  f.detach(); f.attach(); t.mock.timers.tick(60_000)
+  assert.equal(f.attempts.length, 5, 'foreground exhaustion cannot be reset by backgrounding')
+})
+
+test('queued handshake and stability callbacks cannot count background time', t => {
+  const f = fixture(t); f.control.resume()
+  f.setActive(false); t.mock.timers.tick(12_000)
+  assert.equal(f.timeouts(), 0); assert.equal(f.attempts.length, 1)
+  f.attach(); f.control.failed(); t.mock.timers.tick(500); f.control.connected()
+  f.setActive(false); t.mock.timers.tick(5000)
+  f.setActive(true); f.control.failed()
+  assert.equal(f.waiting.at(-1), 2, 'hidden time cannot replenish an unstable foreground budget')
 })
 
 test('authorization or source removal stops retries and disposed handshakes cannot fire later', t => {

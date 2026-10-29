@@ -4,13 +4,18 @@ import { bindMobileInput } from '../web/src/mobile-input.ts'
 
 function fixture(t: TestContext) {
   t.mock.timers.enable({ apis: ['setTimeout'] })
+  const textNode = { textContent: '' }
+  const caret: Array<{ node: unknown; offset: number }> = []
   const element = Object.assign(new EventTarget(), {
     style: {}, attributes: new Map<string, string>(), textContent: '', contentEditable: '', inputMode: '', removed: false,
+    firstChild: textNode,
     setAttribute(name: string, value: string) { this.attributes.set(name, value) },
     remove() { this.removed = true },
   })
+  Object.defineProperty(element, 'textContent', { get: () => textNode.textContent, set: (text: string) => { textNode.textContent = text } })
   const oldDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
-  const document = { createElement: () => element, activeElement: element, getSelection: () => ({ collapse() {} }) }
+  const document = { createElement: () => element, activeElement: element,
+    getSelection: () => ({ collapse(node: unknown, offset: number) { caret.push({ node, offset }) } }) }
   Object.defineProperty(globalThis, 'document', { configurable: true, value: document })
   const events: Array<{ type: string; data?: unknown }> = []
   let active = true
@@ -38,7 +43,7 @@ function fixture(t: TestContext) {
   const edit = (text: string, properties: Record<string, unknown> = {}) => {
     element.textContent = `\u200b${text}`; dispatch('input', properties)
   }
-  return { control, element, events, dispatch, edit, deactivate: () => { active = false } }
+  return { control, element, events, dispatch, edit, caret, deactivate: () => { active = false } }
 }
 
 test('mobile input enables rich editing only while the keyboard is requested', t => {
@@ -61,6 +66,21 @@ test('ordinary input sends only inserted text and retains an Android deletion an
   f.edit('a'); f.edit('🙂'); f.edit('\u200b')
   assert.deepEqual(f.events, [{ type: 'input', data: 'a' }, { type: 'input', data: '🙂' }, { type: 'input', data: '\u200b' }])
   assert.equal(f.element.textContent, '\u200b')
+})
+
+test('enabling an already focused input creates a text caret and repeated enablement preserves composition', t => {
+  const f = fixture(t)
+  f.dispatch('focus')
+  assert.equal(f.caret.length, 0, 'readonly focus does not establish an editable selection')
+  f.control.setEditable(true)
+  assert.deepEqual(f.caret.at(-1), { node: f.element.firstChild, offset: 1 })
+  const placements = f.caret.length
+  f.dispatch('compositionstart'); f.edit('拼音', { isComposing: true })
+  f.control.setEditable(true)
+  assert.equal(f.caret.length, placements)
+  assert.equal(f.element.textContent, '\u200b拼音')
+  f.dispatch('compositionend'); t.mock.timers.tick(0)
+  assert.deepEqual(f.events, [{ type: 'focus' }, { type: 'composing' }, { type: 'input', data: '拼音' }])
 })
 
 test('IME updates stay local and the final composition commits once', t => {

@@ -54,6 +54,22 @@ test('mobile keyboard off gates all native focus while explicit opening permits 
   assert.equal(mobileKeyboardVisible.value, false)
 })
 
+test('opening an already focused noneditable input refreshes the native focus type', t => {
+  const f = fixture(t)
+  const focusTypes: string[] = []
+  f.textarea.addEventListener('focus', () => focusTypes.push(f.textarea.readOnly ? 'none' : f.textarea.inputMode))
+  f.control.focus(false)
+  assert.deepEqual(focusTypes, ['none'])
+  f.open()
+  assert.deepEqual(focusTypes, ['none', 'text'], 'native focus must see the newly enabled editor')
+  f.control.focus()
+  assert.deepEqual(focusTypes, ['none', 'text'], 'ordinary terminal touch must not restart an active IME')
+  f.control.blur(); f.resize(844); f.control.focus()
+  assert.deepEqual(focusTypes, ['none', 'text', 'none'])
+  f.open()
+  assert.deepEqual(focusTypes, ['none', 'text', 'none', 'text'], 'reopening refreshes input policy each time')
+})
+
 test('Android Back without blur restores once and locks the previous terminal viewport', async t => {
   const f = fixture(t); f.open()
   const before = f.textarea.focusCalls

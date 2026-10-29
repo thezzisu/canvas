@@ -29,9 +29,14 @@ export function bindMobileInput(parent: HTMLElement, options: MobileInputOptions
   // A preceding character lets Android's deleteSurroundingText emit Backspace
   // even after the previous input has already been sent to the terminal.
   const anchor = '\u200b'
+  const placeCaret = () => {
+    if (editable && document.activeElement === element && element.firstChild) {
+      document.getSelection()?.collapse(element.firstChild, element.firstChild.textContent?.length || 0)
+    }
+  }
   const clear = () => {
     element.textContent = anchor
-    if (document.activeElement === element) document.getSelection()?.collapse(element, 1)
+    placeCaret()
   }
   function commit() {
     clearTimeout(commitTimer); commitTimer = undefined
@@ -40,12 +45,16 @@ export function bindMobileInput(parent: HTMLElement, options: MobileInputOptions
     if (text && editable && options.active()) options.input(text)
   }
   function setEditable(value: boolean) {
+    // Focus restoration and ordinary terminal taps must not rewrite the IME's
+    // editing state or selection while a composition is in progress.
+    if (editable === value && element.contentEditable === String(value)) return
     editable = value
     // plaintext-only would make Chromium reject Gboard image commits again.
     element.contentEditable = String(value)
     element.setAttribute('aria-readonly', String(!value))
     element.inputMode = value ? 'text' : 'none'
     if (!value) { clearTimeout(commitTimer); commitTimer = undefined; composing = false; clear() }
+    else placeCaret()
   }
   const key = (event: KeyboardEvent) => {
     if (!options.active()) { event.preventDefault(); return }

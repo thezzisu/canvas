@@ -24,7 +24,10 @@ export class TerminalReconnect {
     this.retryTimer = undefined
     if (!this.options.active() || this.exhausted) return
     this.options.waiting(this.attempt)
-    this.handshakeTimer = setTimeout(() => { this.handshakeTimer = undefined; this.options.timeout() }, handshakeTimeout)
+    this.handshakeTimer = setTimeout(() => {
+      this.handshakeTimer = undefined
+      if (this.options.active()) this.options.timeout()
+    }, handshakeTimeout)
     const probe = this.started
     this.started = true
     this.options.connect(probe)
@@ -45,11 +48,21 @@ export class TerminalReconnect {
     clearTimeout(this.handshakeTimer); this.handshakeTimer = undefined
     clearTimeout(this.retryTimer); this.retryTimer = undefined
     if (this.stableTimer !== undefined || !this.options.active()) return
-    this.stableTimer = setTimeout(() => { this.stableTimer = undefined; this.attempt = 0 }, stableConnection)
+    this.stableTimer = setTimeout(() => {
+      this.stableTimer = undefined
+      if (this.options.active()) this.attempt = 0
+    }, stableConnection)
   }
 
   failed(retry = true) {
     this.pause()
+    // A hidden or detached view cannot spend retries. Reserve its next attempt
+    // for resume; a failure arriving in the background cannot exhaust it.
+    if (retry && !this.options.active()) {
+      this.attempt = Math.max(1, this.attempt)
+      this.options.waiting(this.attempt)
+      return
+    }
     if (!retry || this.attempt === retryDelays.length) {
       this.exhausted = true; this.options.failed(); return
     }
