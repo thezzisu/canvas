@@ -1,8 +1,12 @@
 import { mobileKeyboardFrame, mobileKeyboardVisible } from './mobile-keyboard'
-import { viewportPolicy } from './developer-mode'
+import type { GlobalSettings } from '../../shared/settings'
+import { developerMode, viewportFit, interactiveWidget, viewportPolicy } from './developer-mode'
+import { cutoutPosition, cutoutWidth } from './display-cutout'
+import { languagePreference, locale } from './i18n'
+import { keepScreenAwake, screenWakeLockState } from './screen-wake-lock'
 
 /** Explicit, local-only geometry and viewport policy. No terminal content or identity. */
-export function collectViewportDiagnostics() {
+export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
   const number = (value: number) => Number.isFinite(value) ? Math.round(value * 100) / 100 : null
   const rect = (value: DOMRect | DOMRectReadOnly) => ({
     x: number(value.x), y: number(value.y), width: number(value.width), height: number(value.height),
@@ -31,7 +35,18 @@ export function collectViewportDiagnostics() {
     probes = { fixed, dynamic, safeArea: padding(probe) }
   } finally { probe.remove() }
   return {
-    version: 1,
+    version: 2,
+    settings: {
+      developerMode: developerMode.value,
+      viewportFit: viewportFit.value, interactiveWidget: interactiveWidget.value,
+      displayCutout: { position: cutoutPosition.value, width: cutoutWidth.value },
+      language: { preference: languagePreference.value, resolved: locale.value },
+      keepScreenAwake: keepScreenAwake.value,
+      contentFont: settings?.contentFont || null,
+    },
+    browser: { userAgent: navigator.userAgent, secureContext: window.isSecureContext },
+    screen: { width: number(screen.width), height: number(screen.height), availableWidth: number(screen.availWidth), availableHeight: number(screen.availHeight) },
+    wakeLock: screenWakeLockState.value,
     viewportPolicy: { ...viewportPolicy.value, meta: document.querySelector<HTMLMetaElement>('meta[name="viewport"]')?.content || null },
     fullscreen: !fullscreen ? 'none' : fullscreen === document.documentElement ? 'document' : fullscreen === app ? 'app' : 'other',
     viewport: {
