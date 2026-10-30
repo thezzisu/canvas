@@ -172,3 +172,8 @@
 :is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header)[data-cutout-position=center]>.cutout-status{grid-area:1/1;justify-self:start}
 :is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header)[data-cutout-position=center]>.cutout-title{grid-area:1/1;margin-left:44px}
 :is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header)[data-cutout-position=center]>.cutout-actions{grid-area:1/3;justify-self:end;margin-left:0}
+
+.vue-flow__minimap-mask,.vue-flow__minimap-node.minimap-decoration{pointer-events:none}
+.vue-flow__minimap-node.minimap-window{cursor:pointer;pointer-events:all}
+.vue-flow__minimap-node.minimap-window:hover{filter:brightness(1.25)}
+.vue-flow__minimap-node.minimap-current{stroke:#d8dde6;stroke-width:1;vector-effect:non-scaling-stroke}
