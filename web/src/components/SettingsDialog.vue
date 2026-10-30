@@ -5,6 +5,7 @@ import UModal from '@nuxt/ui/components/Modal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UInputMenu from '@nuxt/ui/components/InputMenu.vue'
 import USelect from '@nuxt/ui/components/Select.vue'
+import USlider from '@nuxt/ui/components/Slider.vue'
 import USwitch from '@nuxt/ui/components/Switch.vue'
 import type { ContentFontSettings, GlobalSettings } from '../../../shared/settings'
 import { FONT_CATALOG, buildFontPresentation, ensureContentFont } from '../fonts'
@@ -29,7 +30,7 @@ const cutoutPositions = computed<Array<{ value: CutoutPosition; label: string }>
 ])
 const cutoutMaximum = computed(() => Math.max(0, Math.min(240, Math.min(window.screen.width, window.screen.height) - (cutoutPosition.value === 'center' ? 264 : 220))))
 const displayedCutoutWidth = computed({
-  get: () => Math.min(cutoutWidth.value, cutoutMaximum.value),
+  get: () => Math.max(0, Math.min(cutoutWidth.value, cutoutMaximum.value)),
   set: (width: number) => { cutoutWidth.value = width },
 })
 const clone = (value: ContentFontSettings): ContentFontSettings => ({ ...value, stack: value.stack.map(entry => ({ ...entry })) })
@@ -164,8 +165,8 @@ onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer) })
       <section v-if="mobile && hasDisplayCutout" class="cutout-settings" :aria-label="t('settings.cutout')">
         <div class="cutout-heading"><span>{{ t('settings.cutout') }}</span><small>{{ t('settings.thisBrowser') }}</small></div>
         <div class="cutout-row"><span id="cutout-position-label">{{ t('settings.position') }}</span><div class="cutout-positions" role="group" aria-labelledby="cutout-position-label"><UButton v-for="position in cutoutPositions" :key="position.value" type="button" color="neutral" :variant="cutoutPosition === position.value ? 'solid' : 'outline'" :aria-pressed="cutoutPosition === position.value" @click="cutoutPosition = position.value">{{ position.label }}</UButton></div></div>
-        <div class="cutout-width-label"><label for="cutout-width">{{ t('settings.width') }}</label><output for="cutout-width">{{ n(displayedCutoutWidth) }} px</output></div>
-        <input id="cutout-width" v-model.number="displayedCutoutWidth" class="cutout-width" type="range" min="0" :max="cutoutMaximum" step="1" :aria-valuetext="`${n(displayedCutoutWidth)} px`" />
+        <div class="cutout-width-label"><span id="cutout-width-label">{{ t('settings.width') }}</span><output>{{ n(displayedCutoutWidth) }} px</output></div>
+        <USlider id="cutout-width" v-model="displayedCutoutWidth" class="cutout-width" :min="0" :max="cutoutMaximum" :step="1" size="sm" :disabled="cutoutMaximum === 0" aria-labelledby="cutout-width-label" :aria-valuetext="`${n(displayedCutoutWidth)} px`" />
       </section>
       <form class="font-settings" @submit.prevent>
         <div class="font-stack-heading"><span>{{ t('settings.contentFont') }}</span><UButton type="button" color="neutral" variant="ghost" size="xs" class="font-add" :disabled="draft.stack.length >= 12" :aria-label="t('settings.addFont')" @click="addFont"><Icon name="plus" :size="13" /> {{ t('settings.add') }}</UButton></div>
@@ -233,7 +234,7 @@ onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer) })
 .cutout-positions{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;width:164px}
 .cutout-positions button{min-height:44px;justify-content:center}
 .cutout-width-label output{color:#929fb0;font-variant-numeric:tabular-nums}
-.cutout-width{display:block;width:100%;height:28px;margin:0;accent-color:var(--accent);cursor:pointer}
+.cutout-width{width:100%;min-height:44px;margin:0}
 .developer-setting{margin-top:18px;padding-top:16px;border-top:1px solid #343b46}
 .wake-lock-setting{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:18px;padding-top:16px;border-top:1px solid #343b46}
 .wake-lock-setting>small{margin-left:auto;color:#8793a4;font-size:11px}

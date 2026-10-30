@@ -24,6 +24,9 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
   const keyboard = (navigator as Navigator & { virtualKeyboard?: { boundingRect: DOMRectReadOnly; overlaysContent?: boolean } }).virtualKeyboard
   const held = mobileKeyboardFrame.value
   const appBox = app?.getBoundingClientRect()
+  const bounds = query('.viewport-bounds-probe')
+  const boundsSupported = typeof HTMLElement.prototype.showPopover === 'function'
+  const boundsOpen = boundsSupported && bounds?.matches(':popover-open') === true
   const probe = document.createElement('i')
   probe.setAttribute('aria-hidden', 'true')
   probe.style.cssText = 'all:initial;position:fixed;inset:0;visibility:hidden;pointer-events:none;box-sizing:border-box;contain:strict'
@@ -34,7 +37,9 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
     probe.style.bottom = 'auto'; probe.style.height = '100dvh'
     const dynamic = rect(probe.getBoundingClientRect())
     probe.style.height = '0'; probe.style.padding = 'env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)'
-    probes = { fixed, dynamic, safeArea: padding(probe) }
+    probes = { fixed, dynamic, safeArea: padding(probe), bounds: {
+      supported: boundsSupported, open: boundsOpen, rect: boundsOpen && bounds ? rect(bounds.getBoundingClientRect()) : null,
+    } }
   } finally { probe.remove() }
   return {
     version: 2,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import type { GlobalSettings } from '../../../shared/settings'
@@ -14,6 +14,9 @@ const { t } = useI18n()
 const open = ref(false)
 const toolbar = ref<HTMLElement>()
 const panel = ref<HTMLElement>()
+const bounds = ref<HTMLElement>()
+const boundsVisible = ref(false)
+const boundsSupported = typeof HTMLElement.prototype.showPopover === 'function'
 const feedback = ref('')
 let timer: ReturnType<typeof setTimeout> | undefined
 function preserveTerminalFocus(event: Event) {
@@ -50,7 +53,24 @@ function copy() {
   timer = setTimeout(() => { feedback.value = '' }, 2000)
 }
 function reloadPage() { if (!props.reloadBlocked) window.location.reload() }
-onBeforeUnmount(() => { clearTimeout(timer) })
+function syncBounds() { boundsVisible.value = bounds.value?.matches(':popover-open') === true }
+function toggleBounds() {
+  if (!boundsSupported || !bounds.value) return
+  if (boundsVisible.value) bounds.value.hidePopover()
+  else bounds.value.showPopover()
+  syncBounds()
+}
+function hideBounds() { if (boundsVisible.value) bounds.value?.hidePopover(); boundsVisible.value = false }
+function visibilityChanged() { if (document.hidden) hideBounds() }
+onMounted(() => {
+  document.addEventListener('fullscreenchange', hideBounds)
+  document.addEventListener('visibilitychange', visibilityChanged)
+})
+onBeforeUnmount(() => {
+  clearTimeout(timer); hideBounds()
+  document.removeEventListener('fullscreenchange', hideBounds)
+  document.removeEventListener('visibilitychange', visibilityChanged)
+})
 </script>
 
 <template>
@@ -74,10 +94,12 @@ onBeforeUnmount(() => { clearTimeout(timer) })
             <span v-if="viewportReloadRequired" role="status">{{ t('settings.reloadRequired') }}</span>
             <UButton type="button" color="neutral" variant="outline" size="sm" class="debug-reload" :disabled="reloadBlocked" @click="reloadPage">{{ t('settings.reload') }}</UButton>
           </div>
+          <UButton type="button" color="neutral" variant="outline" size="sm" class="debug-reload debug-bounds-toggle" :aria-pressed="boundsVisible" :disabled="!boundsSupported" @click="toggleBounds">Viewport bounds</UButton>
         </div>
       </template>
     </UPopover>
   </div>
+  <div ref="bounds" class="viewport-bounds-probe" popover="manual" aria-hidden="true" @toggle="syncBounds" />
 </template>
 
 <style scoped>
@@ -97,6 +119,13 @@ onBeforeUnmount(() => { clearTimeout(timer) })
 .debug-reload-row>span{color:#ac9988;font-size:11px}
 .debug-reload{justify-content:center;min-height:36px;padding:0 10px;border:1px solid #414b59;border-radius:5px;background:#1c222a;color:#aeb9c9;font-size:11px}
 .debug-reload:hover{background:#ffffff08;color:#e1e7ef}
+.debug-bounds-toggle{justify-self:start}
+.debug-bounds-toggle[aria-pressed=true]{border-color:#a78770;background:#e9b18812;color:#e9c9b0}
+/* Native top layer escapes ancestor clipping. Eight pixels inside the CSS
+   viewport are the positive control; the remaining stripe tests its boundary. */
+.viewport-bounds-probe{position:fixed;inset:calc(100dvh - 8px) auto auto 0;width:100dvw;height:72px;max-width:none;max-height:none;margin:0;padding:0;border:0;pointer-events:none;background:repeating-linear-gradient(135deg,#00e5ff 0 8px,#ff2da4 8px 16px);box-shadow:none;overflow:clip}
+.viewport-bounds-probe::before{content:'';position:absolute;top:7px;left:0;right:0;height:2px;background:#fff}
+.viewport-bounds-probe::backdrop{display:none}
 .mobile-layout .debug-toolbar>button,.mobile-layout .debug-settings-trigger{min-height:40px}
 .mobile-layout .debug-settings-trigger{width:40px;flex-basis:40px}
 .mobile-layout .debug-setting-options button,.mobile-layout .debug-reload{min-height:44px}
