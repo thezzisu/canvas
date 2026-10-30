@@ -136,13 +136,13 @@ async function resized(event: { params: { width: number; height: number; x: numb
   <article tabindex="-1" class="terminal-card" :class="[{ selected, unavailable: !keepTerminal, focused: data.focus, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="keepTerminal ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :style="{ '--program-color': statusColor(frameStatus), width: dimensions || mobileFocus ? '100%' : `${data.width}px`, height: dimensions || mobileFocus ? '100%' : `${data.height}px` }" :aria-label="`${data.name} · ${data.subtitle}`">
     <header class="terminal-header drag-handle" :class="{ 'cutout-header': mobileFocus }" :data-cutout-position="mobileFocus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="mobileFocus ? { '--cutout-width': `${cutoutWidth}px` } : undefined">
       <PaneIndicators :panes="data.panes" :status="data.status" :available="keepTerminal" :connection="status.status" :error="status.error" :read-only="status.readOnly" />
-      <component :is="mobileFocus ? 'button' : 'span'" class="terminal-name" :class="{ 'cutout-title nodrag': mobileFocus }" :title="title" :aria-label="mobileFocus ? `窗口操作：${data.name}` : undefined" @click.stop="mobileFocus && action('menu')"><span class="terminal-tab-name">{{ data.name }}</span><span v-if="liveTitle" class="terminal-live-title">{{ liveTitle }}</span></component>
+      <span class="terminal-name" :class="{ 'cutout-title': mobileFocus }" :title="title"><span class="terminal-tab-name">{{ data.name }}</span><span v-if="liveTitle" class="terminal-live-title">{{ liveTitle }}</span></span>
       <div class="terminal-actions nodrag" :class="{ 'cutout-actions': mobileFocus }">
         <button v-if="data.overview && !mobileFocus" title="加入画布" aria-label="加入画布" @click.stop="action('add')"><Icon name="plus" :size="15" /></button>
         <button v-else-if="!mobileFocus" title="从画布移除" aria-label="从画布移除" @click.stop="action('remove')"><Icon name="minus" :size="15" /></button>
         <button v-if="!data.focus" title="聚焦窗口" aria-label="聚焦窗口" @click.stop="action('focus')"><Icon name="expand" :size="14" /></button>
         <button v-if="mobileFocus" :title="status.keyboardRequested ? '隐藏键盘' : '打开键盘'" :aria-label="status.keyboardRequested ? '隐藏键盘' : '打开键盘'" :aria-pressed="status.keyboardRequested" @pointerdown.stop.prevent @click.stop="toggleKeyboard"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10" /></svg></button>
-        <button v-if="!mobileFocus" title="窗口操作" aria-label="窗口操作" @click.stop="action('menu')"><Icon name="more" :size="17" /></button>
+        <button title="窗口操作" aria-label="窗口操作" @click.stop="action('menu')"><Icon name="more" :size="17" /></button>
         <button v-if="data.focus" title="退出放大" aria-label="退出放大" @click.stop="action('unfocus')"><Icon name="collapse" :size="15" /></button>
       </div>
     </header>
@@ -167,7 +167,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-loading{background:#11131799;color:#b0b8c5}
 .terminal-tab-name{overflow:hidden;text-overflow:ellipsis;min-width:0}
 .terminal-name:has(.terminal-live-title) .terminal-tab-name{max-width:40%;flex-shrink:0}
-.terminal-live-title{padding-left:6px;border-left:1px solid #65708066;color:#939ba8;overflow:hidden;text-overflow:ellipsis;min-width:0;font-weight:400}
+.terminal-live-title{color:#939ba8;overflow:hidden;text-overflow:ellipsis;min-width:0;font-weight:400}
 .terminal-drop-target{outline:1px solid var(--accent);outline-offset:-3px;background:#e9b18808}
 .terminal-copy-notice{position:absolute;bottom:8px;right:9px;padding:4px 7px;border:1px solid #424a56;border-radius:4px;background:#242930f2;color:#b6c0ce;font-size:10px;pointer-events:none}
 .terminal-copy-notice.copy-failed{border-color:#79545470;background:#33262bf2;color:#d6aaaa}
@@ -188,11 +188,10 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-mobile-preview .terminal-actions{visibility:hidden}
 .terminal-mobile.focused{--terminal-header-height:calc(44px + var(--mobile-safe-top,0px));min-height:0;border-radius:0;box-shadow:none}
 .terminal-mobile.focused .terminal-header{height:var(--terminal-header-height);min-height:var(--terminal-header-height);flex:0 0 var(--terminal-header-height);padding:var(--mobile-safe-top,0px) 0 0;gap:0;cursor:default}
-.terminal-mobile.focused .terminal-name{font-size:13px}
+.terminal-mobile.focused .terminal-name{height:44px;font-size:13px}
 .canvas-fullscreen .terminal-mobile.focused{--terminal-header-height:44px}
 .canvas-fullscreen .terminal-mobile.focused .terminal-header{padding-top:0}
 .terminal-mobile.focused{container-type:inline-size}
-.terminal-mobile.focused button.terminal-name{display:flex;justify-content:flex-start;height:44px;padding:0;text-align:left;border-radius:4px}
 .terminal-mobile.focused .terminal-actions{opacity:1;pointer-events:auto;gap:0}
 .terminal-mobile.focused .terminal-actions button{width:44px;height:44px;min-width:44px;border-radius:4px}
 .terminal-mobile.focused :deep(.terminal-status-trigger){width:44px;height:44px;min-width:44px}

@@ -19,7 +19,11 @@ const mobile = useMobileLayout()
 const cutoutPositions: Array<{ value: CutoutPosition; label: string }> = [
   { value: 'left', label: '左' }, { value: 'center', label: '中' }, { value: 'right', label: '右' },
 ]
-const cutoutMaximum = computed(() => Math.max(0, Math.min(240, Math.min(window.screen.width, window.screen.height) - 200)))
+const cutoutMaximum = computed(() => Math.max(0, Math.min(240, Math.min(window.screen.width, window.screen.height) - (cutoutPosition.value === 'center' ? 264 : 220))))
+const displayedCutoutWidth = computed({
+  get: () => Math.min(cutoutWidth.value, cutoutMaximum.value),
+  set: (width: number) => { cutoutWidth.value = width },
+})
 const clone = (value: ContentFontSettings): ContentFontSettings => ({ ...value, stack: value.stack.map(entry => ({ ...entry })) })
 const normalized = (value: ContentFontSettings): ContentFontSettings => ({
   stack: value.stack.map(entry => ({ family: entry.family.trim() })),
@@ -112,11 +116,11 @@ onBeforeUnmount(() => { disposed = true; previewRevision++; clearTimeout(preview
       <section v-if="mobile && hasDisplayCutout" class="cutout-settings" aria-label="顶部避让">
         <div class="cutout-heading"><span>顶部避让</span><small>仅此浏览器</small></div>
         <div class="cutout-row"><span id="cutout-position-label">位置</span><div class="cutout-positions" role="group" aria-labelledby="cutout-position-label"><UButton v-for="position in cutoutPositions" :key="position.value" type="button" color="neutral" :variant="cutoutPosition === position.value ? 'solid' : 'outline'" :aria-pressed="cutoutPosition === position.value" @click="cutoutPosition = position.value">{{ position.label }}</UButton></div></div>
-        <div class="cutout-width-label"><label for="cutout-width">宽度</label><output for="cutout-width">{{ cutoutWidth }} px</output></div>
-        <input id="cutout-width" v-model.number="cutoutWidth" class="cutout-width" type="range" min="0" :max="cutoutMaximum" step="1" :aria-valuetext="`${cutoutWidth} px`" />
+        <div class="cutout-width-label"><label for="cutout-width">宽度</label><output for="cutout-width">{{ displayedCutoutWidth }} px</output></div>
+        <input id="cutout-width" v-model.number="displayedCutoutWidth" class="cutout-width" type="range" min="0" :max="cutoutMaximum" step="1" :aria-valuetext="`${displayedCutoutWidth} px`" />
         <div class="cutout-preview cutout-header" :data-cutout-position="cutoutWidth > 0 ? cutoutPosition : undefined" :style="{ '--cutout-width': `${cutoutWidth}px` }" aria-hidden="true">
           <span class="cutout-status"><i /></span><span class="cutout-title">终端</span>
-          <div class="cutout-actions"><span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10" /></svg></span><span><Icon name="collapse" :size="18" /></span></div>
+          <div class="cutout-actions"><span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10" /></svg></span><span><Icon name="more" :size="17" /></span><span><Icon name="collapse" :size="18" /></span></div>
         </div>
       </section>
       <form id="content-font-form" class="font-settings" @submit.prevent="save">
