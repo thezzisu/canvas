@@ -1,6 +1,6 @@
 import { mobileKeyboardFrame, mobileKeyboardVisible } from './mobile-keyboard'
 import type { GlobalSettings } from '../../shared/settings'
-import { developerMode, viewportFit, interactiveWidget, viewportPolicy, imeBottomInset } from './developer-mode'
+import { developerMode, viewportFit, interactiveWidget, viewportPolicy, viewportReloadRequired } from './developer-mode'
 import { cutoutPosition, cutoutWidth } from './display-cutout'
 import { languagePreference, locale } from './i18n'
 import { keepScreenAwake, screenWakeLockState } from './screen-wake-lock'
@@ -23,6 +23,7 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
   const visual = window.visualViewport, active = document.activeElement, fullscreen = document.fullscreenElement
   const keyboard = (navigator as Navigator & { virtualKeyboard?: { boundingRect: DOMRectReadOnly; overlaysContent?: boolean } }).virtualKeyboard
   const held = mobileKeyboardFrame.value
+  const appBox = app?.getBoundingClientRect()
   const probe = document.createElement('i')
   probe.setAttribute('aria-hidden', 'true')
   probe.style.cssText = 'all:initial;position:fixed;inset:0;visibility:hidden;pointer-events:none;box-sizing:border-box;contain:strict'
@@ -40,7 +41,6 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
     settings: {
       developerMode: developerMode.value,
       viewportFit: viewportFit.value, interactiveWidget: interactiveWidget.value,
-      imeBottomInset: imeBottomInset.value,
       displayCutout: { position: cutoutPosition.value, width: cutoutWidth.value },
       language: { preference: languagePreference.value, resolved: locale.value },
       keepScreenAwake: keepScreenAwake.value,
@@ -50,7 +50,8 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
     screen: { width: number(screen.width), height: number(screen.height), availableWidth: number(screen.availWidth), availableHeight: number(screen.availHeight) },
     wakeLock: screenWakeLockState.value,
     keyboardLock: { state: keyboardLockState.value, unavailableReason: keyboardLockUnavailableReason.value || null },
-    viewportPolicy: { ...viewportPolicy.value, meta: document.querySelector<HTMLMetaElement>('meta[name="viewport"]')?.content || null },
+    viewportPolicy: { ...viewportPolicy.value, reloadRequired: viewportReloadRequired.value,
+      meta: document.querySelector<HTMLMetaElement>('meta[name="viewport"]')?.content || null },
     fullscreen: !fullscreen ? 'none' : fullscreen === document.documentElement ? 'document' : fullscreen === app ? 'app' : 'other',
     viewport: {
       layout: { width: number(innerWidth), height: number(innerHeight) },
@@ -63,11 +64,13 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
       app: geometry(app), overlay: geometry(query('.focus-overlay')), card: geometry(query('.focus-overlay > .terminal-card')),
       header: geometry(query('.focus-overlay .terminal-header')), helper: geometry(query('.focus-overlay .mobile-keyboard')),
     },
-    applied: app ? Object.fromEntries(['width', 'height', 'top', 'left'].map(name => [name, cssNumber(app, `--mobile-${name}`)])) : null,
+    applied: appBox ? {
+      width: number(appBox.width), height: number(appBox.height), top: number(appBox.top), left: number(appBox.left),
+      sizing: held ? 'recovery' : viewportPolicy.value.interactiveWidget === 'resizes-visual' && app?.classList.contains('mobile-layout') ? 'visual-viewport' : 'css',
+    } : null,
     keyboard: {
       requested: query('.focus-overlay .terminal-actions button[aria-pressed]')?.getAttribute('aria-pressed') === 'true',
       visible: mobileKeyboardVisible.value,
-      imeBottomInset: app ? cssNumber(app, '--mobile-ime-inset') || 0 : 0,
       held: held ? { width: number(held.width), height: number(held.height), top: number(held.top), left: number(held.left) } : null,
       virtual: keyboard ? { rect: rect(keyboard.boundingRect), overlaysContent: keyboard.overlaysContent === true } : null,
     },

@@ -11,11 +11,10 @@ import { FONT_CATALOG, buildFontPresentation, ensureContentFont } from '../fonts
 import { write } from '../api'
 import { useMobileLayout } from '../mobile-layout'
 import { cutoutPosition, cutoutWidth, type CutoutPosition } from '../display-cutout'
-import { developerMode, viewportFit, interactiveWidget } from '../developer-mode'
+import { developerMode, viewportFit, interactiveWidget, viewportReloadRequired } from '../developer-mode'
 import { keepScreenAwake, retryScreenWakeLock, screenWakeLockState, screenWakeLockUnavailable } from '../screen-wake-lock'
 import Icon from './Icon.vue'
 import LanguageSelect from './LanguageSelect.vue'
-import ImeInsetControl from './ImeInsetControl.vue'
 
 const { t, n } = useI18n()
 
@@ -210,9 +209,11 @@ onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer) })
             <label for="interactive-widget"><code>interactive-widget</code></label>
             <USelect id="interactive-widget" v-model="interactiveWidget" :items="interactiveWidgets" :portal="portal || false" :ui="viewportSelectUi" color="neutral" size="sm" class="settings-select" aria-label="interactive-widget" />
           </div>
-          <ImeInsetControl />
-          <UButton type="button" color="neutral" variant="outline" size="sm" class="viewport-reload" :disabled="!canReload" :title="canReload ? undefined : t('settings.finishFont')" @click="reloadPage">{{ t('settings.reload') }}</UButton>
         </section>
+        <div v-if="developerMode || viewportReloadRequired" class="viewport-reload-row">
+          <span v-if="viewportReloadRequired" role="status">{{ t('settings.reloadRequired') }}</span>
+          <UButton type="button" color="neutral" variant="outline" size="sm" class="viewport-reload" :disabled="!canReload" :title="canReload ? undefined : t('settings.finishFont')" @click="reloadPage">{{ t('settings.reload') }}</UButton>
+        </div>
       </div>
     </template>
     <template #footer><UButton color="neutral" variant="outline" class="font-done" @click="close()">{{ t('common.done') }}</UButton></template>
@@ -242,6 +243,8 @@ onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer) })
 .viewport-experiment-heading small{white-space:nowrap}.viewport-experiment-heading small,.viewport-experiment-field code{font-size:11px;font-weight:400;color:#8793a4}
 .viewport-experiment-field{display:grid;gap:7px;min-width:0}
 .viewport-experiment-field label{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:0;font-size:11px}
+.viewport-reload-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:12px}
+.viewport-reload-row>span{color:#ac9988;font-size:11px}
 .viewport-reload{justify-self:start;min-height:34px;padding:0 10px;border:1px solid #485262;border-radius:6px;font-size:11px;color:#c3cdd9;background:#2a323e}
 .viewport-reload:hover{background:#343e4b}
 .mobile-layout .viewport-reload{min-height:44px}

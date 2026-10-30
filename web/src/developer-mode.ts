@@ -1,25 +1,25 @@
 import { useStorage } from '@vueuse/core'
-import { computed, watch } from 'vue'
+import { computed, shallowRef } from 'vue'
 
 export const developerMode = useStorage('canvas:developer-mode', false)
 export const viewportFit = useStorage<'cover' | 'contain'>('canvas:developer:viewport-fit', 'cover')
 export const interactiveWidget = useStorage<'resizes-content' | 'resizes-visual'>('canvas:developer:interactive-widget', 'resizes-content')
-const storedImeBottomInset = useStorage('canvas:developer:ime-bottom-inset', 0)
-const normalizeInset = (value: number) => Number.isFinite(value) ? Math.max(0, Math.min(48, Math.round(value))) : 0
-export const imeBottomInset = computed({
-  get: () => normalizeInset(storedImeBottomInset.value),
-  set: (value: number) => { storedImeBottomInset.value = normalizeInset(value) },
-})
 
-export const viewportPolicy = computed(() => ({
+export const pendingViewportPolicy = computed(() => ({
   viewportFit: developerMode.value && viewportFit.value === 'contain' ? 'contain' : 'cover',
   interactiveWidget: developerMode.value && interactiveWidget.value === 'resizes-visual' ? 'resizes-visual' : 'resizes-content',
-}))
+} as const))
+export const viewportPolicy = shallowRef<typeof pendingViewportPolicy.value>({ viewportFit: 'cover', interactiveWidget: 'resizes-content' })
+export const viewportReloadRequired = computed(() =>
+  pendingViewportPolicy.value.viewportFit !== viewportPolicy.value.viewportFit ||
+  pendingViewportPolicy.value.interactiveWidget !== viewportPolicy.value.interactiveWidget)
 
-/** Apply before mounting so saved experiments also govern the initial app layout. */
-export function watchViewportPolicy() {
-  watch(viewportPolicy, policy => {
-    const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]')
-    if (meta) meta.content = `width=device-width, initial-scale=1.0, viewport-fit=${policy.viewportFit}, interactive-widget=${policy.interactiveWidget}`
-  }, { immediate: true })
+let initialized = false
+/** Native keyboard resize policy stays fixed for the lifetime of this page. */
+export function initializeViewportPolicy() {
+  if (initialized) return
+  initialized = true
+  const policy = viewportPolicy.value = { ...pendingViewportPolicy.value }
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]')
+  if (meta) meta.content = `width=device-width, initial-scale=1.0, viewport-fit=${policy.viewportFit}, interactive-widget=${policy.interactiveWidget}`
 }

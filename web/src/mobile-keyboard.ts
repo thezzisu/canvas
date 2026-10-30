@@ -1,5 +1,5 @@
 import { ref, shallowRef } from 'vue'
-import type { ViewportFrame } from './viewport'
+import { readViewportFrame, type ViewportFrame } from './viewport-frame'
 
 export const mobileKeyboardFrame = shallowRef<ViewportFrame>()
 export const mobileKeyboardVisible = ref(false)
@@ -17,8 +17,7 @@ export function hideMobileKeyboard() { owner?.blur() }
 export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptions) {
   const visual = window.visualViewport
   const keyboard = (navigator as Navigator & { virtualKeyboard?: VirtualKeyboard }).virtualKeyboard
-  const read = (): ViewportFrame => ({ width: visual?.width || window.innerWidth,
-    height: visual?.height || window.innerHeight, top: visual?.offsetTop || 0, left: visual?.offsetLeft || 0 })
+  const read = readViewportFrame
   let baseline = { width: window.innerWidth, height: Math.max(window.innerHeight, read().height) }
   let requested = false
   let changingFocus = false

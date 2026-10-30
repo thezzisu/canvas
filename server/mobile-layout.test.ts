@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { isMobileLayout, touchViewport } from '../web/src/mobile-layout.ts'
-import { canvasFrame, insetViewport, preserveCanvasCenter, viewportFrame } from '../web/src/viewport.ts'
+import { canvasFrame, preserveCanvasCenter, viewportFrame } from '../web/src/viewport.ts'
 
 test('mobile layout requires touch and primary coarse input, not a narrow desktop window', () => {
   const phone = { coarsePointer: true, noHover: true, touchPoints: 5, width: 390, screenWidth: 390, screenHeight: 844 }
@@ -14,43 +14,31 @@ test('mobile layout requires touch and primary coarse input, not a narrow deskto
   assert.equal(isMobileLayout({ ...phone, width: 1194, screenWidth: 834, screenHeight: 1194 }), true)
 })
 
-test('visible viewport retains keyboard height and browser pan offsets with a layout fallback', () => {
-  const layout = { width: 390, height: 844 }
-  assert.deepEqual(viewportFrame(layout, { width: 390, height: 410, offsetTop: 36, offsetLeft: 0 }),
-    { width: 390, height: 410, top: 36, left: 0 })
-  assert.deepEqual(viewportFrame(layout), { width: 390, height: 844, top: 0, left: 0 })
-  assert.deepEqual(viewportFrame(layout, { width: NaN, height: 0, offsetTop: -2, offsetLeft: NaN }),
-    { width: 390, height: 844, top: 0, left: 0 })
-  // resizes-content shrinks both viewports; browsers without that policy can
-  // still report the remaining space through visualViewport alone.
-  const keyboard = { width: 390, height: 410, offsetTop: 0, offsetLeft: 0 }
-  assert.deepEqual(viewportFrame({ width: 390, height: 410 }, keyboard), viewportFrame(layout, keyboard))
+test('CSS content geometry ignores a visual viewport that subtracts the keyboard twice', () => {
+  const layout = { width: 384, height: 487.2 }
+  const visual = { width: 384, height: 199.2, offsetTop: 0, offsetLeft: 0 }
+  assert.deepEqual(viewportFrame(layout, visual), { width: 384, height: 487.2, top: 0, left: 0 })
+  assert.deepEqual(viewportFrame(layout, { ...visual, offsetTop: 36 }), { width: 384, height: 487.2, top: 0, left: 0 })
 })
 
-test('IME calibration reduces only usable height without changing raw geometry or compounding', () => {
-  const visual = { width: 384, height: 535.47, offsetTop: 0, offsetLeft: 0 }
-  const frame = viewportFrame({ width: 384, height: 823 }, visual)
-  assert.deepEqual(insetViewport(frame, 15), { width: 384, height: 520.47, top: 0, left: 0 })
-  assert.deepEqual(insetViewport(frame, 0), frame)
-  assert.equal(frame.height, visual.height, 'raw and held frames stay unmodified')
-  assert.deepEqual(insetViewport({ ...frame, top: 30, left: 2 }, 48), { width: 384, height: 487.47, top: 30, left: 2 })
-  assert.equal(insetViewport({ ...frame, height: 30 }, 48).height, 1)
+test('explicit visual geometry retains keyboard height and browser pan offsets with a CSS fallback', () => {
+  const layout = { width: 384, height: 823.47 }
+  const visual = { width: 384, height: 535.47, offsetTop: 36, offsetLeft: 0 }
+  assert.deepEqual(viewportFrame(layout, visual, 'resizes-visual'), { width: 384, height: 535.47, top: 36, left: 0 })
+  assert.deepEqual(viewportFrame(layout, undefined, 'resizes-visual'), { width: 384, height: 823.47, top: 0, left: 0 })
+  assert.deepEqual(viewportFrame(layout, { width: NaN, height: 0, offsetTop: -2, offsetLeft: NaN }, 'resizes-visual'),
+    { width: 384, height: 823.47, top: 0, left: 0 })
 })
 
-test('IME calibration leaves the saved canvas frame unchanged', t => {
-  const before = new Map(['window', 'getComputedStyle'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]))
-  t.after(() => { for (const [name, descriptor] of before) {
-    if (descriptor) Object.defineProperty(globalThis, name, descriptor)
-    else Reflect.deleteProperty(globalThis, name)
-  } })
-  let inset = 0
-  const app = { clientWidth: 384, clientHeight: 535, classList: { contains: () => true } }
-  const surface = { clientWidth: 384, clientHeight: 491, closest: () => app }
-  Object.defineProperty(globalThis, 'window', { configurable: true, value: { innerWidth: 384, innerHeight: 823, visualViewport: { width: 384, height: 535.47 } } })
-  Object.defineProperty(globalThis, 'getComputedStyle', { configurable: true, value: () => ({ getPropertyValue: () => String(inset) }) })
-  const frame = canvasFrame(surface as unknown as HTMLElement)
-  inset = 15; app.clientHeight -= inset; surface.clientHeight -= inset
-  assert.deepEqual(canvasFrame(surface as unknown as HTMLElement), frame)
+test('canvas camera geometry uses its actual surface without visual viewport compensation', t => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  t.after(() => { if (original) Object.defineProperty(globalThis, 'window', original); else Reflect.deleteProperty(globalThis, 'window') })
+  const window = { innerWidth: 384, innerHeight: 487, visualViewport: { width: 384, height: 199.2 } }
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: window })
+  const surface = { clientWidth: 384, clientHeight: 443 }
+  assert.deepEqual(canvasFrame(surface as HTMLElement), { layoutWidth: 384, width: 384, height: 443 })
+  window.visualViewport.height = 487.2
+  assert.deepEqual(canvasFrame(surface as HTMLElement), { layoutWidth: 384, width: 384, height: 443 })
 })
 
 test('touch navigation pans in screen pixels and pinches around the moving two-finger midpoint', () => {

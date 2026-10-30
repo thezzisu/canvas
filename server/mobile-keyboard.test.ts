@@ -1,11 +1,18 @@
 import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
+import { viewportPolicy } from '../web/src/developer-mode.ts'
+import { readViewportFrame } from '../web/src/viewport-frame.ts'
 import { bindMobileKeyboard, hideMobileKeyboard, mobileKeyboardFrame, mobileKeyboardVisible } from '../web/src/mobile-keyboard.ts'
 
-function fixture(t: TestContext) {
+function fixture(t: TestContext, policy: 'resizes-content' | 'resizes-visual' = 'resizes-content') {
+  const previousPolicy = viewportPolicy.value
+  viewportPolicy.value = { viewportFit: 'cover', interactiveWidget: policy }
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const visual = Object.assign(new EventTarget(), { width: 390, height: 844, offsetTop: 0, offsetLeft: 0 })
-  const document = Object.assign(new EventTarget(), { hidden: false, body: {}, documentElement: {}, activeElement: null as object | null })
+  const css = { width: 390, height: 844 }
+  const probe = { style: {}, setAttribute() {}, getBoundingClientRect: () => css }
+  const document = Object.assign(new EventTarget(), { hidden: false, body: { append() {} }, documentElement: {},
+    createElement: () => probe, activeElement: null as object | null })
   document.activeElement = document.body
   const window = Object.assign(new EventTarget(), { innerWidth: 390, innerHeight: 844, visualViewport: visual })
   const originals = new Map(['window', 'document', 'navigator'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]))
@@ -28,14 +35,21 @@ function fixture(t: TestContext) {
   })
   t.after(() => {
     control.dispose()
+    viewportPolicy.value = previousPolicy
     for (const [name, descriptor] of originals) {
       if (descriptor) Object.defineProperty(globalThis, name, descriptor)
       else Reflect.deleteProperty(globalThis, name)
     }
   })
-  const resize = (height: number) => { visual.height = height; visual.dispatchEvent(new Event('resize')) }
+  const resize = (height: number, visualHeight = height) => {
+    css.width = window.innerWidth
+    if (policy === 'resizes-content') { css.height = height; window.innerHeight = Math.floor(height) }
+    else css.height = window.innerHeight
+    visual.height = visualHeight
+    visual.dispatchEvent(new Event('resize'))
+  }
   const open = () => { control.focus(true); resize(500) }
-  return { control, textarea, window, document, visual, resize, open, requested: () => requested, deactivate: () => { active = false } }
+  return { control, textarea, window, document, visual, css, resize, open, requested: () => requested, deactivate: () => { active = false } }
 }
 
 test('mobile keyboard off gates all native focus while explicit opening permits input', t => {
@@ -174,4 +188,40 @@ test('rotation accepts a keyboard restored at the new landscape dimensions', t =
   assert.equal(mobileKeyboardVisible.value, true); assert.equal(mobileKeyboardFrame.value?.height, undefined)
   f.resize(390)
   assert.equal(mobileKeyboardFrame.value?.height, 220, 'later recovery uses landscape keyboard geometry')
+})
+
+
+test('CSS keyboard recovery holds measured layout height, never the double-subtracted visual height', async t => {
+  const f = fixture(t)
+  f.window.innerWidth = 384; f.visual.width = 384; f.css.width = 384
+  f.window.innerHeight = 823; f.css.height = 823.47; f.visual.height = 823.47
+  f.control.focus(true)
+  f.resize(487.2, 199.2)
+  assert.equal(f.requested(), true)
+  assert.equal(mobileKeyboardVisible.value, true)
+  assert.equal(Boolean(mobileKeyboardFrame.value), false)
+  assert.equal(readViewportFrame().height, 487.2)
+  f.resize(823.47, 535.47)
+  assert.equal(mobileKeyboardFrame.value?.height, 487.2)
+  await Promise.resolve()
+  f.resize(487.2, 199.2)
+  assert.equal(Boolean(mobileKeyboardFrame.value), false)
+  assert.equal(readViewportFrame().height, 487.2)
+  assert.equal(f.requested(), true)
+})
+
+test('explicit visual keyboard mode follows the visual frame while CSS remains full height', async t => {
+  const f = fixture(t, 'resizes-visual')
+  f.window.innerWidth = 384; f.visual.width = 384; f.window.innerHeight = 823
+  f.css.width = 384; f.css.height = 823.47; f.visual.height = 823.47
+  f.control.focus(true)
+  f.resize(535.47)
+  assert.equal(mobileKeyboardVisible.value, true)
+  assert.equal(readViewportFrame().height, 535.47)
+  f.resize(823.47)
+  assert.equal(mobileKeyboardFrame.value?.height, 535.47)
+  await Promise.resolve()
+  f.resize(535.47)
+  assert.equal(Boolean(mobileKeyboardFrame.value), false)
+  assert.equal(f.requested(), true)
 })

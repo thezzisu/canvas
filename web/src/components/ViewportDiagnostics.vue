@@ -6,11 +6,10 @@ import UButton from '@nuxt/ui/components/Button.vue'
 import type { GlobalSettings } from '../../../shared/settings'
 import { copyText } from '../clipboard'
 import { collectViewportDiagnostics } from '../viewport-diagnostics'
-import { viewportFit, interactiveWidget } from '../developer-mode'
+import { viewportFit, interactiveWidget, viewportReloadRequired } from '../developer-mode'
 import Icon from './Icon.vue'
-import ImeInsetControl from './ImeInsetControl.vue'
 
-const props = defineProps<{ settings?: GlobalSettings | null; portal?: HTMLElement }>()
+const props = defineProps<{ settings?: GlobalSettings | null; portal?: HTMLElement; reloadBlocked?: boolean }>()
 const { t } = useI18n()
 const open = ref(false)
 const toolbar = ref<HTMLElement>()
@@ -50,6 +49,7 @@ function copy() {
   clearTimeout(timer)
   timer = setTimeout(() => { feedback.value = '' }, 2000)
 }
+function reloadPage() { if (!props.reloadBlocked) window.location.reload() }
 onBeforeUnmount(() => { clearTimeout(timer) })
 </script>
 
@@ -70,7 +70,10 @@ onBeforeUnmount(() => { clearTimeout(timer) })
             <code>interactive-widget</code>
             <div class="debug-setting-options"><UButton v-for="value in (['resizes-content', 'resizes-visual'] as const)" :key="value" type="button" color="neutral" :variant="interactiveWidget === value ? 'solid' : 'outline'" :aria-pressed="interactiveWidget === value" @click="interactiveWidget = value">{{ value }}</UButton></div>
           </div>
-          <ImeInsetControl preserve-focus />
+          <div class="debug-reload-row">
+            <span v-if="viewportReloadRequired" role="status">{{ t('settings.reloadRequired') }}</span>
+            <UButton type="button" color="neutral" variant="outline" size="sm" class="debug-reload" :disabled="reloadBlocked" @click="reloadPage">{{ t('settings.reload') }}</UButton>
+          </div>
         </div>
       </template>
     </UPopover>
@@ -90,7 +93,11 @@ onBeforeUnmount(() => { clearTimeout(timer) })
 .debug-setting-options button{justify-content:center;min-height:36px;padding:6px 4px;border:1px solid #414b59;border-radius:5px;background:#1c222a;color:#aeb9c9;font-size:11px;white-space:nowrap}
 .debug-setting-options button[aria-pressed=true]{border-color:#a78770;background:#e9b18812;color:#e9c9b0}
 .debug-setting-options button:hover{background:#ffffff08}
+.debug-reload-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.debug-reload-row>span{color:#ac9988;font-size:11px}
+.debug-reload{justify-content:center;min-height:36px;padding:0 10px;border:1px solid #414b59;border-radius:5px;background:#1c222a;color:#aeb9c9;font-size:11px}
+.debug-reload:hover{background:#ffffff08;color:#e1e7ef}
 .mobile-layout .debug-toolbar>button,.mobile-layout .debug-settings-trigger{min-height:40px}
 .mobile-layout .debug-settings-trigger{width:40px;flex-basis:40px}
-.mobile-layout .debug-setting-options button{min-height:44px}
+.mobile-layout .debug-setting-options button,.mobile-layout .debug-reload{min-height:44px}
 </style>

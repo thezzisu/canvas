@@ -108,7 +108,7 @@
 .app-shell.canvas-fullscreen{position:fixed;inset:0;width:100%;height:100%;z-index:50;background:#15171b}.canvas-fullscreen>.sidebar,.canvas-fullscreen>.workspace>.workspace-header{display:none}.canvas-fullscreen .graph-wrap{width:100%;height:100%;overscroll-behavior:none}
 .terminal-host.terminal-paused{visibility:hidden;pointer-events:none}.terminal-maximized{position:absolute;inset:30px 0 0;display:flex;align-items:center;justify-content:center;color:#737e8e;font-size:12px}
 
-.mobile-layout.app-shell,.mobile-layout.login-screen{position:fixed;left:var(--mobile-left,0);top:var(--mobile-top,0);width:var(--mobile-width,100%);height:var(--mobile-height,100dvh);min-height:0;overscroll-behavior:none}
+.mobile-layout.app-shell,.mobile-layout.login-screen{--mobile-width:100dvw;--mobile-height:100dvh;--mobile-top:0px;--mobile-left:0px;position:fixed;left:var(--mobile-left,0);top:var(--mobile-top,0);width:var(--mobile-width,100%);height:var(--mobile-height,100dvh);min-height:0;overscroll-behavior:none}
 .mobile-layout .workspace{min-height:0;overflow:hidden}
 .mobile-layout .workspace-header{height:calc(44px + env(safe-area-inset-top));min-height:calc(44px + env(safe-area-inset-top));padding:env(safe-area-inset-top) max(8px,env(safe-area-inset-right)) 0 max(4px,env(safe-area-inset-left));gap:4px}
 .mobile-layout .header-context{gap:4px}
