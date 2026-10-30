@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { isMobileLayout, touchViewport } from '../web/src/mobile-layout.ts'
-import { preserveCanvasCenter, viewportFrame } from '../web/src/viewport.ts'
+import { canvasFrame, insetViewport, preserveCanvasCenter, viewportFrame } from '../web/src/viewport.ts'
 
 test('mobile layout requires touch and primary coarse input, not a narrow desktop window', () => {
   const phone = { coarsePointer: true, noHover: true, touchPoints: 5, width: 390, screenWidth: 390, screenHeight: 844 }
@@ -25,6 +25,32 @@ test('visible viewport retains keyboard height and browser pan offsets with a la
   // still report the remaining space through visualViewport alone.
   const keyboard = { width: 390, height: 410, offsetTop: 0, offsetLeft: 0 }
   assert.deepEqual(viewportFrame({ width: 390, height: 410 }, keyboard), viewportFrame(layout, keyboard))
+})
+
+test('IME calibration reduces only usable height without changing raw geometry or compounding', () => {
+  const visual = { width: 384, height: 535.47, offsetTop: 0, offsetLeft: 0 }
+  const frame = viewportFrame({ width: 384, height: 823 }, visual)
+  assert.deepEqual(insetViewport(frame, 15), { width: 384, height: 520.47, top: 0, left: 0 })
+  assert.deepEqual(insetViewport(frame, 0), frame)
+  assert.equal(frame.height, visual.height, 'raw and held frames stay unmodified')
+  assert.deepEqual(insetViewport({ ...frame, top: 30, left: 2 }, 48), { width: 384, height: 487.47, top: 30, left: 2 })
+  assert.equal(insetViewport({ ...frame, height: 30 }, 48).height, 1)
+})
+
+test('IME calibration leaves the saved canvas frame unchanged', t => {
+  const before = new Map(['window', 'getComputedStyle'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]))
+  t.after(() => { for (const [name, descriptor] of before) {
+    if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+    else Reflect.deleteProperty(globalThis, name)
+  } })
+  let inset = 0
+  const app = { clientWidth: 384, clientHeight: 535, classList: { contains: () => true } }
+  const surface = { clientWidth: 384, clientHeight: 491, closest: () => app }
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { innerWidth: 384, innerHeight: 823, visualViewport: { width: 384, height: 535.47 } } })
+  Object.defineProperty(globalThis, 'getComputedStyle', { configurable: true, value: () => ({ getPropertyValue: () => String(inset) }) })
+  const frame = canvasFrame(surface as unknown as HTMLElement)
+  inset = 15; app.clientHeight -= inset; surface.clientHeight -= inset
+  assert.deepEqual(canvasFrame(surface as unknown as HTMLElement), frame)
 })
 
 test('touch navigation pans in screen pixels and pinches around the moving two-finger midpoint', () => {

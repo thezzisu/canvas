@@ -4,6 +4,12 @@ import { computed, watch } from 'vue'
 export const developerMode = useStorage('canvas:developer-mode', false)
 export const viewportFit = useStorage<'cover' | 'contain'>('canvas:developer:viewport-fit', 'cover')
 export const interactiveWidget = useStorage<'resizes-content' | 'resizes-visual'>('canvas:developer:interactive-widget', 'resizes-content')
+const storedImeBottomInset = useStorage('canvas:developer:ime-bottom-inset', 0)
+const normalizeInset = (value: number) => Number.isFinite(value) ? Math.max(0, Math.min(48, Math.round(value))) : 0
+export const imeBottomInset = computed({
+  get: () => normalizeInset(storedImeBottomInset.value),
+  set: (value: number) => { storedImeBottomInset.value = normalizeInset(value) },
+})
 
 export const viewportPolicy = computed(() => ({
   viewportFit: developerMode.value && viewportFit.value === 'contain' ? 'contain' : 'cover',

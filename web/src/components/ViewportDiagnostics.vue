@@ -8,6 +8,7 @@ import { copyText } from '../clipboard'
 import { collectViewportDiagnostics } from '../viewport-diagnostics'
 import { viewportFit, interactiveWidget } from '../developer-mode'
 import Icon from './Icon.vue'
+import ImeInsetControl from './ImeInsetControl.vue'
 
 const props = defineProps<{ settings?: GlobalSettings | null; portal?: HTMLElement }>()
 const { t } = useI18n()
@@ -69,6 +70,7 @@ onBeforeUnmount(() => { clearTimeout(timer) })
             <code>interactive-widget</code>
             <div class="debug-setting-options"><UButton v-for="value in (['resizes-content', 'resizes-visual'] as const)" :key="value" type="button" color="neutral" :variant="interactiveWidget === value ? 'solid' : 'outline'" :aria-pressed="interactiveWidget === value" @click="interactiveWidget = value">{{ value }}</UButton></div>
           </div>
+          <ImeInsetControl preserve-focus />
         </div>
       </template>
     </UPopover>

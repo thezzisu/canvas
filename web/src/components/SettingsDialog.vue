@@ -15,6 +15,7 @@ import { developerMode, viewportFit, interactiveWidget } from '../developer-mode
 import { keepScreenAwake, retryScreenWakeLock, screenWakeLockState, screenWakeLockUnavailable } from '../screen-wake-lock'
 import Icon from './Icon.vue'
 import LanguageSelect from './LanguageSelect.vue'
+import ImeInsetControl from './ImeInsetControl.vue'
 
 const { t, n } = useI18n()
 
@@ -209,6 +210,7 @@ onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer) })
             <label for="interactive-widget"><code>interactive-widget</code></label>
             <USelect id="interactive-widget" v-model="interactiveWidget" :items="interactiveWidgets" :portal="portal || false" :ui="viewportSelectUi" color="neutral" size="sm" class="settings-select" aria-label="interactive-widget" />
           </div>
+          <ImeInsetControl />
           <UButton type="button" color="neutral" variant="outline" size="sm" class="viewport-reload" :disabled="!canReload" :title="canReload ? undefined : t('settings.finishFont')" @click="reloadPage">{{ t('settings.reload') }}</UButton>
         </section>
       </div>

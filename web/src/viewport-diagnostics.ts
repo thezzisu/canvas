@@ -1,6 +1,6 @@
 import { mobileKeyboardFrame, mobileKeyboardVisible } from './mobile-keyboard'
 import type { GlobalSettings } from '../../shared/settings'
-import { developerMode, viewportFit, interactiveWidget, viewportPolicy } from './developer-mode'
+import { developerMode, viewportFit, interactiveWidget, viewportPolicy, imeBottomInset } from './developer-mode'
 import { cutoutPosition, cutoutWidth } from './display-cutout'
 import { languagePreference, locale } from './i18n'
 import { keepScreenAwake, screenWakeLockState } from './screen-wake-lock'
@@ -40,6 +40,7 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
     settings: {
       developerMode: developerMode.value,
       viewportFit: viewportFit.value, interactiveWidget: interactiveWidget.value,
+      imeBottomInset: imeBottomInset.value,
       displayCutout: { position: cutoutPosition.value, width: cutoutWidth.value },
       language: { preference: languagePreference.value, resolved: locale.value },
       keepScreenAwake: keepScreenAwake.value,
@@ -66,6 +67,7 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
     keyboard: {
       requested: query('.focus-overlay .terminal-actions button[aria-pressed]')?.getAttribute('aria-pressed') === 'true',
       visible: mobileKeyboardVisible.value,
+      imeBottomInset: app ? cssNumber(app, '--mobile-ime-inset') || 0 : 0,
       held: held ? { width: number(held.width), height: number(held.height), top: number(held.top), left: number(held.left) } : null,
       virtual: keyboard ? { rect: rect(keyboard.boundingRect), overlaysContent: keyboard.overlaysContent === true } : null,
     },
