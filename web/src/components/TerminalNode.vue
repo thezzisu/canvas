@@ -9,6 +9,7 @@ import { statusColor } from '../status'
 import { mountTerminal, type TerminalStatus } from '../terminals'
 import { emptyModifiers, type TerminalModifiers } from '../terminal-input'
 import { terminalInsets } from '../terminal-geometry'
+import { cutoutPosition, cutoutWidth } from '../display-cutout'
 import type { TerminalData } from '../types'
 const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>>()
 const host = ref<HTMLElement>()
@@ -133,15 +134,16 @@ async function resized(event: { params: { width: number; height: number; x: numb
 <template>
   <NodeResizer v-if="!data.mobile && !data.overview && !data.focus && !maximizedElsewhere" :is-visible="selected" :min-width="360" :min-height="220" :max-width="4000" :max-height="3000" @resize-start="resizeStarted" @resize-end="resized" />
   <article tabindex="-1" class="terminal-card" :class="[{ selected, unavailable: !keepTerminal, focused: data.focus, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="keepTerminal ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :style="{ '--program-color': statusColor(frameStatus), width: dimensions || mobileFocus ? '100%' : `${data.width}px`, height: dimensions || mobileFocus ? '100%' : `${data.height}px` }" :aria-label="`${data.name} · ${data.subtitle}`">
-    <header class="terminal-header drag-handle">
+    <header class="terminal-header drag-handle" :data-cutout-position="mobileFocus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="mobileFocus ? { '--cutout-width': `${cutoutWidth}px` } : undefined">
       <PaneIndicators :panes="data.panes" :status="data.status" :available="keepTerminal" :connection="status.status" :error="status.error" :read-only="status.readOnly" />
       <span class="terminal-name" :title="title"><span class="terminal-tab-name">{{ data.name }}</span><span v-if="liveTitle" class="terminal-live-title">{{ liveTitle }}</span></span>
+      <button v-if="mobileFocus" class="terminal-mobile-menu nodrag" title="窗口操作" aria-label="窗口操作" @click.stop="action('menu')"><Icon name="more" :size="17" /></button>
       <div class="terminal-actions nodrag">
         <button v-if="data.overview && !mobileFocus" title="加入画布" aria-label="加入画布" @click.stop="action('add')"><Icon name="plus" :size="15" /></button>
         <button v-else-if="!mobileFocus" title="从画布移除" aria-label="从画布移除" @click.stop="action('remove')"><Icon name="minus" :size="15" /></button>
         <button v-if="!data.focus" title="聚焦窗口" aria-label="聚焦窗口" @click.stop="action('focus')"><Icon name="expand" :size="14" /></button>
         <button v-if="mobileFocus" :title="status.keyboardRequested ? '隐藏键盘' : '打开键盘'" :aria-label="status.keyboardRequested ? '隐藏键盘' : '打开键盘'" :aria-pressed="status.keyboardRequested" @pointerdown.stop.prevent @click.stop="toggleKeyboard"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10" /></svg></button>
-        <button title="窗口操作" aria-label="窗口操作" @click.stop="action('menu')"><Icon name="more" :size="17" /></button>
+        <button v-if="!mobileFocus" title="窗口操作" aria-label="窗口操作" @click.stop="action('menu')"><Icon name="more" :size="17" /></button>
         <button v-if="data.focus" title="退出放大" aria-label="退出放大" @click.stop="action('unfocus')"><Icon name="collapse" :size="15" /></button>
       </div>
     </header>
@@ -185,14 +187,25 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-preview-button:focus-visible{box-shadow:inset 0 0 0 2px var(--accent)}
 .terminal-mobile-preview .terminal-host{pointer-events:none}
 .terminal-mobile-preview .terminal-actions{visibility:hidden}
-.terminal-mobile.focused{min-height:0;border-radius:0;box-shadow:none}
-.terminal-mobile.focused .terminal-header{height:calc(44px + var(--mobile-safe-top,0px));min-height:calc(44px + var(--mobile-safe-top,0px));flex:0 0 calc(44px + var(--mobile-safe-top,0px));padding:var(--mobile-safe-top,0px) 4px 0;gap:3px;cursor:default}
+.terminal-mobile.focused{--terminal-header-height:calc(44px + var(--mobile-safe-top,0px));min-height:0;border-radius:0;box-shadow:none}
+.terminal-mobile.focused .terminal-header{height:var(--terminal-header-height);min-height:var(--terminal-header-height);flex:0 0 var(--terminal-header-height);padding:var(--mobile-safe-top,0px) 4px 0;gap:3px;cursor:default}
 .terminal-mobile.focused .terminal-name{font-size:13px}
+.canvas-fullscreen .terminal-mobile.focused{--terminal-header-height:44px}
+.canvas-fullscreen .terminal-mobile.focused .terminal-header{padding-top:0}
+.terminal-mobile.focused .terminal-mobile-menu{width:44px;height:44px;min-width:44px;padding:0;border-radius:4px;color:#8592a3}
+.canvas-fullscreen .terminal-mobile.focused .terminal-header{--cutout-space:clamp(0px,var(--cutout-width,0px),max(0px,calc(var(--mobile-width,100vw) - 200px)))}
+.canvas-fullscreen .terminal-mobile.focused .terminal-header[data-cutout-position=left]{padding-left:calc(4px + var(--cutout-space))}
+.canvas-fullscreen .terminal-mobile.focused .terminal-header[data-cutout-position=right]{padding-right:calc(4px + var(--cutout-space))}
+.canvas-fullscreen .terminal-mobile.focused .terminal-header[data-cutout-position=center]{display:grid;grid-template-columns:minmax(0,1fr) var(--cutout-space) minmax(0,1fr);gap:0}
+.canvas-fullscreen .terminal-header[data-cutout-position=center] :deep(.terminal-status-trigger){grid-area:1/1;justify-self:start}
+.canvas-fullscreen .terminal-header[data-cutout-position=center] .terminal-name{grid-area:1/1;margin:0 44px}
+.canvas-fullscreen .terminal-header[data-cutout-position=center] .terminal-mobile-menu{grid-area:1/1;justify-self:end}
+.canvas-fullscreen .terminal-header[data-cutout-position=center] .terminal-actions{grid-area:1/3;justify-self:end;margin-left:0}
 .terminal-mobile.focused .terminal-actions{opacity:1;pointer-events:auto;gap:0}
 .terminal-mobile.focused .terminal-actions button{width:44px;height:44px;min-width:44px;border-radius:4px}
 .terminal-mobile.focused :deep(.terminal-status-trigger){width:44px;height:44px;min-width:44px}
 .terminal-mobile.focused .terminal-host{min-height:0;flex:1;touch-action:none}
-.terminal-mobile.focused .terminal-loading,.terminal-mobile.focused .terminal-maximized,.terminal-mobile.focused .terminal-file-drop{top:calc(44px + var(--mobile-safe-top,0px));bottom:calc(49px + var(--mobile-safe-bottom,0px))}
+.terminal-mobile.focused .terminal-loading,.terminal-mobile.focused .terminal-maximized,.terminal-mobile.focused .terminal-file-drop{top:var(--terminal-header-height);bottom:calc(49px + var(--mobile-safe-bottom,0px))}
 .terminal-mobile.focused .terminal-upload{bottom:calc(55px + var(--mobile-safe-bottom,0px))}
 .terminal-mobile.focused .terminal-copy-notice{bottom:calc(57px + var(--mobile-safe-bottom,0px))}
 .terminal-mobile.focused .terminal-disconnected{bottom:calc(49px + var(--mobile-safe-bottom,0px))}

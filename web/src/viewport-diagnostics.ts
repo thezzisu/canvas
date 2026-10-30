@@ -1,0 +1,59 @@
+import { mobileKeyboardFrame, mobileKeyboardVisible } from './mobile-keyboard'
+
+/** Explicit, local-only geometry capture. Never read content, identity or storage. */
+export function collectViewportDiagnostics() {
+  const number = (value: number) => Number.isFinite(value) ? Math.round(value * 100) / 100 : null
+  const rect = (value: DOMRect | DOMRectReadOnly) => ({
+    x: number(value.x), y: number(value.y), width: number(value.width), height: number(value.height),
+  })
+  const query = (selector: string) => document.querySelector<HTMLElement>(selector)
+  const cssNumber = (element: Element, property: string) => number(parseFloat(getComputedStyle(element).getPropertyValue(property)))
+  const padding = (element: Element) => Object.fromEntries(
+    ['top', 'right', 'bottom', 'left'].map(side => [side, cssNumber(element, `padding-${side}`)]),
+  )
+  const geometry = (element: Element | null) => element ? { rect: rect(element.getBoundingClientRect()), padding: padding(element) } : null
+  const app = query('.app-shell'), input = query('.focus-overlay .terminal-mobile-input')
+  const xtermInput = query('.focus-overlay .xterm-helper-textarea')
+  const visual = window.visualViewport, active = document.activeElement, fullscreen = document.fullscreenElement
+  const keyboard = (navigator as Navigator & { virtualKeyboard?: { boundingRect: DOMRectReadOnly; overlaysContent?: boolean } }).virtualKeyboard
+  const held = mobileKeyboardFrame.value
+  const probe = document.createElement('i')
+  probe.setAttribute('aria-hidden', 'true')
+  probe.style.cssText = 'all:initial;position:fixed;inset:0;visibility:hidden;pointer-events:none;box-sizing:border-box;contain:strict'
+  let probes
+  try {
+    document.body.append(probe)
+    const fixed = rect(probe.getBoundingClientRect())
+    probe.style.bottom = 'auto'; probe.style.height = '100dvh'
+    const dynamic = rect(probe.getBoundingClientRect())
+    probe.style.height = '0'; probe.style.padding = 'env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)'
+    probes = { fixed, dynamic, safeArea: padding(probe) }
+  } finally { probe.remove() }
+  return {
+    version: 1,
+    fullscreen: !fullscreen ? 'none' : fullscreen === document.documentElement ? 'document' : fullscreen === app ? 'app' : 'other',
+    viewport: {
+      layout: { width: number(innerWidth), height: number(innerHeight) },
+      client: { width: number(document.documentElement.clientWidth), height: number(document.documentElement.clientHeight) },
+      visual: visual ? { width: number(visual.width), height: number(visual.height), top: number(visual.offsetTop), left: number(visual.offsetLeft), pageTop: number(visual.pageTop), pageLeft: number(visual.pageLeft), scale: number(visual.scale) } : null,
+      scroll: { x: number(scrollX), y: number(scrollY) }, dpr: number(devicePixelRatio),
+    },
+    probes,
+    elements: {
+      app: geometry(app), overlay: geometry(query('.focus-overlay')), card: geometry(query('.focus-overlay > .terminal-card')),
+      header: geometry(query('.focus-overlay .terminal-header')), helper: geometry(query('.focus-overlay .mobile-keyboard')),
+    },
+    applied: app ? Object.fromEntries(['width', 'height', 'top', 'left'].map(name => [name, cssNumber(app, `--mobile-${name}`)])) : null,
+    keyboard: {
+      requested: query('.focus-overlay .terminal-actions button[aria-pressed]')?.getAttribute('aria-pressed') === 'true',
+      visible: mobileKeyboardVisible.value,
+      held: held ? { width: number(held.width), height: number(held.height), top: number(held.top), left: number(held.left) } : null,
+      virtual: keyboard ? { rect: rect(keyboard.boundingRect), overlaysContent: keyboard.overlaysContent === true } : null,
+    },
+    focus: {
+      active: active === input ? 'mobile-input' : active === xtermInput ? 'xterm-input' : active === document.body ? 'body' : 'other',
+      editable: input?.isContentEditable === true,
+      inputMode: input?.inputMode === 'text' ? 'text' : input?.inputMode === 'none' ? 'none' : 'other',
+    },
+  }
+}

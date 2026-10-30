@@ -21,6 +21,34 @@ test('overview paging moves within a space horizontally and to the closest colum
   assert.equal(adjacentPage([], 'a', 'right'), undefined)
 })
 
+test('vertical paging retains the preferred column through short rows and returns to the original window', () => {
+  const rows = [
+    ...Array.from({ length: 5 }, (_, column) => page(`long-${column}`, 'long', column * 820, 0)),
+    ...Array.from({ length: 2 }, (_, column) => page(`short-${column}`, 'short', column * 820, 520)),
+    page('single', 'single', 0, 1040),
+    ...Array.from({ length: 5 }, (_, column) => page(`last-${column}`, 'last', column * 820, 1560)),
+  ]
+  const preferred = rows[3]!.x + rows[3]!.width / 2
+  assert.equal(adjacentPage(rows, 'long-3', 'down', preferred)?.id, 'short-1')
+  assert.equal(adjacentPage(rows, 'short-1', 'up', preferred)?.id, 'long-3')
+  assert.equal(adjacentPage(rows, 'short-1', 'down', preferred)?.id, 'single')
+  assert.equal(adjacentPage(rows, 'single', 'down', preferred)?.id, 'last-3')
+  assert.equal(adjacentPage(rows, 'last-3', 'up', preferred)?.id, 'single')
+  assert.equal(adjacentPage(rows, 'single', 'up', preferred)?.id, 'short-1')
+  assert.equal(adjacentPage(rows, 'long-3', 'up', preferred), undefined)
+})
+
+test('a fresh horizontal target replaces the preferred column and vertical alignment uses card centers', () => {
+  const preferred = pages[2]!.x + pages[2]!.width / 2
+  const horizontal = adjacentPage(pages, 'e', 'left', preferred)!
+  assert.equal(horizontal.id, 'd', 'a stored vertical goal never overrides horizontal neighbors')
+  assert.equal(adjacentPage(pages, horizontal.id, 'up', horizontal.x + horizontal.width / 2)?.id, 'a')
+  const unequal = [page('wide', 'one', 0, 0, 1600), page('narrow', 'two', 0, 520, 200), page('aligned', 'two', 400, 520, 800)]
+  assert.equal(adjacentPage(unequal, 'wide', 'down', 800)?.id, 'aligned')
+  assert.equal(adjacentPage(unequal, 'wide', 'down', 0)?.id, 'narrow', 'a zero-coordinate goal is retained')
+  assert.equal(adjacentPage(pages.filter(value => value.id !== 'c'), 'e', 'up', preferred)?.id, 'b', 'removed destination clamps to the closest surviving card')
+})
+
 test('overview paging retains window identity through sorting and space moves, and chooses a nearby survivor after filtering', () => {
   const reordered = [pages[2]!, pages[0]!, pages[1]!, ...pages.slice(3)]
   assert.equal(retainPage(reordered, 'b')?.id, 'b')

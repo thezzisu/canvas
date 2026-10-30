@@ -13,7 +13,7 @@ export function pageViewport(page: OverviewPage, frame: Frame): CanvasViewport {
   return { zoom, x: frame.width / 2 - point.x * zoom, y: frame.height / 2 - point.y * zoom }
 }
 
-export function adjacentPage(pages: readonly OverviewPage[], currentId: string, direction: PageDirection): OverviewPage | undefined {
+export function adjacentPage(pages: readonly OverviewPage[], currentId: string, direction: PageDirection, preferredX?: number): OverviewPage | undefined {
   const current = pages.find(page => page.id === currentId)
   if (!current) return undefined
   if (direction === 'left' || direction === 'right') {
@@ -22,7 +22,7 @@ export function adjacentPage(pages: readonly OverviewPage[], currentId: string, 
   }
   const rows = [...new Set(pages.map(page => page.row))]
   const nextRow = rows[rows.indexOf(current.row) + (direction === 'up' ? -1 : 1)]
-  const column = center(current).x
+  const column = preferredX ?? center(current).x
   return pages.filter(page => page.row === nextRow).reduce<OverviewPage | undefined>((closest, page) =>
     !closest || Math.abs(center(page).x - column) < Math.abs(center(closest).x - column) ? page : closest, undefined)
 }

@@ -7,7 +7,7 @@ let restoringFocus = false
 export const clipboardRestoringFocus = () => restoringFocus
 
 /** A user copy works on HTTP as well as secure origins. Never read the clipboard. */
-function copyText(text: string, failed: () => void): boolean {
+export function copyText(text: string, failed: () => void): boolean {
   if (!text) return false
   if (new TextEncoder().encode(text).length > MAX_COPY_BYTES) { failed(); return false }
   const documentSelection = document.getSelection()
