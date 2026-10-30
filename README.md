@@ -22,6 +22,10 @@ npm start
 Open <http://127.0.0.1:3010> and sign in with the account created during setup.
 Canvas uses one shared account.
 
+The instance selector connects this frontend to multiple Canvas servers. Each
+instance has its own API base URL and login; switching disconnects the previous
+instance. Login tokens remain in the current browser tab through reloads.
+
 ## Connections
 
 Add connections from the sidebar. Local connections use the Canvas server's
@@ -79,6 +83,7 @@ Native pane layouts and terminal interaction follow herdr behavior.
 ```sh
 canvas open ./report.pdf
 canvas open ./project
+canvas open http://localhost:5173/
 ```
 
 Canvas installs the helper at `~/.local/bin/canvas` on each connected machine;
@@ -99,20 +104,37 @@ window. Press Enter when ready. Selecting terminal text copies it to the clipboa
 For directories, `canvas open` offers a VS Code Remote SSH link. The desktop needs
 VS Code, its Remote SSH extension and SSH access to the source machine.
 
+Web addresses open in the interacting browser. Loopback addresses refer to the
+source machine and use a scoped subpath beneath its Canvas API base. Applications
+must support that prefix. Forwarded pages run in a browser sandbox; cookies,
+storage and service workers are unavailable. Window menus also scan the current
+screen for links and existing files, with OSC 8 targets taking precedence.
+
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CANVAS_DATA_DIR` | `~/.local/share/canvas` | Account, database and stored files |
-| `CANVAS_HOST` | `127.0.0.1` | Listen address |
+| `CANVAS_HOST` | `127.0.0.1` | Listen address or comma-separated addresses |
 | `CANVAS_PORT` | `3010` | Listen port |
-| `CANVAS_SECURE_COOKIE` | unset | Set to `1` behind TLS termination |
+| `CANVAS_ALLOWED_ORIGINS` | Same origin | Comma-separated frontend origins allowed to access this server |
+| `VITE_CANVAS_API_BASE` | Frontend origin | Default backend base URL, including its path prefix; set during the frontend build |
 | `CANVAS_PUBLIC_SSH_HOST` | Listen address or hostname | Advertised VS Code SSH host for local connections |
 | `CANVAS_PUBLIC_SSH_PORT` | `22` | Advertised VS Code SSH port for local connections |
 
-For remote access, use an SSH tunnel or a TLS reverse proxy supporting WebSockets
-and unbuffered server-sent events. Preserve the Host header and serve the UI and
-API from the same origin. Account access grants terminal access to connected machines.
+For remote access, use a TLS reverse proxy supporting WebSockets and unbuffered
+requests and server-sent events. Strip the public prefix before forwarding to
+Canvas and pass it in `X-Forwarded-Prefix`. Configure the frontend origin on the
+server. Authentication uses opaque Bearer tokens; media and forwarded pages use
+expiring scoped URLs. Account access grants terminal access to connected machines.
+
+The frontend can be hosted independently on Cloudflare Pages:
+
+```sh
+VITE_CANVAS_API_BASE=https://backend.example/canvas/ npm run build:web
+npx wrangler login
+npm run deploy:web
+```
 
 Back up the complete data directory, including the SQLite database and `files/`.
 Uploaded terminal files remain in each source machine's managed inbox.

@@ -14,7 +14,7 @@ test("terminal presentation dimensions are shared across canvases while position
   store.addSession("test");
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   const request = (path: string, method = "GET", body?: unknown) => app.request(`http://localhost${path}`, {
-    method, headers: { Host: "localhost", Cookie: "canvas_session=test", "Content-Type": "application/json" },
+    method, headers: { Host: "localhost", Authorization: "Bearer test", "Content-Type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const sourceId = randomUUID(), windowId = "generation:@1", key = `${sourceId}/${windowId}`;

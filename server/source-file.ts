@@ -1,5 +1,6 @@
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { sourcePythonCommand } from './providers.ts'
+import { withoutFileLocation } from './content-candidates.ts'
 import type { Source } from './state.ts'
 
 const readFilePython = String.raw`import json,os,stat,sys
@@ -29,6 +30,47 @@ export interface SourceFile {
   size: number
   chunks: AsyncIterable<Uint8Array>
   close(): Promise<void>
+}
+
+const statFilesPython = String.raw`import json,os,stat,sys
+paths=json.load(sys.stdin)
+valid=[]
+for index,choices in enumerate(paths):
+ for choice,path in enumerate(choices):
+  try:
+   resolved=os.path.join(os.path.expanduser('~'),path[2:]) if path.startswith('~/') else path
+   info=os.stat(resolved)
+   if os.path.isabs(resolved) and stat.S_ISREG(info.st_mode): valid.append([index,choice])
+   break
+  except FileNotFoundError: continue
+  except OSError: break
+print(json.dumps(valid))`
+
+/** A single bounded metadata check; no candidate file is opened or read. */
+export function regularSourceFiles(source: Source, paths: string[], signal: AbortSignal): Promise<Map<string, string>> {
+  signal.throwIfAborted()
+  if (paths.length > 200 || paths.some(path => !(path.startsWith('/') || path.startsWith('~/'))
+      || path.length > 8192 || /[\x00-\x1f\x7f-\x9f]/u.test(path))) throw new Error('Invalid file candidates')
+  const command = sourcePythonCommand(source, statFilesPython, [])
+  const candidates = paths.map(path => {
+    const bare = withoutFileLocation(path)
+    return path === bare ? [path] : [path, bare]
+  })
+  return new Promise((resolve, reject) => {
+    const child = execFile(command.file, command.args, { env: command.env, signal, timeout: 5000,
+      killSignal: 'SIGKILL', maxBuffer: 16 * 1024 }, (error, stdout) => {
+      if (error) { reject(new Error(signal.aborted ? 'Scan cancelled' : 'Could not check source files')); return }
+      try {
+        const indexes: unknown = JSON.parse(stdout)
+        if (!Array.isArray(indexes) || indexes.some(value => !Array.isArray(value) || value.length !== 2
+            || !Number.isInteger(value[0]) || !Number.isInteger(value[1]) || !candidates[value[0]]?.[value[1]]))
+          throw new Error('Invalid file check response')
+        resolve(new Map(indexes.map(([index, choice]) => [paths[index]!, candidates[index]![choice]!])))
+      } catch { reject(new Error('Invalid file check response')) }
+    })
+    child.stdin?.on('error', () => {})
+    child.stdin?.end(JSON.stringify(candidates))
+  })
 }
 
 /** One user-selected file over the configured source transport; no shell expansion. */

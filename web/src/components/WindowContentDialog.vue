@@ -4,10 +4,11 @@ import { useI18n } from 'vue-i18n'
 import UModal from '@nuxt/ui/components/Modal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import type { WindowContentItem, WindowContentOpen, WindowContentScan } from '../../../shared/window-content'
-import { api, segment } from '../api'
+import { api, apiContext, apiUrl, requireCurrentApi, segment, uuid } from '../api'
 import { copyText } from '../clipboard'
 import { presentDownload, type DownloadContext } from '../downloads'
 import Icon from './Icon.vue'
+import { presentUrl } from '../urls'
 
 type Target = { sourceId: string; spaceId: string; windowId: string; name: string; context: DownloadContext }
 type FileItem = Extract<WindowContentItem, { kind: 'file' }>
@@ -73,20 +74,22 @@ function close(open = false) {
 async function openFile(item: FileItem, download = false) {
   const snapshot = result.value
   if (!snapshot || !item.path || opening.value || loading.value || props.target !== snapshot.target) return
+  const context = apiContext()
   const current = fileRequest = new AbortController()
   opening.value = item.id; error.value = ''; retryItem = undefined
   try {
     const file = await api<WindowContentOpen>(`/api/content-scans/${segment(snapshot.scan.id)}/items/${segment(item.id)}/open`,
       { method: 'POST', body: JSON.stringify(snapshot.context), signal: current.signal })
     if (fileRequest !== current || current.signal.aborted || result.value !== snapshot || props.target !== snapshot.target) return
-    const url = new URL(file.url, location.href)
-    if (url.origin !== location.origin || !/^\/api\/(?:files|downloads)\/[^/]+$/.test(url.pathname) || url.search || url.hash) throw new Error(t('panels.scan.openFailed'))
+    const url = apiUrl(file.url, context)
+    if (!/^api\/(?:files|downloads)\/[^/]+$/.test(url.pathname.slice(new URL(context.base).pathname.length)) || url.search) throw new Error(t('panels.scan.openFailed'))
     fileRequest = undefined; opening.value = ''
     if (!download && file.preview !== 'file') {
       emit('close')
       await nextTick()
     }
-    presentDownload(file, download)
+    requireCurrentApi(context)
+    await presentDownload(file, download)
   } catch (reason) {
     if (!current.signal.aborted && result.value === snapshot && props.target === snapshot.target) {
       error.value = reason instanceof Error ? reason : 'panels.scan.openFailed'
@@ -97,6 +100,21 @@ async function openFile(item: FileItem, download = false) {
   }
 }
 function retry() { if (retryItem) void openFile(retryItem.item, retryItem.download); else void scan() }
+async function openLink(item: Extract<WindowContentItem, { kind: 'link' }>) {
+  const snapshot = result.value, context = apiContext()
+  if (!snapshot || opening.value || props.target !== snapshot.target) return
+  const current = fileRequest = new AbortController()
+  opening.value = item.id; error.value = ''
+  try {
+    const opened = await api<{ url: string; forwarded: boolean }>('/api/urls', { method: 'POST',
+      body: JSON.stringify({ sourceId: snapshot.target.sourceId, url: item.url }), signal: current.signal }, context)
+    if (current.signal.aborted || result.value !== snapshot || props.target !== snapshot.target) return
+    fileRequest = undefined; opening.value = ''; emit('close'); await nextTick()
+    requireCurrentApi(context); presentUrl({ id: uuid(), ...opened })
+  } catch (reason) {
+    if (!current.signal.aborted && result.value === snapshot) error.value = reason instanceof Error ? reason : 'panels.scan.openFailed'
+  } finally { if (fileRequest === current) { fileRequest = undefined; opening.value = '' } }
+}
 function copy(item: WindowContentItem) {
   clearTimeout(copyTimer)
   const owner = result.value
@@ -128,15 +146,16 @@ onBeforeUnmount(() => { cancelRequests(); clearTimeout(copyTimer) })
         <header><strong>{{ pane.name || t('terminal.pane', { name: pane.id.split(':').at(-1) || pane.id }) }}</strong><span v-if="pane.cwd" :title="pane.cwd">{{ pane.cwd }}</span></header>
         <div v-for="item in pane.items" :key="item.id" class="content-scan-item" :data-scan-item="item.id" :data-item-kind="item.kind" :aria-busy="opening === item.id">
           <a v-if="item.kind === 'link' && item.href" class="content-scan-open" :href="item.href" target="_blank" rel="noopener noreferrer" :title="item.url"><Icon name="globe" :size="16" /><span><strong>{{ item.label }}</strong><small v-if="item.url !== item.label">{{ item.url }}</small></span></a>
-          <button v-else class="content-scan-open" type="button" :disabled="item.kind === 'file' && !!item.path && !!opening" :title="item.kind === 'file' ? item.path || item.label : item.url" @click="item.kind === 'file' && item.path ? openFile(item) : copy(item)">
+          <button v-else class="content-scan-open" type="button" :disabled="!!opening" :title="item.kind === 'file' ? item.path || item.label : item.url" @click="item.kind === 'link' ? openLink(item) : item.path ? openFile(item) : copy(item)">
             <span v-if="opening === item.id" class="spinner" /><Icon v-else :name="item.kind === 'file' ? 'file' : 'globe'" :size="16" />
-            <span><strong>{{ item.displayLabel }}</strong><small v-if="item.kind === 'link'">{{ t('panels.scan.requiresForward') }}</small><small v-else-if="!item.path">{{ t('panels.scan.unresolved') }}</small><small v-else-if="item.path !== item.displayLabel">{{ item.path }}</small></span>
+            <span><strong>{{ item.displayLabel }}</strong><small v-if="item.kind === 'link'">{{ t('urls.open') }}</small><small v-else-if="!item.path">{{ t('panels.scan.unresolved') }}</small><small v-else-if="item.path !== item.displayLabel">{{ item.path }}</small></span>
           </button>
           <UButton v-if="item.kind === 'file' && item.path" type="button" color="neutral" variant="ghost" class="content-scan-action" :disabled="!!opening" :aria-label="t('panels.file.downloadNamed', { name: item.label })" :title="t('panels.file.download')" @click="openFile(item, true)"><Icon name="download" :size="15" /></UButton>
           <UButton type="button" color="neutral" variant="ghost" class="content-scan-action" :aria-label="t(item.kind === 'file' ? 'panels.scan.copyPath' : 'panels.scan.copyLink')" :title="copied?.id === item.id ? t(copied.failed ? 'terminal.clipboard.failed' : 'terminal.clipboard.copied') : t(item.kind === 'file' ? 'panels.scan.copyPath' : 'panels.scan.copyLink')" @click="copy(item)"><Icon :name="copied?.id === item.id ? copied.failed ? 'info' : 'check' : 'copy'" :size="15" /></UButton>
         </div>
       </section>
       <p v-if="result?.scan.truncated" class="content-scan-truncated">{{ t('panels.scan.truncated') }}</p>
+      <p v-if="result?.scan.incomplete" class="content-scan-truncated">{{ t('panels.scan.incomplete') }}</p>
       <span class="sr-only" role="status">{{ opening ? t('panels.scan.staging') : copied ? t(copied.failed ? 'terminal.clipboard.failed' : 'terminal.clipboard.copied') : '' }}</span>
     </template>
   </UModal>

@@ -34,7 +34,7 @@ async function fixture(t: TestContext, options: { temporaryTtlMs?: number } = {}
   } as unknown as TerminalManager, { assets });
   store.addSession("test");
   t.after(async () => { await assets.close(); store.close(); await rm(dir, { recursive: true, force: true }); });
-  const headers = { Host: "localhost", Cookie: "canvas_session=test", "Content-Type": "application/json" };
+  const headers = { Host: "localhost", Authorization: "Bearer test", "Content-Type": "application/json" };
   const request = (path: string, method = "GET", body?: unknown, authenticated = true) => app.request(`http://localhost${path}`, {
     method,
     headers: authenticated ? headers : { Host: "localhost" },

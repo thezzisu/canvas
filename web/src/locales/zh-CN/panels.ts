@@ -2,7 +2,7 @@ export default {
   scan: {
     title: '扫描内容', scope: '当前画面', refresh: '重新扫描', empty: '未发现文件或链接',
     failed: '扫描失败', openFailed: '无法打开文件', staging: '暂存中…',
-    requiresForward: '需要转发', unresolved: '无法确定工作目录',
+    incomplete: '部分内容未能读取', unresolved: '无法确定工作目录',
     copyPath: '复制路径', copyLink: '复制链接', truncated: '结果已截断',
   },
   background: {

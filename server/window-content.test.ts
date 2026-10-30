@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { contentCandidates } from './content-candidates.ts'
 import { windowContent, readWindowContent, type NativeContentPane } from './herdr/content.ts'
 import type { ClientShellSnapshot, FrameData, PaneSurfaceFrame } from './herdr/wire.ts'
-import { readSourceFile } from './source-file.ts'
+import { readSourceFile, regularSourceFiles } from './source-file.ts'
 import { WindowContentService, type WindowContentOptions } from './window-content.ts'
 import { OpenDownloadService } from './open-download.ts'
 import { Store, type Canvas, type Source } from './state.ts'
@@ -53,6 +53,25 @@ test('candidate scan bounds results and never guesses joins between supplied lin
   const limited = contentCandidates([pane(Array.from({ length: 205 }, (_, i) => `/tmp/${i}.txt`))])
   assert.equal(limited.truncated, true)
   assert.equal(limited.panes[0]!.items.length, 200)
+})
+
+test('candidate scan ignores prose ratios and placeholders while resolving OSC 8 paths on the window source', () => {
+  const content = pane(['commit/push status/diff/log 4/5 0/100 @path/to/file @report.txt', './report.txt subdir/photo.png'], '/work')
+  content.links = [
+    { label: 'Manual', url: 'https://example.test/manual' },
+    { label: 'Image', url: 'file:///tmp/a%20b.png' },
+    { label: 'Local', url: 'file://localhost/tmp/local.txt' },
+    { label: 'This source', url: 'file://source.test/tmp/source.txt' },
+    { label: 'Host is link metadata', url: 'file://other.test/tmp/other.txt' },
+    { label: 'Credentials', url: 'file://user:DUMMY_PASSWORD@host/tmp/private.txt' },
+    { label: 'UNC', url: 'file:////host/share.txt' },
+    { label: 'Invalid path', url: 'file:///tmp/a%00b.txt' },
+  ]
+  const items = contentCandidates([content]).panes[0]!.items
+  assert.deepEqual(items.filter(item => item.kind === 'file').map(item => item.path), [
+    '/tmp/a b.png', '/tmp/local.txt', '/tmp/source.txt', '/tmp/other.txt', '/work/report.txt', '/work/subdir/photo.png',
+  ])
+  assert.deepEqual(items.filter(item => item.kind === 'link'), [{ id: '1', kind: 'link', label: 'Manual', url: 'https://example.test/manual' }])
 })
 
 function nativeFrame(): { surface: PaneSurfaceFrame; snapshot: ClientShellSnapshot } {
@@ -104,7 +123,7 @@ test('native popup scan does not reveal underlying pane content or inherit its c
   assert.deepEqual(result, panes)
 })
 
-test('native formatted scan reads exact visible absolute rows and preserves hard breaks and OSC 8', async () => {
+test('native scan reads current visible rows without revision checks and preserves OSC 8', async () => {
   const { surface, snapshot } = nativeFrame()
   surface.panes[0]!.scroll = { max_offset_from_bottom: 90, offset_from_bottom: 25, viewport_rows: 2 }
   const calls: Record<string, unknown>[] = []
@@ -113,15 +132,15 @@ test('native formatted scan reads exact visible absolute rows and preserves hard
     return { pane_id: params.pane_id, text: params.pane_id === 'a' ? '/tmp/long-native-soft-wrapped-path.png\nHARD_ONE\nHARD_TWO' : './right.txt' }
   })
   assert.deepEqual(calls, [
-    { pane_id: 'a', content_revision: 1, anchor: { row: 65, col: 0 }, cursor: { row: 66, col: 28 } },
-    { pane_id: 'b', content_revision: 1, anchor: { row: 0, col: 0 }, cursor: { row: 1, col: 28 } },
+    { pane_id: 'a', source: 'visible', format: 'text', strip_ansi: true },
+    { pane_id: 'b', source: 'visible', format: 'text', strip_ansi: true },
   ])
   assert.deepEqual(result[0]!.lines, ['/tmp/long-native-soft-wrapped-path.png', 'HARD_ONE', 'HARD_TWO'])
   assert.deepEqual(result[0]!.links, [{ label: 'Open', url: 'https://example.test/original' }])
   assert.deepEqual(result[1]!.lines, ['./right.txt'])
 })
 
-test('formatted scan never reads concealed panes and rejects stale or mismatched responses', async () => {
+test('current scan never reads concealed panes and isolates failed or mismatched pane responses', async () => {
   const { surface, snapshot } = nativeFrame()
   surface.frame.cells[65]!.modifier = 128
   const calls: string[] = []
@@ -130,8 +149,12 @@ test('formatted scan never reads concealed panes and rejects stale or mismatched
   })
   assert.deepEqual(calls, ['b'])
   assert.equal(result[0]!.lines[0], ' /left.txt')
-  await assert.rejects(readWindowContent(surface, snapshot, 'window', async () => { throw new Error('stale_content') }), /scan again/)
-  await assert.rejects(readWindowContent(surface, snapshot, 'window', async () => ({ pane_id: 'other', text: 'foreign' })), /Invalid window content/)
+  for (const read of [async () => { throw new Error('unavailable') }, async () => ({ pane_id: 'other', text: 'foreign' })]) {
+    const partial = await readWindowContent(surface, snapshot, 'window', read)
+    assert.equal(partial[1]!.incomplete, true)
+    assert.deepEqual(partial[1]!.lines, [])
+    assert.equal(partial[0]!.lines[0], ' /left.txt')
+  }
 })
 
 test('native content paths prefer the foreground process directory and validate shell fallback', () => {
@@ -144,8 +167,9 @@ test('native content paths prefer the foreground process directory and validate 
   assert.equal(windowContent(surface, snapshot, 'window')[0]!.cwd, undefined)
 })
 
-async function fixture(t: TestContext, readFileOverride?: WindowContentOptions['readFile']) {
+async function fixture(t: TestContext, readFileOverride?: WindowContentOptions['readFile'], regularFiles?: WindowContentOptions['regularFiles']) {
   const root = await mkdtemp(join(tmpdir(), 'canvas-content-'))
+  await writeFile(join(root, 'report.txt'), 'fixture file\n')
   const store = new Store(join(root, 'canvas.db')), assets = new AssetStore(root, store)
   const source: Source = { id: randomUUID(), name: 'Fixture', transport: 'local' }
   store.put('source', source); store.addSession('first-session'); store.addSession('other-session')
@@ -156,7 +180,7 @@ async function fixture(t: TestContext, readFileOverride?: WindowContentOptions['
     prepare: async () => { throw new Error('No bridge may be created by scanning') }, resources: async () => { throw new Error('No remote scan requests') }, recipient: async () => undefined })
   let content: NativeContentPane[] | undefined = [pane(['./report.txt', 'https://example.test/download'], root)]
   let reads = 0
-  const service = new WindowContentService({ store, assets,
+  const service = new WindowContentService({ store, assets, regularFiles,
     content: async (selectedSource, space, window) => { assert.equal(selectedSource.id, source.id); assert.equal(space, 'space'); assert.equal(window, 'window'); return content },
     registerStaged: (assetId, sessionId) => downloads.registerStaged(assetId, sessionId),
     readFile: (source, path, signal) => { reads++; return (readFileOverride || readSourceFile)(source, path, signal) },
@@ -165,7 +189,7 @@ async function fixture(t: TestContext, readFileOverride?: WindowContentOptions['
     windowContent: service, assets, openDownload: (ticket, session) => downloads.open(ticket, session),
   })
   const call = (path: string, body: unknown = {}, session = 'first-session', signal?: AbortSignal) => app.request(`http://canvas.test${path}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Host: 'canvas.test', Origin: 'http://canvas.test', Cookie: `canvas_session=${session}` }, body: JSON.stringify(body), signal,
+    method: 'POST', headers: { 'Content-Type': 'application/json', Host: 'canvas.test', Origin: 'http://canvas.test', Authorization: `Bearer ${session}` }, body: JSON.stringify(body), signal,
   })
   const scan = async () => {
     const response = await call(`/api/sources/${source.id}/spaces/space/windows/window/scan`)
@@ -177,7 +201,7 @@ async function fixture(t: TestContext, readFileOverride?: WindowContentOptions['
     setContent: (value: NativeContentPane[] | undefined) => { content = value } }
 }
 
-test('HTTP scans authenticate, freeze candidates and do not read files or fetch links', async t => {
+test('HTTP scans authenticate, verify regular file metadata and do not read bytes or fetch links', async t => {
   const f = await fixture(t)
   const endpoint = `/api/sources/${f.source.id}/spaces/space/windows/window/scan`
   assert.equal((await f.call(endpoint, {}, 'missing')).status, 401)
@@ -196,9 +220,9 @@ test('HTTP scans authenticate, freeze candidates and do not read files or fetch 
   assert.equal(response.status, 200)
   const opened = await response.json() as WindowContentOpen
   assert.equal(opened.temporary, true); assert.equal(opened.preview, 'text'); assert.equal(f.reads(), 1)
-  const download = await f.app.request(`http://canvas.test${opened.url}`, { headers: { Cookie: 'canvas_session=first-session' } })
+  const download = await f.app.request(`http://canvas.test${opened.url}`, { headers: { Authorization: 'Bearer first-session' } })
   assert.equal(await download.text(), 'original\n')
-  assert.equal((await f.app.request(`http://canvas.test${opened.url}`, { headers: { Cookie: 'canvas_session=other-session' } })).status, 404)
+  assert.equal((await f.app.request(`http://canvas.test${opened.url}`, { headers: { Authorization: 'Bearer other-session' } })).status, 404)
 })
 
 test('custom-canvas opens add a persistent file beside the captured native window', async t => {
@@ -211,7 +235,7 @@ test('custom-canvas opens add a persistent file beside the captured native windo
   assert.equal(opened.temporary, false)
   const canvas = f.store.get<Canvas>('canvas', f.canvas.id)!, added = canvas.nodes.find(node => node.type === 'file')!
   assert(added && added.x > canvas.nodes[0]!.x)
-  const responseFile = await f.app.request(`http://canvas.test${opened.url}`, { headers: { Cookie: 'canvas_session=other-session' } })
+  const responseFile = await f.app.request(`http://canvas.test${opened.url}`, { headers: { Authorization: 'Bearer other-session' } })
   assert.equal(await responseFile.text(), 'card content')
   assert.equal(await readFile(join(f.root, 'files', opened.id), 'utf8'), 'card content')
 })
@@ -249,6 +273,89 @@ test('source file reader rejects directories and FIFOs without waiting for write
   execFileSync('mkfifo', [fifo])
   await assert.rejects(readSourceFile(f.source, f.root, new AbortController().signal), /regular file/)
   await assert.rejects(readSourceFile(f.source, fifo, new AbortController().signal), /regular file/)
+})
+
+test('one metadata scan drops missing paths, directories, devices and FIFOs without reading bytes', async t => {
+  const f = await fixture(t), fifo = join(f.root, 'pipe'), name = join(f.root, 'literal "quotes" $(nothing) 中文.bin')
+  execFileSync('mkfifo', [fifo]); await writeFile(name, 'literal file')
+  const paths = [join(f.root, 'report.txt'), f.root, fifo, '/dev/null', join(f.root, 'missing.txt'), name]
+  assert.deepEqual(await regularSourceFiles(f.source, paths, new AbortController().signal), new Map([[paths[0], paths[0]], [name, name]]))
+  const content = pane(['commit/push status/diff/log 4/5 0/100 @path/to/file', './report.txt /dev/null ./missing.txt', `"${f.root}" "${fifo}"`], f.root)
+  content.links = [{ label: 'Exact file', url: `file://${encodeURI(name).replaceAll('"', '%22')}` }]
+  f.setContent([content])
+  const scan = await f.scan()
+  assert.deepEqual(scan.panes[0]!.items.filter(item => item.kind === 'file').map(item => item.path), [name, paths[0]])
+  assert.equal(f.reads(), 0)
+  const aborted = new AbortController(); aborted.abort()
+  assert.throws(() => regularSourceFiles(f.source, paths, aborted.signal))
+})
+
+test('OSC 8 file hostnames are metadata and paths are checked on the selected SSH source', async t => {
+  let checked = false
+  const f = await fixture(t, undefined, async (source, paths, signal) => {
+    assert.equal(source.transport, 'ssh'); assert.equal(source.target, 'configured-alias')
+    checked = true
+    return regularSourceFiles({ ...source, transport: 'local' }, paths, signal)
+  })
+  f.store.put('source', { ...f.source, transport: 'ssh', target: 'configured-alias' })
+  const content = pane([], f.root)
+  content.links = [
+    { label: 'Machine hostname', url: `file://actual-remote-host${f.root}/report.txt#L123` },
+    { label: 'Missing file', url: `file://another-host${f.root}/not-present.txt` },
+    { label: 'Device', url: 'file://actual-remote-host/dev/null' },
+  ]
+  f.setContent([content])
+  const scan = await f.scan()
+  assert(checked)
+  assert.deepEqual(scan.panes[0]!.items.map(item => item.kind === 'file' && item.path), [join(f.root, 'report.txt')])
+  assert.equal(f.reads(), 0)
+})
+
+test('file locations fall back only when the exact path is absent and deduplicate matched files', async t => {
+  const f = await fixture(t)
+  await writeFile(join(f.root, 'column.ts'), 'fixture code')
+  await writeFile(join(f.root, 'literal.txt'), 'base')
+  await writeFile(join(f.root, 'literal.txt:12'), 'literal colon filename')
+  await writeFile(join(f.root, 'literal.txt#L7'), 'literal hash filename')
+  f.setContent([pane(['report.txt:123 report.txt#L123 report.txt', 'column.ts:12:45',
+    'literal.txt:12 literal.txt#L7 missing.txt:20'], f.root)])
+  const scan = await f.scan()
+  assert.deepEqual(scan.panes[0]!.items.map(item => item.kind === 'file' && item.path), [
+    join(f.root, 'report.txt'), join(f.root, 'column.ts'), join(f.root, 'literal.txt:12'), join(f.root, 'literal.txt#L7'),
+  ])
+  assert.equal(f.reads(), 0)
+  const item = scan.panes[0]!.items.find(item => item.kind === 'file' && item.path === join(f.root, 'column.ts'))!
+  const opened = await f.call(`/api/content-scans/${scan.id}/items/${item.id}/open`)
+  assert.equal(opened.status, 200)
+  const metadata = await opened.json() as WindowContentOpen
+  assert.equal(metadata.filename, 'column.ts')
+})
+
+test('unavailable metadata returns available links with a partial-result flag', async t => {
+  const f = await fixture(t, undefined, async () => { throw new Error('Source unavailable') })
+  const scan = await f.scan()
+  assert.equal(scan.incomplete, true)
+  assert.deepEqual(scan.panes[0]!.items.map(item => item.kind), ['link'])
+})
+
+test('source replacement, logout and request cancellation abort an ongoing metadata scan', async t => {
+  for (const cause of ['source', 'logout', 'request'] as const) await t.test(cause, async t => {
+    let started!: () => void
+    const ready = new Promise<void>(resolve => { started = resolve })
+    const f = await fixture(t, undefined, async (_source, _paths, signal) => {
+      started()
+      await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
+      signal.throwIfAborted()
+      return new Map()
+    })
+    const controller = new AbortController()
+    const pending = f.service.scan(f.source, 'space', 'window', 'first-session', controller.signal)
+    await ready
+    if (cause === 'source') f.store.put('source', { ...f.source, herdrSession: 'replacement' })
+    else if (cause === 'logout') f.store.removeSession('first-session')
+    else controller.abort()
+    await assert.rejects(pending)
+  })
 })
 
 test('cancelling a selected-file transfer removes staged partials and never adds a card', async t => {

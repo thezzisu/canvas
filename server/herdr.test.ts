@@ -289,10 +289,10 @@ test("native herdr transport works with an unmodified server: split rendering, k
       try {
         const scanned = await terminal!.content();
         const right = scanned?.find(item => item.id === nativePanes[1].pane_id);
-        return !!right?.lines.includes(wrappedPath) && right.lines.includes(wrappedUrl)
+        return !!right?.lines.join('').includes(wrappedPath) && right.lines.join('').includes(wrappedUrl)
           && right.lines.includes('HARD_ONE') && right.lines.includes('HARD_TWO');
       } catch { return false; }
-    }, 'native read did not join soft wraps while retaining hard line breaks');
+    }, 'native current visible read omitted fixture text or hard line breaks');
     const afterScan = snapshot();
     assert.equal(afterScan.focused_tab_id, beforeScan.focused_tab_id);
     assert.equal(afterScan.focused_pane_id, beforeScan.focused_pane_id);

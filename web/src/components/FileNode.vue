@@ -6,12 +6,17 @@ import { NodeResizeControl } from '@vue-flow/node-resizer'
 import type { FileData } from '../types'
 import Icon from './Icon.vue'
 import { readTextPreview } from '../text-preview'
+import { downloadMedia, useMediaUrl } from '../media'
+import { reportDownloadError } from '../downloads'
+import { apiFetch } from '../api'
 
 const { t, n } = useI18n()
 
 const props = defineProps<Pick<NodeProps<FileData>, 'id' | 'data' | 'selected'>>()
 const pdfPreview = navigator.pdfViewerEnabled
-const url = computed(() => `/api/files/${encodeURIComponent(props.data.assetId)}`)
+const path = computed(() => `/api/files/${encodeURIComponent(props.data.assetId)}`)
+const { url, error: ticketError, retry: retryTicket } = useMediaUrl(() => ['image', 'pdf'].includes(props.data.asset.preview) ? path.value : undefined)
+function download() { void downloadMedia(path.value, props.data.asset.filename).catch(reportDownloadError) }
 const fileBody = ref<HTMLElement>()
 const text = ref('')
 const textLoading = ref(false)
@@ -25,7 +30,7 @@ async function loadText() {
   const current = request = new AbortController()
   textLoading.value = true; textError.value = ''; truncated.value = false
   try {
-    const result = await readTextPreview(url.value, props.data.asset.size, current.signal)
+    const result = await readTextPreview(path.value, props.data.asset.size, current.signal, apiFetch)
     if (request !== current || current.signal.aborted) return
     text.value = result.text; truncated.value = result.truncated
   } catch (reason) {
@@ -61,19 +66,23 @@ const size = computed(() => {
       <Icon name="file" :size="13" />
       <span class="file-title" :title="data.asset.filename">{{ data.asset.filename }}</span>
       <span class="file-size">{{ size }}</span>
-      <a class="file-action nodrag" :href="`${url}?download=1`" :download="data.asset.filename" :title="t('panels.file.download')" :aria-label="t('panels.file.download')" @pointerdown.stop><Icon name="download" :size="14" /></a>
+      <button type="button" class="file-action nodrag" @click.stop="download" :title="t('panels.file.download')" :aria-label="t('panels.file.download')" @pointerdown.stop><Icon name="download" :size="14" /></button>
       <button class="file-action nodrag" :title="t('panels.file.remove')" :aria-label="t('panels.file.remove')" @click.stop="data.onRemove(id)"><Icon name="close" :size="14" /></button>
     </header>
     <div ref="fileBody" class="file-body nodrag nopan" @pointerdown.stop @dblclick.stop>
-      <img v-if="data.asset.preview === 'image'" class="file-image" :src="url" :alt="data.asset.filename" draggable="false" loading="lazy" />
+      <div v-if="(data.asset.preview === 'image' || data.asset.preview === 'pdf' && pdfPreview) && !url" class="file-text-status" :role="ticketError ? 'alert' : 'status'">
+        <template v-if="ticketError"><span>{{ t('panels.preview.unavailable') }}</span><button type="button" @click="retryTicket">{{ t('common.retry') }}</button></template>
+        <template v-else><span class="spinner" />{{ t('common.loading') }}</template>
+      </div>
+      <img v-else-if="data.asset.preview === 'image' && url" class="file-image" :src="url" :alt="data.asset.filename" draggable="false" loading="lazy" />
       <div v-else-if="data.asset.preview === 'text'" class="file-text-body nowheel" @wheel.stop>
         <div v-if="textLoading" class="file-text-status" role="status"><span class="spinner" /> {{ t('common.loading') }}</div>
         <div v-else-if="textError" class="file-text-status" role="alert"><span>{{ textError instanceof Error ? textError.message : t(textError) }}</span><button type="button" @click="loadText">{{ t('common.retry') }}</button></div>
         <pre v-else class="file-text-preview" :aria-label="data.asset.filename" tabindex="0">{{ text }}</pre>
-        <div v-if="truncated" class="file-text-truncated"><span>{{ t('panels.preview.truncated') }}</span><a :href="`${url}?download=1`" :download="data.asset.filename">{{ t('panels.file.downloadOriginal') }}</a></div>
+        <div v-if="truncated" class="file-text-truncated"><span>{{ t('panels.preview.truncated') }}</span><button type="button" @click="download">{{ t('panels.file.downloadOriginal') }}</button></div>
       </div>
-      <iframe v-else-if="data.asset.preview === 'pdf' && pdfPreview" class="file-preview nowheel" :src="url" :title="data.asset.filename" loading="lazy" referrerpolicy="no-referrer" />
-      <a v-else class="file-download" :href="`${url}?download=1`" :download="data.asset.filename" :aria-label="t('panels.file.downloadNamed', { name: data.asset.filename })"><Icon name="file" :size="42" /><span>{{ data.asset.filename }}</span></a>
+      <iframe v-else-if="data.asset.preview === 'pdf' && pdfPreview && url" class="file-preview nowheel" :src="url" :title="data.asset.filename" loading="lazy" referrerpolicy="no-referrer" />
+      <button v-else type="button" class="file-download" @click="download" :aria-label="t('panels.file.downloadNamed', { name: data.asset.filename })"><Icon name="file" :size="42" /><span>{{ data.asset.filename }}</span></button>
     </div>
   </article>
 </template>
@@ -91,11 +100,10 @@ const size = computed(() => {
 .file-preview { border: 0; width: 100%; height: 100%; background: #fff; color-scheme: light; }
 .file-text-body { display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 0; background: #14191f; }
 .file-text-preview { flex: 1; min-width: 0; min-height: 0; overflow: auto; margin: 0; padding: 12px; font-family: var(--content-font-family); font-feature-settings: var(--content-font-features); font-size: 13px; line-height: 1.5; white-space: pre; tab-size: 4; color: #cdd5e1; user-select: text; -webkit-user-select: text; touch-action: pan-x pan-y; scrollbar-width: thin; outline: none; }
-.file-text-preview:focus-visible { box-shadow: inset 0 0 0 1px #b18a6d; }
 .file-text-status { display: flex; flex: 1; align-items: center; justify-content: center; gap: 8px; padding: 12px; color: #8b98a9; font-size: 11px; }
 .file-text-status button { color: #d4ac8e; font-size: 11px; }
 .file-text-truncated { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; flex: 0 0 auto; padding: 7px 10px; border-top: 1px solid #303947; font-size: 10px; color: #7f8da1; }
-.file-text-truncated a { flex-shrink: 0; color: #c7aa93; text-decoration: none; }
+.file-text-truncated button { flex-shrink: 0; color: #c7aa93; text-decoration: none; }
 .file-download { display: flex; flex: 1; min-width: 0; align-items: center; justify-content: center; flex-direction: column; gap: 14px; padding: 24px; color: #a9b0be; text-decoration: none; }
 .file-download:hover { color: #e0e3ea; background: #ffffff04; }
 .file-download span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }

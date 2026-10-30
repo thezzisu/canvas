@@ -1,5 +1,5 @@
 import { t } from './i18n'
-import { uuid } from './api'
+import { apiContext, apiFetch, apiUrl, uuid, type ApiContext } from './api'
 
 export interface TerminalUploadState {
   id?: string
@@ -12,7 +12,7 @@ export interface TerminalUploadState {
   queued?: number
   cancelling?: boolean
 }
-interface Batch { id: string; files: File[]; total: number; request?: AbortController; running: boolean; cancelling?: boolean }
+interface Batch { context: ApiContext; id: string; files: File[]; total: number; request?: AbortController; running: boolean; cancelling?: boolean }
 interface UploadOptions {
   available(): boolean
   focus(): void
@@ -50,7 +50,7 @@ export class TerminalUploads {
     const total = files.reduce((sum, file) => sum + file.size, 0)
     if (!Number.isSafeInteger(total)) { this.reject(t('terminal.upload.invalidSize')); return }
     this.options.focus()
-    this.pending.push({ id: uuid(), files, total, running: false })
+    this.pending.push({ context: apiContext(), id: uuid(), files, total, running: false })
     if (this.current) this.update({})
     else this.next()
   }
@@ -87,9 +87,9 @@ export class TerminalUploads {
       const urls: string[] = []
       try {
         for (const value of message.urls as string[]) {
-          const url = new URL(value, location.href)
-          if (url.origin !== location.origin || !url.pathname.startsWith('/api/uploads/') || url.hash) throw new Error('Invalid upload URL')
-          urls.push(`${url.pathname}${url.search}`)
+          const url = apiUrl(value, batch.context)
+          if (!url.pathname.startsWith(`${new URL(batch.context.base).pathname}api/uploads/`) || url.search) throw new Error('Invalid upload URL')
+          urls.push(url.href)
         }
       } catch {
         this.options.send({ type: 'upload-cancel', id: batch.id })
@@ -117,10 +117,9 @@ export class TerminalUploads {
     try {
       for (const [index, file] of batch.files.entries()) {
         if (this.current !== batch) return
-        const response = await fetch(urls[index]!, { method: 'PUT', body: file,
-          headers: { 'Content-Type': 'application/octet-stream' }, signal: batch.request.signal })
-        if (response.status === 401) window.dispatchEvent(new Event('canvas:unauthorized'))
-        if (!response.ok) throw new Error('Upload failed')
+        const response = await apiFetch(urls[index]!, { method: 'PUT', body: file,
+          headers: { 'Content-Type': 'application/octet-stream' }, signal: batch.request.signal }, batch.context)
+            if (!response.ok) throw new Error('Upload failed')
       }
       // The last PUT commits the batch and inserts its paths on the server.
       if (this.current === batch) this.finish('completed')

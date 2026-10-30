@@ -2,9 +2,10 @@ import { watch } from 'vue'
 import { locale, t } from './i18n'
 import { Terminal } from '@xterm/xterm'
 import { terminalUnicodeAddon } from '../../shared/terminal-unicode'
-import { uuid } from './api'
+import { apiContext, apiFetch, apiUrl, isCurrentApi, uuid } from './api'
 import { clearDownloads, disconnectDownloads, receiveDownload } from './downloads'
 import { clearDirectories, receiveDirectory } from './directories'
+import { clearUrls, receiveUrl } from './urls'
 import { bindFileInput, preventFileNavigation, TerminalUploads, type TerminalUploadState } from './uploads'
 import { clipboardRestoringFocus, TerminalClipboard, type ClipboardNotice } from './clipboard'
 import { emptyModifiers, hasModifiers, modifiedText, terminalKey, terminalShortcut, type TerminalModifiers } from './terminal-input'
@@ -209,17 +210,17 @@ function terminalVisibilityChanged() {
   }
 }
 async function connect(session: Session, probe: boolean) {
-  const revision = ++session.connectionRevision
+  const revision = ++session.connectionRevision, context = apiContext()
   if (probe) {
     const controller = session.connectionProbe = new AbortController()
     try {
       // WebSocket errors hide an HTTP 401. Check the existing account/source
       // before retrying instead of repeatedly opening a rejected connection.
-      const response = await fetch('/api/state', { signal: controller.signal })
+      const response = await apiFetch('/api/state', { signal: controller.signal }, context)
       if (session.connectionRevision !== revision) return
       if (response.status === 401) {
         connectionFailed(session, t('terminal.connection.expired'), false)
-        window.dispatchEvent(new Event('canvas:unauthorized')); return
+        return
       }
       if (!response.ok) throw new Error(t('terminal.connection.failed'))
       const state = await response.json() as { sources: Array<{ id: string }> }
@@ -233,12 +234,16 @@ async function connect(session: Session, probe: boolean) {
     } finally { if (session.connectionProbe === controller) session.connectionProbe = undefined }
   }
   if (session.connectionRevision !== revision || !session.host?.isConnected || document.hidden) return
-  const url = new URL('/api/terminal', location.href)
-  url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const url = apiUrl('/api/terminal', context)
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   for (const [name, value] of Object.entries(session.resource)) url.searchParams.set(name, value)
   const socket = new WebSocket(url)
   socket.binaryType = 'arraybuffer'
   session.socket = socket
+  socket.onopen = () => {
+    if (session.socket !== socket || !isCurrentApi(context)) { socket.close(); return }
+    socket.send(JSON.stringify({ type: 'auth', token: context.token }))
+  }
   socket.onmessage = event => {
     if (session.socket !== socket) return
     if (event.data instanceof ArrayBuffer) session.term.write(new Uint8Array(event.data))
@@ -246,7 +251,7 @@ async function connect(session: Session, probe: boolean) {
       try {
         const message = JSON.parse(event.data)
         if (receiveDownload(socket, message, session.resource)) return
-        if (receiveDirectory(socket, message) || session.uploads.receive(message)) return
+        if (receiveDirectory(socket, message) || receiveUrl(socket, message) || session.uploads.receive(message)) return
         if (message.type === 'reset') session.term.write('\x1bc')
         else if (message.type === 'pane-focus') setState(session, { ...session.state, focusedPaneId: typeof message.paneId === 'string' ? message.paneId : undefined })
         else if (message.type === 'presentation') {
@@ -622,6 +627,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
 export function clearTerminals() {
   clearDownloads()
   clearDirectories()
+  clearUrls()
   for (const session of sessions.values()) {
     session.uploads.clear()
     session.keyboardLock?.dispose()

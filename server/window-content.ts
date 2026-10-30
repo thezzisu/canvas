@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import type { WindowContentOpen, WindowContentScan } from '../shared/window-content.ts'
+import type { WindowContentItem, WindowContentOpen, WindowContentScan } from '../shared/window-content.ts'
 import type { NativeContentPane } from './herdr/content.ts'
 import type { AssetStore } from './assets.ts'
 import { contentCandidates } from './content-candidates.ts'
-import { readSourceFile, type SourceFile } from './source-file.ts'
+import { readSourceFile, regularSourceFiles, type SourceFile } from './source-file.ts'
 import { sourceConnectionKey, type Source, type Store } from './state.ts'
 import type { DownloadContext } from './open-download.ts'
 
@@ -22,18 +22,20 @@ export interface WindowContentOptions {
   content(source: Source, spaceId: string, windowId: string): Promise<NativeContentPane[] | undefined>
   registerStaged(assetId: string, sessionId: string): string
   readFile?(source: Source, path: string, signal: AbortSignal): Promise<SourceFile>
+  regularFiles?(source: Source, paths: string[], signal: AbortSignal): Promise<Map<string, string>>
 }
 
 export class WindowContentService {
   private scans = new Map<string, ScanRecord>()
   private transfers = new Map<AbortController, ScanRecord>()
+  private scanning = new Map<AbortController, { sourceId: string; sourceKey: string; sessionId: string }>()
   constructor(private readonly options: WindowContentOptions) {
     options.store.on('sessions', this.invalidate)
     options.store.on('change', this.invalidate)
   }
 
   private invalidate = () => {
-    const valid = (record: ScanRecord) => {
+    const valid = (record: Pick<ScanRecord, 'sourceId' | 'sourceKey' | 'sessionId'>) => {
       const source = this.options.store.get<Source>('source', record.sourceId)
       return source && sourceConnectionKey(source) === record.sourceKey && this.options.store.hasSession(record.sessionId)
     }
@@ -41,9 +43,10 @@ export class WindowContentService {
       if (!valid(record)) this.scans.delete(id)
     }
     for (const [controller, record] of this.transfers) if (!valid(record)) controller.abort()
+    for (const [controller, record] of this.scanning) if (!valid(record)) controller.abort()
   }
 
-  async scan(source: Source, spaceId: string, windowId: string, sessionId: string): Promise<WindowContentScan> {
+  async scan(source: Source, spaceId: string, windowId: string, sessionId: string, signal = new AbortController().signal): Promise<WindowContentScan> {
     if (!this.options.store.hasSession(sessionId)) throw new Error('Please sign in')
     const sourceKey = sourceConnectionKey(source)
     const panes = await this.options.content(source, spaceId, windowId)
@@ -52,6 +55,31 @@ export class WindowContentService {
     if (!this.options.store.hasSession(sessionId)) throw new Error('Please sign in')
     if (!panes) throw new Error('Open this window before scanning its content')
     const scan = { id: randomUUID(), ...contentCandidates(panes) }
+    const paths = [...new Set(scan.panes.flatMap(pane => pane.items.flatMap(item => item.kind === 'file' && item.path ? [item.path] : [])))]
+    const controller = new AbortController(), abort = () => controller.abort()
+    signal.throwIfAborted(); signal.addEventListener('abort', abort, { once: true })
+    this.scanning.set(controller, { sourceId: source.id, sourceKey, sessionId })
+    try {
+      let files = new Map<string, string>()
+      if (paths.length) {
+        try { files = await (this.options.regularFiles || regularSourceFiles)(source, paths, controller.signal) }
+        catch (error) { if (controller.signal.aborted) throw error; scan.incomplete = true }
+      }
+      controller.signal.throwIfAborted()
+      scan.panes = scan.panes.flatMap(pane => {
+        const seen = new Set<string>()
+        const items = pane.items.flatMap<WindowContentItem>(item => {
+          if (item.kind === 'link') return [item]
+          const path = item.path && files.get(item.path)
+          if (!path || seen.has(path)) return []
+          seen.add(path)
+          return [{ ...item, path }]
+        })
+        return items.length ? [{ ...pane, items }] : []
+      })
+    } finally {
+      signal.removeEventListener('abort', abort); this.scanning.delete(controller)
+    }
     for (const [id, record] of this.scans) if (record.expires <= Date.now()) this.scans.delete(id)
     if (this.scans.size >= 128) this.scans.delete(this.scans.keys().next().value!)
     this.scans.set(scan.id, { sessionId, sourceId: source.id, sourceKey, windowId, scan, expires: Date.now() + 10 * 60_000 })
@@ -104,6 +132,7 @@ export class WindowContentService {
   closeSource(sourceId: string) {
     for (const [id, record] of this.scans) if (record.sourceId === sourceId) this.scans.delete(id)
     for (const [controller, record] of this.transfers) if (record.sourceId === sourceId) controller.abort()
+    for (const [controller, record] of this.scanning) if (record.sourceId === sourceId) controller.abort()
   }
 
   close() {
@@ -111,5 +140,6 @@ export class WindowContentService {
     this.options.store.off('change', this.invalidate)
     this.scans.clear()
     for (const controller of this.transfers.keys()) controller.abort()
+    for (const controller of this.scanning.keys()) controller.abort()
   }
 }

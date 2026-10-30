@@ -150,7 +150,7 @@ test("source renames preserve active uploads and future uploads from the same at
     closeOpenBridge: async id => f.service.closeSource(id),
   });
   const patch = (body: unknown) => app.request(`http://canvas.test/api/sources/${f.source.id}`, {
-    method: "PATCH", headers: { Host: "canvas.test", Origin: "http://canvas.test", Cookie: "canvas_session=session-a", "Content-Type": "application/json" },
+    method: "PATCH", headers: { Host: "canvas.test", Origin: "http://canvas.test", Authorization: "Bearer session-a", "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   const [token] = await f.begin([{ name: "active", size: 4 }]);

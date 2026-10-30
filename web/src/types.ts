@@ -85,6 +85,7 @@ export interface TerminalData {
   available: boolean
   sourceOffline?: boolean
   status: ProgramStatus
+  statusFresh: boolean
   panes: PaneResource[]
   overview: boolean
   focus: boolean

@@ -68,8 +68,9 @@ for (let index = 0; index < args.length; index++) {
   const spec = args[++index];
   const split = spec.indexOf(':');
   const local = spec.slice(0, split), remote = spec.slice(split + 1);
+  const tcp = /^(127[.][0-9]+[.][0-9]+[.][0-9]+|\\[::1\\]):([0-9]+)$/.exec(remote);
   const listener = net.createServer((incoming) => {
-    const outgoing = net.createConnection(remote);
+    const outgoing = tcp ? net.createConnection({host:tcp[1].replace(/[\\[\\]]/g,''),port:Number(tcp[2])}) : net.createConnection(remote);
     connections.add(incoming); connections.add(outgoing);
     incoming.pipe(outgoing); outgoing.pipe(incoming);
     incoming.on('error',()=>outgoing.destroy());
@@ -202,6 +203,33 @@ test("closing one source does not disconnect another source tunnel", async () =>
     assert.equal(second.alive(), false);
   } finally {
     await setup.close();
+  }
+});
+
+test("SSH TCP loopback forwarding uses a private Unix listener and rejects arbitrary destinations", async () => {
+  const setup = await fixture();
+  const target = createServer(socket => socket.on("data", bytes => socket.write(bytes)));
+  await new Promise<void>(resolve => target.listen(0, "127.0.0.2", resolve));
+  const address = target.address(); assert(address && typeof address !== "string");
+  try {
+    for (const endpoint of [{ host: "example.test", port: 8080 }, { host: "192.168.1.2", port: 80 },
+      { host: "127.0.0.1", port: 0 }, { host: "127.0.0.1", port: 65536 }])
+      await assert.rejects(ensureSocketTunnel({ ...setup.request, key: `${setup.request.key}-${endpoint.host}-${endpoint.port}`,
+        discover: async () => ({}), tcp: { "web.sock": endpoint } }), /Invalid loopback forwarding endpoint/u);
+    const tunnel = await ensureSocketTunnel({ ...setup.request, discover: async () => ({}),
+      tcp: { "web.sock": { host: "127.0.0.2", port: address.port } } });
+    assert.equal(await echo(tunnel.sockets["web.sock"]!, "web application"), "web application");
+    assert.equal((await stat(dirname(tunnel.sockets["web.sock"]!))).mode & 0o777, 0o700);
+    const starts = (await readFile(setup.log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    assert(starts.at(-1).args.includes(`${tunnel.sockets["web.sock"]}:127.0.0.2:${address.port}`));
+    const ipv6 = await ensureSocketTunnel({ ...setup.request, key: `${setup.request.key}-ipv6`, discover: async () => ({}),
+      tcp: { "web.sock": { host: "::1", port: address.port } } });
+    const last = JSON.parse((await readFile(setup.log, "utf8")).trim().split("\n").at(-1)!);
+    assert(last.args.includes(`${ipv6.sockets["web.sock"]}:[::1]:${address.port}`));
+    await tunnel.close(); await ipv6.close();
+    await assert.rejects(stat(dirname(tunnel.sockets["web.sock"]!)), { code: "ENOENT" });
+  } finally {
+    await setup.close(); await new Promise<void>(resolve => target.close(() => resolve()));
   }
 });
 

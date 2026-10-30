@@ -7,13 +7,16 @@ import Icon from './Icon.vue'
 import ImagePreview from './ImagePreview.vue'
 import { downloadPreview, downloadPreviewCount, dismissDownloadPreview } from '../downloads'
 import { readTextPreview } from '../text-preview'
+import { downloadMedia, useMediaUrl } from '../media'
+import { reportDownloadError } from '../downloads'
+import { apiFetch } from '../api'
 import { useMobileViewport } from '../viewport'
 
 const { t, n } = useI18n()
 
 defineProps<{ portal?: HTMLElement }>()
 const pdfPreview = navigator.pdfViewerEnabled
-const previewUrl = computed(() => downloadPreview.value ? `${downloadPreview.value.url}?preview=1` : '')
+const { url: previewUrl, error: ticketError, retry: retryTicket } = useMediaUrl(() => downloadPreview.value?.preview === 'text' ? undefined : downloadPreview.value?.url)
 const text = ref('')
 const loading = ref(false)
 const error = ref<string | Error>('')
@@ -45,7 +48,7 @@ async function loadText() {
   const current = request = new AbortController()
   loading.value = true; error.value = ''
   try {
-    const result = await readTextPreview(previewUrl.value, preview.size, current.signal)
+    const result = await readTextPreview(`${preview.url}${preview.url.includes('?') ? '&' : '?'}preview=1`, preview.size, current.signal, apiFetch)
     if (request !== current || current.signal.aborted) return
     text.value = result.text; truncated.value = result.truncated
   } catch (reason) {
@@ -85,16 +88,17 @@ onBeforeUnmount(() => request?.abort())
     @update:open="openChanged">
     <template #actions>
       <span v-if="downloadPreviewCount > 1" class="download-preview-count" :aria-label="t('panels.preview.remaining', downloadPreviewCount - 1)">+{{ n(downloadPreviewCount - 1) }}</span>
-      <UButton :href="downloadPreview.url" :download="downloadPreview.filename" color="neutral" variant="ghost" size="sm" class="download-preview-download" :aria-label="t('panels.file.download')" @pointerdown.stop @click.stop><Icon name="download" :size="15" /> {{ t('common.download') }}</UButton>
+      <UButton type="button" color="neutral" variant="ghost" size="sm" class="download-preview-download" :aria-label="t('panels.file.download')" @pointerdown.stop @click.stop="downloadMedia(downloadPreview.url, downloadPreview.filename).catch(reportDownloadError)"><Icon name="download" :size="15" /> {{ t('common.download') }}</UButton>
       <UButton color="neutral" variant="ghost" size="sm" class="download-preview-expand" :aria-label="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :title="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :aria-pressed="expanded" @click="expanded = !expanded"><Icon :name="expanded ? 'collapse' : 'expand'" :size="16" /></UButton>
     </template>
     <template #body>
       <div class="download-preview-content" :data-download-id="downloadPreview.id" :data-preview-kind="downloadPreview.preview">
-        <div v-if="loading" class="download-preview-status" role="status"><span class="spinner" /> {{ t('common.loading') }}</div>
+        <div v-if="ticketError && !previewUrl" class="download-preview-status" role="alert"><span>{{ t('panels.preview.unavailable') }}</span><button type="button" @click="retryTicket">{{ t('common.retry') }}</button></div>
+        <div v-else-if="loading || (downloadPreview.preview !== 'text' && !previewUrl)" class="download-preview-status" role="status"><span class="spinner" /> {{ t('common.loading') }}</div>
         <div v-if="error" class="download-preview-status" role="alert"><span>{{ error instanceof Error ? error.message : t(error) }}</span><button v-if="downloadPreview.preview === 'text'" type="button" @click="loadText">{{ t('common.retry') }}</button></div>
-        <ImagePreview v-if="downloadPreview.preview === 'image' && !error" :key="downloadPreview.id" :id="downloadPreview.id" :src="previewUrl" :alt="downloadPreview.filename" @loaded="imageLoaded" @failed="imageFailed" />
+        <ImagePreview v-if="downloadPreview.preview === 'image' && previewUrl && !error" :key="downloadPreview.id" :id="downloadPreview.id" :src="previewUrl" :alt="downloadPreview.filename" @loaded="imageLoaded" @failed="imageFailed" />
         <template v-else-if="downloadPreview.preview === 'pdf'">
-          <iframe v-if="pdfPreview" class="download-preview-pdf" :src="previewUrl" :title="downloadPreview.filename" referrerpolicy="no-referrer" />
+          <iframe v-if="pdfPreview && previewUrl" class="download-preview-pdf" :src="previewUrl" :title="downloadPreview.filename" referrerpolicy="no-referrer" />
           <div v-else class="download-preview-status">{{ t('panels.preview.pdfUnavailable') }}</div>
         </template>
         <template v-else-if="downloadPreview.preview === 'text' && !loading && !error">

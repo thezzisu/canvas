@@ -16,7 +16,7 @@ function fixture(t: TestContext) {
   } as unknown as TerminalManager);
   store.addSession("test");
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
-  const headers = { Host: "localhost", Cookie: "canvas_session=test", "Content-Type": "application/json" };
+  const headers = { Host: "localhost", Authorization: "Bearer test", "Content-Type": "application/json" };
   const request = (path: string, method = "GET", body?: unknown) => app.request(`http://localhost${path}`, {
     method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });

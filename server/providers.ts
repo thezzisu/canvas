@@ -2,6 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSocketTunnels, ensureSocketTunnel } from "./ssh-tunnels.ts";
 import { hostname, userInfo } from "node:os";
+import { isLoopbackHost } from "./loopback.ts";
 import { join } from "node:path";
 import type { Source } from "./state.ts";
 import { createHerdrClient, type HerdrClientTransport } from "./herdr/client.ts";
@@ -164,6 +165,19 @@ export function sourcePythonCommand(source: Source, script: string, args: string
   return source.transport === "local"
     ? { file: command[0]!, args: command.slice(1), env: commandEnvironment() }
     : { file: "ssh", args: [...sshOptions(source), `exec ${command.map(shellQuote).join(" ")}`], env: commandEnvironment() };
+}
+
+/** Private loopback transport for an explicitly opened web application. */
+export async function prepareLoopback(source: Source, host: string, port: number) {
+  if (!isLoopbackHost(host) || !Number.isInteger(port) || port < 1 || port > 65535)
+    throw new Error("Invalid loopback endpoint");
+  validateSource(source);
+  if (source.transport === "local") return { hostname: host, close: async () => {} };
+  const key = `web:${socketTunnelIdentity(source, [host, String(port)])}`;
+  const tunnel = await ensureSocketTunnel({ sourceId: `web:${source.id}`, key,
+    sshArgs: sshOptions(source), env: commandEnvironment(), discover: async () => ({}),
+    tcp: { "web.sock": { host, port } } });
+  return { socketPath: tunnel.sockets["web.sock"]!, close: () => tunnel.close() };
 }
 
 export async function editorAuthority(source: Source): Promise<{ hostName: string; user: string; port: number }> {
@@ -823,7 +837,8 @@ async function prepareTerminal(
   active.add(handle);
   return {
     connect: (cols, rows) => createHerdrClient({ socketPath: sockets.client, tabId: windowId, cols, rows,
-      readSelection: params => herdrApiRequest(sockets.api, "pane.selection.read", params) }),
+      readSelection: params => herdrApiRequest(sockets.api, "pane.selection.read", params),
+      readContent: async params => (await herdrApiRequest(sockets.api, "pane.read", params, { timeoutMs: 5000 })).read }),
     cleanup,
   };
 }

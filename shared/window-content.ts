@@ -13,6 +13,7 @@ export interface WindowContentScan {
   id: string
   panes: WindowContentPane[]
   truncated: boolean
+  incomplete?: boolean
 }
 
 export interface WindowContentOpen {

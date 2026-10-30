@@ -2,6 +2,7 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, lstat, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isLoopbackHost } from "./loopback.ts";
 
 export interface SocketTunnel {
   sockets: Record<string, string>;
@@ -27,6 +28,7 @@ interface TunnelRequest {
   sshArgs: string[];
   env: NodeJS.ProcessEnv;
   discover(): Promise<Record<string, string>>;
+  tcp?: Record<string, { host: string; port: number }>;
   reverse?: Record<string, { remotePath: string; localPath: string }>;
   cleanupRemote?(): Promise<void>;
 }
@@ -98,7 +100,8 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
   const remote = await request.discover();
   const entries = Object.entries(remote);
   const reverse = Object.entries(request.reverse || {});
-  if (!entries.length && !reverse.length)
+  const tcp = Object.entries(request.tcp || {});
+  if (!entries.length && !reverse.length && !tcp.length)
     throw new Error("No Unix socket forwarding was requested");
   for (const [name, path] of entries) {
     if (!/^[a-z][a-z0-9-]*\.sock$/u.test(name))
@@ -111,18 +114,25 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
     checkSocketPath(endpoint.remotePath);
     checkSocketPath(endpoint.localPath);
   }
+  for (const [name, endpoint] of tcp) {
+    if (!/^[a-z][a-z0-9-]*\.sock$/u.test(name) || !isLoopbackHost(endpoint.host)
+        || !Number.isInteger(endpoint.port) || endpoint.port < 1 || endpoint.port > 65535)
+      throw new Error("Invalid loopback forwarding endpoint");
+  }
   // Unix socket names are short on both Linux and macOS. mkdtemp creates an
   // owner-only directory; no global SSH configuration or existing socket changes.
   const directory = await mkdtemp(
     join(tmpdir().length < 50 ? tmpdir() : "/tmp", "canvas-s-"),
   );
   const sockets = Object.fromEntries(
-    entries.map(([name]) => [name, join(directory, name)]),
+    [...entries, ...tcp].map(([name]) => [name, join(directory, name)]),
   );
   const forwards = entries.flatMap(([name, remotePath]) => [
     "-L",
     `${sockets[name]}:${remotePath}`,
   ]);
+  forwards.push(...tcp.flatMap(([name, endpoint]) => ["-L",
+    `${sockets[name]}:${endpoint.host === "::1" ? "[::1]" : endpoint.host}:${endpoint.port}`]));
   const reverseForwards = reverse.flatMap(([, endpoint]) => [
     "-R",
     `${endpoint.remotePath}:${endpoint.localPath}`,

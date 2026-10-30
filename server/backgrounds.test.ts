@@ -44,7 +44,7 @@ function fixture(t: TestContext) {
       headers: {
         Host: "localhost",
         Origin: "http://localhost",
-        Cookie: "canvas_session=fixture-session",
+        Authorization: "Bearer fixture-session",
         "Content-Type": "application/json",
         ...headers,
       },
@@ -205,13 +205,13 @@ test("backgrounds persist separately, serve authenticated original-format images
   );
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), png());
   assert.equal(
-    (await f.request(url, "GET", undefined, { Cookie: "" })).status,
+    (await f.request(url, "GET", undefined, { Authorization: "" })).status,
     401,
   );
   assert.equal(
     (
       await f.request(url, "GET", undefined, {
-        Cookie: "canvas_session=invalid",
+        Authorization: "Bearer invalid",
       })
     ).status,
     401,
@@ -320,7 +320,7 @@ test("invalid changes leave the previous background intact", async (t) => {
     [image, "?opacity=", {}, 400],
     [image, "", { Origin: "https://other.example" }, 403],
     [image, "", { Origin: "invalid-origin" }, 403],
-    [image, "", { Cookie: "" }, 401],
+    [image, "", { Authorization: "" }, 401],
   ];
   for (const [input, query, headers, status] of invalid)
     assert.equal((await f.upload(input, query, headers)).status, status);

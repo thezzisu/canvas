@@ -5,6 +5,7 @@ import type { NodeProps } from '@vue-flow/core'
 import { NodeResizeControl } from '@vue-flow/node-resizer'
 import type { NoteData, NotePatch } from '../types'
 import Icon from './Icon.vue'
+import { noteColor } from '../status'
 
 const { t } = useI18n()
 
@@ -36,12 +37,12 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', outsideColor))
   <template v-if="selected && !data.minimized">
     <NodeResizeControl v-for="position in (['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const)" :key="position" :node-id="id" :position="position" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
   </template>
-  <article class="note-card" :class="`note-${color}`" :data-note-id="id">
+  <article class="note-card" :data-note-id="id" :style="{ '--note-color': noteColor(color) }">
     <header class="note-header drag-handle">
       <div ref="colorPicker" class="note-color-picker nodrag">
-        <button class="note-color-dot" :class="`note-dot-${color}`" :title="t('panels.note.color')" :aria-label="t('panels.note.color')" :aria-expanded="colorOpen" @click.stop="colorOpen = !colorOpen" @keydown.esc.stop="colorOpen = false" />
+        <button class="note-color-dot" :title="t('panels.note.color')" :aria-label="t('panels.note.color')" :aria-expanded="colorOpen" @click.stop="colorOpen = !colorOpen" @keydown.esc.stop="colorOpen = false" />
         <div v-if="colorOpen" class="note-colors" role="group" :aria-label="t('panels.note.color')" @pointerdown.stop @keydown.esc.stop="colorOpen = false">
-          <button v-for="item in colors" :key="item" class="note-color-choice" :class="`note-dot-${item}`" :aria-label="t(`panels.note.colors.${item}`)" :title="t(`panels.note.colors.${item}`)" :aria-pressed="color === item" @click="setColor(item)" />
+          <button v-for="item in colors" :key="item" class="note-color-choice" :style="{ background: noteColor(item) }" :aria-label="t(`panels.note.colors.${item}`)" :title="t(`panels.note.colors.${item}`)" :aria-pressed="color === item" @click="setColor(item)" />
         </div>
       </div>
       <input v-if="editingTitle" ref="titleInput" v-model="title" class="note-title nodrag" :aria-label="t('panels.note.title')" maxlength="200" @input="emitChange({ title })" @blur="finishTitle" @keydown.enter.stop.prevent="titleInput?.blur()" @keydown.esc.stop.prevent="titleInput?.blur()" />

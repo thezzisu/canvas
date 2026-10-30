@@ -2,7 +2,7 @@ export default {
   scan: {
     title: 'Scan content', scope: 'Current screen', refresh: 'Rescan', empty: 'No files or links found',
     failed: 'Could not scan this window', openFailed: 'Could not open this file', staging: 'Staging…',
-    requiresForward: 'Forwarding required', unresolved: 'Working directory unavailable',
+    incomplete: 'Some content could not be read', unresolved: 'Working directory unavailable',
     copyPath: 'Copy path', copyLink: 'Copy link', truncated: 'Results truncated',
   },
   background: {

@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { Readable } from "node:stream";
 import { bodyLimit } from "hono/body-limit";
-import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
-import { verifyPassword } from "./auth.ts";
+import { verifyPassword, bearerToken, allowedOrigin } from "./auth.ts";
+import { MediaTickets, mediaPath } from "./media.ts";
 import { settingsPatchSchema } from "./settings.ts";
 import {
   Store,
@@ -82,36 +82,47 @@ export function createApp(
   account: Account,
   terminals: TerminalManager,
   options: {
-    secureCookie?: boolean;
+    allowedOrigins?: ReadonlySet<string>;
     openDownload?: (ticket: string, sessionId: string) => Promise<DownloadResponse | undefined>;
     prepareDownload?: (ticket: string, sessionId: string, context?: DownloadContext) => boolean;
     closeOpenBridge?: (sourceId: string) => Promise<void>;
     assets?: AssetStore;
     uploads?: UploadService;
     windowContent?: WindowContentService;
+    openUrl?: (source: Source, url: string, sessionId: string) => { url: string; forwarded: boolean };
   } = {},
 ) {
   const app = new Hono();
+  const origins = options.allowedOrigins || new Set<string>();
+  const media = new MediaTickets(token => store.hasSession(token), async (path, session, download) => {
+    const response = await app.request(`http://canvas.internal${path}${download ? '?download=1' : '?preview=1'}`, {
+      headers: { Authorization: `Bearer ${session}` },
+    });
+    if (!response.ok || !response.body) { await response.body?.cancel(); return; }
+    return { body: Readable.fromWeb(response.body as import('node:stream/web').ReadableStream),
+      headers: Object.fromEntries(response.headers) };
+  }, origins);
   let attempts: { count: number; until: number } | undefined;
   app.use("/api/*", async (c, next) => {
     c.header("Cache-Control", "no-store");
     c.header("X-Content-Type-Options", "nosniff");
-    if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method)) {
-      const origin = c.req.header("origin");
-      if (origin) {
-        try {
-          if (new URL(origin).host !== c.req.header("host"))
-            return c.json({ error: "Request origin rejected" }, 403);
-        } catch {
-          return c.json({ error: "Request origin rejected" }, 403);
-        }
-      }
+    const origin = c.req.header('origin');
+    if (origin && !allowedOrigin(origin, new URL(c.req.url).origin, origins))
+      return c.json({ error: 'Request origin rejected' }, 403);
+    if (origin) {
+      c.header('Access-Control-Allow-Origin', origin);
+      c.header('Vary', 'Origin');
+      c.header('Access-Control-Expose-Headers', 'Content-Length, Content-Disposition, Content-Range, Accept-Ranges');
     }
-    if (
-      !["/api/login", "/api/session"].includes(c.req.path) &&
-      !store.hasSession(getCookie(c, "canvas_session") ?? "")
-    )
-      return c.json({ error: "Please sign in" }, 401);
+    if (c.req.method === 'OPTIONS') {
+      c.header('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS');
+      c.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
+      c.header('Access-Control-Max-Age', '600');
+      return c.body(null, 204);
+    }
+    const ticketRequest = ['GET', 'HEAD'].includes(c.req.method) && /^\/api\/media\/[A-Za-z0-9_-]+$/.test(c.req.path);
+    if (!['/api/login', '/api/session'].includes(c.req.path) && !ticketRequest && !store.hasSession(bearerToken(c.req.header('authorization'))))
+      return c.json({ error: 'Please sign in' }, 401);
     if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method)) {
       if (isBackgroundUpload(c.req.method, c.req.path))
         backgroundContentType(c.req.header("content-type"));
@@ -134,19 +145,28 @@ export function createApp(
   );
   app.get("/api/session", (c) =>
     c.json({
-      authenticated: store.hasSession(getCookie(c, "canvas_session") ?? ""),
+      authenticated: store.hasSession(bearerToken(c.req.header("authorization"))),
       username: account.username,
     }),
   );
+  app.post('/api/media-tickets', async c => {
+    const input = z.object({ path: z.string().regex(mediaPath), download: z.boolean().optional() }).strict().parse(await c.req.json());
+    const ticket = await media.create(input.path, bearerToken(c.req.header('authorization')), input.download);
+    return ticket ? c.json(ticket) : c.json({ error: 'Media not found' }, 404);
+  });
+  app.on(['GET', 'HEAD'], '/api/media/:ticket', async c => {
+    const response = await media.open(c.req.param('ticket'), c.req.method, c.req.header('range'));
+    return response || c.json({ error: 'Media link expired' }, 404);
+  });
   app.put("/api/uploads/:token", async c => {
-    const status = await options.uploads?.receive(c.req.param("token"), getCookie(c, "canvas_session") ?? "", c.req.raw) ?? 404;
+    const status = await options.uploads?.receive(c.req.param("token"), bearerToken(c.req.header("authorization")), c.req.raw) ?? 404;
     return status === 204 ? c.body(null, 204) : c.json({ error: status === 404 ? "Upload expired" : "Upload failed" }, status);
   });
   app.get("/api/downloads/:ticket", async (c) => {
     if (c.req.method !== "GET") return c.body(null, 405);
     const download = await options.openDownload?.(
       c.req.param("ticket"),
-      getCookie(c, "canvas_session") ?? "",
+      bearerToken(c.req.header("authorization")),
     );
     if (!download) return c.json({ error: "Download expired" }, 404);
     const headers = c.req.query("preview") === "1" && c.req.query("download") !== "1"
@@ -157,21 +177,21 @@ export function createApp(
     const context = z.object({
       canvasId: z.union([z.string().uuid(), z.literal("overview")]).optional(), anchorId: z.string().max(150).optional(),
     }).strict().parse(await c.req.json());
-    const prepared = options.prepareDownload?.(c.req.param("ticket"), getCookie(c, "canvas_session") ?? "", context);
+    const prepared = options.prepareDownload?.(c.req.param("ticket"), bearerToken(c.req.header("authorization")), context);
     return prepared ? c.body(null, 204) : c.json({ error: "Download expired" }, 404);
   });
   app.post("/api/sources/:id/spaces/:space/windows/:window/scan", async c => {
     z.object({}).strict().parse(await c.req.json());
     const source = store.get<Source>("source", c.req.param("id"));
     if (!source || !options.windowContent) return c.json({ error: "Window not found" }, 404);
-    return c.json(await options.windowContent.scan(source, c.req.param("space"), c.req.param("window"), getCookie(c, "canvas_session") ?? ""));
+    return c.json(await options.windowContent.scan(source, c.req.param("space"), c.req.param("window"), bearerToken(c.req.header("authorization")), c.req.raw.signal));
   });
   app.post("/api/content-scans/:scan/items/:item/open", async c => {
     const context = z.object({
       canvasId: z.union([z.string().uuid(), z.literal("overview")]).optional(), anchorId: z.string().max(150).optional(),
     }).strict().parse(await c.req.json());
     const opened = await options.windowContent?.open(c.req.param("scan"), c.req.param("item"),
-      getCookie(c, "canvas_session") ?? "", context, c.req.raw.signal);
+      bearerToken(c.req.header("authorization")), context, c.req.raw.signal);
     return opened ? c.json(opened) : c.json({ error: "Scan expired; scan this window again" }, 404);
   });
   app.on(["GET", "HEAD"], "/api/files/:id", async (c) => {
@@ -220,22 +240,14 @@ export function createApp(
       return c.json({ error: "Incorrect username or password" }, 401);
     }
     attempts = undefined;
-    const old = getCookie(c, "canvas_session");
+    const old = bearerToken(c.req.header("authorization"));
     if (old) store.removeSession(old);
     const token = randomBytes(32).toString("base64url");
     store.addSession(token);
-    setCookie(c, "canvas_session", token, {
-      httpOnly: true,
-      sameSite: "Strict",
-      secure: options.secureCookie || new URL(c.req.url).protocol === "https:",
-      path: "/",
-      maxAge: 7 * 86400,
-    });
-    return c.json({ authenticated: true, username: account.username });
+    return c.json({ authenticated: true, username: account.username, token, expiresAt: Date.now() + 7 * 86400_000 });
   });
   app.post("/api/logout", async (c) => {
-    store.removeSession(getCookie(c, "canvas_session") ?? "");
-    deleteCookie(c, "canvas_session", { path: "/" });
+    store.removeSession(bearerToken(c.req.header("authorization")));
     return c.json({ ok: true });
   });
   const source = (id: string) => {
@@ -244,10 +256,15 @@ export function createApp(
     return result;
   };
   app.get("/api/state", (c) => c.json(store.snapshot()));
+  app.post('/api/urls', async c => {
+    const value = z.object({ sourceId: z.string().uuid(), url: z.string().max(8192) }).strict().parse(await c.req.json());
+    const opened = options.openUrl?.(source(value.sourceId), value.url, bearerToken(c.req.header('authorization')));
+    return opened ? c.json(opened) : c.json({ error: 'Web forwarding is unavailable' }, 503);
+  });
   app.get("/api/settings", c => c.json(store.settings()));
   app.patch("/api/settings", async c => c.json(store.updateSettings(settingsPatchSchema.parse(await c.req.json()))));
   app.get("/api/events", (c) => {
-    const session = getCookie(c, "canvas_session") ?? "";
+    const session = bearerToken(c.req.header("authorization"));
     const encoder = new TextEncoder();
     let controller: ReadableStreamDefaultController<Uint8Array>;
     let pending: string | undefined;

@@ -26,7 +26,7 @@ test("authentication, CSRF rejection and persistent canvas CRUD", async () => {
     path: string,
     method = "GET",
     body?: unknown,
-    cookie?: string,
+    token?: string,
     origin = "http://localhost",
   ) =>
     app.request(`http://localhost${path}`, {
@@ -35,7 +35,7 @@ test("authentication, CSRF rejection and persistent canvas CRUD", async () => {
         "Content-Type": "application/json",
         Host: "localhost",
         Origin: origin,
-        ...(cookie ? { Cookie: cookie } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
@@ -67,13 +67,17 @@ test("authentication, CSRF rejection and persistent canvas CRUD", async () => {
       password: "fixture-password",
     });
     assert.equal(login.status, 200);
-    const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
-    assert.match(login.headers.get("set-cookie")!, /HttpOnly/i);
+    const { token, expiresAt } = await login.json();
+    assert.match(token, /^[A-Za-z0-9_-]{43}$/u);
+    assert(expiresAt > Date.now() + 6 * 86400_000);
+    assert.equal(login.headers.get("set-cookie"), null);
+    assert.equal((await app.request("http://localhost/api/state", { headers: { Cookie: `canvas_session=${token}` } })).status, 401);
+    assert.deepEqual(await (await call("/api/session", "GET", undefined, token)).json(), { authenticated: true, username: "test" });
     const created = await call(
       "/api/canvases",
       "POST",
       { name: "Investigation", nodes: [] },
-      cookie,
+      token,
     );
     assert.equal(created.status, 201);
     const canvas = (await created.json()) as { id: string };
@@ -83,7 +87,7 @@ test("authentication, CSRF rejection and persistent canvas CRUD", async () => {
           `/api/canvases/${canvas.id}`,
           "PATCH",
           { name: "Renamed", nodes: [] },
-          cookie,
+          token,
         )
       ).status,
       200,
@@ -99,15 +103,15 @@ test("authentication, CSRF rejection and persistent canvas CRUD", async () => {
             transport: "ssh",
             target: "-oProxyCommand=evil",
           },
-          cookie,
+          token,
         )
       ).status,
       400,
     );
-    assert.equal((await call("/api/logout", "POST", {}, cookie)).status, 200);
+    assert.equal((await call("/api/logout", "POST", {}, token)).status, 200);
     assert.equal(closed, 0, "logout must preserve other sessions' terminals");
     assert.equal(
-      (await call("/api/state", "GET", undefined, cookie)).status,
+      (await call("/api/state", "GET", undefined, token)).status,
       401,
     );
   } finally {
@@ -127,7 +131,7 @@ test("empty herdr settings explicitly clear overrides while omitted PATCH fields
   } as unknown as TerminalManager);
   const call = (path: string, method = "GET", body?: unknown) => app.request(`http://localhost${path}`, {
     method,
-    headers: { Host: "localhost", Origin: "http://localhost", Cookie: "canvas_session=source-clear", "Content-Type": "application/json" },
+    headers: { Host: "localhost", Origin: "http://localhost", Authorization: "Bearer source-clear", "Content-Type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const created = await call("/api/sources", "POST", {

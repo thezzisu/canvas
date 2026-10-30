@@ -233,7 +233,7 @@ test("canvas open directories fail promptly without a controlling browser and bo
   await f.endpoint("unresponsive-directory", { neverComplete: true });
   const timedOut = await f.run(".", {}, { start: 0.1, idle: 1 });
   assert.equal(timedOut.code, 1);
-  assert.equal(timedOut.stderr, "canvas: directory open timed out\n");
+  assert.equal(timedOut.stderr, "canvas: open request timed out\n");
 });
 
 test("canvas open never retries after transfer acceptance", async t => {

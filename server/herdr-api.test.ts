@@ -140,7 +140,7 @@ test("herdr provider discovers sockets and performs resource CRUD without execut
     const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {} as TerminalManager);
     const call = (path: string, method: string, body: unknown) => app.request(`http://localhost/api/sources/${source.id}/${path}`, {
       method,
-      headers: { Host: "localhost", Origin: "http://localhost", Cookie: "canvas_session=creation-fixture", "Content-Type": "application/json" },
+      headers: { Host: "localhost", Origin: "http://localhost", Authorization: "Bearer creation-fixture", "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     for (const body of [{}, { name: "  ", sourceSpaceId: "w1" }]) {

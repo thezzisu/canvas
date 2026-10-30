@@ -38,7 +38,7 @@ function fixture(t: TestContext) {
       method,
       headers: {
         Host: "localhost",
-        Cookie: `canvas_session=${session}`,
+        Authorization: `Bearer ${session}`,
         "Content-Type": "application/json",
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),

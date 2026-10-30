@@ -8,6 +8,7 @@ import Icon from './Icon.vue'
 import PaneIndicators from './PaneIndicators.vue'
 import MobileKeyboard from './MobileKeyboard.vue'
 import { statusColor } from '../status'
+import { needsAttention } from '../canvas-status'
 import { mountTerminal, type TerminalStatus } from '../terminals'
 import { emptyModifiers, type TerminalModifiers } from '../terminal-input'
 import { terminalInsets } from '../terminal-geometry'
@@ -28,7 +29,8 @@ const windowFocused = useWindowFocus()
 const inputFocused = computed(() => windowFocused.value && !mobilePreview.value && !maximizedElsewhere.value &&
   keepTerminal.value && status.value.status === 'connected' && !status.value.readOnly &&
   !!activeElement.value?.matches('.xterm-helper-textarea, .terminal-mobile-input') && !!host.value?.contains(activeElement.value))
-const frameStatus = computed(() => !keepTerminal.value || status.value.status === 'disconnected' ? 'error' : props.data.status)
+const frameStatus = computed(() => props.data.statusFresh && !props.data.sourceOffline ? props.data.status : 'unknown')
+const statusPulse = computed(() => props.data.statusFresh === true && !props.data.sourceOffline && needsAttention(frameStatus.value))
 const resizeState = computed(() => !props.data.focus ? 'passive' : !status.value.focusResize ? 'pending' : status.value.focusResize.owned ? 'owned' : 'passive')
 const uploadActive = computed(() => status.value.upload && ['preparing', 'uploading'].includes(status.value.upload.state))
 const uploadPercent = computed(() => {
@@ -142,7 +144,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
 </script>
 <template>
   <NodeResizer v-if="!data.mobile && !data.overview && !data.focus && !maximizedElsewhere" :is-visible="selected" :min-width="360" :min-height="220" :max-width="4000" :max-height="3000" @resize-start="resizeStarted" @resize-end="resized" />
-  <article tabindex="-1" class="terminal-card" :class="[{ selected, unavailable: !keepTerminal, focused: data.focus, 'input-focused': inputFocused, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="keepTerminal ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :data-input-focused="inputFocused" :style="{ '--program-color': statusColor(frameStatus), width: dimensions || mobileFocus ? '100%' : `${data.width}px`, height: dimensions || mobileFocus ? '100%' : `${data.height}px` }" :aria-label="`${data.name} · ${data.subtitle}`">
+  <article tabindex="-1" class="terminal-card" :class="[{ selected, unavailable: !keepTerminal, focused: data.focus, 'input-focused': inputFocused, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="keepTerminal ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-status-pulse="statusPulse" :data-resize-state="resizeState" :data-input-focused="inputFocused" :style="{ '--program-color': statusColor(frameStatus), width: dimensions || mobileFocus ? '100%' : `${data.width}px`, height: dimensions || mobileFocus ? '100%' : `${data.height}px` }" :aria-label="`${data.name} · ${data.subtitle}`">
     <header class="terminal-header drag-handle" :class="{ 'cutout-header': mobileFocus }" :data-cutout-position="mobileFocus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="mobileFocus ? { '--cutout-width': `${cutoutWidth}px` } : undefined">
       <PaneIndicators :panes="data.panes" :status="data.status" :available="keepTerminal" :connection="status.status" :error="status.error" :read-only="status.readOnly" />
       <span class="terminal-name" :class="{ 'cutout-title': mobileFocus }" :title="title"><span class="terminal-tab-name">{{ data.name }}</span><span v-if="liveTitle" class="terminal-live-title">{{ liveTitle }}</span></span>
@@ -173,10 +175,9 @@ async function resized(event: { params: { width: number; height: number; x: numb
 </template>
 
 <style scoped>
-:global(.vue-flow__node-terminal .vue-flow__resize-control.handle){opacity:0}
 .terminal-name{display:flex;align-items:center;gap:6px}
-.terminal-card.input-focused{border-color:color-mix(in srgb,var(--program-color) 60%,#fff)}
-.terminal-card.input-focused.program-unknown{border-color:#aeb9c8}
+.terminal-card.input-focused{--frame-rest:color-mix(in srgb,var(--program-color) 60%,#fff);--frame-peak:color-mix(in srgb,var(--program-color) 45%,#fff)}
+.terminal-card.input-focused.program-unknown{--frame-rest:#aeb9c8}
 .terminal-card.input-focused .terminal-header{background:color-mix(in srgb,var(--program-color) 27%,#22262d)}
 .terminal-card.input-focused .terminal-name{color:#f4f6f9}
 .terminal-card.input-focused .terminal-live-title{color:#c4cbd5}

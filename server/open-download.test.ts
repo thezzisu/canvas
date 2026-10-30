@@ -45,6 +45,7 @@ type FixtureOptions = Partial<Pick<OpenDownloadOptions, "contextTimeoutMs" | "pr
   uploadFailure?: "create" | "write" | "complete";
   directoryAck?: boolean;
   directoryUri?: OpenDownloadOptions["directoryUri"];
+  urlAck?: boolean;
 };
 async function fixture(t: TestContext, options: FixtureOptions = {}) {
   const root = await mkdtemp(join(tmpdir(), "canvas-open-service-"));
@@ -62,6 +63,7 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
   store.addSession("authenticated-session"); store.addSession("other-session");
   const observations = { uploadedBytes: 0, aborted: 0, finalized: 0, bridgeStarts: 0, bridgeStops: 0, sourceCloses: 0 };
   const service = new OpenDownloadService({
+    openUrl: (_source, url, session) => { assert.equal(session, "authenticated-session"); return { url, forwarded: false }; },
     registryDirectory: registry,
     socketDirectory: sockets,
     idleTimeoutMs: 15,
@@ -98,6 +100,8 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
     } : undefined,
   });
   receiver.onMessage = message => {
+    if (message.type === "open-url" && options.urlAck !== false)
+      queueMicrotask(() => service.urlReceived(String(message.id), receiver as never, "authenticated-session"));
     if (message.type === "open-directory" && options.directoryAck !== false)
       queueMicrotask(() => service.directoryReceived(String(message.id), receiver as never, "authenticated-session"));
     if (message.type === "file-context" && options.autoContext !== false) queueMicrotask(() => {
@@ -142,6 +146,34 @@ async function waitFor(check: () => boolean | Promise<boolean>, message: string)
   assert.fail(message);
 }
 
+test("CLI web addresses reach only the controlling browser and complete on receipt", async t => {
+  const f = await fixture(t);
+  const result = await f.run("http://localhost:5173/project?q=one#section");
+  assert.deepEqual(result, { code: 0, stderr: "" });
+  const message = f.receiver.messages.find(message => message.type === "open-url")!;
+  assert.equal(message.url, "http://localhost:5173/project?q=one#section");
+  assert.equal(message.forwarded, false);
+  assert.equal(f.observations.uploadedBytes, 0);
+});
+
+test("CLI URL receipt binds to the original browser, session and message kind", async t => {
+  const f = await fixture(t, { urlAck: false });
+  const pending = f.run("https://example.test/page");
+  await waitFor(() => f.receiver.messages.some(message => message.type === "open-url"), "URL was not delivered");
+  const id = String(f.receiver.messages.find(message => message.type === "open-url")!.id);
+  assert.equal(f.service.directoryReceived(id, f.receiver as never, "authenticated-session"), false);
+  assert.equal(f.service.urlReceived(id, new FakeWebSocket() as never, "authenticated-session"), false);
+  assert.equal(f.service.urlReceived(id, f.receiver as never, "other-session"), false);
+  assert.equal(f.service.urlReceived(id, f.receiver as never, "authenticated-session"), true);
+  assert.equal((await pending).code, 0);
+});
+
+test("CLI URL open fails without an attached browser or with URL credentials", async t => {
+  const f = await fixture(t, { recipientAvailable: false });
+  assert.deepEqual(await f.run("http://localhost:5173/"), { code: 1, stderr: "canvas: no browser attached to this window\n" });
+  assert.deepEqual(await f.run("https://user:DUMMY_PASSWORD@example.test/"), { code: 1, stderr: "canvas: invalid web address\n" });
+});
+
 async function sender(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, size: number) {
   const messageMark = f.receiver.messages.length;
   const record = JSON.parse(await readFile(join(f.registry, (await readdir(f.registry))[0]!), "utf8"));
@@ -184,10 +216,10 @@ test("overview copy succeeds before any HTTP request and stages exact retryable 
   assert(notice, "native download starts only after server staging completes");
   assert.deepEqual(f.receiver.messages.map(message => message.type), ["file-context", "download"]);
   const url = `http://canvas.test${notice.url}`;
-  assert.equal((await f.app.request(url, { headers: { Cookie: "canvas_session=other-session" } })).status, 404);
+  assert.equal((await f.app.request(url, { headers: { Authorization: "Bearer other-session" } })).status, 404);
   assert.equal((await f.app.request(url)).status, 401);
   for (let attempt = 0; attempt < 2; attempt++) {
-    const response = await f.app.request(url, { headers: { Cookie: "canvas_session=authenticated-session" } });
+    const response = await f.app.request(url, { headers: { Authorization: "Bearer authenticated-session" } });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-length"), String(content.length));
     assert.match(response.headers.get("content-disposition")!, /filename\*=UTF-8''/u);
@@ -213,8 +245,8 @@ test("overview completion exposes sniffed preview metadata and owner-only inline
       "CLI completes without a preview acknowledgement");
     const url = `http://canvas.test${notice.url}?preview=1`;
     assert.equal((await f.app.request(url)).status, 401);
-    assert.equal((await f.app.request(url, { headers: { Cookie: "canvas_session=other-session" } })).status, 404);
-    const preview = await f.app.request(url, { headers: { Cookie: "canvas_session=authenticated-session" } });
+    assert.equal((await f.app.request(url, { headers: { Authorization: "Bearer other-session" } })).status, 404);
+    const preview = await f.app.request(url, { headers: { Authorization: "Bearer authenticated-session" } });
     assert.equal(preview.status, 200);
     assert.equal(preview.headers.get("content-type"), sample.mime);
     assert.match(preview.headers.get("content-disposition")!, /^inline;/u);
@@ -225,7 +257,7 @@ test("overview completion exposes sniffed preview metadata and owner-only inline
     assert.equal(csp.includes("sandbox"), sample.preview !== "pdf", "native PDF viewer must remain available");
     assert.deepEqual(Buffer.from(await preview.arrayBuffer()), sample.content);
     for (const query of ["", "?download=1", "?preview=1&download=1"]) {
-      const download = await f.app.request(`http://canvas.test${notice.url}${query}`, { headers: { Cookie: "canvas_session=authenticated-session" } });
+      const download = await f.app.request(`http://canvas.test${notice.url}${query}`, { headers: { Authorization: "Bearer authenticated-session" } });
       assert.match(download.headers.get("content-disposition")!, /^attachment;/u);
       assert.equal(download.headers.get("content-type"), "application/octet-stream");
       assert.deepEqual(Buffer.from(await download.arrayBuffer()), sample.content);
@@ -244,7 +276,7 @@ test("overview inline mode never promotes opaque or active files to browser prev
     await copyFile(f, sample.filename, sample.content);
     const notice = f.receiver.messages.find(message => message.type === "download")!;
     assert.equal(notice.preview, "file");
-    const response = await f.app.request(`http://canvas.test${notice.url}?preview=1`, { headers: { Cookie: "canvas_session=authenticated-session" } });
+    const response = await f.app.request(`http://canvas.test${notice.url}?preview=1`, { headers: { Authorization: "Bearer authenticated-session" } });
     assert.match(response.headers.get("content-disposition")!, /^attachment;/u);
     assert.equal(response.headers.get("content-type"), "application/octet-stream");
     assert.deepEqual(Buffer.from(await response.arrayBuffer()), sample.content);
@@ -317,7 +349,7 @@ test("custom canvas copy adds one persistent card without starting a browser dow
   const canvas = f.store.canvasView(f.store.get<Canvas>("canvas", f.canvas.id)!);
   const card = canvas.nodes.find(node => node.type === "file");
   assert(card && card.type === "file");
-  const response = await f.app.request(`http://canvas.test/api/files/${card.assetId}?download=1`, { headers: { Cookie: "canvas_session=authenticated-session" } });
+  const response = await f.app.request(`http://canvas.test/api/files/${card.assetId}?download=1`, { headers: { Authorization: "Bearer authenticated-session" } });
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), content);
 });
 
@@ -327,7 +359,7 @@ test("browser context is bound once and copying never starts through a GET reque
   assert.equal(f.service.prepare(transfer.id, "other-session"), false);
   assert.equal(f.observations.uploadedBytes, 0);
   const response = await f.app.request(`http://canvas.test/api/downloads/${transfer.id}`, {
-    method: "POST", headers: { Cookie: "canvas_session=authenticated-session", "Content-Type": "application/json" },
+    method: "POST", headers: { Authorization: "Bearer authenticated-session", "Content-Type": "application/json" },
     body: JSON.stringify({ canvasId: f.canvas.id, anchorId: "anchor" }),
   });
   assert.equal(response.status, 204);
@@ -343,7 +375,7 @@ test("empty files complete staging and a real native HTTP response", async t => 
   const f = await fixture(t), base = await serveFixture(t, f);
   await copyFile(f, "empty", Buffer.alloc(0));
   const notice = f.receiver.messages.find(message => message.type === "download")!;
-  const response = await fetch(`${base}${notice.url}`, { headers: { Cookie: "canvas_session=authenticated-session", Connection: "close" } });
+  const response = await fetch(`${base}${notice.url}`, { headers: { Authorization: "Bearer authenticated-session", Connection: "close" } });
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("content-length"), "0");
   assert.equal((await response.arrayBuffer()).byteLength, 0);
@@ -369,7 +401,7 @@ test("cancelling a native HTTP download does not affect the completed CLI copy",
   const result = await copyFile(f, "large.bin", content);
   const notice = f.receiver.messages.find(message => message.type === "download")!;
   await new Promise<void>((resolve, reject) => {
-    const request = get(`${base}${notice.url}`, { headers: { Cookie: "canvas_session=authenticated-session" } }, response => {
+    const request = get(`${base}${notice.url}`, { headers: { Authorization: "Bearer authenticated-session" } }, response => {
       response.on("error", () => {});
       response.once("data", () => { response.destroy(); resolve(); });
     });
@@ -448,7 +480,7 @@ test("renaming a source and attaching again preserve an active copy; endpoint ed
   const f = await fixture(t), releaseViewer = f.service.retainSource(source.id);
   t.after(releaseViewer);
   const patch = (body: unknown) => f.app.request(`http://canvas.test/api/sources/${source.id}`, {
-    method: "PATCH", headers: { Host: "canvas.test", Origin: "http://canvas.test", Cookie: "canvas_session=authenticated-session", "Content-Type": "application/json" },
+    method: "PATCH", headers: { Host: "canvas.test", Origin: "http://canvas.test", Authorization: "Bearer authenticated-session", "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   const transfer = await sender(t, f, 8);

@@ -5,6 +5,7 @@ export interface NativeContentPane {
   id: string
   name: string
   cwd?: string
+  incomplete?: boolean
   lines: string[]
   links: Array<{ label: string; url: string }>
 }
@@ -52,7 +53,7 @@ export function windowContent(surface: PaneSurfaceFrame, snapshot: ClientShellSn
   })
 }
 
-/** Native selection formatting unwraps soft rows without changing the selection or viewport. */
+/** Read the current visible pane text once, without revision checks or viewport mutations. */
 export async function readWindowContent(surface: PaneSurfaceFrame, snapshot: ClientShellSnapshot, tabId: string,
   read: (params: Record<string, unknown>) => Promise<unknown>): Promise<NativeContentPane[]> {
   const panes = windowContent(surface, snapshot, tabId)
@@ -71,16 +72,15 @@ export async function readWindowContent(surface: PaneSurfaceFrame, snapshot: Cli
     // Plain formatters can expose concealed cells. Keep the masked painted
     // rows for this pane instead of reading its underlying terminal text.
     if (concealed) continue
-    const top = pane.scroll ? Math.max(0, pane.scroll.max_offset_from_bottom - pane.scroll.offset_from_bottom) : 0
-    let response: unknown
     try {
-      response = await read({ pane_id: pane.pane_id, content_revision: pane.content_revision,
-        anchor: { row: top, col: 0 }, cursor: { row: top + rect.height - 1, col: rect.width - 1 } })
-    } catch { throw new Error('Window content changed or could not be read; scan again') }
-    if (!response || typeof response !== 'object' || !('text' in response) || typeof response.text !== 'string'
-        || 'pane_id' in response && response.pane_id !== pane.pane_id)
-      throw new Error('Invalid window content response; scan again')
-    result.lines = response.text.split('\n').map(line => clean(line.replace(/\r$/u, '')))
+      const response = await read({ pane_id: pane.pane_id, source: 'visible', format: 'text', strip_ansi: true })
+      if (!response || typeof response !== 'object' || !('text' in response) || typeof response.text !== 'string'
+          || 'pane_id' in response && response.pane_id !== pane.pane_id) throw new Error('Invalid pane content')
+      result.lines = response.text.split('\n').map(line => clean(line.replace(/\r$/u, '')))
+    } catch {
+      result.lines = []
+      result.incomplete = true
+    }
   }
   return panes
 }

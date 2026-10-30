@@ -1,19 +1,52 @@
+import { ref, watch } from 'vue'
 import { t } from './i18n'
+import { activeInstance, tokenKey } from './instances'
+import { instanceToken, resolveApiUrl } from './instance-url'
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) { super(message) }
 }
 
-export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
-  })
+export interface ApiContext { id: string; base: string; token: string; revision: number; signal: AbortSignal }
+export const apiRevision = ref(0)
+let lifetime = new AbortController()
+export function resetApiRequests() {
+  lifetime.abort(); lifetime = new AbortController(); apiRevision.value++
+}
+watch(() => `${activeInstance.value.id}:${activeInstance.value.base}`, resetApiRequests, { flush: 'sync' })
+export function apiContext(): ApiContext {
+  const instance = activeInstance.value
+  return { id: instance.id, base: instance.base, token: instanceToken(sessionStorage.getItem(tokenKey(instance.id)), instance.base), revision: apiRevision.value, signal: lifetime.signal }
+}
+export function isCurrentApi(context: ApiContext) { return context.revision === apiRevision.value && !context.signal.aborted }
+export function requireCurrentApi(context: ApiContext) {
+  if (!isCurrentApi(context)) throw new DOMException('Canvas instance changed', 'AbortError')
+}
+export function setSessionToken(token: string) {
+  if (token) sessionStorage.setItem(tokenKey(activeInstance.value.id), JSON.stringify({ base: activeInstance.value.base, token }))
+  else sessionStorage.removeItem(tokenKey(activeInstance.value.id))
+  resetApiRequests()
+}
+export function apiUrl(path: string, context = apiContext()) { return resolveApiUrl(context.base, path) }
+export async function apiFetch(path: string, init?: RequestInit, context = apiContext()): Promise<Response> {
+  requireCurrentApi(context)
+  const headers = new Headers(init?.headers)
+  if (context.token) headers.set('Authorization', `Bearer ${context.token}`)
+  const signal = init?.signal ? AbortSignal.any([context.signal, init.signal]) : context.signal
+  const response = await fetch(apiUrl(path, context), { ...init, headers, credentials: 'omit', signal })
+  requireCurrentApi(context)
+  if (response.status === 401 && context.token) window.dispatchEvent(new Event('canvas:unauthorized'))
+  return response
+}
+export async function api<T = unknown>(path: string, init?: RequestInit, context = apiContext()): Promise<T> {
+  const headers = new Headers(init?.headers)
+  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  const response = await apiFetch(path, { ...init, headers }, context)
   let body: any
   const text = await response.text()
+  requireCurrentApi(context)
   try { body = text ? JSON.parse(text) : undefined } catch { body = undefined }
   if (!response.ok) {
-    if (response.status === 401) window.dispatchEvent(new Event('canvas:unauthorized'))
     throw new ApiError(response.status, body?.error || body?.message || t('common.requestFailed', { status: response.status }))
   }
   return body as T

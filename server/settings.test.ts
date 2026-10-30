@@ -37,8 +37,8 @@ test('settings routes enforce account/origin boundaries and validate family name
   t.after(() => { store.close(); rmSync(directory, { recursive: true, force: true }) })
   store.addSession('fixture')
   const app = createApp(store, { username: 'fixture', passwordHash: 'unused' }, {} as TerminalManager)
-  const call = (body?: unknown, cookie = 'fixture', origin = 'http://localhost') => app.request('http://localhost/api/settings', {
-    method: body ? 'PATCH' : 'GET', headers: { Host: 'localhost', Origin: origin, Cookie: `canvas_session=${cookie}`, 'Content-Type': 'application/json' },
+  const call = (body?: unknown, token = 'fixture', origin = 'http://localhost') => app.request('http://localhost/api/settings', {
+    method: body ? 'PATCH' : 'GET', headers: { Host: 'localhost', Origin: origin, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     ...(body ? { body: JSON.stringify(body) } : {}),
   })
   assert.equal((await call(undefined, 'missing')).status, 401)

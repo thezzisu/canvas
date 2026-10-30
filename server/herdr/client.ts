@@ -19,8 +19,9 @@ export interface HerdrClientTransport {
 
 export interface HerdrClientOptions {
   socketPath: string; tabId: string; cols: number; rows: number; handshakeTimeoutMs?: number
-  /** Absolute, revision-checked selection reads do not mutate endpoint view state. */
+  /** Independent API reads leave the endpoint keyboard lane available. */
   readSelection?(params: Record<string, unknown>): Promise<unknown>
+  readContent?(params: Record<string, unknown>): Promise<unknown>
 }
 type Exit = { exitCode: number; signal?: number }
 interface Request { boot: string; chunks: Buffer[]; size: number; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
@@ -259,8 +260,8 @@ class HerdrClient implements HerdrClientTransport {
     const rendered = this.renderedContent
     if (this.closed || !rendered) return
     const panes = await readWindowContent(rendered.surface, rendered.snapshot, this.options.tabId,
-      params => this.request('pane.selection.read', params))
-    if (this.closed || this.snapshot?.boot_id !== rendered.snapshot.boot_id) throw new Error('Window changed; scan again')
+      params => this.options.readContent ? this.options.readContent(params) : Promise.reject(new Error('Pane read unavailable')))
+    if (this.closed) return
     return panes
   }
   private clipboard(data: string) {

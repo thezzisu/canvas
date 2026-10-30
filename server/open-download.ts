@@ -8,6 +8,7 @@ import type { WebSocket } from "ws";
 import { sourceConnectionKey, type FileAsset, type Source } from "./state.ts";
 import type { SourceResource } from "./providers.ts";
 import { directoryPath } from "./editor-links.ts";
+import { webUrl, type OpenedUrl } from "./url-forward.ts";
 
 const MAX_HEADER = 16 * 1024;
 const MAX_TRANSFERS_PER_SOURCE = 4;
@@ -45,6 +46,7 @@ export interface OpenDownloadOptions {
   createUpload(metadata: { filename: string; size: number }): Promise<Upload>;
   readTemporary(id: string): Promise<{ body: Readable; asset: FileAsset } | undefined>;
   directoryUri?(source: Source, path: string): Promise<string>;
+  openUrl?(source: Source, url: string, sessionId: string): Promise<OpenedUrl> | OpenedUrl;
   prepare(source: Source, localSocket: string): Promise<PreparedOpenBridge>;
   publishRemote?(source: Source, record: RegistryRecord): Promise<() => Promise<void>>;
   installHelper?(source: Source): Promise<void>;
@@ -91,6 +93,7 @@ interface DownloadTicket {
 }
 
 interface DirectoryTicket {
+  kind: "directory" | "url";
   id: string;
   sourceId: string;
   sessionId: string;
@@ -291,10 +294,10 @@ export class OpenDownloadService {
         typeof header.paneId !== "string" || !header.paneId || header.paneId.length > 256) {
       socket.end(rejected); return;
     }
-    const isDirectory = header.kind === "directory";
+    const isDirectory = header.kind === "directory", isUrl = header.kind === "url";
     let path: string | undefined;
-    if (isDirectory) {
-      try { path = directoryPath(header.path); }
+    if (isDirectory || isUrl) {
+      try { path = isUrl ? webUrl(header.url).href : directoryPath(header.path); }
       catch { socket.end(rejected); return; }
       if (header.size !== undefined || header.filename !== undefined) { socket.end(rejected); return; }
     } else if (header.kind !== "file" ||
@@ -317,8 +320,8 @@ export class OpenDownloadService {
     if (!recipient || !recipient.isCurrent() || recipient.socket.readyState !== 1 || !recipient.sessionId) {
       socket.end(jsonLine({ ok: false, reason: "not-attached" })); return;
     }
-    if (isDirectory) {
-      await this.sendDirectory(source, path!, socket, recipient);
+    if (isDirectory || isUrl) {
+      await this.sendReference(source, path!, socket, recipient, isUrl ? "url" : "directory");
       return;
     }
     const filename = safeFilename(header.filename)!;
@@ -348,8 +351,8 @@ export class OpenDownloadService {
     } catch { this.finish(ticket, "failed", "disconnected"); }
   }
 
-  private async sendDirectory(source: Source, path: string, socket: Socket, recipient: DownloadRecipient): Promise<void> {
-    if (!this.options.directoryUri) { socket.end(jsonLine({ ok: false, reason: "editor-unavailable" })); return; }
+  private async sendReference(source: Source, path: string, socket: Socket, recipient: DownloadRecipient, kind: "directory" | "url"): Promise<void> {
+    if (kind === "directory" ? !this.options.directoryUri : !this.options.openUrl) { socket.end(jsonLine({ ok: false, reason: kind === "url" ? "url-unavailable" : "editor-unavailable" })); return; }
     const id = randomBytes(32).toString("base64url");
     const release = this.retainSource(source.id);
     const onClose = () => this.finishDirectory(id, "not-attached");
@@ -357,7 +360,7 @@ export class OpenDownloadService {
     const timer = setTimeout(() => this.finishDirectory(id, "not-started"), this.options.contextTimeoutMs ?? CONTEXT_TIMEOUT);
     timer.unref();
     const ticket: DirectoryTicket = {
-      id, sourceId: source.id, sessionId: recipient.sessionId, socket, recipient: recipient.socket, timer,
+      id, kind, sourceId: source.id, sessionId: recipient.sessionId, socket, recipient: recipient.socket, timer,
       cleanup: () => {
         clearTimeout(timer);
         socket.off("close", onClose);
@@ -373,18 +376,25 @@ export class OpenDownloadService {
     socket.setTimeout(0);
     socket.resume();
     try {
-      const uri = await this.options.directoryUri(source, path);
+      const data = kind === "directory" ? { type: "open-directory", path, uri: await this.options.directoryUri!(source, path) }
+        : { type: "open-url", ...await this.options.openUrl!(source, path, recipient.sessionId) };
       if (this.directories.get(id) !== ticket) return;
       if (!recipient.isCurrent() || recipient.socket.readyState !== 1) {
         this.finishDirectory(id, "not-attached"); return;
       }
-      recipient.socket.send(JSON.stringify({ type: "open-directory", id, path, uri }));
-    } catch { this.finishDirectory(id, "editor-unavailable"); }
+      recipient.socket.send(JSON.stringify({ ...data, id }));
+    } catch { this.finishDirectory(id, kind === "url" ? "url-unavailable" : "editor-unavailable"); }
   }
 
   directoryReceived(id: string, socket: WebSocket, sessionId: string): boolean {
+    return this.referenceReceived(id, socket, sessionId, "directory");
+  }
+  urlReceived(id: string, socket: WebSocket, sessionId: string): boolean {
+    return this.referenceReceived(id, socket, sessionId, "url");
+  }
+  private referenceReceived(id: string, socket: WebSocket, sessionId: string, kind: "directory" | "url"): boolean {
     const ticket = this.directories.get(id);
-    if (!ticket || ticket.recipient !== socket || ticket.sessionId !== sessionId || socket.readyState !== 1) return false;
+    if (!ticket || ticket.kind !== kind || ticket.recipient !== socket || ticket.sessionId !== sessionId || socket.readyState !== 1) return false;
     this.finishDirectory(id);
     return true;
   }

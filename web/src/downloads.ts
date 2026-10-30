@@ -1,4 +1,6 @@
 import { computed, shallowRef } from 'vue'
+import { apiFetch, apiUrl } from './api'
+import { downloadMedia } from './media'
 
 export interface DownloadContext { canvasId?: string; anchorId?: string }
 export interface DownloadResource { sourceId: string; windowId: string }
@@ -16,21 +18,12 @@ export const downloadPreviewCount = computed(() => previews.value.length)
 export function dismissDownloadPreview() { previews.value = previews.value.slice(1) }
 
 /** Present an already-staged file in the browser that requested it. */
-export function presentDownload(file: Omit<DownloadPreview, 'preview'> & { preview: DownloadPreview['preview'] | 'file' }, download = false) {
+export async function presentDownload(file: Omit<DownloadPreview, 'preview'> & { preview: DownloadPreview['preview'] | 'file' }, download = false) {
   if (!download && file.preview !== 'file') {
     previews.value = [...previews.value, { ...file, preview: file.preview }]
     return
   }
-  const url = new URL(file.url, location.href)
-  if (download) url.searchParams.set('download', '1')
-  const anchor = document.createElement('a')
-  anchor.href = url.href
-  anchor.download = file.filename
-  anchor.hidden = true
-  const target = document.fullscreenElement || document.body
-  target.append(anchor)
-  anchor.click()
-  anchor.remove()
+  await downloadMedia(file.url, file.filename)
 }
 
 const requests = new Map<AbortController, WebSocket>()
@@ -56,11 +49,10 @@ async function prepare(socket: WebSocket, path: string, context: DownloadContext
   requests.set(controller, socket)
   const timeout = setTimeout(() => controller.abort(), 10_000)
   try {
-    const response = await fetch(path, {
+    await apiFetch(path, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(context), signal: controller.signal,
     })
-    if (response.status === 401) window.dispatchEvent(new Event('canvas:unauthorized'))
   } catch {
     // The server expires an unprepared transfer and reports the failure to its
     // helper. No browser download is attempted before staging has completed.
@@ -84,16 +76,16 @@ export function receiveDownload(socket: WebSocket, message: Record<string, unkno
   }
   if (typeof message.url !== 'string' || typeof message.filename !== 'string') return true
   let url: URL
-  try { url = new URL(message.url, location.href) } catch { return true }
-  if (url.origin !== location.origin || url.pathname !== path || url.search || url.hash) return true
+  try { url = apiUrl(message.url) } catch { return true }
+  if (url.href !== apiUrl(path).href || url.search) return true
   if (!firstMessage(socket, message.type, message.id)) return true
   if ((message.preview === 'image' || message.preview === 'pdf' || message.preview === 'text')
       && Number.isSafeInteger(message.size) && (message.size as number) >= 0) {
-    presentDownload({ id: message.id, filename: message.filename,
-      size: message.size as number, preview: message.preview, url: path })
+    void presentDownload({ id: message.id, filename: message.filename,
+      size: message.size as number, preview: message.preview, url: path }).catch(reportDownloadError)
     return true
   }
-  presentDownload({ id: message.id, filename: message.filename, size: 0, preview: 'file', url: url.href })
+  void presentDownload({ id: message.id, filename: message.filename, size: 0, preview: 'file', url: url.href }).catch(reportDownloadError)
   return true
 }
 
@@ -109,4 +101,9 @@ export function clearDownloads() {
   requests.clear()
   received = new WeakMap()
   previews.value = []
+}
+
+export function reportDownloadError(reason: unknown) {
+  if (reason instanceof Error && reason.name === 'AbortError') return
+  window.dispatchEvent(new CustomEvent('canvas:error', { detail: reason }))
 }
