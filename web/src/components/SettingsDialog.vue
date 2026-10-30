@@ -13,8 +13,8 @@ import { developerMode } from '../developer-mode'
 import { keepScreenAwake, retryScreenWakeLock, screenWakeLockState, screenWakeLockUnavailable } from '../screen-wake-lock'
 import Icon from './Icon.vue'
 
-const props = defineProps<{ settings: GlobalSettings; portal?: HTMLElement; hasDisplayCutout?: boolean }>()
-const emit = defineEmits<{ close: []; saved: [settings: GlobalSettings] }>()
+const props = defineProps<{ open: boolean; settings: GlobalSettings; portal?: HTMLElement; hasDisplayCutout?: boolean }>()
+const emit = defineEmits<{ close: []; saved: [settings: GlobalSettings]; error: [message: string] }>()
 const mobile = useMobileLayout()
 const cutoutPositions: Array<{ value: CutoutPosition; label: string }> = [
   { value: 'left', label: '左' }, { value: 'center', label: '中' }, { value: 'right', label: '右' },
@@ -30,87 +30,123 @@ const normalized = (value: ContentFontSettings): ContentFontSettings => ({
   ligatures: value.ligatures,
 })
 const draft = reactive(clone(props.settings.contentFont))
-const original = JSON.stringify(normalized(props.settings.contentFont))
+const signature = (value: ContentFontSettings) => JSON.stringify(normalized(value))
+const persisted = ref(clone(props.settings.contentFont))
 const families = [...FONT_CATALOG.map(font => font.family), 'monospace']
 const entryIds = ref(draft.stack.map((_, index) => index))
 let nextEntryId = entryIds.value.length
 const saving = ref(false)
 const loading = ref(false)
-const error = ref('')
 const fontError = ref('')
 const preview = ref<{ family: string; features: string }>()
-let previewRevision = 0
+let revision = 0
 let disposed = false
-let previewTimer: ReturnType<typeof setTimeout> | undefined
+let timer: ReturnType<typeof setTimeout> | undefined
+let writes: Promise<void> = Promise.resolve()
 const config = computed(() => normalized(draft))
-const changed = computed(() => JSON.stringify(config.value) !== original)
 const invalid = computed(() => !draft.stack.length || draft.stack.some(entry => !entry.family.trim()))
 const previewStyle = computed(() => preview.value ? { fontFamily: preview.value.family, fontFeatureSettings: preview.value.features } : {})
 const previewText = '中文对齐  ABCD  012345\n天地玄黄  ABCD  012345\nconst x = a !== b && c => d;\n\ue0b0 \ue0b2 \uf07c  ~/canvas'
 
-async function loadPreview(value: ContentFontSettings, revision: number) {
+function setDraft(value: ContentFontSettings) {
+  if (signature(config.value) === signature(value)) return
+  const remaining = draft.stack.map((entry, index) => ({ entry, id: entryIds.value[index]! }))
+  const entries = value.stack.map(entry => {
+    const index = remaining.findIndex(item => item.entry.family.trim().toLowerCase() === entry.family.trim().toLowerCase())
+    const existing = index < 0 ? undefined : remaining.splice(index, 1)[0]
+    if (!existing) return { entry: { ...entry }, id: nextEntryId++ }
+    existing.entry.family = entry.family
+    return existing
+  })
+  draft.stack = entries.map(item => item.entry)
+  draft.ligatures = value.ligatures
+  entryIds.value = entries.map(item => item.id)
+}
+function failed(reason: unknown, current: number, changed: boolean) {
+  if (disposed || current !== revision) return
+  fontError.value = reason instanceof Error ? reason.message : '字体设置失败'
+  if (!props.open && changed) emit('error', fontError.value)
+}
+async function saveFont(value: ContentFontSettings, current: number) {
+  if (disposed || current !== revision || signature(value) === signature(persisted.value)) return
+  saving.value = true
+  try {
+    const settings = await write<GlobalSettings>('/api/settings', 'PATCH', { contentFont: value })
+    if (disposed) return
+    persisted.value = clone(settings.contentFont)
+    if (current === revision) setDraft(settings.contentFont)
+    emit('saved', settings)
+  } catch (reason) { failed(reason, current, true) }
+  finally { saving.value = false }
+}
+async function applyFont(value: ContentFontSettings, current: number) {
+  if (disposed || current !== revision || invalid.value) return
   try {
     await ensureContentFont(value)
-    if (disposed || revision !== previewRevision) return
+    if (disposed || current !== revision) return
     preview.value = buildFontPresentation(value)
-  } catch (reason) {
-    if (!disposed && revision === previewRevision) fontError.value = reason instanceof Error ? reason.message : '字体加载失败'
-  } finally { if (!disposed && revision === previewRevision) loading.value = false }
+    writes = writes.then(() => saveFont(value, current))
+  } catch (reason) { failed(reason, current, signature(value) !== signature(persisted.value)) }
+  finally { if (!disposed && current === revision) loading.value = false }
 }
-function retryPreview() {
-  clearTimeout(previewTimer)
-  fontError.value = ''; loading.value = true
-  void loadPreview(clone(config.value), ++previewRevision)
-}
-watch(config, value => {
-  const revision = ++previewRevision
-  clearTimeout(previewTimer)
+function scheduleFont(value: ContentFontSettings) {
+  const current = ++revision
+  clearTimeout(timer)
   fontError.value = ''
   if (invalid.value) { loading.value = false; return }
   loading.value = true
-  previewTimer = setTimeout(() => { void loadPreview(clone(value), revision) }, 180)
-}, { immediate: true })
+  timer = setTimeout(() => {
+    timer = undefined
+    void applyFont(clone(value), current)
+  }, 180)
+}
+function retryPreview() { scheduleFont(config.value) }
+watch(config, scheduleFont, { immediate: true })
+watch(() => props.settings.contentFont, value => {
+  const pristine = signature(config.value) === signature(persisted.value)
+  persisted.value = clone(value)
+  if (pristine && !saving.value) setDraft(value)
+})
 function setFamily(index: number, family: string) {
   const entry = draft.stack[index]
-  if (!entry || saving.value) return
-  entry.family = family
+  if (entry) entry.family = family
 }
 function addFont() {
-  if (saving.value || draft.stack.length >= 12) return
+  if (draft.stack.length >= 12) return
   draft.stack.push({ family: '' })
   entryIds.value.push(nextEntryId++)
 }
 function moveFont(index: number, direction: number) {
   const next = index + direction
-  if (saving.value || next < 0 || next >= draft.stack.length) return
+  if (next < 0 || next >= draft.stack.length) return
   const [value] = draft.stack.splice(index, 1)
   const [id] = entryIds.value.splice(index, 1)
   draft.stack.splice(next, 0, value!)
   entryIds.value.splice(next, 0, id!)
 }
 function removeFont(index: number) {
-  if (saving.value || draft.stack.length === 1) return
+  if (draft.stack.length === 1) return
   draft.stack.splice(index, 1)
   entryIds.value.splice(index, 1)
 }
-function close(open = false) { if (!open && !saving.value) emit('close') }
-async function save() {
-  if (saving.value || loading.value || invalid.value || !changed.value || fontError.value) return
-  saving.value = true; error.value = ''
-  try {
-    const value = clone(config.value)
-    await ensureContentFont(value)
-    const settings = await write<GlobalSettings>('/api/settings', 'PATCH', { contentFont: value })
-    emit('saved', settings)
-    emit('close')
-  } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason) }
-  finally { saving.value = false }
+function close(open = false) {
+  if (open) return
+  if (invalid.value) {
+    clearTimeout(timer)
+    timer = undefined
+    setDraft(persisted.value)
+  } else if (timer) {
+    clearTimeout(timer)
+    timer = undefined
+    void applyFont(clone(config.value), revision)
+  }
+  emit('close')
 }
-onBeforeUnmount(() => { disposed = true; previewRevision++; clearTimeout(previewTimer) })
+onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer) })
 </script>
 
 <template>
-  <UModal :open="true" title="设置" :portal="portal || false" :dismissible="!saving" :close="{ 'aria-label': '关闭设置', disabled: saving }"
+  <UModal :open="open" title="设置" :portal="portal || false" :close="{ 'aria-label': '关闭设置' }"
     :ui="{ content: 'settings-modal', overlay: 'settings-overlay', header: 'settings-header', body: 'settings-body', footer: 'settings-footer', title: 'settings-title', close: 'settings-close' }" @update:open="close">
     <template #body>
       <section v-if="mobile && hasDisplayCutout" class="cutout-settings" aria-label="顶部避让">
@@ -118,31 +154,27 @@ onBeforeUnmount(() => { disposed = true; previewRevision++; clearTimeout(preview
         <div class="cutout-row"><span id="cutout-position-label">位置</span><div class="cutout-positions" role="group" aria-labelledby="cutout-position-label"><UButton v-for="position in cutoutPositions" :key="position.value" type="button" color="neutral" :variant="cutoutPosition === position.value ? 'solid' : 'outline'" :aria-pressed="cutoutPosition === position.value" @click="cutoutPosition = position.value">{{ position.label }}</UButton></div></div>
         <div class="cutout-width-label"><label for="cutout-width">宽度</label><output for="cutout-width">{{ displayedCutoutWidth }} px</output></div>
         <input id="cutout-width" v-model.number="displayedCutoutWidth" class="cutout-width" type="range" min="0" :max="cutoutMaximum" step="1" :aria-valuetext="`${displayedCutoutWidth} px`" />
-        <div class="cutout-preview cutout-header" :data-cutout-position="cutoutWidth > 0 ? cutoutPosition : undefined" :style="{ '--cutout-width': `${cutoutWidth}px` }" aria-hidden="true">
-          <span class="cutout-status"><i /></span><span class="cutout-title">终端</span>
-          <div class="cutout-actions"><span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10" /></svg></span><span><Icon name="more" :size="17" /></span><span><Icon name="collapse" :size="18" /></span></div>
-        </div>
       </section>
-      <form id="content-font-form" class="font-settings" @submit.prevent="save">
-        <div class="font-stack-heading"><span>内容字体</span><UButton type="button" color="neutral" variant="ghost" size="xs" class="font-add" :disabled="saving || draft.stack.length >= 12" aria-label="添加字体" @click="addFont"><Icon name="plus" :size="13" />添加</UButton></div>
+      <form class="font-settings" @submit.prevent>
+        <div class="font-stack-heading"><span>内容字体</span><UButton type="button" color="neutral" variant="ghost" size="xs" class="font-add" :disabled="draft.stack.length >= 12" aria-label="添加字体" @click="addFont"><Icon name="plus" :size="13" />添加</UButton></div>
         <ol class="font-stack" aria-label="字体顺序">
           <li v-for="(entry, index) in draft.stack" :key="entryIds[index]" class="font-stack-entry">
             <div class="font-stack-row">
               <span class="font-order" :title="index === 0 ? '主字体' : '回退字体'">{{ index + 1 }}</span>
-              <UInputMenu :model-value="entry.family" mode="autocomplete" :items="families" :portal="portal || false" :disabled="saving" :open-on-focus="false" size="sm" class="font-family-input" :aria-label="`字体 ${index + 1}`" :title="entry.family" placeholder="选择或输入字体名称" :maxlength="100"
+              <UInputMenu :model-value="entry.family" mode="autocomplete" :items="families" :portal="portal || false" :open-on-focus="false" size="sm" class="font-family-input" :aria-label="`字体 ${index + 1}`" :title="entry.family" placeholder="选择或输入字体名称" :maxlength="100"
                 :ui="{ content: 'font-select-menu', item: 'font-select-item', viewport: 'font-select-viewport', trailing: 'font-family-trailing' }" @update:model-value="setFamily(index, $event)"><template #empty><span class="font-local-hint">使用本机字体</span></template></UInputMenu>
-              <UButton type="button" color="neutral" variant="ghost" size="xs" class="font-order-button" :disabled="saving || index === 0" :aria-label="`上移字体 ${index + 1}`" @click="moveFont(index, -1)"><Icon name="down" :size="13" class="font-up" /></UButton>
-              <UButton type="button" color="neutral" variant="ghost" size="xs" class="font-order-button" :disabled="saving || index === draft.stack.length - 1" :aria-label="`下移字体 ${index + 1}`" @click="moveFont(index, 1)"><Icon name="down" :size="13" /></UButton>
-              <UButton type="button" color="neutral" variant="ghost" size="xs" class="font-order-button" :disabled="saving || draft.stack.length === 1" :aria-label="`删除字体 ${index + 1}`" @click="removeFont(index)"><Icon name="close" :size="13" /></UButton>
+              <UButton type="button" color="neutral" variant="ghost" size="xs" class="font-order-button" :disabled="index === 0" :aria-label="`上移字体 ${index + 1}`" @click="moveFont(index, -1)"><Icon name="down" :size="13" class="font-up" /></UButton>
+              <UButton type="button" color="neutral" variant="ghost" size="xs" class="font-order-button" :disabled="index === draft.stack.length - 1" :aria-label="`下移字体 ${index + 1}`" @click="moveFont(index, 1)"><Icon name="down" :size="13" /></UButton>
+              <UButton type="button" color="neutral" variant="ghost" size="xs" class="font-order-button" :disabled="draft.stack.length === 1" :aria-label="`删除字体 ${index + 1}`" @click="removeFont(index)"><Icon name="close" :size="13" /></UButton>
             </div>
           </li>
         </ol>
-        <div class="font-options"><USwitch v-model="draft.ligatures" :disabled="saving" label="连字" aria-label="连字" size="sm" class="settings-switch" /><span class="font-stack-hint">从上到下依次回退</span></div>
+        <div class="font-options"><USwitch v-model="draft.ligatures" label="连字" aria-label="连字" size="sm" class="settings-switch" /><span class="font-stack-hint">从上到下依次回退</span></div>
         <div class="font-preview-wrap">
-          <div class="font-preview-heading"><span>预览</span><span v-if="loading" class="font-loading" role="status"><span class="spinner" />加载字体</span></div>
+          <div class="font-preview-heading"><span>预览</span><span v-if="loading || saving" class="font-loading" role="status"><span class="spinner" />{{ saving ? '应用中…' : '加载字体' }}</span></div>
           <pre class="font-preview" :style="previewStyle" :aria-busy="loading" aria-label="字体预览">{{ previewText }}</pre>
         </div>
-        <div v-if="fontError || error" class="font-error" role="alert"><span>{{ fontError || error }}</span><UButton v-if="fontError" type="button" color="neutral" variant="link" size="xs" aria-label="重新加载字体" @click="retryPreview">重试</UButton></div>
+        <div v-if="fontError" class="font-error" role="alert"><span>{{ fontError }}</span><UButton type="button" color="neutral" variant="link" size="xs" aria-label="重试字体设置" @click="retryPreview">重试</UButton></div>
       </form>
       <div class="wake-lock-setting">
         <USwitch :model-value="!screenWakeLockUnavailable && keepScreenAwake" :disabled="!!screenWakeLockUnavailable" label="保持屏幕常亮" aria-label="保持屏幕常亮" size="sm" class="settings-switch" @update:model-value="keepScreenAwake = $event" />
@@ -155,11 +187,14 @@ onBeforeUnmount(() => { disposed = true; previewRevision++; clearTimeout(preview
       </div>
       <div class="developer-setting"><USwitch v-model="developerMode" label="开发者模式" aria-label="开发者模式" size="sm" class="settings-switch" /></div>
     </template>
-    <template #footer><UButton color="neutral" variant="outline" class="font-cancel" :disabled="saving" @click="close()">{{ changed ? '取消' : '完成' }}</UButton><UButton type="submit" form="content-font-form" class="font-save" :disabled="saving || loading || invalid || !changed || !!fontError"><span v-if="saving" class="spinner" />{{ saving ? '保存中…' : '保存' }}</UButton></template>
+    <template #footer><UButton color="neutral" variant="outline" class="font-done" @click="close()">完成</UButton></template>
   </UModal>
 </template>
 
 <style scoped>
+.font-done{height:32px;min-width:62px;padding:0 12px;border:1px solid #485262;border-radius:6px;font-size:11px;font-weight:500;color:#c3cdd9;background:#2a323e}
+.font-done:hover{background:#343e4b}
+.mobile-layout .font-done{height:40px}
 .cutout-settings{container-type:inline-size;display:grid;gap:12px;margin-bottom:20px;padding-bottom:18px;border-bottom:1px solid #343b46}
 .cutout-heading,.cutout-row,.cutout-width-label{display:flex;align-items:center;justify-content:space-between;gap:16px;color:#c4cbd6;font-size:12px}
 .cutout-heading{font-weight:500}
@@ -168,11 +203,6 @@ onBeforeUnmount(() => { disposed = true; previewRevision++; clearTimeout(preview
 .cutout-positions button{min-height:44px;justify-content:center}
 .cutout-width-label output{color:#929fb0;font-variant-numeric:tabular-nums}
 .cutout-width{display:block;width:100%;height:28px;margin:0;accent-color:var(--accent);cursor:pointer}
-.cutout-preview{min-height:44px;border:1px solid #3d4651;border-radius:5px;background:#252a32;color:#a9b4c4;overflow:hidden}
-.cutout-preview .cutout-status{display:flex;align-items:center;justify-content:center;width:44px;height:44px}
-.cutout-preview .cutout-status i{width:7px;height:7px;border-radius:50%;background:#a6e3a1}
-.cutout-preview .cutout-title{font-size:12px;color:#d3d8e1}
-.cutout-preview .cutout-actions>span{display:flex;width:44px;height:44px;align-items:center;justify-content:center}
 .developer-setting{margin-top:18px;padding-top:16px;border-top:1px solid #343b46}
 .wake-lock-setting{display:flex;align-items:center;gap:8px;margin-top:18px;padding-top:16px;border-top:1px solid #343b46}
 .wake-lock-setting>small{margin-left:auto;color:#8793a4;font-size:11px}

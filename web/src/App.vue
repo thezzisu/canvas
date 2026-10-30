@@ -18,6 +18,7 @@ import BackgroundDialog from './components/BackgroundDialog.vue'
 import DirectoryDialog from './components/DirectoryDialog.vue'
 import DownloadPreviewDialog from './components/DownloadPreviewDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
+import CutoutPreview from './components/CutoutPreview.vue'
 import { directoryRequest } from './directories'
 import { api, segment, uuid, write } from './api'
 import { clearTerminals, focusWindow, hasLiveTerminal, setContentFont } from './terminals'
@@ -31,7 +32,7 @@ import { developerMode } from './developer-mode'
 import { useScreenWakeLock } from './screen-wake-lock'
 import { canvasFrame, preserveCanvasCenter, useMobileViewport, type CanvasFrame } from './viewport'
 import { statusColor, statusLabel } from './status'
-import { overviewResources, overviewLayoutKey, overviewStatuses, type OverviewInteraction, type OverviewOrder } from './overview'
+import { overviewResources, overviewFocusStatuses, overviewLayoutKey, overviewStatuses, type OverviewInteraction, type OverviewOrder } from './overview'
 import { adjacentPage, pageViewport, retainPage, type OverviewPage, type PageDirection } from './overview-paging'
 import type { ProgramStatus } from '../../shared/status'
 import type { Canvas, CanvasNode, FileData, NoteData, NotePatch, SharedState, Source, SourceResource, TerminalCanvasNode, TerminalData, WindowSize } from './types'
@@ -225,6 +226,7 @@ const showMinimap = useStorage('canvas:view:minimap', true)
 const showNavigation = useStorage('canvas:view:navigation', true)
 const overviewMenuOpen = ref(false)
 const overviewFiltered = computed(() => overviewSelected.value.length !== overviewStatuses.length)
+const overviewFocused = computed(() => overviewSelected.value.length === overviewFocusStatuses.length && overviewFocusStatuses.every(status => overviewSelected.value.includes(status)))
 const overviewChanged = computed(() => overviewFiltered.value || overviewOrder.value !== 'native')
 const activeElement = useActiveElement({ triggerOnRemoval: true })
 const overviewInteraction = computed<OverviewInteraction | undefined>(() => {
@@ -240,6 +242,7 @@ function resetOverview() { overviewSelected.value = [...overviewStatuses]; overv
 const overviewMenu = computed<DropdownMenuItem[][]>(() => [
   [{ type: 'label', label: '状态' },
     { type: 'checkbox', label: '全部状态', checked: !overviewFiltered.value, onSelect: event => event.preventDefault(), onUpdateChecked: checked => { overviewSelected.value = checked ? [...overviewStatuses] : [] } },
+    { type: 'checkbox', label: '聚焦', checked: overviewFocused.value, onSelect: event => event.preventDefault(), onUpdateChecked: checked => { overviewSelected.value = checked ? [...overviewFocusStatuses] : [] } },
     ...overviewStatuses.map(status => ({ type: 'checkbox' as const, label: status === 'unknown' ? '其他' : statusLabel(status), status, checked: overviewSelected.value.includes(status),
       onSelect: (event: Event) => event.preventDefault(), onUpdateChecked: (checked: boolean) => { overviewSelected.value = checked ? [...overviewSelected.value, status] : overviewSelected.value.filter(value => value !== status) } })),
   ],
@@ -926,6 +929,7 @@ function keydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
     if (sidebarOpen.value) sidebarOpen.value = false
     else if (canvasMenu.value) { canvasMenu.value = false; canvasMenuElement.value?.querySelector<HTMLButtonElement>('.canvas-menu-trigger')?.focus() }
+    else if (overviewMenuOpen.value) overviewMenuOpen.value = false
     else if (windowMenu.value) windowMenu.value = null
     else if (actionDialog.value) { if (!busy.value) actionDialog.value = null }
     else if (sourceDialog.value) sourceDialog.value = false
@@ -934,6 +938,11 @@ function keydown(event: KeyboardEvent) {
     else if (focused.value) void closeFocus()
     else sourcePanel.value = false
   }
+}
+function outsideOverviewMenu(event: PointerEvent) {
+  if (!overviewMenuOpen.value) return
+  const target = event.target instanceof Element ? event.target : undefined
+  if (!target?.closest('.overview-display-menu, .overview-display-trigger')) overviewMenuOpen.value = false
 }
 function beforeUnload(event: BeforeUnloadEvent) {
   if (!pendingNotes.size && !savingNotes.size) return
@@ -992,12 +1001,13 @@ onMounted(async () => {
   window.addEventListener('resize', windowResize)
   window.addEventListener('beforeunload', beforeUnload)
   document.addEventListener('pointerdown', outsideCanvasMenu)
+  document.addEventListener('pointerdown', outsideOverviewMenu, true)
   try { const session = await api<{ authenticated: boolean; username?: string }>('/api/session'); authenticated.value = session.authenticated; username.value = session.username || ''; if (authenticated.value) await load() }
   catch (reason) { showError(reason) }
   finally { ready.value = true }
   refreshTimer = setInterval(() => { void refreshResources(true) }, 2000)
 })
-onBeforeUnmount(() => { for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('pointerdown', outsideCanvasMenu) })
+onBeforeUnmount(() => { for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('pointerdown', outsideCanvasMenu); document.removeEventListener('pointerdown', outsideOverviewMenu, true) })
 </script>
 
 <template>
@@ -1014,7 +1024,7 @@ onBeforeUnmount(() => { for (const event of ['pointerdown', 'keydown', 'wheel', 
       </form>
     </main>
   </div>
-  <div v-else ref="appElement" class="app-shell" :class="{ 'canvas-fullscreen': canvasFullscreen, 'mobile-layout': mobile, 'has-display-cutout': hasSafeTop }" :style="[mobileViewportStyle, contentFontStyle]" :data-content-font="appliedContentFont">
+  <div v-else ref="appElement" class="app-shell" :class="{ 'canvas-fullscreen': canvasFullscreen, 'mobile-layout': mobile, 'has-display-cutout': hasSafeTop, 'cutout-preview-active': settingsDialog && mobile && hasSafeTop }" :style="[mobileViewportStyle, contentFontStyle]" :data-content-font="appliedContentFont">
     <button v-if="mobile && sidebarOpen" class="sidebar-backdrop" aria-label="关闭画布列表" @click="sidebarOpen = false" />
     <aside v-show="!mobile || sidebarOpen" id="canvas-sidebar" class="sidebar" :class="{ 'sidebar-open': sidebarOpen }">
       <div class="brand"><span class="brand-symbol"><Icon name="canvas" :size="24" /></span><span class="brand-name">canvas</span><button v-if="mobile" class="icon-button sidebar-close" aria-label="关闭画布列表" @click="sidebarOpen = false"><Icon name="close" :size="19" /></button></div>
@@ -1058,7 +1068,8 @@ onBeforeUnmount(() => { for (const event of ['pointerdown', 'keydown', 'wheel', 
     <ViewportDiagnostics v-if="developerMode" />
     <DirectoryDialog :portal="appElement" />
     <DownloadPreviewDialog :portal="appElement" />
-    <SettingsDialog v-if="settingsDialog && settings" :settings="settings" :has-display-cutout="hasSafeTop" :portal="appElement" @close="settingsDialog = false" @saved="settingsSaved" />
+    <SettingsDialog v-if="settings" :open="settingsDialog" :settings="settings" :has-display-cutout="hasSafeTop" :portal="appElement" @close="settingsDialog = false" @saved="settingsSaved" @error="showError" />
+    <CutoutPreview v-if="settingsDialog && mobile && hasSafeTop" />
     <div v-if="modalOpen && !backgroundCanvas && !settingsDialog" class="modal-backdrop" @click.self="!busy && (sourceDialog = false, canvasDialog = false, actionDialog = null, addDialog = false, windowMenu = null)">
       <section v-if="sourceDialog" class="modal source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title"><header><div><h2 id="source-title">{{ sourceDraft.id ? '编辑连接' : '添加连接' }}</h2></div><button class="icon-button" aria-label="关闭对话框" @click="sourceDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitSource"><label>连接名称<input v-model="sourceDraft.name" name="sourceName" required placeholder="例如：开发机器" /></label><div class="segmented-control"><button type="button" :class="{ selected: sourceDraft.transport === 'local' }" @click="sourceDraft.transport = 'local'"><Icon name="server" :size="15" />本机</button><button type="button" :class="{ selected: sourceDraft.transport === 'ssh' }" @click="sourceDraft.transport = 'ssh'"><Icon name="globe" :size="15" />远程 SSH</button></div><label v-if="sourceDraft.transport === 'ssh'">SSH 地址<input v-model="sourceDraft.target" name="target" placeholder="ssh://user@hostname:22" :required="sourceDraft.transport === 'ssh'" /></label><label>Session <span class="optional">可选</span><input v-model="sourceDraft.herdrSession" name="herdrSession" placeholder="default" /></label><details><summary>高级设置</summary><template v-if="sourceDraft.transport === 'ssh'"><label>SSH 私钥路径（Server） <span class="optional">可选</span><input v-model="sourceDraft.sshIdentityFile" name="sshIdentityFile" placeholder="/path/to/id_ed25519" /></label><label>SSH known_hosts 路径（Server） <span class="optional">可选</span><input v-model="sourceDraft.sshKnownHostsFile" name="sshKnownHostsFile" placeholder="/path/to/known_hosts" /></label></template><label>Socket 路径 <span class="optional">可选</span><input v-model="sourceDraft.herdrSocket" name="herdrSocket" placeholder="/path/to/herdr.sock" /></label></details><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="sourceDialog = false">取消</button><button class="button primary" type="submit" :disabled="busy"><span v-if="busy" class="spinner" />{{ busy ? '保存中…' : '保存' }}</button></footer></form></section>
       <section v-else-if="canvasDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="canvas-title"><header><div><h2 id="canvas-title">{{ canvasDraft.id ? '重命名画布' : '新建画布' }}</h2></div><button class="icon-button" aria-label="关闭对话框" @click="canvasDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitCanvas"><label>画布名称<input v-model="canvasDraft.name" name="canvasName" required autofocus placeholder="例如：日常开发" maxlength="80" /></label><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="canvasDialog = false">取消</button><button class="button primary" :disabled="busy" type="submit">{{ canvasDraft.id ? '保存' : '创建画布' }}</button></footer></form></section>

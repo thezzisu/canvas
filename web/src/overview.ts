@@ -2,6 +2,8 @@ import { statusPriority, type ProgramStatus } from '../../shared/status.ts'
 import type { SourceResource } from './types'
 
 export const overviewStatuses = ['attention', 'done', 'working', 'idle', 'unknown'] as const
+/** The task-focused preset keeps windows that need attention or are active. */
+export const overviewFocusStatuses = ['attention', 'done', 'working'] as const
 export type OverviewOrder = 'native' | 'status'
 export type OverviewInteraction = { sourceId: string; windowId: string }
 

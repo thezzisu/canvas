@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { overviewLayoutKey, overviewResources, overviewStatuses } from '../web/src/overview.ts'
+import { overviewFocusStatuses, overviewLayoutKey, overviewResources, overviewStatuses } from '../web/src/overview.ts'
 import type { SourceResource, WindowResource } from '../web/src/types.ts'
 
 const window = (id: string, status?: WindowResource['status']): WindowResource => ({ id, name: id, status })
@@ -29,6 +29,13 @@ test('overview filtering uses window aggregates, removes empty groups and suppor
   assert.deepEqual(filtered[0]!.spaces.map(space => space.id), ['first', 'second'])
   assert.deepEqual(filtered[0]!.spaces[0]!.windows.map(window => window.id), ['done-1', 'done-2', 'unknown'])
   assert.deepEqual(overviewResources(resources, [], 'status'), [])
+})
+
+test('focus preset keeps attention, completed and working windows', () => {
+  const visible = overviewResources(fixture(), overviewFocusStatuses, 'native')
+  assert.deepEqual(visible.flatMap(source => source.spaces.flatMap(space => space.windows.map(window => window.id))), [
+    'working-1', 'done-1', 'working-2', 'attention', 'done-2', 'second-working', 'second-done',
+  ])
 })
 
 test('status changes alter layout only when filtering or priority ordering changes visible membership/order', () => {

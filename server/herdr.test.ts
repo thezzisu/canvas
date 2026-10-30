@@ -170,6 +170,8 @@ test("native herdr transport works with an unmodified server: split rendering, k
     const nativePanes = data.panes.filter(
       (p: { tab_id: string }) => p.tab_id === window.id,
     );
+    // Unknown self-reported agents are cleared when Herdr observes an idle shell.
+    // Use a recognized label to test status mapping independently of that lifecycle.
     cli(
       "pane",
       "report-agent",
@@ -177,7 +179,7 @@ test("native herdr transport works with an unmodified server: split rendering, k
       "--source",
       "canvas-test",
       "--agent",
-      "fixture",
+      "pi",
       "--state",
       "working",
     );
@@ -188,7 +190,7 @@ test("native herdr transport works with an unmodified server: split rendering, k
       "--source",
       "canvas-test",
       "--agent",
-      "fixture",
+      "pi",
       "--state",
       "blocked",
     );
