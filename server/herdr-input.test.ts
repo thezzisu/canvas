@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { HerdrInputRouter, VtInputParser, wordBounds, type HerdrSelection } from './herdr/input.ts';
 import { cellWidth, popupInnerRect } from './herdr/screen.ts';
 import { encodeClientMessage, type ClientMessage, type ClientPaneInputEvent, type ClientShellSnapshot, type FrameData, type PaneSurfaceFrame, type PaneSurfacePane } from './herdr/wire.ts';
-import { terminalKey } from '../web/src/terminal-input.ts';
+import { terminalKey, terminalShortcut } from '../web/src/terminal-input.ts';
 
 type Parsed = Parameters<ConstructorParameters<typeof VtInputParser>[0]>[0];
 const mouse = (code: number, column: number, row: number, up = false) => `\x1b[<${code};${column + 1};${row + 1}${up ? 'm' : 'M'}`;
@@ -101,6 +101,51 @@ test('every Enter modifier combination survives the browser link as a native sem
     const native = (mods.shift ? 1 : 0) | (mods.ctrl ? 2 : 0) | (mods.alt ? 4 : 0) | (mods.meta ? 8 : 0);
     assert.deepEqual(events(parse(terminalKey('Enter', mods))).map(keyShape), [{ code: 'Enter', modifiers: native }]);
   }
+});
+
+test('physical function and navigation chords retain every modifier through the native parser', () => {
+  const navigation = { ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right', Home: 'Home', End: 'End', Insert: 'Insert', Delete: 'Delete', PageUp: 'PageUp', PageDown: 'PageDown' };
+  for (let mask = 0; mask < 16; mask++) {
+    const modifiers = { shiftKey: !!(mask & 1), altKey: !!(mask & 2), ctrlKey: !!(mask & 4), metaKey: !!(mask & 8) };
+    const native = (mask & 1) | (mask & 2 ? 4 : 0) | (mask & 4 ? 2 : 0) | (mask & 8);
+    for (const [key, code] of Object.entries(navigation)) {
+      for (const application of [false, true]) {
+        const input = events(parse(terminalShortcut({ key, ...modifiers }, {}, application)));
+        assert.deepEqual(input.map(keyShape), mask ? [{ code, modifiers: native }] : [], `${key}/${mask}/${application}`);
+      }
+    }
+    for (let number = 1; number <= 12; number++) {
+      const key = `F${number}`;
+      assert.deepEqual(events(parse(terminalShortcut({ key, ...modifiers }))).map(keyShape), [{ code: { F: number }, modifiers: native }], `${key}/${mask}`);
+    }
+  }
+});
+
+test('physical Tab and basic-key chords preserve modifiers instead of collapsing into control bytes', () => {
+  const names = { Tab: 'Tab', Enter: 'Enter', Backspace: 'Backspace', Escape: 'Esc' };
+  for (let mask = 1; mask < 16; mask++) {
+    const modifiers = { shiftKey: !!(mask & 1), altKey: !!(mask & 2), ctrlKey: !!(mask & 4), metaKey: !!(mask & 8) };
+    const native = (mask & 1) | (mask & 2 ? 4 : 0) | (mask & 4 ? 2 : 0) | (mask & 8);
+    for (const [key, code] of Object.entries(names)) {
+      const expected = key === 'Tab' && mask === 1 ? 'BackTab' : code;
+      assert.deepEqual(events(parse(terminalShortcut({ key, ...modifiers }))).map(keyShape), [{ code: expected, modifiers: native }], `${key}/${mask}`);
+    }
+  }
+});
+
+test('physical layout characters keep their codepoints and independent modifier bits end to end', () => {
+  for (let mask = 2; mask < 16; mask++) {
+    const modifiers = { shiftKey: !!(mask & 1), altKey: !!(mask & 2), ctrlKey: !!(mask & 4), metaKey: !!(mask & 8) };
+    const native = (mask & 1) | (mask & 2 ? 4 : 0) | (mask & 4 ? 2 : 0) | (mask & 8);
+    for (const char of ['a', 'A', '$', 'é', '中', '😀']) {
+      const data = terminalShortcut({ key: char, ...modifiers }, {}, false, 'Linux');
+      const bytes = Buffer.from(data), split = Math.floor(bytes.length / 2);
+      assert.deepEqual(events(parse(bytes.subarray(0, split), bytes.subarray(split))).map(keyShape), [{ code: { Char: char }, modifiers: native }], `${char}/${mask}`);
+    }
+  }
+  assert.deepEqual(events(parse(terminalShortcut({ key: 'A', ctrlKey: true }))).map(keyShape), [{ code: { Char: 'A' }, modifiers: 2 }]);
+  assert.deepEqual(events(parse(terminalShortcut({ key: 'a', ctrlKey: true, shiftKey: true }))).map(keyShape), [{ code: { Char: 'a' }, modifiers: 3 }]);
+  assert.deepEqual(events(parse(terminalShortcut({ key: 'a', ctrlKey: true }, { shift: true }))).map(keyShape), [{ code: { Char: 'A' }, modifiers: 3 }]);
 });
 
 test('SGR and byte-oriented X10 mouse parsing survives fragmentation and high coordinates', () => {

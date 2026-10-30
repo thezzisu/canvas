@@ -7,7 +7,8 @@ import { clearDownloads, disconnectDownloads, receiveDownload } from './download
 import { clearDirectories, receiveDirectory } from './directories'
 import { bindFileInput, preventFileNavigation, TerminalUploads, type TerminalUploadState } from './uploads'
 import { clipboardRestoringFocus, TerminalClipboard, type ClipboardNotice } from './clipboard'
-import { emptyModifiers, hasModifiers, modifiedText, terminalKey, type TerminalModifiers } from './terminal-input'
+import { emptyModifiers, hasModifiers, modifiedText, terminalKey, terminalShortcut, type TerminalModifiers } from './terminal-input'
+import { bindTerminalKeyboardLock } from './terminal-keyboard-lock'
 import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch'
 import { defaultContentFont, type ContentFontSettings } from '../../shared/settings'
 import { applyTerminalFontFeatures, type FontPresentation } from './fonts'
@@ -46,7 +47,8 @@ interface Session {
   mobileInput?: ReturnType<typeof bindMobileInput>
   keyHandler?: (event: KeyboardEvent) => boolean
   suppressInput?: boolean
-  nativeKey?: { id: string; key: string; modifiers: Partial<TerminalModifiers> }
+  nativeKey?: { id: string; virtual: TerminalModifiers }
+  keyboardLock?: ReturnType<typeof bindTerminalKeyboardLock>
   removeFontFeatures?: () => void
   resizeTimer?: ReturnType<typeof setTimeout>
   removeTouch?: () => void
@@ -144,6 +146,7 @@ const key = (sourceId: string, spaceId: string, windowId: string) => `${sourceId
 function setState(session: Session, state: TerminalStatus) {
   const next = session.state = { ...state, modifiers: session.modifiers, touchMode: session.touchMode,
     keyboardRequested: session.keyboardRequested }
+  session.keyboardLock?.refresh()
   session.listeners.forEach(listener => listener(next))
 }
 function interactive(session: Session) { return !session.mobile || session.magnified }
@@ -371,8 +374,10 @@ function claimFocus(session: Session) {
   setState(session, { ...session.state, readOnly: false })
 }
 function sendTerminalKey(session: Session, key: string, modifiers: Partial<TerminalModifiers>) {
+  return sendTerminalData(session, terminalKey(key, modifiers, session.term.modes.applicationCursorKeysMode))
+}
+function sendTerminalData(session: Session, data: string) {
   if (!interactive(session) || session.socket?.readyState !== WebSocket.OPEN || session.state.status !== 'connected' || (session.state.presentation?.maximized && !session.state.presentation.owned)) return false
-  const data = terminalKey(key, modifiers, session.term.modes.applicationCursorKeysMode)
   if (!data) return false
   setModifiers(session)
   claimFocus(session)
@@ -449,41 +454,30 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     })
     current.keyHandler = event => {
       if (!interactive(current)) return false
-      if (current.clipboard?.key(event) === false) return false
-      const modifiedEnter = event.key === 'Enter' && (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey)
-      if (current.mobile || modifiedEnter || current.nativeKey?.key === 'Enter') {
-        const id = event.code || event.key
-        if (event.type === 'keyup' && current.nativeKey?.id === id) current.nativeKey = undefined
-        if (event.isComposing || event.keyCode === 229 || ['Dead', 'AltGraph'].includes(event.key) || event.getModifierState('AltGraph')) {
-          current.nativeKey = undefined
-          setModifiers(current)
-          return true
-        }
-        if (event.type === 'keypress' && current.nativeKey) { event.preventDefault(); return false }
-        if (event.type === 'keydown') {
-          const repeat = event.repeat && current.nativeKey?.id === id ? current.nativeKey : undefined
-          if (!repeat) current.nativeKey = undefined
-          if (repeat || hasModifiers(current.modifiers) || modifiedEnter) {
-            // Printable DOM keys already include physical Shift/Caps/layout.
-            // Apply only an additional virtual Shift, never physical Shift twice.
-            const modifiers = repeat?.modifiers || {
-              shift: event.key.length === 1 ? current.modifiers.shift && !event.shiftKey : current.modifiers.shift || event.shiftKey,
-              ctrl: current.modifiers.ctrl || event.ctrlKey,
-              alt: current.modifiers.alt || event.altKey,
-              meta: current.modifiers.meta || event.metaKey,
-            }
-            const key = repeat?.key || event.key
-            if (sendTerminalKey(current, key, modifiers)) {
-              current.nativeKey = { id, key, modifiers }
-              event.preventDefault()
-              return false
-            }
-          }
+      if (document.activeElement !== (current.mobile ? current.mobileInput?.element : current.term.textarea)) return true
+      if (current.clipboard?.key(event) === false) { current.nativeKey = undefined; return false }
+      if (event.isComposing || event.keyCode === 229 || ['Process', 'Dead', 'AltGraph'].includes(event.key) || event.getModifierState('AltGraph')) {
+        current.nativeKey = undefined; setModifiers(current); return true
+      }
+      const id = event.code || event.key
+      if (event.type === 'keyup' && current.nativeKey?.id === id) {
+        current.nativeKey = undefined; event.preventDefault(); event.stopPropagation(); return false
+      }
+      if (event.type === 'keypress' && current.nativeKey) { event.preventDefault(); event.stopPropagation(); return false }
+      if (event.type === 'keydown') {
+        // A virtual latch is consumed once, but remains held for auto-repeat.
+        // Physical modifiers are read afresh on every repeated keydown.
+        const virtual = current.mobile && event.repeat && current.nativeKey?.id === id ? current.nativeKey.virtual : current.modifiers
+        current.nativeKey = undefined
+        const data = terminalShortcut(event, virtual, current.term.modes.applicationCursorKeysMode, navigator.platform)
+        if (data && sendTerminalData(current, data)) {
+          current.nativeKey = { id, virtual }
+          event.preventDefault(); event.stopPropagation(); return false
         }
       }
       if (current.mobile && document.activeElement === current.mobileInput?.element && event.type === 'keydown' &&
         !event.isComposing && event.keyCode !== 229 &&
-        (!current.keyboardRequested || event.key.length !== 1 || event.ctrlKey || event.altKey || event.metaKey) &&
+        (event.key.length !== 1 || !current.keyboardRequested && !event.ctrlKey && !event.altKey && !event.metaKey) &&
         sendTerminalKey(current, event.key, { shift: event.key.length !== 1 && event.shiftKey,
           ctrl: event.ctrlKey, alt: event.altKey, meta: event.metaKey })) {
         event.preventDefault(); return false
@@ -567,6 +561,11 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     session.term.textarea.setAttribute('autocorrect', 'off')
     session.term.textarea.spellcheck = false
   }
+  session.keyboardLock?.dispose()
+  const keyboardInput = session.mobile ? session.mobileInput?.element : session.term.textarea
+  if (keyboardInput) session.keyboardLock = bindTerminalKeyboardLock(keyboardInput, () =>
+    !!session.host?.isConnected && interactive(session) && session.state.status === 'connected' && !session.state.readOnly &&
+    !(session.state.presentation?.maximized && !session.state.presentation.owned))
   session.listeners.add(listener)
   if (onGeometry) session.geometryListeners.add(onGeometry)
   listener(session.state)
@@ -611,6 +610,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
         endFocusSize(current)
         if (current.mobile) current.keyboard?.blur()
         current.host = undefined
+        current.keyboardLock?.dispose(); current.keyboardLock = undefined
         current.magnified = false
         current.keyboardRequested = false
         current.reconnect?.pause()
@@ -624,6 +624,7 @@ export function clearTerminals() {
   clearDirectories()
   for (const session of sessions.values()) {
     session.uploads.clear()
+    session.keyboardLock?.dispose()
     session.removeTouch?.()
     session.removeFontFeatures?.()
     session.keyboard?.dispose()

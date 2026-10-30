@@ -4,6 +4,7 @@ import { developerMode, viewportFit, interactiveWidget, viewportPolicy } from '.
 import { cutoutPosition, cutoutWidth } from './display-cutout'
 import { languagePreference, locale } from './i18n'
 import { keepScreenAwake, screenWakeLockState } from './screen-wake-lock'
+import { keyboardLockState, keyboardLockUnavailableReason } from './terminal-keyboard-lock'
 
 /** Explicit, local-only geometry and viewport policy. No terminal content or identity. */
 export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
@@ -47,6 +48,7 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
     browser: { userAgent: navigator.userAgent, secureContext: window.isSecureContext },
     screen: { width: number(screen.width), height: number(screen.height), availableWidth: number(screen.availWidth), availableHeight: number(screen.availHeight) },
     wakeLock: screenWakeLockState.value,
+    keyboardLock: { state: keyboardLockState.value, unavailableReason: keyboardLockUnavailableReason.value || null },
     viewportPolicy: { ...viewportPolicy.value, meta: document.querySelector<HTMLMetaElement>('meta[name="viewport"]')?.content || null },
     fullscreen: !fullscreen ? 'none' : fullscreen === document.documentElement ? 'document' : fullscreen === app ? 'app' : 'other',
     viewport: {

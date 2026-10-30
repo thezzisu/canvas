@@ -2,6 +2,41 @@ export interface TerminalModifiers { shift: boolean; ctrl: boolean; alt: boolean
 export const emptyModifiers = (): TerminalModifiers => ({ shift: false, ctrl: false, alt: false, meta: false })
 export const hasModifiers = (modifiers: Partial<TerminalModifiers>) => !!(modifiers.shift || modifiers.ctrl || modifiers.alt || modifiers.meta)
 
+interface PhysicalKey {
+  key: string
+  shiftKey?: boolean
+  ctrlKey?: boolean
+  altKey?: boolean
+  metaKey?: boolean
+  isComposing?: boolean
+  keyCode?: number
+  getModifierState?(key: string): boolean
+}
+
+/** DOM key values already include the physical layout, Shift and Caps Lock. */
+export function terminalShortcut(event: PhysicalKey, virtual: Partial<TerminalModifiers> = {}, applicationCursor = false, platform = ''): string {
+  if (event.isComposing || event.keyCode === 229 || ['Process', 'Dead', 'AltGraph'].includes(event.key) || event.getModifierState?.('AltGraph')) return ''
+  // xterm implements the platform's familiar local select-all shortcut.
+  if (/Mac/.test(platform) && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'a') return ''
+  const printable = [...event.key].length === 1
+  // Preserve native third-level text entry, including browsers without AltGraph.
+  if (printable && !event.metaKey && event.altKey &&
+      (/Mac/.test(platform) && !event.ctrlKey || /Win/.test(platform) && event.ctrlKey)) return ''
+  const modifiers = {
+    shift: !!(virtual.shift || event.shiftKey), ctrl: !!(virtual.ctrl || event.ctrlKey),
+    alt: !!(virtual.alt || event.altKey), meta: !!(virtual.meta || event.metaKey),
+  }
+  if (!hasModifiers(virtual) && !event.ctrlKey && !event.altKey && !event.metaKey &&
+      !(event.shiftKey && !printable) && !/^F([1-9]|1[0-2])$/.test(event.key)) return ''
+  const key = printable && virtual.shift && !event.shiftKey ? modifiedText(event.key, { shift: true }) : event.key
+  const modifier = 1 + Number(modifiers.shift) + 2 * Number(modifiers.alt) + 4 * Number(modifiers.ctrl) + 8 * Number(modifiers.meta)
+  if (printable) return `\x1b[${key.codePointAt(0)};${modifier}u`
+  if (key === 'Tab' && modifiers.shift && !modifiers.ctrl && !modifiers.alt && !modifiers.meta) return '\x1b[Z'
+  const basic: Record<string, number> = { Tab: 9, Enter: 13, Backspace: 127, Escape: 27 }
+  if (basic[key] && modifier > 1) return `\x1b[${basic[key]};${modifier}u`
+  return terminalKey(key, modifiers, applicationCursor)
+}
+
 const shifted: Record<string, string> = {
   '`': '~', '1': '!', '2': '@', '3': '#', '4': '$', '5': '%', '6': '^', '7': '&', '8': '*', '9': '(', '0': ')',
   '-': '_', '=': '+', '[': '{', ']': '}', '\\': '|', ';': ':', "'": '"', ',': '<', '.': '>', '/': '?',

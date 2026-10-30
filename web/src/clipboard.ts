@@ -121,11 +121,13 @@ export class TerminalClipboard {
       if (event.type === 'keydown' && event.isTrusted && !event.repeat && /Mac/.test(navigator.platform) && event.ctrlKey && !event.metaKey) this.notice('macPaste')
       return false
     }
-    const copy = event.code === 'KeyC' && !event.altKey && (event.metaKey || event.ctrlKey && event.shiftKey)
+    const copy = !event.altKey && (event.code === 'KeyC' && (event.metaKey || event.ctrlKey && event.shiftKey)
+      || event.key === 'Insert' && event.ctrlKey && !event.shiftKey && !event.metaKey)
     if (copy && event.type === 'keydown' && event.isTrusted) {
       this.allowProgramCopy()
       if (this.ready() && this.term.hasSelection()) { this.copySelection(); event.preventDefault(); return false }
     }
+    if (copy && event.metaKey && !event.ctrlKey) return false
     return true
   }
 
