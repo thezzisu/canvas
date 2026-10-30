@@ -1,5 +1,6 @@
 import type { Terminal } from '@xterm/xterm'
 import type { ContentFontSettings } from '../../shared/settings.ts'
+import { t } from './i18n'
 
 export interface FontPresentation { family: string; features: string }
 
@@ -103,12 +104,12 @@ function loadFamily(font: ResolvedFont): Promise<void> {
   }
   let timeout: ReturnType<typeof setTimeout> | undefined
   const request = Promise.race([load(), new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error('字体加载超时，请重试')), 45_000)
+    timeout = setTimeout(() => reject(new Error(t('common.fontTimeout'))), 45_000)
   })]).then(faces => {
     for (const face of faces) document.fonts.add(face)
   }).catch(error => {
     if (loaded.get(font.family) === request) loaded.delete(font.family)
-    throw error instanceof Error ? error : new Error('字体加载失败，请重试')
+    throw error instanceof Error ? error : new Error(t('common.fontLoadFailed'))
   }).finally(() => clearTimeout(timeout))
   loaded.set(font.family, request)
   return request

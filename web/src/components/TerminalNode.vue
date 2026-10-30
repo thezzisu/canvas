@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useActiveElement, useWindowFocus } from '@vueuse/core'
 import type { NodeProps } from '@vue-flow/core'
@@ -12,6 +13,7 @@ import { emptyModifiers, type TerminalModifiers } from '../terminal-input'
 import { terminalInsets } from '../terminal-geometry'
 import { cutoutPosition, cutoutWidth } from '../display-cutout'
 import type { TerminalData } from '../types'
+const { t } = useI18n()
 const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>>()
 const host = ref<HTMLElement>()
 const status = ref<TerminalStatus>({ status: 'connecting' })
@@ -33,14 +35,15 @@ const uploadPercent = computed(() => {
   const upload = status.value.upload
   return upload?.total ? Math.min(100, Math.floor(upload.transferred / upload.total * 100)) : upload?.state === 'completed' ? 100 : 0
 })
+const uploadName = computed(() => status.value.upload?.fileCount && status.value.upload.fileCount > 1 ? t('terminal.upload.files', { count: status.value.upload.fileCount }) : status.value.upload?.name || '')
 const uploadLabel = computed(() => {
   const upload = status.value.upload
   if (!upload) return ''
-  if (upload.cancelling) return '取消中…'
-  if (upload.state === 'failed') return upload.error || '上传失败'
-  if (upload.state === 'cancelled') return '已取消'
-  if (upload.state === 'completed') return '已插入路径'
-  return upload.state === 'preparing' ? '准备上传…' : `${uploadPercent.value}%`
+  if (upload.cancelling) return t('terminal.upload.cancelling')
+  if (upload.state === 'failed') return upload.error || t('terminal.upload.failed')
+  if (upload.state === 'cancelled') return t('terminal.upload.cancelled')
+  if (upload.state === 'completed') return t('terminal.upload.pathInserted')
+  return upload.state === 'preparing' ? t('terminal.upload.preparing') : `${uploadPercent.value}%`
 })
 const liveTitle = computed(() => {
   const value = props.data.panes.find(pane => pane.id === status.value.focusedPaneId)?.terminalTitle || ''
@@ -144,26 +147,26 @@ async function resized(event: { params: { width: number; height: number; x: numb
       <PaneIndicators :panes="data.panes" :status="data.status" :available="keepTerminal" :connection="status.status" :error="status.error" :read-only="status.readOnly" />
       <span class="terminal-name" :class="{ 'cutout-title': mobileFocus }" :title="title"><span class="terminal-tab-name">{{ data.name }}</span><span v-if="liveTitle" class="terminal-live-title">{{ liveTitle }}</span></span>
       <div class="terminal-actions nodrag" :class="{ 'cutout-actions': mobileFocus }">
-        <button v-if="data.overview && !mobileFocus" title="加入画布" aria-label="加入画布" @click.stop="action('add')"><Icon name="plus" :size="15" /></button>
-        <button v-else-if="!mobileFocus" title="从画布移除" aria-label="从画布移除" @click.stop="action('remove')"><Icon name="minus" :size="15" /></button>
-        <button v-if="!data.focus" title="聚焦窗口" aria-label="聚焦窗口" @click.stop="action('focus')"><Icon name="expand" :size="14" /></button>
-        <button v-if="mobileFocus" :title="status.keyboardRequested ? '隐藏键盘' : '打开键盘'" :aria-label="status.keyboardRequested ? '隐藏键盘' : '打开键盘'" :aria-pressed="status.keyboardRequested" @pointerdown.stop.prevent @click.stop="toggleKeyboard"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10" /></svg></button>
-        <button title="窗口操作" aria-label="窗口操作" @click.stop="action('menu')"><Icon name="more" :size="17" /></button>
-        <button v-if="data.focus" title="退出放大" aria-label="退出放大" @click.stop="action('unfocus')"><Icon name="collapse" :size="15" /></button>
+        <button v-if="data.overview && !mobileFocus" :title="t('terminal.action.addToCanvas')" :aria-label="t('terminal.action.addToCanvas')" @click.stop="action('add')"><Icon name="plus" :size="15" /></button>
+        <button v-else-if="!mobileFocus" :title="t('terminal.action.removeFromCanvas')" :aria-label="t('terminal.action.removeFromCanvas')" @click.stop="action('remove')"><Icon name="minus" :size="15" /></button>
+        <button v-if="!data.focus" :title="t('terminal.action.focus')" :aria-label="t('terminal.action.focus')" @click.stop="action('focus')"><Icon name="expand" :size="14" /></button>
+        <button v-if="mobileFocus" :title="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-label="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-pressed="status.keyboardRequested" @pointerdown.stop.prevent @click.stop="toggleKeyboard"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10" /></svg></button>
+        <button :title="t('terminal.action.windowActions')" :aria-label="t('terminal.action.windowActions')" @click.stop="action('menu')"><Icon name="more" :size="17" /></button>
+        <button v-if="data.focus" :title="t('terminal.action.restore')" :aria-label="t('terminal.action.restore')" @click.stop="action('unfocus')"><Icon name="collapse" :size="15" /></button>
       </div>
     </header>
     <div v-if="keepTerminal" ref="host" class="terminal-host nodrag nopan nowheel" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop />
-    <div v-if="mobilePreview" class="terminal-preview-button" role="button" tabindex="0" :aria-label="`打开窗口 ${data.name}`" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
-    <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">上传文件</div>
-    <span v-if="status.clipboardError" class="terminal-copy-notice" :class="{ 'copy-failed': status.clipboardError === '复制失败' }" role="status">{{ status.clipboardError }}</span>
+    <div v-if="mobilePreview" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: data.name })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
+    <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">{{ t('terminal.upload.file') }}</div>
+    <span v-if="status.clipboardError" class="terminal-copy-notice" :class="{ 'copy-failed': status.clipboardError === 'failed' }" role="status">{{ t(`terminal.clipboard.${status.clipboardError}`) }}</span>
     <div v-if="status.upload" class="terminal-upload nodrag nopan" :class="{ 'upload-failed': status.upload.state === 'failed' }" :data-upload-id="status.upload.id" :data-upload-state="status.upload.state" @pointerdown.stop @mousedown.stop>
-      <div class="terminal-upload-row"><span class="terminal-upload-name" :title="status.upload.name">{{ status.upload.name }}</span><small v-if="status.upload.queued">+{{ status.upload.queued }}</small><span class="terminal-upload-status" role="status">{{ uploadLabel }}</span><button :aria-label="uploadActive ? '取消上传' : '关闭上传状态'" :disabled="status.upload.cancelling" @click.stop="terminal?.cancelUpload()"><Icon name="close" :size="13" /></button></div>
-      <div v-if="uploadActive" class="terminal-upload-track" role="progressbar" :aria-valuenow="status.upload.transferred" :aria-valuemin="0" :aria-valuemax="status.upload.total" :aria-valuetext="`${uploadPercent}%`" aria-label="文件上传进度"><span :style="{ width: `${uploadPercent}%` }" /></div>
+      <div class="terminal-upload-row"><span class="terminal-upload-name" :title="uploadName">{{ uploadName }}</span><small v-if="status.upload.queued">+{{ status.upload.queued }}</small><span class="terminal-upload-status" role="status">{{ uploadLabel }}</span><button :aria-label="uploadActive ? t('terminal.upload.cancel') : t('terminal.upload.close')" :disabled="status.upload.cancelling" @click.stop="terminal?.cancelUpload()"><Icon name="close" :size="13" /></button></div>
+      <div v-if="uploadActive" class="terminal-upload-track" role="progressbar" :aria-valuenow="status.upload.transferred" :aria-valuemin="0" :aria-valuemax="status.upload.total" :aria-valuetext="`${uploadPercent}%`" :aria-label="t('terminal.upload.progress')"><span :style="{ width: `${uploadPercent}%` }" /></div>
     </div>
-    <div v-if="data.available && maximizedElsewhere" class="terminal-maximized">已最大化</div>
-    <div v-if="!keepTerminal" class="terminal-unavailable"><Icon name="terminal" :size="28" /><strong>窗口不可用</strong></div>
-    <div v-if="data.available && status.status === 'disconnected'" class="terminal-disconnected nodrag"><span>{{ status.error || '终端连接已断开' }}</span><button @click.stop="action('reconnect')"><Icon name="refresh" :size="13" />重连</button></div>
-    <div v-if="keepTerminal && status.status === 'connecting'" class="terminal-loading nodrag" role="status"><span class="spinner" />{{ status.retryAttempt ? `重连中 ${status.retryAttempt}/3` : '连接中' }}</div>
+    <div v-if="data.available && maximizedElsewhere" class="terminal-maximized">{{ t('terminal.maximized') }}</div>
+    <div v-if="!keepTerminal" class="terminal-unavailable"><Icon name="terminal" :size="28" /><strong>{{ t('terminal.unavailable') }}</strong></div>
+    <div v-if="data.available && status.status === 'disconnected'" class="terminal-disconnected nodrag"><span>{{ status.error || t('terminal.connection.disconnected') }}</span><button @click.stop="action('reconnect')"><Icon name="refresh" :size="13" />{{ t('terminal.connection.reconnect') }}</button></div>
+    <div v-if="keepTerminal && status.status === 'connecting'" class="terminal-loading nodrag" role="status"><span class="spinner" />{{ status.retryAttempt ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt }) : t('terminal.connection.connecting') }}</div>
     <MobileKeyboard v-if="mobileFocus" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :read-text="readText" :copy-text="copyText" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @files="mobileFiles" @paste="mobilePaste" @reading="reading" />
   </article>
 </template>

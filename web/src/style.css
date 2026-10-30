@@ -13,6 +13,8 @@
 .settings-select-item{min-height:36px;padding:8px 28px 8px 8px;border-radius:4px;font-size:12px;outline:0}
 .settings-select-item[data-highlighted],.settings-select-item[data-state=checked]{background:#ffffff08}
 .mobile-layout .settings-select,.mobile-layout .settings-select-item{min-height:44px}
+.settings-select.language-select{width:150px;max-width:100%;flex-shrink:0}
+.settings-select.login-language{width:118px;margin-left:auto;font-size:11px;font-weight:400;letter-spacing:0}
 .settings-footer{flex:0 0 auto;display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #343c48;background:#1d2229}
 .font-settings{display:flex;flex-direction:column;gap:14px}
 .font-family-input:focus-within{outline:0;border-color:#b18a6d;box-shadow:0 0 0 2px #e9b18812}

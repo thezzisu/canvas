@@ -1,3 +1,4 @@
+import { t } from './i18n'
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { terminalConsumesWheel } from './terminals'
 import { touchViewport, type TouchPosition } from './mobile-layout'
@@ -286,7 +287,7 @@ export function useCanvasNavigation(options: {
       try {
         await document.documentElement.requestFullscreen?.({ navigationUI: 'hide' })
         if (document.fullscreenElement !== document.documentElement) throw new Error('Fullscreen unavailable')
-      } catch { options.onError('浏览器未允许系统全屏，已切换网页全屏') }
+      } catch { options.onError(t('app.fullscreenDenied')) }
       if (!fullscreen.value || !app.value) { await exitFullscreen(); return }
       await settle()
       if (fullscreen.value && options.paging?.enabled()) await options.paging.recenter()

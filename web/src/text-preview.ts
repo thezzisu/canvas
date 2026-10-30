@@ -1,10 +1,12 @@
+import { t } from './i18n'
+
 export const textPreviewLimit = 1024 * 1024
 
 /** Decode a bounded UTF-8 prefix as plain text, and release the remaining body. */
 export async function readTextPreview(url: string, size: number, signal: AbortSignal): Promise<{ text: string; truncated: boolean }> {
   const response = await fetch(url, { signal })
   if (response.status === 401) window.dispatchEvent(new Event('canvas:unauthorized'))
-  if (!response.ok) throw new Error(response.status === 404 ? '文件已过期或不存在' : `读取失败 (${response.status})`)
+  if (!response.ok) throw new Error(response.status === 404 ? t('common.fileUnavailable') : t('common.readFailed', { status: response.status }))
   const reader = response.body?.getReader()
   if (!reader) return { text: '', truncated: false }
   const decoder = new TextDecoder('utf-8')

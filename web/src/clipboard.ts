@@ -59,10 +59,12 @@ export function copyText(text: string, failed: () => void): boolean {
   return copied
 }
 
+export type ClipboardNotice = 'failed' | 'macPaste'
+
 interface ClipboardOptions {
   visible(): boolean
   controlsInput(): boolean
-  copyError(value: string | undefined): void
+  copyError(value: ClipboardNotice | undefined): void
 }
 
 /** Copy is authorized only by a real gesture in this terminal, never by replay. */
@@ -100,11 +102,11 @@ export class TerminalClipboard {
   private copy(text: string) {
     clearTimeout(this.noticeTimer)
     this.options.copyError(undefined)
-    return copyText(text, () => this.notice('复制失败'))
+    return copyText(text, () => this.notice('failed'))
   }
   copyText(text: string): boolean { return this.ready() && this.copy(text) }
   touchSelectionCompleted(): void { this.allowProgramCopy() }
-  private notice(message: string) {
+  private notice(message: ClipboardNotice) {
     if (this.disposed) return
     clearTimeout(this.noticeTimer)
     this.options.copyError(message)
@@ -116,7 +118,7 @@ export class TerminalClipboard {
     // the browser's native paste event. Windows clipboard history can supply
     // the logical key without a physical code; images still arrive via paste.
     if (isPasteShortcut(event)) {
-      if (event.type === 'keydown' && event.isTrusted && !event.repeat && /Mac/.test(navigator.platform) && event.ctrlKey && !event.metaKey) this.notice('使用 ⌘V 粘贴')
+      if (event.type === 'keydown' && event.isTrusted && !event.repeat && /Mac/.test(navigator.platform) && event.ctrlKey && !event.metaKey) this.notice('macPaste')
       return false
     }
     const copy = event.code === 'KeyC' && !event.altKey && (event.metaKey || event.ctrlKey && event.shiftKey)

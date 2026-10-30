@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { paneLabel, paneName, statusColor, statusLabel } from '../status'
 import type { PaneResource, ProgramStatus } from '../types'
 
+const { t, locale } = useI18n()
 const props = defineProps<{
   panes: PaneResource[]
   status: ProgramStatus
@@ -19,7 +21,7 @@ const panelId = useId()
 const position = ref({ left: '0px', top: '0px' })
 const portal = computed(() => trigger.value?.closest('.app-shell') || document.body)
 let leaveTimer: ReturnType<typeof setTimeout> | undefined
-const summary = computed(() => !props.available ? '窗口不可用' : props.connection === 'connecting' ? '连接中' : props.connection === 'disconnected' ? '连接已断开' : statusLabel(props.status))
+const summary = computed(() => !props.available ? t('terminal.unavailable') : props.connection === 'connecting' ? t('terminal.connection.connecting') : props.connection === 'disconnected' ? t('terminal.connection.disconnected') : statusLabel(props.status))
 const color = computed(() => !props.available || props.connection === 'disconnected' ? statusColor('error') : props.connection === 'connecting' ? statusColor('working') : statusColor(props.status))
 
 function contains(target: EventTarget | null) { return target instanceof Node && (trigger.value?.contains(target) || panel.value?.contains(target)) }
@@ -64,7 +66,7 @@ watch(open, async value => {
     window.visualViewport?.removeEventListener('scroll', positionPanel)
   }
 })
-watch(() => [props.panes.length, props.error], async () => { if (open.value) { await nextTick(); positionPanel() } })
+watch(() => [props.panes.length, props.error, locale.value], async () => { if (open.value) { await nextTick(); positionPanel() } })
 onBeforeUnmount(() => {
   clearTimeout(leaveTimer)
   document.removeEventListener('pointerdown', outside, true)
@@ -78,10 +80,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <button ref="trigger" class="terminal-status-trigger nodrag cutout-status" :class="{ connecting: available && connection === 'connecting' }" :style="{ '--status-color': color }" :data-connection-status="available ? connection : 'unavailable'" :aria-label="`窗口状态：${summary}`" :aria-expanded="open" :aria-controls="panelId" @pointerdown.stop @mouseenter="enter" @mouseleave="leave" @focus="enter" @blur="blur" @click.stop="toggle" @keydown.esc.stop.prevent="close"><i /></button>
+  <button ref="trigger" class="terminal-status-trigger nodrag cutout-status" :class="{ connecting: available && connection === 'connecting' }" :style="{ '--status-color': color }" :data-connection-status="available ? connection : 'unavailable'" :aria-label="t('terminal.statusSummary', { status: summary })" :aria-expanded="open" :aria-controls="panelId" @pointerdown.stop @mouseenter="enter" @mouseleave="leave" @focus="enter" @blur="blur" @click.stop="toggle" @keydown.esc.stop.prevent="close"><i /></button>
   <Teleport :to="portal">
-    <div v-if="open" :id="panelId" ref="panel" class="terminal-status-popover" :style="position" role="region" aria-label="窗口状态" @mouseenter="enter" @mouseleave="leave" @pointerdown.stop @wheel.stop @keydown.esc.stop.prevent="close">
-      <div class="terminal-status-summary"><i class="program-dot" :style="{ '--program-color': color }" /><span>{{ summary }}</span><small v-if="readOnly && connection === 'connected'">只读</small></div>
+    <div v-if="open" :id="panelId" ref="panel" class="terminal-status-popover" :style="position" role="region" :aria-label="t('terminal.windowStatus')" @mouseenter="enter" @mouseleave="leave" @pointerdown.stop @wheel.stop @keydown.esc.stop.prevent="close">
+      <div class="terminal-status-summary"><i class="program-dot" :style="{ '--program-color': color }" /><span>{{ summary }}</span><small v-if="readOnly && connection === 'connected'">{{ t('terminal.readOnly') }}</small></div>
       <p v-if="error" class="terminal-status-error">{{ error }}</p>
       <div v-if="available && panes.length" class="pane-status-list">
         <div v-for="pane in panes" :key="pane.id" class="pane-status-row" :class="{ active: pane.active }" :style="{ '--program-color': statusColor(pane.status) }" :data-pane-id="pane.id" :data-program-status="pane.status" :title="paneLabel(pane)">

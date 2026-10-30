@@ -1,13 +1,16 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { cutoutPosition, cutoutWidth } from '../display-cutout'
 import Icon from './Icon.vue'
+
+const { t } = useI18n()
 </script>
 
 <template>
   <div class="cutout-preview-frame" aria-hidden="true">
     <div class="cutout-preview cutout-header" :data-cutout-position="cutoutWidth > 0 ? cutoutPosition : undefined" :style="{ '--cutout-width': `${cutoutWidth}px` }">
       <span class="cutout-status cutout-preview-control"><i /></span>
-      <span class="cutout-title">Tab Title</span>
+      <span class="cutout-title">{{ t('terminal.previewTitle') }}</span>
       <div class="cutout-actions">
         <span class="cutout-preview-control"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10" /></svg></span>
         <span class="cutout-preview-control"><Icon name="more" :size="17" /></span>

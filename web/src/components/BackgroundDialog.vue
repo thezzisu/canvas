@@ -1,8 +1,11 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api, segment, write } from '../api'
 import type { Canvas } from '../types'
 import Icon from './Icon.vue'
+
+const { t, n } = useI18n()
 
 const props = defineProps<{ canvas: Canvas }>()
 const emit = defineEmits<{ close: []; saved: [canvas: Canvas] }>()
@@ -15,7 +18,7 @@ const removed = ref(false)
 const opacity = ref(props.canvas.background?.opacity ?? .35)
 const saving = ref(false)
 const inspecting = ref(false)
-const error = ref('')
+const error = ref<string | Error>('')
 const originalFocus = document.activeElement as HTMLElement | null
 let selection = 0
 let disposed = false
@@ -31,14 +34,14 @@ async function chooseFile(event: Event) {
   const request = ++selection
   error.value = ''
   inspecting.value = false
-  if (!['image/png', 'image/jpeg', 'image/webp'].includes(chosen.type)) { error.value = '请选择 PNG、JPEG 或 WebP 图片'; return }
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(chosen.type)) { error.value = 'panels.background.invalidType'; return }
   inspecting.value = true
   const url = URL.createObjectURL(chosen)
   try {
     const image = new Image()
     image.src = url
     await image.decode()
-    if (!image.naturalWidth || !image.naturalHeight) throw new Error('无法读取这张图片')
+    if (!image.naturalWidth || !image.naturalHeight) throw new Error()
     if (disposed || request !== selection) { URL.revokeObjectURL(url); return }
     clearObjectUrl()
     objectUrl.value = url
@@ -46,7 +49,7 @@ async function chooseFile(event: Event) {
     removed.value = false
   } catch {
     URL.revokeObjectURL(url)
-    if (!disposed && request === selection) error.value = '无法读取这张图片'
+    if (!disposed && request === selection) error.value = 'panels.background.unreadable'
   } finally { if (request === selection) inspecting.value = false }
 }
 function remove() { selection++; clearObjectUrl(); file.value = null; removed.value = true; error.value = ''; inspecting.value = false }
@@ -60,7 +63,7 @@ async function save() {
       : await write<Canvas>(path, removed.value ? 'DELETE' : 'PATCH', removed.value ? undefined : { opacity: opacity.value })
     emit('saved', canvas)
     emit('close')
-  } catch (reason) { error.value = reason instanceof Error ? reason.message : String(reason) }
+  } catch (reason) { error.value = reason instanceof Error ? reason : new Error(String(reason)) }
   finally { saving.value = false }
 }
 function close() { if (!saving.value) emit('close') }
@@ -80,16 +83,16 @@ onBeforeUnmount(() => { disposed = true; selection++; clearObjectUrl(); original
 <template>
   <div class="modal-backdrop" @click.self="close" @keydown="keydown">
     <section ref="dialog" class="modal background-modal" role="dialog" aria-modal="true" aria-labelledby="background-title" :aria-busy="saving">
-      <header><h2 id="background-title">背景图片</h2><button class="icon-button" aria-label="关闭对话框" :disabled="saving" @click="close"><Icon name="close" /></button></header>
+      <header><h2 id="background-title">{{ t('panels.background.title') }}</h2><button class="icon-button" :aria-label="t('common.close')" :disabled="saving" @click="close"><Icon name="close" /></button></header>
       <div class="background-preview" :class="{ 'has-image': preview }">
-        <img v-if="preview" :src="preview" :style="{ opacity }" alt="背景预览" />
+        <img v-if="preview" :src="preview" :style="{ opacity }" :alt="t('panels.background.preview')" />
         <Icon v-else name="image" :size="28" />
       </div>
-      <input ref="picker" class="file-input" type="file" accept="image/png,image/jpeg,image/webp" tabindex="-1" aria-label="选择背景图片" :disabled="saving" @change="chooseFile" />
-      <div class="background-file-actions"><button ref="chooseButton" class="button subtle" :disabled="saving || inspecting" @click="picker?.click()"><Icon name="image" :size="15" />{{ inspecting ? '读取中…' : preview ? '更换图片' : '选择图片' }}</button><button v-if="preview" class="text-button" :disabled="saving || inspecting" @click="remove">移除</button><span>PNG / JPEG / WebP</span></div>
-      <label v-if="preview" class="background-opacity"><span>不透明度<output>{{ Math.round(opacity * 100) }}%</output></span><input v-model.number="opacity" type="range" min="0" max="1" step="0.05" aria-label="背景不透明度" :disabled="saving" /></label>
-      <p v-if="error" class="form-error" role="alert">{{ error }}</p>
-      <footer><button class="button subtle" :disabled="saving" @click="close">取消</button><button class="button primary" :disabled="!changed || saving || inspecting" @click="save"><span v-if="saving" class="spinner" />{{ saving ? '保存中…' : '保存' }}</button></footer>
+      <input ref="picker" class="file-input" type="file" accept="image/png,image/jpeg,image/webp" tabindex="-1" :aria-label="t('panels.background.choose')" :disabled="saving" @change="chooseFile" />
+      <div class="background-file-actions"><button ref="chooseButton" class="button subtle" :disabled="saving || inspecting" @click="picker?.click()"><Icon name="image" :size="15" />{{ t(inspecting ? 'panels.background.reading' : preview ? 'panels.background.change' : 'panels.background.choose') }}</button><button v-if="preview" class="text-button" :disabled="saving || inspecting" @click="remove">{{ t('panels.background.remove') }}</button><span>PNG / JPEG / WebP</span></div>
+      <label v-if="preview" class="background-opacity"><span>{{ t('panels.background.opacity') }}<output>{{ n(opacity, { style: 'percent', maximumFractionDigits: 0 }) }}</output></span><input v-model.number="opacity" type="range" min="0" max="1" step="0.05" :aria-label="t('panels.background.opacityLabel')" :disabled="saving" /></label>
+      <p v-if="error" class="form-error" role="alert">{{ error instanceof Error ? error.message : t(error) }}</p>
+      <footer><button class="button subtle" :disabled="saving" @click="close">{{ t('common.cancel') }}</button><button class="button primary" :disabled="!changed || saving || inspecting" @click="save"><span v-if="saving" class="spinner" />{{ t(saving ? 'panels.background.saving' : 'common.save') }}</button></footer>
     </section>
   </div>
 </template>

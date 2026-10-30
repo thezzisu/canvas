@@ -1,8 +1,10 @@
+import { t } from './i18n'
 import { uuid } from './api'
 
 export interface TerminalUploadState {
   id?: string
   name: string
+  fileCount?: number
   transferred: number
   total: number
   state: 'preparing' | 'uploading' | 'completed' | 'cancelled' | 'failed'
@@ -43,10 +45,10 @@ export class TerminalUploads {
 
   enqueue(files: File[]) {
     if (!files.length) return
-    if (!this.options.available()) { this.reject('终端未连接'); return }
+    if (!this.options.available()) { this.reject(t('terminal.upload.disconnected')); return }
     if (this.current?.cancelling) return
     const total = files.reduce((sum, file) => sum + file.size, 0)
-    if (!Number.isSafeInteger(total)) { this.reject('文件大小无效'); return }
+    if (!Number.isSafeInteger(total)) { this.reject(t('terminal.upload.invalidSize')); return }
     this.options.focus()
     this.pending.push({ id: uuid(), files, total, running: false })
     if (this.current) this.update({})
@@ -57,16 +59,16 @@ export class TerminalUploads {
     clearTimeout(this.dismissed)
     const batch = this.current = this.pending.shift()
     if (!batch) return
-    this.state = { id: batch.id, name: batch.files.length === 1 ? batch.files[0]!.name : `${batch.files.length} 个文件`,
+    this.state = { id: batch.id, name: batch.files.length === 1 ? batch.files[0]!.name : '', fileCount: batch.files.length,
       transferred: 0, total: batch.total, state: 'preparing', queued: this.pending.length }
     this.options.changed(this.state)
     if (!this.options.send({ type: 'upload-begin', id: batch.id, files: batch.files.map(file => ({ name: file.name, size: file.size })) })) {
-      this.finish('failed', '连接中断')
+      this.finish('failed', t('terminal.connection.interrupted'))
       return
     }
     this.timer = setTimeout(() => {
       this.options.send({ type: 'upload-cancel', id: batch.id })
-      this.finish('failed', '上传准备超时')
+      this.finish('failed', t('terminal.upload.prepareTimeout'))
     }, 30_000)
   }
 
@@ -79,7 +81,7 @@ export class TerminalUploads {
       if (batch.running) return true
       if (!Array.isArray(message.urls) || message.urls.length !== batch.files.length || !message.urls.every(value => typeof value === 'string')) {
         this.options.send({ type: 'upload-cancel', id: batch.id })
-        this.finish('failed', '上传地址无效')
+        this.finish('failed', t('terminal.upload.invalidUrl'))
         return true
       }
       const urls: string[] = []
@@ -91,7 +93,7 @@ export class TerminalUploads {
         }
       } catch {
         this.options.send({ type: 'upload-cancel', id: batch.id })
-        this.finish('failed', '上传地址无效')
+        this.finish('failed', t('terminal.upload.invalidUrl'))
         return true
       }
       clearTimeout(this.timer)
@@ -105,7 +107,7 @@ export class TerminalUploads {
     }
     if (message.state === 'completed') this.finish('completed')
     else if (message.state === 'cancelled') this.finish('cancelled')
-    else if (message.state === 'failed') this.finish('failed', typeof message.error === 'string' ? message.error : '上传失败')
+    else if (message.state === 'failed') this.finish('failed', typeof message.error === 'string' ? message.error : t('terminal.upload.failed'))
     else if (message.state === 'uploading') this.update({ state: 'uploading' })
     return true
   }
@@ -126,7 +128,7 @@ export class TerminalUploads {
       if (this.current !== batch) return
       if (batch.cancelling) return
       this.options.send({ type: 'upload-cancel', id: batch.id })
-      this.finish('failed', '上传失败')
+      this.finish('failed', t('terminal.upload.failed'))
     }
   }
 
@@ -156,7 +158,7 @@ export class TerminalUploads {
   }
 
   disconnected() {
-    if (this.current) this.finish('failed', '连接中断')
+    if (this.current) this.finish('failed', t('terminal.connection.interrupted'))
     this.pending = []
   }
 
@@ -211,7 +213,7 @@ export function bindFileInput(host: HTMLElement, uploads: TerminalUploads, dragg
     event.stopImmediatePropagation()
     dragging(false)
     if ([...event.dataTransfer?.items || []].some(item => item.webkitGetAsEntry?.()?.isDirectory)) {
-      uploads.reject('暂不支持文件夹')
+      uploads.reject(t('terminal.upload.foldersUnsupported'))
       return
     }
     uploads.enqueue(filesFrom(event.dataTransfer))

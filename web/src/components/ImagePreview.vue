@@ -1,6 +1,9 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import Icon from './Icon.vue'
+
+const { t, n } = useI18n()
 
 const props = defineProps<{ id: string; src: string; alt: string }>()
 const emit = defineEmits<{ loaded: [id: string, width: number, height: number]; failed: [id: string] }>()
@@ -15,7 +18,7 @@ const ready = computed(() => natural.value.width > 0 && bounds.value.width > 0 &
 const fitScale = computed(() => ready.value ? Math.min(1, bounds.value.width / natural.value.width, bounds.value.height / natural.value.height) : 1)
 const minimumScale = computed(() => Math.min(.05, fitScale.value))
 const maximumScale = 8
-const percentage = computed(() => `${scale.value < .1 ? Math.round(scale.value * 1000) / 10 : Math.round(scale.value * 100)}%`)
+const percentage = computed(() => n(scale.value, { style: 'percent', maximumFractionDigits: scale.value < .1 ? 1 : 0 }))
 const canPan = computed(() => ready.value && (natural.value.width * scale.value > bounds.value.width + 1 || natural.value.height * scale.value > bounds.value.height + 1))
 const imageStyle = computed(() => ({
   width: `${natural.value.width * scale.value}px`, height: `${natural.value.height * scale.value}px`,
@@ -170,11 +173,11 @@ onBeforeUnmount(() => {
       @wheel="wheel" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerEnd" @pointercancel="pointerEnd($event, true)" @lostpointercapture="pointerEnd($event, true)" @dblclick="doubleClick" @dragstart.prevent @contextmenu.prevent>
       <img class="download-preview-image" :data-preview-id="id" :src="src" :alt="alt" :style="imageStyle" draggable="false" @load="loaded" @error="failed" />
     </div>
-    <div v-if="ready" class="image-preview-tools" role="toolbar" aria-label="图片缩放" @pointerdown.stop @mousedown.prevent.stop @dblclick.stop>
-      <button type="button" aria-label="缩小图片" title="缩小图片" :disabled="scale <= minimumScale + .00001" @click="zoom(scale / 1.25)"><Icon name="minus" :size="16" /></button>
-      <button type="button" aria-label="适合图片" title="适合图片" @click="fit"><Icon name="fit" :size="16" /></button>
-      <output class="image-preview-scale" aria-label="缩放比例">{{ percentage }}</output>
-      <button type="button" aria-label="放大图片" title="放大图片" :disabled="scale >= maximumScale" @click="zoom(scale * 1.25)"><Icon name="plus" :size="16" /></button>
+    <div v-if="ready" class="image-preview-tools" role="toolbar" :aria-label="t('panels.image.zoom')" @pointerdown.stop @mousedown.prevent.stop @dblclick.stop>
+      <button type="button" :aria-label="t('panels.image.zoomOut')" :title="t('panels.image.zoomOut')" :disabled="scale <= minimumScale + .00001" @click="zoom(scale / 1.25)"><Icon name="minus" :size="16" /></button>
+      <button type="button" :aria-label="t('panels.image.fit')" :title="t('panels.image.fit')" @click="fit"><Icon name="fit" :size="16" /></button>
+      <output class="image-preview-scale" :aria-label="t('panels.image.scale')">{{ percentage }}</output>
+      <button type="button" :aria-label="t('panels.image.zoomIn')" :title="t('panels.image.zoomIn')" :disabled="scale >= maximumScale" @click="zoom(scale * 1.25)"><Icon name="plus" :size="16" /></button>
     </div>
   </div>
 </template>

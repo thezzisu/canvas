@@ -1,6 +1,9 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import type { NodeProps } from '@vue-flow/core'
 import Icon from './Icon.vue'
+
+const { t } = useI18n()
 
 defineProps<NodeProps<{
   sourceId: string; spaceId?: string; context: string; available: boolean
@@ -11,12 +14,12 @@ defineProps<NodeProps<{
 <template>
   <button class="overview-create nodrag nopan" :class="data.spaceId ? 'overview-create-tab' : 'overview-create-space'"
     :data-source-id="data.sourceId" :data-space-id="data.spaceId"
-    :aria-label="`${data.spaceId ? '新建 Tab' : '新建 Space'} · ${data.context}`"
+    :aria-label="t('panels.overview.createIn', { action: t(data.spaceId ? 'panels.overview.newTab' : 'panels.overview.newSpace'), context: data.context })"
     :aria-busy="data.pending()" :disabled="!data.available || data.pending()"
-    :title="data.available ? undefined : '连接不可用'" @pointerdown.stop @click.stop="data.create()" @dblclick.stop>
+    :title="data.available ? undefined : t('panels.overview.unavailable')" @pointerdown.stop @click.stop="data.create()" @dblclick.stop>
     <span v-if="data.pending()" class="spinner" />
     <Icon v-else :name="data.spaceId ? 'plus' : 'layers'" :size="data.spaceId ? 22 : 15" />
-    <span>{{ data.spaceId ? '新建 Tab' : '新建 Space' }}</span>
+    <span>{{ t(data.spaceId ? 'panels.overview.newTab' : 'panels.overview.newSpace') }}</span>
     <i v-if="!data.spaceId" />
   </button>
 </template>

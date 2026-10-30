@@ -1,3 +1,9 @@
+import { t } from './i18n'
+
+export class ApiError extends Error {
+  constructor(readonly status: number, message: string) { super(message) }
+}
+
 export async function api<T = unknown>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -8,7 +14,7 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
   try { body = text ? JSON.parse(text) : undefined } catch { body = undefined }
   if (!response.ok) {
     if (response.status === 401) window.dispatchEvent(new Event('canvas:unauthorized'))
-    throw new Error(body?.error || body?.message || `请求失败 (${response.status})`)
+    throw new ApiError(response.status, body?.error || body?.message || t('common.requestFailed', { status: response.status }))
   }
   return body as T
 }

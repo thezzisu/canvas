@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readTextPreview, textPreviewLimit } from "../web/src/text-preview.ts";
+import { locale } from "../web/src/i18n.ts";
 
 test("text preview decodes split UTF-8 literally without interpreting markup", async t => {
   const content = new TextEncoder().encode("中文 <b>literal</b>\n");
@@ -30,5 +31,10 @@ test("text preview cancels its response after a bounded prefix and drops an inco
 
 test("text preview handles expired staged tickets without reading the error response as a file", async t => {
   t.mock.method(globalThis, "fetch", async () => new Response('{"error":"Download expired"}', { status: 404 }));
-  await assert.rejects(readTextPreview("/api/downloads/fixture?preview=1", 0, new AbortController().signal), /文件已过期或不存在/u);
+  const previous = locale.value;
+  t.after(() => { locale.value = previous; });
+  for (const [language, message] of [["zh-CN", "文件已过期或不存在"], ["en", "File expired or not found"]] as const) {
+    locale.value = language;
+    await assert.rejects(readTextPreview("/api/downloads/fixture?preview=1", 0, new AbortController().signal), { message });
+  }
 });

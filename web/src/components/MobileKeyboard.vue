@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { TerminalModifiers } from '../terminal-input'
 import Icon from './Icon.vue'
+
+const { t } = useI18n()
 
 type TouchMode = 'scroll' | 'mouse' | 'select'
 interface Keycap { key: string; label: string; symbol?: string; span?: number }
@@ -36,30 +39,30 @@ let repeatDelay: ReturnType<typeof setTimeout> | undefined
 let repeatTimer: ReturnType<typeof setInterval> | undefined
 let copyTimer: ReturnType<typeof setTimeout> | undefined
 let previousMode: TouchMode = 'scroll'
-const arrows: Keycap[] = [
-  { key: 'ArrowLeft', label: '向左', symbol: '←' }, { key: 'ArrowDown', label: '向下', symbol: '↓' },
-  { key: 'ArrowUp', label: '向上', symbol: '↑' }, { key: 'ArrowRight', label: '向右', symbol: '→' },
-]
-const keys: Keycap[] = [
+const arrows = computed<Keycap[]>(() => [
+  { key: 'ArrowLeft', label: t('terminal.keyboard.arrowLeft'), symbol: '←' }, { key: 'ArrowDown', label: t('terminal.keyboard.arrowDown'), symbol: '↓' },
+  { key: 'ArrowUp', label: t('terminal.keyboard.arrowUp'), symbol: '↑' }, { key: 'ArrowRight', label: t('terminal.keyboard.arrowRight'), symbol: '→' },
+])
+const keys = computed<Keycap[]>(() => [
   { key: 'Escape', label: 'Esc' }, { key: 'Tab', label: 'Tab' },
-  { key: 'Control', label: 'Ctrl' }, ...arrows,
-]
+  { key: 'Control', label: 'Ctrl' }, ...arrows.value,
+])
 const modifierKeys: Record<string, keyof TerminalModifiers> = { Shift: 'shift', ShiftRight: 'shift', Control: 'ctrl', ControlRight: 'ctrl', Alt: 'alt', AltRight: 'alt', Meta: 'meta' }
 const shiftedSymbols: Record<string, string> = { '`': '~', '1': '!', '2': '@', '3': '#', '4': '$', '5': '%', '6': '^', '7': '&', '8': '*', '9': '(', '0': ')', '-': '_', '=': '+', '[': '{', ']': '}', '\\': '|', ';': ':', "'": '"', ',': '<', '.': '>', '/': '?' }
 const characters = (text: string): Keycap[] => [...text].map(key => ({ key, label: /[a-z]/.test(key) ? key.toUpperCase() : key }))
-const deckRows = [
-  { name: '功能键', class: 'mobile-key-functions', keys: Array.from({ length: 12 }, (_, index) => ({ key: `F${index + 1}`, label: `F${index + 1}` })) as Keycap[] },
-  { name: '数字和符号', class: 'mobile-key-standard', keys: [...characters('`1234567890-='), { key: 'Backspace', label: 'Backspace', symbol: '⌫' }] },
+const deckRows = computed(() => [
+  { name: t('terminal.keyboard.functions'), class: 'mobile-key-functions', keys: Array.from({ length: 12 }, (_, index) => ({ key: `F${index + 1}`, label: `F${index + 1}` })) as Keycap[] },
+  { name: t('terminal.keyboard.numbers'), class: 'mobile-key-standard', keys: [...characters('`1234567890-='), { key: 'Backspace', label: 'Backspace', symbol: '⌫' }] },
   { name: 'QWERTY', class: 'mobile-key-standard', keys: [{ key: 'Tab', label: 'Tab', symbol: '⇥' }, ...characters('qwertyuiop[]\\')] },
   { name: 'ASDF', class: 'mobile-key-standard', keys: [{ key: 'CapsLock', label: 'Caps Lock', symbol: 'Caps' }, ...characters("asdfghjkl;'"), { key: 'Enter', label: 'Enter', symbol: '↵', span: 2 }] },
-  { name: 'ZXCV', class: 'mobile-key-standard', keys: [{ key: 'Shift', label: 'Shift', symbol: '⇧', span: 2 }, ...characters('zxcvbnm,./'), { key: 'ShiftRight', label: '右 Shift', symbol: '⇧', span: 2 }] },
-  { name: '修改键和导航', class: 'mobile-key-standard mobile-key-bottom', keys: [
+  { name: 'ZXCV', class: 'mobile-key-standard', keys: [{ key: 'Shift', label: 'Shift', symbol: '⇧', span: 2 }, ...characters('zxcvbnm,./'), { key: 'ShiftRight', label: t('terminal.keyboard.rightShift'), symbol: '⇧', span: 2 }] },
+  { name: t('terminal.keyboard.modifiers'), class: 'mobile-key-standard mobile-key-bottom', keys: [
     { key: 'Control', label: 'Ctrl' }, { key: 'Meta', label: 'Meta', symbol: '⊞' }, { key: 'Alt', label: 'Alt' },
-    { key: ' ', label: 'Space', symbol: '', span: 3 }, { key: 'AltRight', label: '右Alt', symbol: 'Alt' }, { key: 'ControlRight', label: '右Ctrl', symbol: 'Ctrl' },
+    { key: ' ', label: 'Space', symbol: '', span: 3 }, { key: 'AltRight', label: t('terminal.keyboard.rightAlt'), symbol: 'Alt' }, { key: 'ControlRight', label: t('terminal.keyboard.rightCtrl'), symbol: 'Ctrl' },
     { key: 'PageUp', label: 'Page Up', symbol: 'Pg↑' }, { key: 'PageDown', label: 'Page Down', symbol: 'Pg↓' },
     { key: 'Home', label: 'Home', symbol: '↤' }, { key: 'End', label: 'End', symbol: '↦' }, { key: 'Insert', label: 'Insert', symbol: 'Ins' }, { key: 'Delete', label: 'Delete', symbol: 'Del' },
   ] },
-]
+])
 const modifierPresses = ref(new Map<number, { key: keyof TerminalModifiers; previous: boolean; value: boolean; used: boolean; target: HTMLElement }>())
 const activeModifiers = computed(() => {
   const value = { ...props.modifiers }
@@ -193,7 +196,7 @@ function copy(all: boolean) {
   const area = textArea.value
   const text = all ? snapshot.value : area?.value.slice(area.selectionStart, area.selectionEnd) || ''
   if (!text) return
-  copyResult.value = props.copyText(text) ? '已复制' : '复制失败'
+  copyResult.value = props.copyText(text) ? 'copied' : 'failed'
   clearTimeout(copyTimer)
   copyTimer = setTimeout(() => { copyResult.value = '' }, 1800)
 }
@@ -230,34 +233,34 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
 <template>
   <section class="mobile-keyboard" @pointerdown.stop @mousedown.stop @keydown.esc.stop.prevent="escape">
     <div v-if="more" class="mobile-keys-dismiss" @pointerdown.stop.prevent="more = false" />
-    <div v-if="more" class="mobile-keys-more" role="menu" aria-label="更多按键" @wheel.stop>
-      <div class="mobile-key-deck" role="group" aria-label="完整键盘" @scroll.capture="stopRepeat" @contextmenu.prevent>
-        <div v-for="row in deckRows" :key="row.name" class="mobile-key-deck-row" :class="row.class" role="group" :aria-label="row.name">
+    <div v-if="more" class="mobile-keys-more" role="menu" :aria-label="t('terminal.keyboard.more')" @wheel.stop>
+      <div class="mobile-key-deck" role="group" :aria-label="t('terminal.keyboard.full')" @scroll.capture="stopRepeat" @contextmenu.prevent>
+        <div v-for="row in deckRows" :key="row.keys[0]?.key" class="mobile-key-deck-row" :class="row.class" role="group" :aria-label="row.name">
           <button v-for="key in row.keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :title="key.label" :aria-pressed="keyPressed(key.key)" :style="key.span ? { gridColumn: `span ${key.span}` } : undefined"
             :class="{ 'letter-key': key.key.length === 1, 'shift-key': key.key.startsWith('Shift'), 'backspace-key': key.key === 'Backspace', 'space-key': key.key === ' ', 'enter-key': key.key === 'Enter', 'symbol-key': ['Meta', 'Home', 'End'].includes(key.key) }"
             @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ keyLabel(key) }}</button>
         </div>
       </div>
-      <div class="mobile-key-actions" role="toolbar" aria-label="终端操作">
-        <button type="button" :disabled="disabled" aria-label="上传文件" title="上传文件" @pointerdown.prevent @click="pickFiles"><Icon name="file" :size="18" /></button>
-        <button type="button" :disabled="disabled" aria-label="粘贴文本" title="粘贴文本" @pointerdown.prevent @click="openSheet('paste')"><Icon name="copy" :size="18" /></button>
-        <button type="button" aria-label="选择文本" title="选择文本" @pointerdown.prevent @click="openSheet('select')"><Icon name="note" :size="18" /></button>
-        <button type="button" :aria-pressed="touchMode === 'scroll'" aria-label="触控滚动" title="触控滚动" @pointerdown.prevent @click="chooseMode('scroll')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18 M8 7l4-4 4 4 M8 17l4 4 4-4" /></svg></button>
-        <button type="button" :disabled="disabled" :aria-pressed="touchMode === 'mouse'" aria-label="触控鼠标" title="触控鼠标" @pointerdown.prevent @click="chooseMode('mouse')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="6" /><path d="M12 3v6" /></svg></button>
+      <div class="mobile-key-actions" role="toolbar" :aria-label="t('terminal.keyboard.actions')">
+        <button type="button" :disabled="disabled" :aria-label="t('terminal.upload.file')" :title="t('terminal.upload.file')" @pointerdown.prevent @click="pickFiles"><Icon name="file" :size="18" /></button>
+        <button type="button" :disabled="disabled" :aria-label="t('terminal.keyboard.pasteText')" :title="t('terminal.keyboard.pasteText')" @pointerdown.prevent @click="openSheet('paste')"><Icon name="copy" :size="18" /></button>
+        <button type="button" :aria-label="t('terminal.keyboard.selectText')" :title="t('terminal.keyboard.selectText')" @pointerdown.prevent @click="openSheet('select')"><Icon name="note" :size="18" /></button>
+        <button type="button" :aria-pressed="touchMode === 'scroll'" :aria-label="t('terminal.keyboard.touchScroll')" :title="t('terminal.keyboard.touchScroll')" @pointerdown.prevent @click="chooseMode('scroll')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18 M8 7l4-4 4 4 M8 17l4 4 4-4" /></svg></button>
+        <button type="button" :disabled="disabled" :aria-pressed="touchMode === 'mouse'" :aria-label="t('terminal.keyboard.touchMouse')" :title="t('terminal.keyboard.touchMouse')" @pointerdown.prevent @click="chooseMode('mouse')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="6" /><path d="M12 3v6" /></svg></button>
       </div>
     </div>
-    <div class="mobile-key-row" role="toolbar" aria-label="终端辅助键" @contextmenu.prevent>
+    <div class="mobile-key-row" role="toolbar" :aria-label="t('terminal.keyboard.helperKeys')" @contextmenu.prevent>
       <button v-for="key in keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :aria-pressed="keyPressed(key.key)" :class="{ 'arrow-key': key.symbol }" @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ key.symbol || key.label }}</button>
-      <button type="button" aria-label="更多按键" :aria-expanded="more" :class="{ active: more || modifiers.shift || modifiers.alt || modifiers.meta }" @pointerdown.prevent @click="toggleMore"><Icon name="more" :size="19" /></button>
+      <button type="button" :aria-label="t('terminal.keyboard.more')" :aria-expanded="more" :class="{ active: more || modifiers.shift || modifiers.alt || modifiers.meta }" @pointerdown.prevent @click="toggleMore"><Icon name="more" :size="19" /></button>
     </div>
-    <input ref="fileInput" class="mobile-file-input" type="file" multiple tabindex="-1" aria-label="上传文件" @change="filesChanged" />
+    <input ref="fileInput" class="mobile-file-input" type="file" multiple tabindex="-1" :aria-label="t('terminal.upload.file')" @change="filesChanged" />
     <div v-if="sheet" class="mobile-text-backdrop" @pointerdown.self="closeSheet">
-      <section class="mobile-text-sheet" role="dialog" aria-modal="true" :aria-label="sheet === 'select' ? '选择文本' : '粘贴文本'">
-        <header><strong>{{ sheet === 'select' ? '选择文本' : '粘贴文本' }}</strong><button type="button" :aria-label="sheet === 'select' ? '关闭选择' : '关闭粘贴'" @pointerdown.prevent @click="closeSheet"><Icon name="close" :size="18" /></button></header>
-        <textarea v-if="sheet === 'select'" ref="textArea" :value="snapshot" readonly inputmode="none" aria-label="终端文本" spellcheck="false" @select="updateSelection" @pointerup="updateSelection" @keyup="updateSelection" />
-        <textarea v-else ref="textArea" v-model="draft" aria-label="待粘贴文本" placeholder="长按粘贴" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" @paste="pasteFiles" />
-        <footer v-if="sheet === 'select'"><span role="status">{{ copyResult }}</span><button type="button" :disabled="!selected" @pointerdown.prevent @click="copy(false)">复制选中</button><button type="button" :disabled="!snapshot" @pointerdown.prevent @click="copy(true)">复制全部</button></footer>
-        <footer v-else><button type="button" :disabled="!draft || disabled" @pointerdown.prevent @click="pasteText">粘贴到终端</button></footer>
+      <section class="mobile-text-sheet" role="dialog" aria-modal="true" :aria-label="sheet === 'select' ? t('terminal.keyboard.selectText') : t('terminal.keyboard.pasteText')">
+        <header><strong>{{ sheet === 'select' ? t('terminal.keyboard.selectText') : t('terminal.keyboard.pasteText') }}</strong><button type="button" :aria-label="t('common.close')" @pointerdown.prevent @click="closeSheet"><Icon name="close" :size="18" /></button></header>
+        <textarea v-if="sheet === 'select'" ref="textArea" :value="snapshot" readonly inputmode="none" :aria-label="t('terminal.keyboard.terminalText')" spellcheck="false" @select="updateSelection" @pointerup="updateSelection" @keyup="updateSelection" />
+        <textarea v-else ref="textArea" v-model="draft" :aria-label="t('terminal.keyboard.textToPaste')" :placeholder="t('terminal.keyboard.longPressPaste')" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" @paste="pasteFiles" />
+        <footer v-if="sheet === 'select'"><span role="status">{{ copyResult ? t(`terminal.clipboard.${copyResult}`) : '' }}</span><button type="button" :disabled="!selected" @pointerdown.prevent @click="copy(false)">{{ t('terminal.keyboard.copySelection') }}</button><button type="button" :disabled="!snapshot" @pointerdown.prevent @click="copy(true)">{{ t('terminal.keyboard.copyAll') }}</button></footer>
+        <footer v-else><button type="button" :disabled="!draft || disabled" @pointerdown.prevent @click="pasteText">{{ t('terminal.keyboard.pasteIntoTerminal') }}</button></footer>
       </section>
     </div>
   </section>

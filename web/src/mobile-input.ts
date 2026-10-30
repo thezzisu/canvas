@@ -1,3 +1,6 @@
+import { watchEffect } from 'vue'
+import { t } from './i18n'
+
 interface MobileInputOptions {
   active(): boolean
   input(text: string): void
@@ -15,7 +18,7 @@ export function bindMobileInput(parent: HTMLElement, options: MobileInputOptions
   const element = document.createElement('div')
   element.className = 'terminal-mobile-input'
   element.setAttribute('role', 'textbox')
-  element.setAttribute('aria-label', '终端输入')
+  const stopLabel = watchEffect(() => element.setAttribute('aria-label', t('terminal.keyboard.input')))
   element.setAttribute('aria-multiline', 'true')
   element.setAttribute('autocapitalize', 'off')
   element.setAttribute('autocorrect', 'off')
@@ -111,6 +114,7 @@ export function bindMobileInput(parent: HTMLElement, options: MobileInputOptions
   return {
     element, setEditable,
     dispose() {
+      stopLabel()
       clearTimeout(commitTimer)
       element.removeEventListener('keydown', key); element.removeEventListener('keypress', key); element.removeEventListener('keyup', key)
       element.removeEventListener('beforeinput', beforeInput); element.removeEventListener('input', input)

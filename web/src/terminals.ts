@@ -1,10 +1,12 @@
+import { watch } from 'vue'
+import { locale, t } from './i18n'
 import { Terminal } from '@xterm/xterm'
 import { terminalUnicodeAddon } from '../../shared/terminal-unicode'
 import { uuid } from './api'
 import { clearDownloads, disconnectDownloads, receiveDownload } from './downloads'
 import { clearDirectories, receiveDirectory } from './directories'
 import { bindFileInput, preventFileNavigation, TerminalUploads, type TerminalUploadState } from './uploads'
-import { clipboardRestoringFocus, TerminalClipboard } from './clipboard'
+import { clipboardRestoringFocus, TerminalClipboard, type ClipboardNotice } from './clipboard'
 import { emptyModifiers, hasModifiers, modifiedText, terminalKey, type TerminalModifiers } from './terminal-input'
 import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch'
 import { defaultContentFont, type ContentFontSettings } from '../../shared/settings'
@@ -23,7 +25,7 @@ export type TerminalStatus = {
   focusResize?: { owned: boolean }
   upload?: TerminalUploadState
   draggingFile?: boolean
-  clipboardError?: string
+  clipboardError?: ClipboardNotice
   modifiers?: TerminalModifiers
   touchMode?: TerminalTouchMode
   keyboardRequested?: boolean
@@ -66,6 +68,11 @@ interface Session {
   clipboard?: TerminalClipboard
 }
 const sessions = new Map<string, Session>()
+watch(locale, () => {
+  Terminal.strings.promptLabel = t('terminal.keyboard.input')
+  Terminal.strings.tooMuchOutput = t('terminal.tooMuchOutput')
+  for (const session of sessions.values()) session.term.textarea?.setAttribute('aria-label', Terminal.strings.promptLabel)
+}, { immediate: true })
 export function hasLiveTerminal(sourceId: string, windowId: string): boolean {
   return [...sessions.values()].some(session => session.resource.sourceId === sourceId && session.resource.windowId === windowId &&
     session.host?.isConnected && session.state.status !== 'disconnected')
@@ -178,7 +185,7 @@ function disconnect(session: Session) {
   session.presentationRevision = (session.presentationRevision || 0) + 1
   setState(session, { ...session.state, readOnly: true, presentation: undefined, focusResize: undefined })
 }
-function connectionFailed(session: Session, error = '终端连接已断开', retry = true) {
+function connectionFailed(session: Session, error = t('terminal.connection.disconnected'), retry = true) {
   disconnect(session)
   session.connectionError = error
   session.reconnect?.failed(retry)
@@ -208,17 +215,17 @@ async function connect(session: Session, probe: boolean) {
       const response = await fetch('/api/state', { signal: controller.signal })
       if (session.connectionRevision !== revision) return
       if (response.status === 401) {
-        connectionFailed(session, '登录已失效', false)
+        connectionFailed(session, t('terminal.connection.expired'), false)
         window.dispatchEvent(new Event('canvas:unauthorized')); return
       }
-      if (!response.ok) throw new Error('终端连接失败')
+      if (!response.ok) throw new Error(t('terminal.connection.failed'))
       const state = await response.json() as { sources: Array<{ id: string }> }
       if (session.connectionRevision !== revision) return
       if (!state.sources.some(source => source.id === session.resource.sourceId)) {
-        connectionFailed(session, '连接已移除', false); return
+        connectionFailed(session, t('terminal.connection.removed'), false); return
       }
     } catch {
-      if (session.connectionRevision === revision) connectionFailed(session, '终端连接失败')
+      if (session.connectionRevision === revision) connectionFailed(session, t('terminal.connection.failed'))
       return
     } finally { if (session.connectionProbe === controller) session.connectionProbe = undefined }
   }
@@ -279,11 +286,11 @@ async function connect(session: Session, probe: boolean) {
     }
   }
   socket.onerror = () => {
-    if (session.socket === socket) connectionFailed(session, '终端连接失败')
+    if (session.socket === socket) connectionFailed(session, t('terminal.connection.failed'))
   }
   socket.onclose = event => {
     if (session.socket === socket) {
-      connectionFailed(session, event.code === 1008 ? '登录已失效' : undefined, event.code !== 1008)
+      connectionFailed(session, event.code === 1008 ? t('terminal.connection.expired') : undefined, event.code !== 1008)
       if (event.code === 1008) window.dispatchEvent(new Event('canvas:unauthorized'))
     }
   }
@@ -409,7 +416,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       connect: probe => { void connect(current, probe) },
       waiting: attempt => setState(current, { ...current.state, status: 'connecting', error: undefined, retryAttempt: attempt || undefined }),
       failed: () => setState(current, { ...current.state, status: 'disconnected', error: current.connectionError, retryAttempt: undefined }),
-      timeout: () => connectionFailed(current, '终端连接超时'),
+      timeout: () => connectionFailed(current, t('terminal.connection.timeout')),
     })
     // Offscreen xterm buffers can resize before the DOM renderer catches up.
     // Keep each measured grid paired with the dimensions that actually painted it.

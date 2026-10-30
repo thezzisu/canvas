@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import UModal from '@nuxt/ui/components/Modal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
@@ -8,12 +9,14 @@ import { downloadPreview, downloadPreviewCount, dismissDownloadPreview } from '.
 import { readTextPreview } from '../text-preview'
 import { useMobileViewport } from '../viewport'
 
+const { t, n } = useI18n()
+
 defineProps<{ portal?: HTMLElement }>()
 const pdfPreview = navigator.pdfViewerEnabled
 const previewUrl = computed(() => downloadPreview.value ? `${downloadPreview.value.url}?preview=1` : '')
 const text = ref('')
 const loading = ref(false)
-const error = ref('')
+const error = ref<string | Error>('')
 const truncated = ref(false)
 const expanded = ref(false)
 const imageSize = ref<{ width: number; height: number }>()
@@ -46,7 +49,7 @@ async function loadText() {
     if (request !== current || current.signal.aborted) return
     text.value = result.text; truncated.value = result.truncated
   } catch (reason) {
-    if (request === current && !current.signal.aborted) error.value = reason instanceof Error ? reason.message : '无法预览此文件'
+    if (request === current && !current.signal.aborted) error.value = reason instanceof Error ? reason : 'panels.preview.unavailable'
   } finally { if (request === current) loading.value = false }
 }
 watch(downloadPreview, preview => {
@@ -63,7 +66,7 @@ function imageLoaded(id: string, width: number, height: number) {
 }
 function imageFailed(id: string) {
   if (id !== downloadPreview.value?.id) return
-  loading.value = false; error.value = '无法预览此文件'
+  loading.value = false; error.value = 'panels.preview.unavailable'
 }
 function openChanged(open: boolean) { if (!open) dismissDownloadPreview() }
 function preventReturnFocus(event: Event) { event.preventDefault() }
@@ -77,26 +80,26 @@ onBeforeUnmount(() => request?.abort())
 
 <template>
   <UModal v-if="downloadPreview" :key="downloadPreview.id" :open="true" :title="downloadPreview.filename" :portal="portal || false" :fullscreen="expanded" :transition="false"
-    :close="{ 'aria-label': '关闭预览', title: '关闭预览' }" :content="modalContent"
+    :close="{ 'aria-label': t('panels.preview.close'), title: t('panels.preview.close') }" :content="modalContent"
     :ui="{ content: `download-preview-modal${expanded ? ' download-preview-fullscreen' : ''}`, overlay: 'download-preview-overlay', header: 'download-preview-header', wrapper: 'download-preview-title-wrap', title: 'download-preview-title', body: 'download-preview-body', close: 'download-preview-close' }"
     @update:open="openChanged">
     <template #actions>
-      <span v-if="downloadPreviewCount > 1" class="download-preview-count" :aria-label="`还有 ${downloadPreviewCount - 1} 个文件待预览`">+{{ downloadPreviewCount - 1 }}</span>
-      <UButton :href="downloadPreview.url" :download="downloadPreview.filename" color="neutral" variant="ghost" size="sm" class="download-preview-download" aria-label="下载文件" @pointerdown.stop @click.stop><Icon name="download" :size="15" />下载</UButton>
-      <UButton color="neutral" variant="ghost" size="sm" class="download-preview-expand" :aria-label="expanded ? '退出全屏预览' : '全屏预览'" :title="expanded ? '退出全屏预览' : '全屏预览'" :aria-pressed="expanded" @click="expanded = !expanded"><Icon :name="expanded ? 'collapse' : 'expand'" :size="16" /></UButton>
+      <span v-if="downloadPreviewCount > 1" class="download-preview-count" :aria-label="t('panels.preview.remaining', downloadPreviewCount - 1)">+{{ n(downloadPreviewCount - 1) }}</span>
+      <UButton :href="downloadPreview.url" :download="downloadPreview.filename" color="neutral" variant="ghost" size="sm" class="download-preview-download" :aria-label="t('panels.file.download')" @pointerdown.stop @click.stop><Icon name="download" :size="15" /> {{ t('common.download') }}</UButton>
+      <UButton color="neutral" variant="ghost" size="sm" class="download-preview-expand" :aria-label="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :title="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :aria-pressed="expanded" @click="expanded = !expanded"><Icon :name="expanded ? 'collapse' : 'expand'" :size="16" /></UButton>
     </template>
     <template #body>
       <div class="download-preview-content" :data-download-id="downloadPreview.id" :data-preview-kind="downloadPreview.preview">
-        <div v-if="loading" class="download-preview-status" role="status"><span class="spinner" />加载中…</div>
-        <div v-if="error" class="download-preview-status" role="alert"><span>{{ error }}</span><button v-if="downloadPreview.preview === 'text'" type="button" @click="loadText">重试</button></div>
+        <div v-if="loading" class="download-preview-status" role="status"><span class="spinner" /> {{ t('common.loading') }}</div>
+        <div v-if="error" class="download-preview-status" role="alert"><span>{{ error instanceof Error ? error.message : t(error) }}</span><button v-if="downloadPreview.preview === 'text'" type="button" @click="loadText">{{ t('common.retry') }}</button></div>
         <ImagePreview v-if="downloadPreview.preview === 'image' && !error" :key="downloadPreview.id" :id="downloadPreview.id" :src="previewUrl" :alt="downloadPreview.filename" @loaded="imageLoaded" @failed="imageFailed" />
         <template v-else-if="downloadPreview.preview === 'pdf'">
           <iframe v-if="pdfPreview" class="download-preview-pdf" :src="previewUrl" :title="downloadPreview.filename" referrerpolicy="no-referrer" />
-          <div v-else class="download-preview-status">浏览器不支持 PDF 预览</div>
+          <div v-else class="download-preview-status">{{ t('panels.preview.pdfUnavailable') }}</div>
         </template>
         <template v-else-if="downloadPreview.preview === 'text' && !loading && !error">
           <pre class="download-preview-text" :aria-label="downloadPreview.filename" tabindex="0">{{ text }}</pre>
-          <div v-if="truncated" class="download-preview-truncated">已显示前 1 MiB</div>
+          <div v-if="truncated" class="download-preview-truncated">{{ t('panels.preview.truncated') }}</div>
         </template>
       </div>
     </template>

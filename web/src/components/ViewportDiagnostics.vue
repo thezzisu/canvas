@@ -1,14 +1,16 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { onBeforeUnmount, ref } from 'vue'
 import { copyText } from '../clipboard'
 import { collectViewportDiagnostics } from '../viewport-diagnostics'
 
+const { t } = useI18n()
 const feedback = ref('')
 let timer: ReturnType<typeof setTimeout> | undefined
 function copy() {
   const snapshot = collectViewportDiagnostics()
-  const failed = () => { feedback.value = '复制失败' }
-  if (copyText(JSON.stringify(snapshot, null, 2), failed)) feedback.value = '已复制'
+  const failed = () => { feedback.value = 'failed' }
+  if (copyText(JSON.stringify(snapshot, null, 2), failed)) feedback.value = 'copied'
   clearTimeout(timer)
   timer = setTimeout(() => { feedback.value = '' }, 2000)
 }
@@ -16,7 +18,7 @@ onBeforeUnmount(() => { clearTimeout(timer) })
 </script>
 
 <template>
-  <button class="viewport-diagnostics" type="button" aria-label="复制视口诊断" @pointerdown.stop.prevent @click.stop="copy">{{ feedback || '复制视口诊断' }}</button>
+  <button class="viewport-diagnostics" type="button" :aria-label="t('terminal.copyDiagnostics')" @pointerdown.stop.prevent @click.stop="copy">{{ feedback ? t(`terminal.clipboard.${feedback}`) : t('terminal.copyDiagnostics') }}</button>
 </template>
 
 <style scoped>

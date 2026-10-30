@@ -1,5 +1,6 @@
 import { useStorage } from '@vueuse/core'
-import { onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
+import { t } from './i18n'
 
 type WakeLockState = 'off' | 'pending' | 'active' | 'released' | 'denied'
 interface ScreenLock extends EventTarget { readonly released: boolean; release(): Promise<void> }
@@ -69,8 +70,8 @@ export class ScreenWakeLockController {
 
 export const keepScreenAwake = useStorage('canvas:display:keep-awake', false)
 export const screenWakeLockState = ref<WakeLockState>('off')
-export const screenWakeLockUnavailable = typeof window === 'undefined' || !window.isSecureContext
-  ? '需要 HTTPS' : typeof navigator.wakeLock?.request !== 'function' ? '浏览器不支持' : ''
+export const screenWakeLockUnavailable = computed(() => typeof window === 'undefined' || !window.isSecureContext
+  ? t('common.httpsRequired') : typeof navigator.wakeLock?.request !== 'function' ? t('common.unsupportedBrowser') : '')
 let retry = () => {}
 export function retryScreenWakeLock() { retry() }
 
@@ -78,7 +79,7 @@ export function useScreenWakeLock(authenticated: Ref<boolean>) {
   const controller = new ScreenWakeLockController(() => navigator.wakeLock.request('screen'), state => { screenWakeLockState.value = state })
   let mounted = false
   const update = () => controller.setActive(mounted && authenticated.value && keepScreenAwake.value &&
-    !screenWakeLockUnavailable && document.visibilityState === 'visible')
+    !screenWakeLockUnavailable.value && document.visibilityState === 'visible')
   const hide = () => controller.setActive(false)
   retry = () => controller.retry()
   const stop = watch([authenticated, keepScreenAwake], update, { flush: 'sync' })
