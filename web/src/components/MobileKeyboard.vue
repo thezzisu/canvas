@@ -291,8 +291,8 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
 .mobile-key-actions button[aria-pressed=true]{background:#3d342e;border-color:#886b54;color:#e8bc9a}
 .mobile-key-actions button:active{background:#3b4654}
 .mobile-file-input{display:none}
-.mobile-text-backdrop{position:fixed;left:var(--mobile-left,0);top:var(--mobile-top,0);width:var(--mobile-width,100%);height:var(--mobile-height,100dvh);z-index:90;display:flex;align-items:center;justify-content:center;padding:12px;background:#070a10b0}
-.mobile-text-sheet{width:min(600px,100%);max-height:100%;height:min(520px,80%);display:flex;flex-direction:column;overflow:hidden;border:1px solid #48515f;border-radius:9px;background:#20252d;box-shadow:0 16px 50px #0008}
+.mobile-text-backdrop{--text-safe-top:var(--mobile-safe-top,env(safe-area-inset-top,0px));--text-safe-bottom:var(--mobile-safe-bottom,env(safe-area-inset-bottom,0px));box-sizing:border-box;position:fixed;left:var(--mobile-left,0);top:var(--mobile-top,0);width:var(--mobile-width,100%);height:var(--mobile-height,100dvh);z-index:90;display:flex;align-items:center;justify-content:center;padding:calc(12px + var(--text-safe-top)) calc(12px + env(safe-area-inset-right,0px)) calc(12px + var(--text-safe-bottom)) calc(12px + env(safe-area-inset-left,0px));background:#070a10b0}
+.mobile-text-sheet{width:min(600px,100%);max-height:100%;min-height:0;height:min(520px,80%);display:flex;flex-direction:column;overflow:auto;overscroll-behavior:contain;border:1px solid #48515f;border-radius:9px;background:#20252d;box-shadow:0 16px 50px #0008}
 .mobile-text-sheet header{display:flex;align-items:center;justify-content:space-between;flex:0 0 48px;padding:0 6px 0 15px;border-bottom:1px solid #353e4b}
 .mobile-text-sheet strong{font-size:14px;font-weight:500}
 .mobile-text-sheet textarea{display:block;flex:1;min-height:0;resize:none;width:100%;padding:12px;margin:0;color:#d7dce5;border:0;border-radius:0;outline:none;box-shadow:none;background:#15191f;font-family:var(--content-font-family,monospace);font-feature-settings:var(--content-font-features,normal);font-size:16px;line-height:1.5;white-space:pre-wrap;overflow:auto;user-select:text;-webkit-user-select:text;touch-action:pan-y;-webkit-touch-callout:default}
@@ -300,5 +300,5 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
 .mobile-text-sheet footer>span{margin-right:auto;color:#a0b6a9;font-size:11px}
 .mobile-text-sheet footer button{background:#333c49;color:#d4dfed;font-size:12px}
 @media(hover:hover){.mobile-keyboard button:hover:not(:disabled):not([aria-pressed=true]):not(.active){background:#37414e;border-color:#526071}}
-@media(max-height:400px){.mobile-text-backdrop{padding:5px}.mobile-text-sheet{height:100%;}.mobile-text-sheet header{flex-basis:44px}.mobile-text-sheet footer{flex-basis:44px}}
+@media(max-height:400px){.mobile-text-backdrop{padding:calc(5px + var(--text-safe-top)) calc(5px + env(safe-area-inset-right,0px)) calc(5px + var(--text-safe-bottom)) calc(5px + env(safe-area-inset-left,0px))}.mobile-text-sheet{height:100%;}.mobile-text-sheet header{flex-basis:44px}.mobile-text-sheet footer{flex-basis:44px}}
 </style>

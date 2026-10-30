@@ -9,9 +9,10 @@ import { FONT_CATALOG, buildFontPresentation, ensureContentFont } from '../fonts
 import { write } from '../api'
 import { useMobileLayout } from '../mobile-layout'
 import { cutoutPosition, cutoutWidth, type CutoutPosition } from '../display-cutout'
+import { developerMode } from '../developer-mode'
 import Icon from './Icon.vue'
 
-const props = defineProps<{ settings: GlobalSettings; portal?: HTMLElement }>()
+const props = defineProps<{ settings: GlobalSettings; portal?: HTMLElement; hasDisplayCutout?: boolean }>()
 const emit = defineEmits<{ close: []; saved: [settings: GlobalSettings] }>()
 const mobile = useMobileLayout()
 const cutoutPositions: Array<{ value: CutoutPosition; label: string }> = [
@@ -107,11 +108,15 @@ onBeforeUnmount(() => { disposed = true; previewRevision++; clearTimeout(preview
   <UModal :open="true" title="设置" :portal="portal || false" :dismissible="!saving" :close="{ 'aria-label': '关闭设置', disabled: saving }"
     :ui="{ content: 'settings-modal', overlay: 'settings-overlay', header: 'settings-header', body: 'settings-body', footer: 'settings-footer', title: 'settings-title', close: 'settings-close' }" @update:open="close">
     <template #body>
-      <section v-if="mobile" class="cutout-settings" aria-label="顶部避让">
+      <section v-if="mobile && hasDisplayCutout" class="cutout-settings" aria-label="顶部避让">
         <div class="cutout-heading"><span>顶部避让</span><small>仅此浏览器</small></div>
         <div class="cutout-row"><span id="cutout-position-label">位置</span><div class="cutout-positions" role="group" aria-labelledby="cutout-position-label"><UButton v-for="position in cutoutPositions" :key="position.value" type="button" color="neutral" :variant="cutoutPosition === position.value ? 'solid' : 'outline'" :aria-pressed="cutoutPosition === position.value" @click="cutoutPosition = position.value">{{ position.label }}</UButton></div></div>
         <div class="cutout-width-label"><label for="cutout-width">宽度</label><output for="cutout-width">{{ cutoutWidth }} px</output></div>
         <input id="cutout-width" v-model.number="cutoutWidth" class="cutout-width" type="range" min="0" :max="cutoutMaximum" step="1" :aria-valuetext="`${cutoutWidth} px`" />
+        <div class="cutout-preview cutout-header" :data-cutout-position="cutoutWidth > 0 ? cutoutPosition : undefined" :style="{ '--cutout-width': `${cutoutWidth}px` }" aria-hidden="true">
+          <span class="cutout-status"><i /></span><span class="cutout-title">终端</span>
+          <div class="cutout-actions"><span><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10" /></svg></span><span><Icon name="collapse" :size="18" /></span></div>
+        </div>
       </section>
       <form id="content-font-form" class="font-settings" @submit.prevent="save">
         <div class="font-stack-heading"><span>内容字体</span><UButton type="button" color="neutral" variant="ghost" size="xs" class="font-add" :disabled="saving || draft.stack.length >= 12" aria-label="添加字体" @click="addFont"><Icon name="plus" :size="13" />添加</UButton></div>
@@ -134,14 +139,14 @@ onBeforeUnmount(() => { disposed = true; previewRevision++; clearTimeout(preview
         </div>
         <div v-if="fontError || error" class="font-error" role="alert"><span>{{ fontError || error }}</span><UButton v-if="fontError" type="button" color="neutral" variant="link" size="xs" aria-label="重新加载字体" @click="retryPreview">重试</UButton></div>
       </form>
-
+      <div class="developer-setting"><USwitch v-model="developerMode" label="开发者模式" aria-label="开发者模式" size="sm" /></div>
     </template>
     <template #footer><UButton color="neutral" variant="outline" class="font-cancel" :disabled="saving" @click="close()">{{ changed ? '取消' : '完成' }}</UButton><UButton type="submit" form="content-font-form" class="font-save" :disabled="saving || loading || invalid || !changed || !!fontError"><span v-if="saving" class="spinner" />{{ saving ? '保存中…' : '保存' }}</UButton></template>
   </UModal>
 </template>
 
 <style scoped>
-.cutout-settings{display:grid;gap:12px;margin-bottom:20px;padding-bottom:18px;border-bottom:1px solid #343b46}
+.cutout-settings{container-type:inline-size;display:grid;gap:12px;margin-bottom:20px;padding-bottom:18px;border-bottom:1px solid #343b46}
 .cutout-heading,.cutout-row,.cutout-width-label{display:flex;align-items:center;justify-content:space-between;gap:16px;color:#c4cbd6;font-size:12px}
 .cutout-heading{font-weight:500}
 .cutout-heading small{font-size:11px;font-weight:400;color:#8793a4}
@@ -149,4 +154,10 @@ onBeforeUnmount(() => { disposed = true; previewRevision++; clearTimeout(preview
 .cutout-positions button{min-height:44px;justify-content:center}
 .cutout-width-label output{color:#929fb0;font-variant-numeric:tabular-nums}
 .cutout-width{display:block;width:100%;height:28px;margin:0;accent-color:var(--accent);cursor:pointer}
+.cutout-preview{min-height:44px;border:1px solid #3d4651;border-radius:5px;background:#252a32;color:#a9b4c4;overflow:hidden}
+.cutout-preview .cutout-status{display:flex;align-items:center;justify-content:center;width:44px;height:44px}
+.cutout-preview .cutout-status i{width:7px;height:7px;border-radius:50%;background:#a6e3a1}
+.cutout-preview .cutout-title{font-size:12px;color:#d3d8e1}
+.cutout-preview .cutout-actions>span{display:flex;width:44px;height:44px;align-items:center;justify-content:center}
+.developer-setting{margin-top:18px;padding-top:16px;border-top:1px solid #343b46}
 </style>

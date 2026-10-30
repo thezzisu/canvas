@@ -78,7 +78,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <button ref="trigger" class="terminal-status-trigger nodrag" :class="{ connecting: available && connection === 'connecting' }" :style="{ '--status-color': color }" :data-connection-status="available ? connection : 'unavailable'" :aria-label="`窗口状态：${summary}`" :aria-expanded="open" :aria-controls="panelId" @pointerdown.stop @mouseenter="enter" @mouseleave="leave" @focus="enter" @blur="blur" @click.stop="toggle" @keydown.esc.stop.prevent="close"><i /></button>
+  <button ref="trigger" class="terminal-status-trigger nodrag cutout-status" :class="{ connecting: available && connection === 'connecting' }" :style="{ '--status-color': color }" :data-connection-status="available ? connection : 'unavailable'" :aria-label="`窗口状态：${summary}`" :aria-expanded="open" :aria-controls="panelId" @pointerdown.stop @mouseenter="enter" @mouseleave="leave" @focus="enter" @blur="blur" @click.stop="toggle" @keydown.esc.stop.prevent="close"><i /></button>
   <Teleport :to="portal">
     <div v-if="open" :id="panelId" ref="panel" class="terminal-status-popover" :style="position" role="region" aria-label="窗口状态" @mouseenter="enter" @mouseleave="leave" @pointerdown.stop @wheel.stop @keydown.esc.stop.prevent="close">
       <div class="terminal-status-summary"><i class="program-dot" :style="{ '--program-color': color }" /><span>{{ summary }}</span><small v-if="readOnly && connection === 'connected'">只读</small></div>

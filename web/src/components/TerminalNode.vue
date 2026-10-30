@@ -134,11 +134,10 @@ async function resized(event: { params: { width: number; height: number; x: numb
 <template>
   <NodeResizer v-if="!data.mobile && !data.overview && !data.focus && !maximizedElsewhere" :is-visible="selected" :min-width="360" :min-height="220" :max-width="4000" :max-height="3000" @resize-start="resizeStarted" @resize-end="resized" />
   <article tabindex="-1" class="terminal-card" :class="[{ selected, unavailable: !keepTerminal, focused: data.focus, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="keepTerminal ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :style="{ '--program-color': statusColor(frameStatus), width: dimensions || mobileFocus ? '100%' : `${data.width}px`, height: dimensions || mobileFocus ? '100%' : `${data.height}px` }" :aria-label="`${data.name} · ${data.subtitle}`">
-    <header class="terminal-header drag-handle" :data-cutout-position="mobileFocus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="mobileFocus ? { '--cutout-width': `${cutoutWidth}px` } : undefined">
+    <header class="terminal-header drag-handle" :class="{ 'cutout-header': mobileFocus }" :data-cutout-position="mobileFocus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="mobileFocus ? { '--cutout-width': `${cutoutWidth}px` } : undefined">
       <PaneIndicators :panes="data.panes" :status="data.status" :available="keepTerminal" :connection="status.status" :error="status.error" :read-only="status.readOnly" />
-      <span class="terminal-name" :title="title"><span class="terminal-tab-name">{{ data.name }}</span><span v-if="liveTitle" class="terminal-live-title">{{ liveTitle }}</span></span>
-      <button v-if="mobileFocus" class="terminal-mobile-menu nodrag" title="窗口操作" aria-label="窗口操作" @click.stop="action('menu')"><Icon name="more" :size="17" /></button>
-      <div class="terminal-actions nodrag">
+      <component :is="mobileFocus ? 'button' : 'span'" class="terminal-name" :class="{ 'cutout-title nodrag': mobileFocus }" :title="title" :aria-label="mobileFocus ? `窗口操作：${data.name}` : undefined" @click.stop="mobileFocus && action('menu')"><span class="terminal-tab-name">{{ data.name }}</span><span v-if="liveTitle" class="terminal-live-title">{{ liveTitle }}</span></component>
+      <div class="terminal-actions nodrag" :class="{ 'cutout-actions': mobileFocus }">
         <button v-if="data.overview && !mobileFocus" title="加入画布" aria-label="加入画布" @click.stop="action('add')"><Icon name="plus" :size="15" /></button>
         <button v-else-if="!mobileFocus" title="从画布移除" aria-label="从画布移除" @click.stop="action('remove')"><Icon name="minus" :size="15" /></button>
         <button v-if="!data.focus" title="聚焦窗口" aria-label="聚焦窗口" @click.stop="action('focus')"><Icon name="expand" :size="14" /></button>
@@ -192,15 +191,8 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-mobile.focused .terminal-name{font-size:13px}
 .canvas-fullscreen .terminal-mobile.focused{--terminal-header-height:44px}
 .canvas-fullscreen .terminal-mobile.focused .terminal-header{padding-top:0}
-.terminal-mobile.focused .terminal-mobile-menu{width:44px;height:44px;min-width:44px;padding:0;border-radius:4px;color:#8592a3}
-.canvas-fullscreen .terminal-mobile.focused .terminal-header{--cutout-space:clamp(0px,var(--cutout-width,0px),max(0px,calc(var(--mobile-width,100vw) - 200px)))}
-.canvas-fullscreen .terminal-mobile.focused .terminal-header[data-cutout-position=left]{padding-left:calc(4px + var(--cutout-space))}
-.canvas-fullscreen .terminal-mobile.focused .terminal-header[data-cutout-position=right]{padding-right:calc(4px + var(--cutout-space))}
-.canvas-fullscreen .terminal-mobile.focused .terminal-header[data-cutout-position=center]{display:grid;grid-template-columns:minmax(0,1fr) var(--cutout-space) minmax(0,1fr);gap:0}
-.canvas-fullscreen .terminal-header[data-cutout-position=center] :deep(.terminal-status-trigger){grid-area:1/1;justify-self:start}
-.canvas-fullscreen .terminal-header[data-cutout-position=center] .terminal-name{grid-area:1/1;margin:0 44px}
-.canvas-fullscreen .terminal-header[data-cutout-position=center] .terminal-mobile-menu{grid-area:1/1;justify-self:end}
-.canvas-fullscreen .terminal-header[data-cutout-position=center] .terminal-actions{grid-area:1/3;justify-self:end;margin-left:0}
+.terminal-mobile.focused{container-type:inline-size}
+.terminal-mobile.focused button.terminal-name{display:block;height:44px;padding:0;text-align:left;border-radius:4px}
 .terminal-mobile.focused .terminal-actions{opacity:1;pointer-events:auto;gap:0}
 .terminal-mobile.focused .terminal-actions button{width:44px;height:44px;min-width:44px;border-radius:4px}
 .terminal-mobile.focused :deep(.terminal-status-trigger){width:44px;height:44px;min-width:44px}
