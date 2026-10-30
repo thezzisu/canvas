@@ -3,19 +3,29 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import UModal from '@nuxt/ui/components/Modal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UInputMenu from '@nuxt/ui/components/InputMenu.vue'
+import USelect from '@nuxt/ui/components/Select.vue'
 import USwitch from '@nuxt/ui/components/Switch.vue'
 import type { ContentFontSettings, GlobalSettings } from '../../../shared/settings'
 import { FONT_CATALOG, buildFontPresentation, ensureContentFont } from '../fonts'
 import { write } from '../api'
 import { useMobileLayout } from '../mobile-layout'
 import { cutoutPosition, cutoutWidth, type CutoutPosition } from '../display-cutout'
-import { developerMode } from '../developer-mode'
+import { developerMode, viewportFit, interactiveWidget } from '../developer-mode'
 import { keepScreenAwake, retryScreenWakeLock, screenWakeLockState, screenWakeLockUnavailable } from '../screen-wake-lock'
 import Icon from './Icon.vue'
 
 const props = defineProps<{ open: boolean; settings: GlobalSettings; portal?: HTMLElement; hasDisplayCutout?: boolean }>()
 const emit = defineEmits<{ close: []; saved: [settings: GlobalSettings]; error: [message: string] }>()
 const mobile = useMobileLayout()
+const viewportFits = [
+  { value: 'cover', label: 'cover · 延伸至边缘（默认）' },
+  { value: 'contain', label: 'contain · 保留安全区' },
+]
+const interactiveWidgets = [
+  { value: 'resizes-content', label: 'resizes-content · 整页缩小（默认）' },
+  { value: 'resizes-visual', label: 'resizes-visual · 仅可视区域缩小' },
+]
+const viewportSelectUi = { content: 'settings-select-menu', item: 'settings-select-item' }
 const cutoutPositions: Array<{ value: CutoutPosition; label: string }> = [
   { value: 'left', label: '左' }, { value: 'center', label: '中' }, { value: 'right', label: '右' },
 ]
@@ -45,6 +55,8 @@ let timer: ReturnType<typeof setTimeout> | undefined
 let writes: Promise<void> = Promise.resolve()
 const config = computed(() => normalized(draft))
 const invalid = computed(() => !draft.stack.length || draft.stack.some(entry => !entry.family.trim()))
+const canReload = computed(() => !loading.value && !saving.value && signature(config.value) === signature(persisted.value))
+function reloadPage() { if (canReload.value) window.location.reload() }
 const previewStyle = computed(() => preview.value ? { fontFamily: preview.value.family, fontFeatureSettings: preview.value.features } : {})
 const previewText = '中文对齐  ABCD  012345\n天地玄黄  ABCD  012345\nconst x = a !== b && c => d;\n\ue0b0 \ue0b2 \uf07c  ~/canvas'
 
@@ -185,7 +197,22 @@ onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer) })
           <template v-else-if="screenWakeLockState === 'denied' || screenWakeLockState === 'released'"><small role="status">{{ screenWakeLockState === 'denied' ? '未能保持常亮' : '常亮已暂停' }}</small><UButton type="button" color="neutral" variant="link" size="xs" aria-label="重试常亮" @click="retryScreenWakeLock">重试</UButton></template>
         </template>
       </div>
-      <div class="developer-setting"><USwitch v-model="developerMode" label="开发者模式" aria-label="开发者模式" size="sm" class="settings-switch" /></div>
+      <div class="developer-setting">
+        <USwitch v-model="developerMode" label="开发者模式" aria-label="开发者模式" size="sm" class="settings-switch" />
+        <section v-if="developerMode" class="viewport-experiments" aria-label="视口测试">
+          <div class="viewport-experiment-heading"><span>视口测试</span><small>仅此浏览器</small></div>
+          <div class="viewport-experiment-field">
+            <label for="viewport-fit">屏幕边缘 <code>viewport-fit</code></label>
+            <USelect id="viewport-fit" v-model="viewportFit" :items="viewportFits" :portal="portal || false" :ui="viewportSelectUi" color="neutral" size="sm" class="settings-select" aria-label="屏幕边缘" />
+          </div>
+          <div class="viewport-experiment-field">
+            <label for="interactive-widget">键盘视口 <code>interactive-widget</code></label>
+            <USelect id="interactive-widget" v-model="interactiveWidget" :items="interactiveWidgets" :portal="portal || false" :ui="viewportSelectUi" color="neutral" size="sm" class="settings-select" aria-label="键盘视口" />
+          </div>
+          <p class="viewport-experiment-hint">立即设置；关闭开发者模式恢复默认。对比测试前可重新加载，再进入全屏并打开键盘。</p>
+          <UButton type="button" color="neutral" variant="outline" size="sm" class="viewport-reload" :disabled="!canReload" :title="canReload ? undefined : '先完成字体设置'" @click="reloadPage">重新加载页面</UButton>
+        </section>
+      </div>
     </template>
     <template #footer><UButton color="neutral" variant="outline" class="font-done" @click="close()">完成</UButton></template>
   </UModal>
@@ -207,4 +234,13 @@ onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer) })
 .wake-lock-setting{display:flex;align-items:center;gap:8px;margin-top:18px;padding-top:16px;border-top:1px solid #343b46}
 .wake-lock-setting>small{margin-left:auto;color:#8793a4;font-size:11px}
 .wake-lock-setting+.developer-setting{margin-top:14px;padding-top:0;border-top:0}
+.viewport-experiments{display:grid;gap:12px;margin-top:10px;padding:14px 0 0;border-top:1px solid #343b46}
+.viewport-experiment-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#c4cbd6;font-size:12px;font-weight:500}
+.viewport-experiment-heading small,.viewport-experiment-field code{font-size:11px;font-weight:400;color:#8793a4}
+.viewport-experiment-field{display:grid;gap:7px;min-width:0}
+.viewport-experiment-field label{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:0;font-size:11px}
+.viewport-experiment-hint{font-size:11px;line-height:1.7;color:#8793a4}
+.viewport-reload{justify-self:start;min-height:34px;padding:0 10px;border:1px solid #485262;border-radius:6px;font-size:11px;color:#c3cdd9;background:#2a323e}
+.viewport-reload:hover{background:#343e4b}
+.mobile-layout .viewport-reload{min-height:44px}
 </style>

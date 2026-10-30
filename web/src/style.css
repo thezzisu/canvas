@@ -8,6 +8,11 @@
 .settings-close{position:absolute;right:10px;top:9px;min-width:32px;min-height:32px;padding:6px;border-radius:6px;color:#8d99a9}
 .settings-close:hover{color:#dbe1e9;background:#ffffff08}
 .settings-body{flex:1 1 auto;min-height:0;padding:18px;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.settings-select{position:relative;width:100%;min-width:0;min-height:36px;justify-content:space-between;padding:7px 28px 7px 10px;border:1px solid #3c4654;border-radius:6px;background:#181d24;color:#d3dbe6;font-size:12px;box-shadow:none;text-align:left}
+.settings-select-menu{z-index:82;width:var(--reka-select-trigger-width);max-width:calc(100vw - 24px);border:1px solid #454f5e;border-radius:7px;background:#242b35;padding:4px;box-shadow:0 10px 26px #0007;color:#d3dbe6}
+.settings-select-item{min-height:36px;padding:8px 28px 8px 8px;border-radius:4px;font-size:12px;outline:0}
+.settings-select-item[data-highlighted],.settings-select-item[data-state=checked]{background:#ffffff08}
+.mobile-layout .settings-select,.mobile-layout .settings-select-item{min-height:44px}
 .settings-footer{flex:0 0 auto;display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #343c48;background:#1d2229}
 .font-settings{display:flex;flex-direction:column;gap:14px}
 .font-family-input:focus-within{outline:0;border-color:#b18a6d;box-shadow:0 0 0 2px #e9b18812}

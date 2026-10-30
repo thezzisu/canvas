@@ -1,6 +1,7 @@
 import { mobileKeyboardFrame, mobileKeyboardVisible } from './mobile-keyboard'
+import { viewportPolicy } from './developer-mode'
 
-/** Explicit, local-only geometry capture. Never read content, identity or storage. */
+/** Explicit, local-only geometry and viewport policy. No terminal content or identity. */
 export function collectViewportDiagnostics() {
   const number = (value: number) => Number.isFinite(value) ? Math.round(value * 100) / 100 : null
   const rect = (value: DOMRect | DOMRectReadOnly) => ({
@@ -31,6 +32,7 @@ export function collectViewportDiagnostics() {
   } finally { probe.remove() }
   return {
     version: 1,
+    viewportPolicy: { ...viewportPolicy.value, meta: document.querySelector<HTMLMetaElement>('meta[name="viewport"]')?.content || null },
     fullscreen: !fullscreen ? 'none' : fullscreen === document.documentElement ? 'document' : fullscreen === app ? 'app' : 'other',
     viewport: {
       layout: { width: number(innerWidth), height: number(innerHeight) },
