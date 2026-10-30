@@ -163,11 +163,11 @@ async function resized(event: { params: { width: number; height: number; x: numb
 </template>
 
 <style scoped>
-.terminal-name{display:flex;align-items:center;gap:8px}
+.terminal-name{display:flex;align-items:center;gap:6px}
 .terminal-loading{background:#11131799;color:#b0b8c5}
 .terminal-tab-name{overflow:hidden;text-overflow:ellipsis;min-width:0}
 .terminal-name:has(.terminal-live-title) .terminal-tab-name{max-width:40%;flex-shrink:0}
-.terminal-live-title{color:#939ba8;overflow:hidden;text-overflow:ellipsis;min-width:0;font-weight:400}
+.terminal-live-title{padding-left:6px;border-left:1px solid #65708066;color:#939ba8;overflow:hidden;text-overflow:ellipsis;min-width:0;font-weight:400}
 .terminal-drop-target{outline:1px solid var(--accent);outline-offset:-3px;background:#e9b18808}
 .terminal-copy-notice{position:absolute;bottom:8px;right:9px;padding:4px 7px;border:1px solid #424a56;border-radius:4px;background:#242930f2;color:#b6c0ce;font-size:10px;pointer-events:none}
 .terminal-copy-notice.copy-failed{border-color:#79545470;background:#33262bf2;color:#d6aaaa}
@@ -187,12 +187,12 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-mobile-preview .terminal-host{pointer-events:none}
 .terminal-mobile-preview .terminal-actions{visibility:hidden}
 .terminal-mobile.focused{--terminal-header-height:calc(44px + var(--mobile-safe-top,0px));min-height:0;border-radius:0;box-shadow:none}
-.terminal-mobile.focused .terminal-header{height:var(--terminal-header-height);min-height:var(--terminal-header-height);flex:0 0 var(--terminal-header-height);padding:var(--mobile-safe-top,0px) 4px 0;gap:3px;cursor:default}
+.terminal-mobile.focused .terminal-header{height:var(--terminal-header-height);min-height:var(--terminal-header-height);flex:0 0 var(--terminal-header-height);padding:var(--mobile-safe-top,0px) 0 0;gap:0;cursor:default}
 .terminal-mobile.focused .terminal-name{font-size:13px}
 .canvas-fullscreen .terminal-mobile.focused{--terminal-header-height:44px}
 .canvas-fullscreen .terminal-mobile.focused .terminal-header{padding-top:0}
 .terminal-mobile.focused{container-type:inline-size}
-.terminal-mobile.focused button.terminal-name{display:block;height:44px;padding:0;text-align:left;border-radius:4px}
+.terminal-mobile.focused button.terminal-name{display:flex;justify-content:flex-start;height:44px;padding:0;text-align:left;border-radius:4px}
 .terminal-mobile.focused .terminal-actions{opacity:1;pointer-events:auto;gap:0}
 .terminal-mobile.focused .terminal-actions button{width:44px;height:44px;min-width:44px;border-radius:4px}
 .terminal-mobile.focused :deep(.terminal-status-trigger){width:44px;height:44px;min-width:44px}
