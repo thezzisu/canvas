@@ -21,6 +21,7 @@ import { OpenDownloadService } from "./open-download.ts";
 import { AssetStore } from "./assets.ts";
 import { UploadService } from "./uploads.ts";
 import { vscodeDirectoryUri } from "./editor-links.ts";
+import { WindowContentService } from "./window-content.ts";
 const dataDir =
   process.env.CANVAS_DATA_DIR ?? join(homedir(), ".local/share/canvas");
 const accountFile = join(dataDir, "auth.json");
@@ -50,13 +51,19 @@ const downloads = new OpenDownloadService({
     return socket && sessionId ? { socket, sessionId, isCurrent: recipient!.isCurrent } : undefined;
   },
 });
+const windowContent = new WindowContentService({
+  store, assets,
+  content: (source, spaceId, windowId) => terminals.content(source, spaceId, windowId),
+  registerStaged: (assetId, sessionId) => downloads.registerStaged(assetId, sessionId),
+});
 const app = createApp(store, account, terminals, {
   secureCookie: process.env.CANVAS_SECURE_COOKIE === "1",
   openDownload: (ticket, session) => downloads.open(ticket, session),
   prepareDownload: (ticket, session, context) => downloads.prepare(ticket, session, context),
-  closeOpenBridge: (sourceId) => { uploads.closeSource(sourceId); return downloads.closeSource(sourceId); },
+  closeOpenBridge: (sourceId) => { uploads.closeSource(sourceId); windowContent.closeSource(sourceId); return downloads.closeSource(sourceId); },
   assets,
   uploads,
+  windowContent,
 });
 app.get("/api/*", (c) => c.json({ error: "Not found" }, 404));
 app.use("*", async (c, next) => {
@@ -170,6 +177,7 @@ async function stop() {
   if (stopping) return;
   stopping = true;
   clearInterval(heartbeat);
+  windowContent.close();
   await uploads.closeAll();
   await terminals.closeAll();
   await downloads.closeAll();

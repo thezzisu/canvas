@@ -24,6 +24,7 @@ import type { TerminalManager } from "./terminals.ts";
 import type { DownloadContext } from "./open-download.ts";
 import type { AssetStore } from "./assets.ts";
 import type { UploadService } from "./uploads.ts";
+import type { WindowContentService } from "./window-content.ts";
 import {
   BackgroundError,
   DEFAULT_BACKGROUND_OPACITY,
@@ -87,6 +88,7 @@ export function createApp(
     closeOpenBridge?: (sourceId: string) => Promise<void>;
     assets?: AssetStore;
     uploads?: UploadService;
+    windowContent?: WindowContentService;
   } = {},
 ) {
   const app = new Hono();
@@ -157,6 +159,20 @@ export function createApp(
     }).strict().parse(await c.req.json());
     const prepared = options.prepareDownload?.(c.req.param("ticket"), getCookie(c, "canvas_session") ?? "", context);
     return prepared ? c.body(null, 204) : c.json({ error: "Download expired" }, 404);
+  });
+  app.post("/api/sources/:id/spaces/:space/windows/:window/scan", async c => {
+    z.object({}).strict().parse(await c.req.json());
+    const source = store.get<Source>("source", c.req.param("id"));
+    if (!source || !options.windowContent) return c.json({ error: "Window not found" }, 404);
+    return c.json(await options.windowContent.scan(source, c.req.param("space"), c.req.param("window"), getCookie(c, "canvas_session") ?? ""));
+  });
+  app.post("/api/content-scans/:scan/items/:item/open", async c => {
+    const context = z.object({
+      canvasId: z.union([z.string().uuid(), z.literal("overview")]).optional(), anchorId: z.string().max(150).optional(),
+    }).strict().parse(await c.req.json());
+    const opened = await options.windowContent?.open(c.req.param("scan"), c.req.param("item"),
+      getCookie(c, "canvas_session") ?? "", context, c.req.raw.signal);
+    return opened ? c.json(opened) : c.json({ error: "Scan expired; scan this window again" }, 404);
   });
   app.on(["GET", "HEAD"], "/api/files/:id", async (c) => {
     const file = await options.assets?.read(c.req.param("id"));

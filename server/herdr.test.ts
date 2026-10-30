@@ -278,6 +278,26 @@ test("native herdr transport works with an unmodified server: split rendering, k
       () => screenText().includes("RIGHT_TTY_30 53"),
       "right pane PTY did not fill its half of the resized tab",
     );
+    const wrappedPath = `/tmp/${'soft-wrap-'.repeat(9)}visible.txt`;
+    const wrappedUrl = `https://example.test/${'long-url-'.repeat(8)}page`;
+    const scanScript = join(root, 'scan-visible.py');
+    writeFileSync(scanScript, `import sys\nsys.stdout.write(${JSON.stringify(`\x1b[2J\x1b[H${wrappedPath}\r\n${wrappedUrl}\r\nHARD_ONE\r\nHARD_TWO\r\nSCAN_DONE\r\n`)});sys.stdout.flush()\n`);
+    terminal.write(`python3 '${scanScript}'\r`);
+    await waitFor(() => screenText().includes('SCAN_DONE'), 'native scan fixture did not print');
+    const beforeScan = snapshot();
+    await waitFor(async () => {
+      try {
+        const scanned = await terminal!.content();
+        const right = scanned?.find(item => item.id === nativePanes[1].pane_id);
+        return !!right?.lines.includes(wrappedPath) && right.lines.includes(wrappedUrl)
+          && right.lines.includes('HARD_ONE') && right.lines.includes('HARD_TWO');
+      } catch { return false; }
+    }, 'native read did not join soft wraps while retaining hard line breaks');
+    const afterScan = snapshot();
+    assert.equal(afterScan.focused_tab_id, beforeScan.focused_tab_id);
+    assert.equal(afterScan.focused_pane_id, beforeScan.focused_pane_id);
+    assert.deepEqual(afterScan.panes.filter((p: { tab_id: string }) => p.tab_id === window.id).map((p: { scroll: unknown }) => p.scroll),
+      beforeScan.panes.filter((p: { tab_id: string }) => p.tab_id === window.id).map((p: { scroll: unknown }) => p.scroll));
     screen.resize(70, 18);
     terminal.resize(70, 18);
     await assertSplitGeometry(70, 18);

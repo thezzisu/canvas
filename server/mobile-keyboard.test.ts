@@ -1,10 +1,10 @@
 import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
-import { viewportPolicy } from '../web/src/developer-mode.ts'
+import { viewportPolicy, type InteractiveWidget } from '../web/src/developer-mode.ts'
 import { readViewportFrame } from '../web/src/viewport-frame.ts'
-import { bindMobileKeyboard, hideMobileKeyboard, mobileKeyboardFrame, mobileKeyboardVisible } from '../web/src/mobile-keyboard.ts'
+import { bindMobileKeyboard, hideMobileKeyboard, mobileKeyboardFrame, mobileKeyboardVisible, refreshMobileKeyboardViewport } from '../web/src/mobile-keyboard.ts'
 
-function fixture(t: TestContext, policy: 'resizes-content' | 'resizes-visual' = 'resizes-content') {
+function fixture(t: TestContext, policy: InteractiveWidget = 'resizes-content') {
   const previousPolicy = viewportPolicy.value
   viewportPolicy.value = { viewportFit: 'cover', interactiveWidget: policy }
   t.mock.timers.enable({ apis: ['setTimeout'] })
@@ -224,4 +224,45 @@ test('explicit visual keyboard mode follows the visual frame while CSS remains f
   f.resize(535.47)
   assert.equal(Boolean(mobileKeyboardFrame.value), false)
   assert.equal(f.requested(), true)
+})
+
+
+test('CSS-only overlay inset changes drive keyboard intent and bounded recovery without viewport events', async t => {
+  const f = fixture(t, 'overlays-content')
+  f.control.focus(true)
+  const originalLayout = f.window.innerHeight, originalVisual = f.visual.height
+  f.css.height = 520.8
+  refreshMobileKeyboardViewport()
+  t.mock.timers.tick(1000)
+  assert.equal(f.requested(), true)
+  assert.equal(mobileKeyboardVisible.value, true)
+  assert.equal(readViewportFrame().height, 520.8)
+  assert.equal(f.window.innerHeight, originalLayout)
+  assert.equal(f.visual.height, originalVisual)
+  const focusCalls = f.textarea.focusCalls
+  f.css.height = 844
+  refreshMobileKeyboardViewport()
+  assert.equal(mobileKeyboardFrame.value?.height, 520.8)
+  await Promise.resolve()
+  assert.equal(f.textarea.focusCalls, focusCalls + 1)
+  f.css.height = 520.8
+  refreshMobileKeyboardViewport()
+  assert.equal(Boolean(mobileKeyboardFrame.value), false)
+  assert.equal(f.requested(), true)
+  f.control.blur()
+  f.css.height = 844
+  refreshMobileKeyboardViewport()
+  assert.equal(mobileKeyboardVisible.value, false)
+})
+
+test('overlay mode with no reported keyboard geometry retains the bounded opening failure behavior', t => {
+  const f = fixture(t, 'overlays-content')
+  f.control.focus(true)
+  refreshMobileKeyboardViewport()
+  t.mock.timers.tick(900)
+  assert.equal(f.requested(), false)
+  assert.equal(f.textarea.readOnly, true)
+  assert.equal(mobileKeyboardVisible.value, false)
+  assert.equal(mobileKeyboardFrame.value, undefined)
+  assert.equal(readViewportFrame().height, 844)
 })

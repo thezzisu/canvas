@@ -1,4 +1,10 @@
 export default {
+  scan: {
+    title: 'Scan content', scope: 'Current screen', refresh: 'Rescan', empty: 'No files or links found',
+    failed: 'Could not scan this window', openFailed: 'Could not open this file', staging: 'Staging…',
+    requiresForward: 'Forwarding required', unresolved: 'Working directory unavailable',
+    copyPath: 'Copy path', copyLink: 'Copy link', truncated: 'Results truncated',
+  },
   background: {
     title: 'Wallpaper', preview: 'Wallpaper preview', choose: 'Choose image', change: 'Change image', remove: 'Remove',
     reading: 'Reading…', saving: 'Saving…', opacity: 'Opacity', opacityLabel: 'Wallpaper opacity',

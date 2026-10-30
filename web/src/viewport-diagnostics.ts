@@ -37,7 +37,12 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
     probe.style.bottom = 'auto'; probe.style.height = '100dvh'
     const dynamic = rect(probe.getBoundingClientRect())
     probe.style.height = '0'; probe.style.padding = 'env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)'
-    probes = { fixed, dynamic, safeArea: padding(probe), bounds: {
+    const safeArea = padding(probe)
+    probe.style.padding = '0'
+    const dimensions = ['top', 'right', 'bottom', 'left', 'width', 'height']
+    for (const dimension of dimensions) probe.style.setProperty(dimension, `env(keyboard-inset-${dimension}, 0px)`)
+    const keyboardInsets = Object.fromEntries(dimensions.map(dimension => [dimension, cssNumber(probe, dimension)]))
+    probes = { fixed, dynamic, safeArea, keyboardInsets, bounds: {
       supported: boundsSupported, open: boundsOpen, rect: boundsOpen && bounds ? rect(bounds.getBoundingClientRect()) : null,
     } }
   } finally { probe.remove() }
@@ -71,7 +76,8 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
     },
     applied: appBox ? {
       width: number(appBox.width), height: number(appBox.height), top: number(appBox.top), left: number(appBox.left),
-      sizing: held ? 'recovery' : viewportPolicy.value.interactiveWidget === 'resizes-visual' && app?.classList.contains('mobile-layout') ? 'visual-viewport' : 'css',
+      sizing: held ? 'recovery' : viewportPolicy.value.interactiveWidget === 'resizes-visual' && app?.classList.contains('mobile-layout') ? 'visual-viewport'
+        : viewportPolicy.value.interactiveWidget === 'overlays-content' ? 'css-keyboard-inset' : 'css',
     } : null,
     keyboard: {
       requested: query('.focus-overlay .terminal-actions button[aria-pressed]')?.getAttribute('aria-pressed') === 'true',

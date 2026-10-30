@@ -3,11 +3,13 @@ import { randomUUID } from 'node:crypto'
 import { HerdrInputRouter } from './input.ts'
 import { HerdrScreen, applySurfacePatch, validateSurface, type ScreenSelection } from './screen.ts'
 import { FrameReader, encodeClientMessage, type ClientMessage, type ClientShellSnapshot, type PaneSurfaceFrame, type ServerMessage } from './wire.ts'
+import { readWindowContent, type NativeContentPane } from './content.ts'
 
 export interface HerdrClientTransport {
   onData(listener: (data: string) => void): { dispose(): void }
   onPaneFocus(listener: (paneId: string | undefined) => void): { dispose(): void }
   onExit(listener: (event: { exitCode: number; signal?: number }) => void): { dispose(): void }
+  content(): Promise<NativeContentPane[] | undefined>
   write(data: string | Buffer): void
   resize(cols: number, rows: number): void
   pause(): void
@@ -54,6 +56,7 @@ class HerdrClient implements HerdrClientTransport {
   private readonly input: HerdrInputRouter
   private snapshot?: ClientShellSnapshot
   private surface?: PaneSurfaceFrame
+  private renderedContent?: { surface: PaneSurfaceFrame; snapshot: ClientShellSnapshot }
   private selection?: ScreenSelection
   private output: string[] = []
   private outputBytes = 0
@@ -242,6 +245,7 @@ class HerdrClient implements HerdrClientTransport {
     }
     this.input.refresh()
     const rendered = this.screen.render(surface, this.selection)
+    this.renderedContent = { surface, snapshot: this.snapshot! }
     if (!this.initialized) {
       this.initialized = true
       clearTimeout(this.deadline)
@@ -250,6 +254,14 @@ class HerdrClient implements HerdrClientTransport {
     }
     this.emit(rendered)
     this.flushInput()
+  }
+  async content() {
+    const rendered = this.renderedContent
+    if (this.closed || !rendered) return
+    const panes = await readWindowContent(rendered.surface, rendered.snapshot, this.options.tabId,
+      params => this.request('pane.selection.read', params))
+    if (this.closed || this.snapshot?.boot_id !== rendered.snapshot.boot_id) throw new Error('Window changed; scan again')
+    return panes
   }
   private clipboard(data: string) {
     if (!this.initialized || data.length > 2 * 1024 * 1024 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) return

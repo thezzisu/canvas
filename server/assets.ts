@@ -55,7 +55,7 @@ async function writeAll(file: FileHandle, chunk: Buffer, position: number) {
 
 export interface AssetUpload {
   write(chunk: Uint8Array): Promise<void>;
-  complete(context: FileNodeContext): Promise<FileAsset & { temporary: boolean }>;
+  complete(context: FileNodeContext, signal?: AbortSignal): Promise<FileAsset & { temporary: boolean }>;
   abort(): Promise<void>;
 }
 
@@ -109,7 +109,7 @@ export class AssetStore {
         await writeAll(file, chunk, written);
         written += chunk.length;
       },
-      complete: async (context) => {
+      complete: async (context, signal) => {
         if (!active) throw new Error("Upload is closed");
         if (written !== input.size) throw new Error("File transfer ended before declared length");
         const id = randomUUID();
@@ -117,8 +117,10 @@ export class AssetStore {
         const directoryPath = temporary ? this.staged : this.directory;
         const path = join(directoryPath, id);
         try {
+          signal?.throwIfAborted();
           await file.sync();
           await file.close();
+          signal?.throwIfAborted();
           if (!active) throw new Error("Upload is closed");
           const detected = /\.(?:html?|xhtml|svg|xml|js|mjs|cjs)$/iu.test(filename)
             ? { mime: "application/octet-stream", preview: "file" as const }
@@ -130,6 +132,7 @@ export class AssetStore {
           await rename(partialPath, path);
           const directory = await open(directoryPath, constants.O_RDONLY | constants.O_DIRECTORY);
           try { await directory.sync(); } finally { await directory.close(); }
+          signal?.throwIfAborted();
           if (!active || this.closed) throw new Error("Upload is closed");
           if (temporary) {
             const ttl = this.options.temporaryTtlMs ?? 60 * 60_000;

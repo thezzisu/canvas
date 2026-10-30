@@ -2,7 +2,7 @@ import headless from "@xterm/headless";
 import { terminalUnicodeAddon } from "../shared/terminal-unicode.ts";
 import serialize from "@xterm/addon-serialize";
 import type { WebSocket } from "ws";
-import type { Source } from "./state.ts";
+import { sourceConnectionKey, type Source } from "./state.ts";
 import { openTerminal } from "./providers.ts";
 import { GeometryController, type Size } from "./geometry.ts";
 import { HERDR_MOUSE_ENCODING, type HerdrClientTransport } from "./herdr/client.ts";
@@ -42,6 +42,8 @@ class LiveTerminal {
   constructor(
     readonly key: string,
     readonly sourceId: string,
+    readonly connectionKey: string,
+    readonly spaceId: string,
     readonly handle: Awaited<ReturnType<typeof openTerminal>>,
     cols: number,
     rows: number,
@@ -339,6 +341,8 @@ export class TerminalManager {
           return new LiveTerminal(
             key,
             source.id,
+            sourceConnectionKey(source),
+            target.spaceId,
             handle,
             cols,
             rows,
@@ -372,6 +376,11 @@ export class TerminalManager {
     const socket = terminal?.downloadRecipient();
     if (!terminal || !socket) return;
     return { socket, isCurrent: () => terminal.downloadRecipient() === socket };
+  }
+  async content(source: Source, spaceId: string, windowId: string) {
+    const terminal = await this.entries.get(`${source.id}/${windowId}`)?.catch(() => undefined);
+    return terminal && !terminal.closed && terminal.clients.size && terminal.spaceId === spaceId
+      && terminal.connectionKey === sourceConnectionKey(source) ? terminal.proc.content() : undefined;
   }
   async captureFilePaste(sourceId: string, windowId: string, ws: WebSocket) {
     const pending = this.entries.get(`${sourceId}/${windowId}`);

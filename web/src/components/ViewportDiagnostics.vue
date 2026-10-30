@@ -88,7 +88,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="debug-setting" role="group" aria-label="interactive-widget">
             <code>interactive-widget</code>
-            <div class="debug-setting-options"><UButton v-for="value in (['resizes-content', 'resizes-visual'] as const)" :key="value" type="button" color="neutral" :variant="interactiveWidget === value ? 'solid' : 'outline'" :aria-pressed="interactiveWidget === value" @click="interactiveWidget = value">{{ value }}</UButton></div>
+            <div class="debug-setting-options debug-widget-options"><UButton v-for="value in (['resizes-content', 'resizes-visual', 'overlays-content'] as const)" :key="value" type="button" color="neutral" :variant="interactiveWidget === value ? 'solid' : 'outline'" :aria-pressed="interactiveWidget === value" @click="interactiveWidget = value">{{ value }}</UButton></div>
           </div>
           <div class="debug-reload-row">
             <span v-if="viewportReloadRequired" role="status">{{ t('settings.reloadRequired') }}</span>
@@ -112,6 +112,7 @@ onBeforeUnmount(() => {
 .debug-setting{display:grid;gap:8px}
 .debug-setting>code{font-size:11px;color:#929fb0}
 .debug-setting-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
+.debug-widget-options{grid-template-columns:minmax(0,1fr)}
 .debug-setting-options button{justify-content:center;min-height:36px;padding:6px 4px;border:1px solid #414b59;border-radius:5px;background:#1c222a;color:#aeb9c9;font-size:11px;white-space:nowrap}
 .debug-setting-options button[aria-pressed=true]{border-color:#a78770;background:#e9b18812;color:#e9c9b0}
 .debug-setting-options button:hover{background:#ffffff08}

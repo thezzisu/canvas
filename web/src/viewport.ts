@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 import type { CanvasViewport } from './mobile-layout'
-import { mobileKeyboardFrame, mobileKeyboardVisible } from './mobile-keyboard'
+import { mobileKeyboardFrame, mobileKeyboardVisible, refreshMobileKeyboardViewport } from './mobile-keyboard'
 import { viewportPolicy } from './developer-mode'
 import { readViewportFrame, viewportProbe } from './viewport-frame'
 export { viewportFrame, type ViewportFrame } from './viewport-frame'
@@ -28,6 +28,8 @@ export function useMobileViewport(mobile: Ref<boolean>) {
   const update = () => {
     const next = readViewportFrame(), previous = measured.value
     if (next.width !== previous.width || next.height !== previous.height || next.top !== previous.top || next.left !== previous.left) measured.value = next
+    // CSS keyboard insets can change without a window or VisualViewport event.
+    refreshMobileKeyboardViewport()
   }
   let observer: ResizeObserver | undefined
   onMounted(() => {
@@ -50,7 +52,7 @@ export function useMobileViewport(mobile: Ref<boolean>) {
   const style = computed(() => {
     if (!mobile.value) return {}
     const frame = viewport.value
-    // CSS owns normal resizes-content geometry. Only an explicit visual policy
+    // CSS owns content-resize and keyboard-inset geometry. Only an explicit visual policy
     // or bounded keyboard recovery overrides the CSS viewport dimensions.
     const override = viewportPolicy.value.interactiveWidget === 'resizes-visual' || !!mobileKeyboardFrame.value
     return {

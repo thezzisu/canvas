@@ -3,10 +3,11 @@ import type { CanvasViewport } from './mobile-layout'
 export type PageDirection = 'left' | 'right' | 'up' | 'down'
 export interface OverviewPage { id: string; row: string; x: number; y: number; width: number; height: number }
 type Frame = { width: number; height: number }
-const center = (page: OverviewPage) => ({ x: page.x + page.width / 2, y: page.y + page.height / 2 })
+type Bounds = Pick<OverviewPage, 'x' | 'y' | 'width' | 'height'>
+const center = (page: Bounds) => ({ x: page.x + page.width / 2, y: page.y + page.height / 2 })
 
 /** The native window keeps its dimensions; only the canvas camera moves. */
-export function pageViewport(page: OverviewPage, frame: Frame): CanvasViewport {
+export function pageViewport(page: Bounds, frame: Frame): CanvasViewport {
   const padding = 16
   const zoom = Math.max(.08, Math.min(2, (frame.width - padding * 2) / page.width, (frame.height - padding * 2) / page.height))
   const point = center(page)

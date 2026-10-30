@@ -15,6 +15,24 @@ export const downloadPreview = computed(() => previews.value[0])
 export const downloadPreviewCount = computed(() => previews.value.length)
 export function dismissDownloadPreview() { previews.value = previews.value.slice(1) }
 
+/** Present an already-staged file in the browser that requested it. */
+export function presentDownload(file: Omit<DownloadPreview, 'preview'> & { preview: DownloadPreview['preview'] | 'file' }, download = false) {
+  if (!download && file.preview !== 'file') {
+    previews.value = [...previews.value, { ...file, preview: file.preview }]
+    return
+  }
+  const url = new URL(file.url, location.href)
+  if (download) url.searchParams.set('download', '1')
+  const anchor = document.createElement('a')
+  anchor.href = url.href
+  anchor.download = file.filename
+  anchor.hidden = true
+  const target = document.fullscreenElement || document.body
+  target.append(anchor)
+  anchor.click()
+  anchor.remove()
+}
+
 const requests = new Map<AbortController, WebSocket>()
 let received = new WeakMap<WebSocket, Set<string>>()
 let getDownloadContext: (resource: DownloadResource) => DownloadContext | undefined = () => undefined
@@ -71,20 +89,11 @@ export function receiveDownload(socket: WebSocket, message: Record<string, unkno
   if (!firstMessage(socket, message.type, message.id)) return true
   if ((message.preview === 'image' || message.preview === 'pdf' || message.preview === 'text')
       && Number.isSafeInteger(message.size) && (message.size as number) >= 0) {
-    previews.value = [...previews.value, { id: message.id, filename: message.filename,
-      size: message.size as number, preview: message.preview, url: path }]
+    presentDownload({ id: message.id, filename: message.filename,
+      size: message.size as number, preview: message.preview, url: path })
     return true
   }
-  // This URL serves an already-staged file. Browser download policy can no
-  // longer hold the remote helper or its terminal session open.
-  const anchor = document.createElement('a')
-  anchor.href = url.href
-  anchor.download = message.filename
-  anchor.hidden = true
-  const target = document.fullscreenElement || document.body
-  target.append(anchor)
-  anchor.click()
-  anchor.remove()
+  presentDownload({ id: message.id, filename: message.filename, size: 0, preview: 'file', url: url.href })
   return true
 }
 

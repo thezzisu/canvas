@@ -12,6 +12,7 @@ interface VirtualKeyboard extends EventTarget {
 interface KeyboardOptions { active(): boolean; changed(requested: boolean): void; setEditable?(value: boolean): void }
 let owner: ReturnType<typeof bindMobileKeyboard> | undefined
 export function hideMobileKeyboard() { owner?.blur() }
+export function refreshMobileKeyboardViewport() { owner?.refreshViewport() }
 
 /** Keep native keyboard intent, input focus and its temporary viewport together. */
 export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptions) {
@@ -125,6 +126,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   }
   function visibilityChanged() { if (document.hidden && owner === controller) controller.blur() }
   const controller = {
+    refreshViewport: observe,
     focus(value?: boolean) {
       if (!options.active()) return
       if (owner !== controller) { owner?.blur(); owner = controller }

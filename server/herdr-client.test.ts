@@ -8,7 +8,7 @@ import { createHerdrClient } from './herdr/client.ts'
 import { Writer } from './herdr/wire.ts'
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
-async function until(check: () => boolean) { for (let i = 0; i < 100; i++) { if (check()) return; await delay(5) } assert.fail('fixture state did not settle') }
+async function until(check: () => boolean | Promise<boolean>) { for (let i = 0; i < 100; i++) { if (await check()) return; await delay(5) } assert.fail('fixture state did not settle') }
 function framed(payload: Buffer) { const prefix = Buffer.alloc(4); prefix.writeUInt32LE(payload.length); return Buffer.concat([prefix, payload]) }
 function readHeader(payload: Buffer) {
   let offset = 1
@@ -98,6 +98,35 @@ test('snapshot and full-surface revisions must pair before presenting, while old
   f.snapshot(1); await delay(10); assert.equal(output, '')
   let exit: number | undefined; client.onExit(value => exit = value.exitCode)
   f.snapshot(1, 'target', 'another-boot'); await until(() => exit !== undefined); assert.equal(exit, 1)
+})
+
+test('content scan reads the coherent displayed frame through revision-bound read-only requests', async t => {
+  const reads: Record<string, unknown>[] = []
+  const f = await fixture(t, { readSelection: async params => {
+    reads.push(params)
+    return { pane_id: 'pane', text: ['READY', 'NEW', 'NEXT'][Number(params.content_revision) - 1] }
+  } }), client = await f.connect()
+  t.after(() => client.kill())
+  await delay(10)
+  const before = [...f.tags]
+  assert.deepEqual((await client.content())?.map(pane => pane.lines), [['READY']])
+  assert.deepEqual(reads[0], { pane_id: 'pane', content_revision: 1, anchor: { row: 0, col: 0 }, cursor: { row: 0, col: 7 } })
+  assert.deepEqual(f.tags, before)
+  f.snapshot(2); await delay(10)
+  assert.deepEqual((await client.content())?.map(pane => pane.lines), [['READY']])
+  f.surface(2, 2, 'NEW'); await until(async () => (await client.content())?.[0]?.lines[0] === 'NEW')
+  f.surface(3, 3, 'NEXT'); await delay(10)
+  assert.deepEqual((await client.content())?.map(pane => pane.lines), [['NEW']])
+  f.snapshot(3); await until(async () => (await client.content())?.[0]?.lines[0] === 'NEXT')
+  assert.deepEqual(f.tags, before)
+  client.kill()
+  assert.equal(await client.content(), undefined)
+})
+
+test('content reads reject stale native revisions instead of using mixed frame rows', async t => {
+  const f = await fixture(t, { readSelection: async () => { throw new Error('pane content changed') } }), client = await f.connect()
+  t.after(() => client.kill())
+  await assert.rejects(client.content(), /scan again/)
 })
 
 test('native client pause/resume preserves queued display and cleanup reports one exit', async t => {

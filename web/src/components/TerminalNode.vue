@@ -149,6 +149,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
       <div class="terminal-actions nodrag" :class="{ 'cutout-actions': mobileFocus }">
         <button v-if="data.overview && !mobileFocus" :title="t('terminal.action.addToCanvas')" :aria-label="t('terminal.action.addToCanvas')" @click.stop="action('add')"><Icon name="plus" :size="15" /></button>
         <button v-else-if="!mobileFocus" :title="t('terminal.action.removeFromCanvas')" :aria-label="t('terminal.action.removeFromCanvas')" @click.stop="action('remove')"><Icon name="minus" :size="15" /></button>
+        <button v-if="data.newTab && !mobileFocus" :title="t('app.newTab')" :aria-label="t('app.newTab')" :disabled="!data.available || data.newTab.pending()" :aria-busy="data.newTab.pending()" @click.stop="data.newTab.create()"><span v-if="data.newTab.pending()" class="spinner" /><Icon v-else name="plus" :size="15" /></button>
         <button v-if="!data.focus" :title="t('terminal.action.focus')" :aria-label="t('terminal.action.focus')" @click.stop="action('focus')"><Icon name="expand" :size="14" /></button>
         <button v-if="mobileFocus" :title="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-label="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-pressed="status.keyboardRequested" @pointerdown.stop.prevent @click.stop="toggleKeyboard"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10" /></svg></button>
         <button :title="t('terminal.action.windowActions')" :aria-label="t('terminal.action.windowActions')" @click.stop="action('menu')"><Icon name="more" :size="17" /></button>
@@ -172,6 +173,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
 </template>
 
 <style scoped>
+:global(.vue-flow__node-terminal .vue-flow__resize-control.handle){opacity:0}
 .terminal-name{display:flex;align-items:center;gap:6px}
 .terminal-card.input-focused{border-color:color-mix(in srgb,var(--program-color) 60%,#fff)}
 .terminal-card.input-focused.program-unknown{border-color:#aeb9c8}

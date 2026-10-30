@@ -3,11 +3,12 @@ import { computed, shallowRef } from 'vue'
 
 export const developerMode = useStorage('canvas:developer-mode', false)
 export const viewportFit = useStorage<'cover' | 'contain'>('canvas:developer:viewport-fit', 'cover')
-export const interactiveWidget = useStorage<'resizes-content' | 'resizes-visual'>('canvas:developer:interactive-widget', 'resizes-content')
+export type InteractiveWidget = 'resizes-content' | 'resizes-visual' | 'overlays-content'
+export const interactiveWidget = useStorage<InteractiveWidget>('canvas:developer:interactive-widget', 'resizes-content')
 
 export const pendingViewportPolicy = computed(() => ({
   viewportFit: developerMode.value && viewportFit.value === 'contain' ? 'contain' : 'cover',
-  interactiveWidget: developerMode.value && interactiveWidget.value === 'resizes-visual' ? 'resizes-visual' : 'resizes-content',
+  interactiveWidget: developerMode.value && (interactiveWidget.value === 'resizes-visual' || interactiveWidget.value === 'overlays-content') ? interactiveWidget.value : 'resizes-content',
 } as const))
 export const viewportPolicy = shallowRef<typeof pendingViewportPolicy.value>({ viewportFit: 'cover', interactiveWidget: 'resizes-content' })
 export const viewportReloadRequired = computed(() =>
@@ -20,6 +21,7 @@ export function initializeViewportPolicy() {
   if (initialized) return
   initialized = true
   const policy = viewportPolicy.value = { ...pendingViewportPolicy.value }
+  document.documentElement.dataset.interactiveWidget = policy.interactiveWidget
   const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]')
   if (meta) meta.content = `width=device-width, initial-scale=1.0, viewport-fit=${policy.viewportFit}, interactive-widget=${policy.interactiveWidget}`
 }

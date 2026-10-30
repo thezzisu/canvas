@@ -474,11 +474,7 @@ export class OpenDownloadService {
         const complete = async () => {
           const asset = await upload.complete({ ...ticket.context, sourceId: ticket.sourceId, windowId: ticket.windowId });
           if (this.tickets.get(ticket.id) !== ticket) { callback(new Error("File transfer cancelled")); return; }
-          if (asset.temporary) {
-            const timer = setTimeout(() => this.staged.delete(ticket.id), STAGED_LIFETIME);
-            timer.unref();
-            this.staged.set(ticket.id, { sessionId: ticket.sessionId, assetId: asset.id, timer });
-          }
+          if (asset.temporary) this.registerStaged(asset.id, ticket.sessionId, ticket.id);
           // Success means the server has committed the complete file. Browser
           // download speed, save-dialog choices and HTTP aborts are independent.
           this.finish(ticket, "completed");
@@ -503,6 +499,13 @@ export class OpenDownloadService {
     });
     socket.write(jsonLine({ ok: true, state: "transferring", transferred: 0, size: ticket.size }));
     socket.pipe(body);
+  }
+
+  registerStaged(assetId: string, sessionId: string, id: string = randomUUID()): string {
+    const timer = setTimeout(() => this.staged.delete(id), STAGED_LIFETIME);
+    timer.unref();
+    this.staged.set(id, { sessionId, assetId, timer });
+    return id;
   }
 
   async open(ticketId: string, sessionId: string): Promise<{ body: Readable; headers: Record<string, string>; previewHeaders?: Record<string, string> } | undefined> {

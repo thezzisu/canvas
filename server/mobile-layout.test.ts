@@ -30,6 +30,14 @@ test('explicit visual geometry retains keyboard height and browser pan offsets w
     { width: 384, height: 823.47, top: 0, left: 0 })
 })
 
+test('overlay geometry uses the CSS keyboard-inset result without subtracting visual occlusion again', () => {
+  const measured = { width: 384, height: 520.8 }
+  assert.deepEqual(viewportFrame(measured, { width: 384, height: 823.47, offsetTop: 0, offsetLeft: 0 }, 'overlays-content'),
+    { width: 384, height: 520.8, top: 0, left: 0 })
+  assert.deepEqual(viewportFrame(measured, { width: 384, height: 199.2, offsetTop: 34, offsetLeft: 0 }, 'overlays-content'),
+    { width: 384, height: 520.8, top: 0, left: 0 })
+})
+
 test('canvas camera geometry uses its actual surface without visual viewport compensation', t => {
   const original = Object.getOwnPropertyDescriptor(globalThis, 'window')
   t.after(() => { if (original) Object.defineProperty(globalThis, 'window', original); else Reflect.deleteProperty(globalThis, 'window') })

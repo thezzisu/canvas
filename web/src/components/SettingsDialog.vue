@@ -23,7 +23,7 @@ const props = defineProps<{ open: boolean; settings: GlobalSettings; portal?: HT
 const emit = defineEmits<{ close: []; saved: [settings: GlobalSettings]; error: [message: string] }>()
 const mobile = useMobileLayout()
 const viewportFits = ['cover', 'contain']
-const interactiveWidgets = ['resizes-content', 'resizes-visual']
+const interactiveWidgets = ['resizes-content', 'resizes-visual', 'overlays-content']
 const viewportSelectUi = { content: 'settings-select-menu', item: 'settings-select-item' }
 const cutoutPositions = computed<Array<{ value: CutoutPosition; label: string }>>(() => [
   { value: 'left', label: t('settings.left') }, { value: 'center', label: t('settings.center') }, { value: 'right', label: t('settings.right') },
