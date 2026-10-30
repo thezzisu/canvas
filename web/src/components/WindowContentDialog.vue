@@ -21,7 +21,9 @@ const error = shallowRef<string | Error>('')
 const copied = ref<{ id: string; failed: boolean }>()
 const errorMessage = computed(() => error.value instanceof Error ? error.value.message : error.value ? t(error.value) : '')
 const panes = computed(() => result.value?.scan.panes.filter(pane => pane.items.length).map(pane => ({ ...pane,
-  items: pane.items.map(item => ({ ...item, href: item.kind === 'link' ? externalLink(item.url) : undefined })),
+  items: pane.items.map(item => ({ ...item,
+    displayLabel: item.kind === 'file' ? item.label.split('/').filter(Boolean).at(-1) || item.label : item.label,
+    href: item.kind === 'link' ? externalLink(item.url) : undefined })),
 })) || [])
 let scanRequest: AbortController | undefined
 let fileRequest: AbortController | undefined
@@ -128,7 +130,7 @@ onBeforeUnmount(() => { cancelRequests(); clearTimeout(copyTimer) })
           <a v-if="item.kind === 'link' && item.href" class="content-scan-open" :href="item.href" target="_blank" rel="noopener noreferrer" :title="item.url"><Icon name="globe" :size="16" /><span><strong>{{ item.label }}</strong><small v-if="item.url !== item.label">{{ item.url }}</small></span></a>
           <button v-else class="content-scan-open" type="button" :disabled="item.kind === 'file' && !!item.path && !!opening" :title="item.kind === 'file' ? item.path || item.label : item.url" @click="item.kind === 'file' && item.path ? openFile(item) : copy(item)">
             <span v-if="opening === item.id" class="spinner" /><Icon v-else :name="item.kind === 'file' ? 'file' : 'globe'" :size="16" />
-            <span><strong>{{ item.label }}</strong><small v-if="item.kind === 'link'">{{ t('panels.scan.requiresForward') }}</small><small v-else-if="!item.path">{{ t('panels.scan.unresolved') }}</small><small v-else-if="item.path !== item.label">{{ item.path }}</small></span>
+            <span><strong>{{ item.displayLabel }}</strong><small v-if="item.kind === 'link'">{{ t('panels.scan.requiresForward') }}</small><small v-else-if="!item.path">{{ t('panels.scan.unresolved') }}</small><small v-else-if="item.path !== item.displayLabel">{{ item.path }}</small></span>
           </button>
           <UButton v-if="item.kind === 'file' && item.path" type="button" color="neutral" variant="ghost" class="content-scan-action" :disabled="!!opening" :aria-label="t('panels.file.downloadNamed', { name: item.label })" :title="t('panels.file.download')" @click="openFile(item, true)"><Icon name="download" :size="15" /></UButton>
           <UButton type="button" color="neutral" variant="ghost" class="content-scan-action" :aria-label="t(item.kind === 'file' ? 'panels.scan.copyPath' : 'panels.scan.copyLink')" :title="copied?.id === item.id ? t(copied.failed ? 'terminal.clipboard.failed' : 'terminal.clipboard.copied') : t(item.kind === 'file' ? 'panels.scan.copyPath' : 'panels.scan.copyLink')" @click="copy(item)"><Icon :name="copied?.id === item.id ? copied.failed ? 'info' : 'check' : 'copy'" :size="15" /></UButton>
