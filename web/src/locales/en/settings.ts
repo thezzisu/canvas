@@ -8,6 +8,5 @@ export default {
   fontFailed: 'Could not apply font settings', retryFont: 'Retry font settings', keepAwake: 'Keep screen awake',
   active: 'Active', requesting: 'Requesting…', wakeDenied: 'Could not keep screen awake', wakePaused: 'Wake lock paused', retryWake: 'Retry wake lock',
   developerMode: 'Developer mode', developerAdvanced: 'Advanced developer settings',
-  viewportHint: 'Set immediately. Disabling developer mode restores defaults. For a fresh comparison, reload, enter fullscreen and open the keyboard.',
   reload: 'Reload page', finishFont: 'Finish font settings first',
 }

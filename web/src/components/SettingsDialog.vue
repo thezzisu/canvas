@@ -209,7 +209,6 @@ onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer) })
             <label for="interactive-widget"><code>interactive-widget</code></label>
             <USelect id="interactive-widget" v-model="interactiveWidget" :items="interactiveWidgets" :portal="portal || false" :ui="viewportSelectUi" color="neutral" size="sm" class="settings-select" aria-label="interactive-widget" />
           </div>
-          <p class="viewport-experiment-hint">{{ t('settings.viewportHint') }}</p>
           <UButton type="button" color="neutral" variant="outline" size="sm" class="viewport-reload" :disabled="!canReload" :title="canReload ? undefined : t('settings.finishFont')" @click="reloadPage">{{ t('settings.reload') }}</UButton>
         </section>
       </div>
@@ -241,7 +240,6 @@ onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer) })
 .viewport-experiment-heading small{white-space:nowrap}.viewport-experiment-heading small,.viewport-experiment-field code{font-size:11px;font-weight:400;color:#8793a4}
 .viewport-experiment-field{display:grid;gap:7px;min-width:0}
 .viewport-experiment-field label{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:0;font-size:11px}
-.viewport-experiment-hint{font-size:11px;line-height:1.7;color:#8793a4}
 .viewport-reload{justify-self:start;min-height:34px;padding:0 10px;border:1px solid #485262;border-radius:6px;font-size:11px;color:#c3cdd9;background:#2a323e}
 .viewport-reload:hover{background:#343e4b}
 .mobile-layout .viewport-reload{min-height:44px}

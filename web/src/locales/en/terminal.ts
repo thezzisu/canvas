@@ -26,6 +26,6 @@ export default {
     copyAll: 'Copy all', pasteIntoTerminal: 'Paste into terminal',
   },
   unavailable: 'Window unavailable', maximized: 'Maximized elsewhere', windowStatus: 'Window status', statusSummary: 'Window status: {status}',
-  readOnly: 'Read-only', pane: 'Pane {name}', copyDiagnostics: 'Copy viewport diagnostics', previewTitle: 'Tab title',
+  readOnly: 'Read-only', pane: 'Pane {name}', copyDiagnostics: 'Copy view data', previewTitle: 'Tab title',
   tooMuchOutput: 'Too much output to announce. Navigate to the terminal rows to continue reading.',
 }

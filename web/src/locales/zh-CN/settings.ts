@@ -8,6 +8,5 @@ export default {
   fontFailed: '字体设置失败', retryFont: '重试字体设置', keepAwake: '保持屏幕常亮',
   active: '已开启', requesting: '请求中…', wakeDenied: '未能保持常亮', wakePaused: '常亮已暂停', retryWake: '重试常亮',
   developerMode: '开发者模式', developerAdvanced: '开发者高级设置',
-  viewportHint: '立即设置；关闭开发者模式恢复默认。对比前可重新加载，再进入全屏并打开键盘。',
   reload: '重新加载页面', finishFont: '先完成字体设置',
 }

@@ -26,6 +26,6 @@ export default {
     copyAll: '复制全部', pasteIntoTerminal: '粘贴到终端',
   },
   unavailable: '窗口不可用', maximized: '已最大化', windowStatus: '窗口状态', statusSummary: '窗口状态：{status}',
-  readOnly: '只读', pane: '窗格 {name}', copyDiagnostics: '复制视口诊断', previewTitle: '标签页标题',
+  readOnly: '只读', pane: '窗格 {name}', copyDiagnostics: '复制视图数据', previewTitle: '标签页标题',
   tooMuchOutput: '输出内容过多，请查看终端行以继续阅读。',
 }
