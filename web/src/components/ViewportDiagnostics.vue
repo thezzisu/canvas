@@ -12,6 +12,8 @@ import Icon from './Icon.vue'
 const props = defineProps<{ settings?: GlobalSettings | null; portal?: HTMLElement }>()
 const { t } = useI18n()
 const open = ref(false)
+const toolbar = ref<HTMLElement>()
+const panel = ref<HTMLElement>()
 const feedback = ref('')
 let timer: ReturnType<typeof setTimeout> | undefined
 function preserveTerminalFocus(event: Event) {
@@ -28,8 +30,17 @@ watch(open, (value, _, cleanup) => {
     if (event.key !== 'Escape') return
     event.preventDefault(); event.stopImmediatePropagation(); open.value = false
   }
+  // Terminal touch gestures intentionally suppress the click Reka waits for.
+  const outside = (event: PointerEvent) => {
+    const target = event.target
+    if (target instanceof Node && !toolbar.value?.contains(target) && !panel.value?.contains(target)) open.value = false
+  }
   window.addEventListener('keydown', escape, true)
-  cleanup(() => window.removeEventListener('keydown', escape, true))
+  window.addEventListener('pointerdown', outside, true)
+  cleanup(() => {
+    window.removeEventListener('keydown', escape, true)
+    window.removeEventListener('pointerdown', outside, true)
+  })
 })
 function copy() {
   const snapshot = collectViewportDiagnostics(props.settings)
@@ -42,14 +53,14 @@ onBeforeUnmount(() => { clearTimeout(timer) })
 </script>
 
 <template>
-  <div class="debug-toolbar" @pointerdown.stop @click.stop>
+  <div ref="toolbar" class="debug-toolbar" @pointerdown.stop @click.stop>
     <button class="viewport-diagnostics" type="button" :aria-label="t('terminal.copyDiagnostics')" @pointerdown.prevent @click="copy"><span :style="{ visibility: feedback ? 'hidden' : undefined }">{{ t('terminal.copyDiagnostics') }}</span><span v-if="feedback" class="debug-copy-feedback" aria-live="polite">{{ t(`terminal.clipboard.${feedback}`) }}</span></button>
     <UPopover v-model:open="open" :modal="false" :portal="portal || false"
       :content="popoverContent"
       :ui="{ content: 'debug-settings-popover' }">
       <UButton type="button" color="neutral" variant="ghost" class="debug-settings-trigger" :aria-label="t('settings.adjustAdvanced')" :title="t('settings.adjustAdvanced')" @pointerdown.prevent><Icon name="settings" :size="15" /></UButton>
       <template #content>
-        <div class="debug-settings" @pointerdown.prevent @click.stop>
+        <div ref="panel" class="debug-settings" @pointerdown.prevent @click.stop>
           <div class="debug-setting" role="group" aria-label="viewport-fit">
             <code>viewport-fit</code>
             <div class="debug-setting-options"><UButton v-for="value in (['cover', 'contain'] as const)" :key="value" type="button" color="neutral" :variant="viewportFit === value ? 'solid' : 'outline'" :aria-pressed="viewportFit === value" @click="viewportFit = value">{{ value }}</UButton></div>
