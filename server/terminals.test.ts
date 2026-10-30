@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WebSocket } from "ws";
 import headless from "@xterm/headless";
+import { terminalUnicodeAddon } from "../shared/terminal-unicode.ts";
+import { terminalInputChunks } from "../web/src/terminal-input-chunks.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createSpace, createWindow, listResources, shellQuote, type Source } from "./providers.ts";
 
@@ -33,7 +35,7 @@ async function waitFor(check: () => boolean | Promise<boolean>, label: string) {
   assert.fail(label);
 }
 
-async function fixture(t: TestContext, probe = false) {
+async function fixture(t: TestContext, probe = false, quietProbe = false) {
   const binary = process.env.CANVAS_TEST_HERDR_SERVER_BINARY;
   if (!binary) { t.skip("Set CANVAS_TEST_HERDR_SERVER_BINARY to an unmodified upstream server"); return; }
   const root = mkdtempSync(join(tmpdir(), "cv-terminal-"));
@@ -41,7 +43,7 @@ async function fixture(t: TestContext, probe = false) {
   let shell = "/bin/sh";
   if (probe) {
     shell = join(root, "receiver");
-    writeFileSync(shell, `#!/usr/bin/python3\nimport os,tty\ntty.setraw(0)\nprint('\\x1b[?1003hREADY',flush=True)\nwith open(${JSON.stringify(bytes)},'ab',buffering=0) as output:\n while True:\n  data=os.read(0,4096)\n  if not data: break\n  output.write(data)\n  print('HEX:'+data.hex(),flush=True)\n`, { mode: 0o700 });
+    writeFileSync(shell, `#!/usr/bin/python3\nimport os,tty\ntty.setraw(0)\nprint('\\x1b[?1003h${quietProbe ? "\\x1b[?2004h" : ""}READY',flush=True)\nwith open(${JSON.stringify(bytes)},'ab',buffering=0) as output:\n while True:\n  data=os.read(0,4096)\n  if not data: break\n  output.write(data)\n${quietProbe ? "" : "  print('HEX:'+data.hex(),flush=True)\n"}`, { mode: 0o700 });
   }
   for (const flavor of ["herdr", "herdr-dev"]) {
     mkdirSync(join(config, flavor), { recursive: true });
@@ -136,7 +138,8 @@ test("one native window has one maximized view, pauses peers and restores comple
   await f.ready();
   const pid = await f.shellResult(first, "printf '%s\\n' $$");
   first.command({ type: "focus-resize-begin", token: firstToken, cols: 130, rows: 40 });
-  assert.deepEqual(presentation(second), { type: "presentation", maximized: true, owned: false, token: firstToken });
+  assert.deepEqual(presentation(second), { type: "presentation", maximized: true, owned: false, token: firstToken, lease: presentation(second).lease });
+  assert(Number.isSafeInteger(presentation(second).lease));
   await f.assertSize(first, 130, 40);
   const secondMark = second.received.length;
   second.command({ type: "focus" });
@@ -203,6 +206,69 @@ test("one native window has one maximized view, pauses peers and restores comple
   assert.equal(presentation(independent).owned, true, "ownership leaked across native windows");
 });
 
+test("a paused peer cancels the observed maximization without input, focus takeover or losing the shared restore size", async t => {
+  const f = await fixture(t, true); if (!f) return;
+  const { manager, source, target } = f;
+  const owner = new Client(), peer = new Client();
+  await manager.connect(source, target, owner.socket);
+  await manager.connect(source, target, peer.socket);
+  await f.ready();
+  const token = randomUUID();
+  owner.command({ type: "focus-resize-begin", token, cols: 130, rows: 40 });
+  await waitFor(() => size(owner)?.cols === 130, "owner did not maximize");
+  const observed = presentation(peer);
+  assert(observed.maximized && !observed.owned && Number.isSafeInteger(observed.lease));
+  owner.command({ type: "resize", cols: 112, rows: 34 });
+  const terminal = await manager.entries.get(`${source.id}/${target.windowId}`)!;
+  await terminal.geometry.drain();
+  assert.equal(size(owner).cols, 130, "persistent card geometry replaced the active maximized size");
+  const before = existsSync(f.bytes) ? readFileSync(f.bytes) : Buffer.alloc(0);
+  peer.command({ type: "presentation-cancel", token, lease: observed.lease });
+  peer.command({ type: "presentation-cancel", token, lease: observed.lease });
+  await waitFor(() => presentation(owner)?.maximized === false && presentation(peer)?.maximized === false, "peer cancel did not resume both views");
+  assert.equal(size(peer).cols, 112);
+  assert.equal(size(peer).rows, 34);
+  assert.equal(terminal.controller, owner.socket, "cancel stole terminal focus");
+  assert.equal((await manager.downloadRecipient(source.id, target.windowId))?.socket, owner.socket);
+  assert.deepEqual(existsSync(f.bytes) ? readFileSync(f.bytes) : Buffer.alloc(0), before, "cancel sent terminal input");
+  peer.command({ type: "presentation-cancel", token, lease: observed.lease });
+  assert.equal(presentation(peer).maximized, false, "repeated cancel reintroduced a lease");
+});
+
+test("stale peer cancellation cannot end a replacement lease or a takeover queued during restoration", async t => {
+  const f = await fixture(t, true); if (!f) return;
+  const { manager, source, target } = f;
+  const owner = new Client(), peer = new Client();
+  await manager.connect(source, target, owner.socket);
+  await manager.connect(source, target, peer.socket);
+  await f.ready();
+  const token = randomUUID();
+  owner.command({ type: "focus-resize-begin", token, cols: 130, rows: 40 });
+  await waitFor(() => size(owner)?.cols === 130, "initial maximization failed");
+  const stale = presentation(peer);
+  owner.command({ type: "focus-resize-begin", token, cols: 140, rows: 44 });
+  const replacement = presentation(peer);
+  assert.notEqual(replacement.lease, stale.lease, "server lease identity must not depend on client token uniqueness");
+  peer.command({ type: "presentation-cancel", token, lease: stale.lease });
+  await waitFor(() => size(owner)?.cols === 140, "stale cancellation changed replacement geometry");
+  assert.equal(presentation(peer).lease, replacement.lease);
+  peer.command({ type: "presentation-cancel", token, lease: replacement.lease });
+  const nextToken = randomUUID();
+  owner.command({ type: "focus-resize-begin", token: nextToken, cols: 150, rows: 46 });
+  const terminal = await manager.entries.get(`${source.id}/${target.windowId}`)!;
+  await terminal.geometry.drain();
+  await waitFor(() => presentation(owner)?.owned === true && presentation(owner)?.token === nextToken, "queued restore dismissed the new owner");
+  assert.equal(size(owner).cols, 150);
+  peer.command({ type: "presentation-cancel", token, lease: replacement.lease });
+  assert.equal(presentation(peer).token, nextToken);
+  assert.equal(presentation(peer).maximized, true);
+  const current = presentation(peer);
+  peer.command({ type: "presentation-cancel", token: nextToken, lease: current.lease });
+  await waitFor(() => presentation(peer)?.maximized === false, "latest observed lease could not be cancelled");
+  assert.equal(size(peer).cols, 100);
+  assert.equal(size(peer).rows, 30);
+});
+
 test("shared native terminals serialize to late viewers, retain last resize and close without stopping herdr", async t => {
   const f = await fixture(t); if (!f) return;
   const { manager, source, target } = f;
@@ -267,6 +333,22 @@ test("binary mouse coordinates and UTF-8 input pass through the native herdr cli
   assert.deepEqual(readFileSync(f.bytes).subarray(mouseBytes.length), Buffer.from("中文"));
 });
 
+test("a 200000-code-unit note reaches the native pane intact in bounded chunks and one paste bracket pair", async t => {
+  const f = await fixture(t, true, true); if (!f) return;
+  const client = new Client();
+  await f.manager.connect(f.source, f.target, client.socket);
+  await f.ready();
+  const body = '中文😀\0\t\n\r"\\'.repeat(20_000);
+  assert.equal(body.length, 200_000);
+  const input = `\x1b[200~${body}\x1b[201~`, expected = Buffer.from(input);
+  for (const data of terminalInputChunks(input)) {
+    assert(Buffer.byteLength(JSON.stringify({ type: "input", data })) < 128 * 1024);
+    client.command({ type: "input", data });
+  }
+  await waitFor(() => existsSync(f.bytes) && readFileSync(f.bytes).length >= expected.length, "long note bytes were dropped");
+  assert.deepEqual(readFileSync(f.bytes), expected, "native paste was truncated, Unicode was split, or Enter/brackets were duplicated");
+});
+
 test("a viewport failure closes every viewer and drains restoration before reconnect", async t => {
   const f = await fixture(t); if (!f) return;
   const { manager, source, target } = f;
@@ -287,4 +369,61 @@ test("a viewport failure closes every viewer and drains restoration before recon
   await manager.connect(source, target, reconnected.socket);
   assert.equal(manager.entries.size, 1);
   await f.assertSize(reconnected, 100, 30);
+});
+
+test("hidden viewers stop binary traffic and resume an exact current screen without native reconnect", async t => {
+  const f = await fixture(t); if (!f) return;
+  const first = new Client(), second = new Client();
+  await f.manager.connect(f.source, f.target, first.socket);
+  await f.manager.connect(f.source, f.target, second.socket);
+  await f.ready();
+  const terminal = (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!;
+  const native = terminal.proc;
+  first.command({ type: 'focus' });
+  const recipient = await f.manager.downloadRecipient(f.source.id, f.target.windowId);
+  second.command({ type: 'view-visible', visible: false });
+  const mark = second.received.length;
+  first.command({ type: 'input', data: "printf '\\033[2J\\033[H'; printf 'HIDDEN_%s\\n' OUTPUT; seq 1 70\r" });
+  await waitFor(async () => (await f.text()).includes('70'), 'background output was not incorporated');
+  first.command({ type: 'resize', cols: 123, rows: 37 });
+  await f.assertSize(first, 123, 37);
+  await terminal.queue;
+  assert.equal(second.received.slice(mark).filter(Buffer.isBuffer).length, 0);
+  assert(!second.received.slice(mark).some(frame => typeof frame === 'string' && JSON.parse(frame).type === 'resize'));
+  assert.equal(recipient?.isCurrent(), true, 'hiding another view changed the CLI recipient');
+  const beforeResume = second.received.length;
+  for (let i = 0; i < 4; i++) {
+    second.command({ type: 'view-visible', visible: true });
+    second.command({ type: 'view-visible', visible: false });
+  }
+  second.command({ type: 'view-visible', visible: true });
+  await terminal.queue;
+  assert.equal(terminal.proc, native); assert.equal(f.manager.entries.size, 1);
+  const frames = second.received.slice(beforeResume);
+  const visible = (value: InstanceType<typeof headless.Terminal>) => Array.from({ length: value.rows }, (_, row) =>
+    value.buffer.active.getLine(value.buffer.active.baseY + row)?.translateToString(true) || '');
+  const expected = { lines: visible(terminal.emulator), cols: terminal.cols, rows: terminal.rows,
+    x: terminal.emulator.buffer.active.cursorX, y: terminal.emulator.buffer.active.cursorY };
+  const replay = new headless.Terminal({ cols: 80, rows: 24, scrollback: 2000, allowProposedApi: true });
+  replay.loadAddon(terminalUnicodeAddon());
+  try {
+    for (const frame of frames) {
+      if (Buffer.isBuffer(frame)) await new Promise<void>(resolve => replay.write(frame, resolve));
+      else {
+        const message = JSON.parse(frame);
+        if (message.type === 'reset') await new Promise<void>(resolve => replay.write('\x1bc', resolve));
+        if (message.type === 'resize') replay.resize(message.cols, message.rows);
+      }
+    }
+    assert.equal(replay.cols, expected.cols); assert.equal(replay.rows, expected.rows);
+    assert.deepEqual(visible(replay), expected.lines);
+    assert.equal(replay.buffer.active.cursorX, expected.x);
+    assert.equal(replay.buffer.active.cursorY, expected.y);
+  } finally { replay.dispose(); }
+  const token = randomUUID();
+  first.command({ type: 'focus-resize-begin', token, cols: 130, rows: 40 });
+  second.command({ type: 'view-visible', visible: false });
+  first.command({ type: 'focus-resize-end', token });
+  await terminal.geometry.drain(); await terminal.queue;
+  assert.equal(presentation(second).maximized, false, 'hidden peers missed lease state');
 });

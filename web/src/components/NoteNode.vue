@@ -6,6 +6,8 @@ import { NodeResizeControl } from '@vue-flow/node-resizer'
 import type { NoteData, NotePatch } from '../types'
 import Icon from './Icon.vue'
 import { noteColor } from '../status'
+import { copyText } from '../clipboard'
+import { writeNoteTransfer } from '../note-transfer'
 
 const { t } = useI18n()
 
@@ -17,6 +19,8 @@ const editingTitle = ref(false)
 const titleInput = ref<HTMLInputElement>()
 const colorOpen = ref(false)
 const colorPicker = ref<HTMLElement>()
+const copied = ref<'' | 'copied' | 'failed'>('')
+let copyTimer: ReturnType<typeof setTimeout> | undefined
 const color = computed(() => colors.includes(props.data.color) ? props.data.color : 'yellow')
 // Pending fields are merged above remote snapshots by the parent. Fields edited
 // in another browser can therefore update here without replacing a local draft.
@@ -29,8 +33,19 @@ async function rename() { editingTitle.value = true; await nextTick(); titleInpu
 function toggleMinimize() { emitChange({ minimized: !props.data.minimized }); flush() }
 function setColor(value: typeof colors[number]) { emitChange({ color: value }); colorOpen.value = false; flush() }
 function outsideColor(event: PointerEvent) { if (!colorPicker.value?.contains(event.target as HTMLElement)) colorOpen.value = false }
+function copyResult(value: 'copied' | 'failed') {
+  clearTimeout(copyTimer); copied.value = value
+  copyTimer = setTimeout(() => { copied.value = '' }, 2200)
+}
+function copyNote() {
+  if (copyText(content.value, () => copyResult('failed'))) copyResult('copied')
+}
+function dragNote(event: DragEvent) {
+  if (!writeNoteTransfer(event.dataTransfer, content.value)) event.preventDefault()
+  event.stopPropagation()
+}
 onMounted(() => document.addEventListener('pointerdown', outsideColor))
-onBeforeUnmount(() => document.removeEventListener('pointerdown', outsideColor))
+onBeforeUnmount(() => { clearTimeout(copyTimer); document.removeEventListener('pointerdown', outsideColor) })
 </script>
 
 <template>
@@ -48,11 +63,18 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', outsideColor))
       <input v-if="editingTitle" ref="titleInput" v-model="title" class="note-title nodrag" :aria-label="t('panels.note.title')" maxlength="200" @input="emitChange({ title })" @blur="finishTitle" @keydown.enter.stop.prevent="titleInput?.blur()" @keydown.esc.stop.prevent="titleInput?.blur()" />
       <span v-else class="note-title" :title="title || t('panels.note.name')" @dblclick.stop="rename">{{ title || t('panels.note.name') }}</span>
       <div class="note-actions nodrag">
+        <button type="button" class="note-copy" :class="{ 'note-copy-failed': copied === 'failed' }" :disabled="!content" :draggable="!!content" :title="copied ? t(`terminal.clipboard.${copied}`) : t('panels.note.copyOrDrag')" :aria-label="t('panels.note.copy')" @pointerdown.stop @click.stop="copyNote" @dragstart="dragNote"><Icon :name="copied === 'copied' ? 'check' : 'copy'" :size="13" /></button>
         <button :title="t('panels.note.rename')" :aria-label="t('panels.note.rename')" @click.stop="rename"><Icon name="edit" :size="13" /></button>
         <button :title="t(data.minimized ? 'panels.note.expand' : 'panels.note.collapse')" :aria-label="t(data.minimized ? 'panels.note.expand' : 'panels.note.collapse')" @click.stop="toggleMinimize"><Icon :name="data.minimized ? 'expand' : 'minus'" :size="14" /></button>
         <button :title="t('panels.note.remove')" :aria-label="t('panels.note.remove')" @click.stop="data.onAction('remove', id)"><Icon name="close" :size="14" /></button>
       </div>
+      <span class="sr-only" role="status">{{ copied ? t(`terminal.clipboard.${copied}`) : '' }}</span>
     </header>
     <textarea v-if="!data.minimized" v-model="content" class="note-content nodrag nowheel" :aria-label="t('panels.note.content')" :placeholder="t('panels.note.placeholder')" maxlength="200000" @input="emitChange({ content })" @blur="flush" @pointerdown.stop @wheel.stop @dblclick.stop />
   </article>
 </template>
+
+<style scoped>
+.note-copy[draggable=true]{cursor:grab}.note-copy[draggable=true]:active{cursor:grabbing}
+.note-copy:disabled{cursor:default}.note-actions .note-copy-failed{color:#dfaaa5}
+</style>

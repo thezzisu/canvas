@@ -13,6 +13,7 @@ export default {
     foldersUnsupported: 'Folders are not supported yet',
   },
   action: {
+    cancelMaximized: 'Cancel maximization',
     addToCanvas: 'Add to canvas', removeFromCanvas: 'Remove from canvas', focus: 'Focus window', hideKeyboard: 'Hide keyboard',
     showKeyboard: 'Show keyboard', windowActions: 'Window actions', restore: 'Restore window', openWindow: 'Open window {name}',
   },

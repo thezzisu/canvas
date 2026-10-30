@@ -240,6 +240,24 @@ test('custom-canvas opens add a persistent file beside the captured native windo
   assert.equal(await readFile(join(f.root, 'files', opened.id), 'utf8'), 'card content')
 })
 
+test('scan download stays temporary while an explicit destination adds a file note without a terminal anchor', async t => {
+  const f = await fixture(t)
+  const target = f.store.put<Canvas>('canvas', { id: randomUUID(), name: 'Empty canvas', nodes: [] })
+  const scan = await f.scan(), file = scan.panes[0]!.items.find(item => item.kind === 'file')!
+  const route = `/api/content-scans/${scan.id}/items/${file.id}/open`
+  const download = await (await f.call(route, {})).json() as WindowContentOpen
+  assert(download.temporary)
+  assert.equal(f.store.get<Canvas>('canvas', f.canvas.id)!.nodes.length, 1)
+  assert.equal(f.store.get<Canvas>('canvas', target.id)!.nodes.length, 0)
+  const added = await f.call(route, { canvasId: target.id, position: { x: -60.25, y: 120 } })
+  assert.equal(added.status, 200)
+  assert.equal((await added.json() as WindowContentOpen).temporary, false)
+  const card = f.store.get<Canvas>('canvas', target.id)!.nodes[0]!
+  assert.equal(card.type, 'file'); assert.equal(card.x, -60.25); assert.equal(card.y, 120)
+  assert.equal((await f.call(route, { position: { x: 1, y: 2 } })).status, 400)
+  assert.equal((await f.call(route, { canvasId: 'overview', position: { x: 1, y: 2 } })).status, 400)
+})
+
 test('changed source identity and logout invalidate captured file actions', async t => {
   const f = await fixture(t)
   const scan = await f.scan(), file = scan.panes[0]!.items.find(item => item.kind === 'file')!

@@ -31,6 +31,7 @@ const paths: Record<string, string> = {
   info: 'M12 11v6 M12 7h.01 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',
   minus: 'M5 12h14',
   copy: 'M8 8h12v12H8z M16 8V4H4v12h4',
+  clipboard: 'M9 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3 M9 2h6v4H9z',
   note: 'M4 3h16v13l-5 5H4z M15 21v-5h5 M8 8h8 M8 12h6',
   file: 'M5 3h9l5 5v13H5z M14 3v6h5',
   download: 'M12 3v12 M7 10l5 5 5-5 M4 17v4h16v-4',

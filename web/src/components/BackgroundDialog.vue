@@ -4,7 +4,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api, segment, write } from '../api'
 import type { Canvas } from '../types'
 import Icon from './Icon.vue'
-import { useMediaUrl } from '../media'
+import { useBackgroundUrl } from '../backgrounds'
 
 const { t, n } = useI18n()
 
@@ -23,7 +23,7 @@ const error = ref<string | Error>('')
 const originalFocus = document.activeElement as HTMLElement | null
 let selection = 0
 let disposed = false
-const { url: backgroundUrl } = useMediaUrl(() => props.canvas.background?.url)
+const { url: backgroundUrl } = useBackgroundUrl(() => props.canvas.background?.url)
 const preview = computed(() => removed.value ? '' : objectUrl.value || backgroundUrl.value)
 const changed = computed(() => !!file.value || (!!props.canvas.background && (removed.value || opacity.value !== props.canvas.background.opacity)))
 

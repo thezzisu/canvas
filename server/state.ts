@@ -87,12 +87,10 @@ export type FileAsset = {
   createdAt: number;
 };
 export type FileNodeView = FileNode & { asset: FileAsset };
-export type FileNodeContext = {
-  canvasId?: string;
-  anchorId?: string;
-  sourceId: string;
-  windowId: string;
-};
+export type FileNodeContext = { canvasId?: string } & (
+  | { anchorId?: string; sourceId: string; windowId: string }
+  | { position: { x: number; y: number } }
+);
 export const isTerminalNode = (node: CanvasNode): node is TerminalNode =>
   node.type === "terminal";
 export const canvasSchema = z
@@ -259,29 +257,33 @@ export class Store extends EventEmitter {
 
   addFileNode(asset: FileAsset, context: FileNodeContext): boolean {
     const canvasId = context.canvasId;
-    if (!canvasId || canvasId === "overview" || !context.anchorId) return false;
+    if (!canvasId || canvasId === "overview") return false;
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const row = this.db.prepare("SELECT body FROM documents WHERE kind='canvas' AND id=?").get(canvasId);
       if (!row) { this.db.exec("ROLLBACK"); return false; }
       const canvas = JSON.parse(String(row.body)) as Canvas;
-      const anchor = canvas.nodes.find(node => isTerminalNode(node) && node.id === context.anchorId &&
-        node.sourceId === context.sourceId && node.windowId === context.windowId);
-      if (!anchor) { this.db.exec("ROLLBACK"); return false; }
+      let x: number, y: number;
+      if ('position' in context) {
+        ({ x, y } = nodeLayoutSchema.pick({ x: true, y: true }).parse(context.position));
+      } else {
+        const anchor = canvas.nodes.find(node => isTerminalNode(node) && node.id === context.anchorId &&
+          node.sourceId === context.sourceId && node.windowId === context.windowId);
+        if (!anchor) { this.db.exec("ROLLBACK"); return false; }
+        x = Math.min(1e7, anchor.x + this.windowSize(context.sourceId, context.windowId).width + 24);
+        const occupied = canvas.nodes.filter(node => node.type === "file" && Math.abs(node.x - x) < 1)
+          .reduce((bottom, node) => Math.max(bottom, node.y + node.height), anchor.y);
+        y = Math.min(1e7, occupied === anchor.y ? anchor.y : occupied + 16);
+      }
       if (canvas.nodes.length >= 500) throw new Error("Canvas contains too many items");
       this.db.prepare("INSERT INTO canvas_files(id,canvas_id,filename,size,mime,preview,created_at) VALUES(?,?,?,?,?,?,?)")
         .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.preview, asset.createdAt);
-      const x = Math.min(1e7, anchor.x + this.windowSize(context.sourceId, context.windowId).width + 24);
-      const occupied = canvas.nodes.filter(node => node.type === "file" &&
-        Math.abs(node.x - x) < 1)
-        .reduce((bottom, node) => Math.max(bottom, node.y + node.height), anchor.y);
       const dimensions = asset.preview === "pdf" ? { width: 420, height: 480 }
         : asset.preview === "file" ? { width: 320, height: 160 }
         : { width: 360, height: 280 };
       const node: FileNode = {
         id: randomUUID(), type: "file", assetId: asset.id,
-        x,
-        y: Math.min(1e7, occupied === anchor.y ? anchor.y : occupied + 16),
+        x, y,
         ...dimensions,
       };
       canvas.nodes.push(node);

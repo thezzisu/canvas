@@ -24,7 +24,7 @@ Canvas uses one shared account.
 
 The instance selector connects this frontend to multiple Canvas servers. Each
 instance has its own API base URL and login; switching disconnects the previous
-instance. Login tokens remain in the current browser tab through reloads.
+instance. Login sessions persist in this browser until sign-out or expiry.
 
 ## Connections
 
@@ -118,7 +118,6 @@ screen for links and existing files, with OSC 8 targets taking precedence.
 | `CANVAS_HOST` | `127.0.0.1` | Listen address or comma-separated addresses |
 | `CANVAS_PORT` | `3010` | Listen port |
 | `CANVAS_ALLOWED_ORIGINS` | Same origin | Comma-separated frontend origins allowed to access this server |
-| `VITE_CANVAS_API_BASE` | Frontend origin | Default backend base URL, including its path prefix; set during the frontend build |
 | `CANVAS_PUBLIC_SSH_HOST` | Listen address or hostname | Advertised VS Code SSH host for local connections |
 | `CANVAS_PUBLIC_SSH_PORT` | `22` | Advertised VS Code SSH port for local connections |
 
@@ -131,10 +130,24 @@ expiring scoped URLs. Account access grants terminal access to connected machine
 The frontend can be hosted independently on Cloudflare Pages:
 
 ```sh
-VITE_CANVAS_API_BASE=https://backend.example/canvas/ npm run build:web
+npm run build:web
 npx wrangler login
 npm run deploy:web
 ```
+
+Enter the backend URL on the sign-in page, or open a link such as
+`https://frontend.example/?server=https%3A%2F%2Fbackend.example%2Fcanvas%2F&name=Personal`.
+The link selects the server and removes these setup parameters from the address.
+Existing servers are reused; credentials are never imported from a URL. When
+frontend and backend share an origin, Canvas discovers the backend automatically.
+
+Canvas supports browser installation over HTTPS (or localhost). Install from the
+browser menu or Settings when available. Updates wait for your explicit reload;
+only the static app shell and icons are cached, while terminals and files require
+a live server. Fonts load on demand.
+
+Text file cards offer wrapping. Markdown files share Source/Rendered views with
+the preview dialog; HTML and components remain literal text.
 
 Back up the complete data directory, including the SQLite database and `files/`.
 Uploaded terminal files remain in each source machine's managed inbox.

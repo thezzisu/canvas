@@ -93,7 +93,7 @@ export class WindowContentService {
     return source
   }
 
-  async open(scanId: string, itemId: string, sessionId: string, context: DownloadContext, signal: AbortSignal): Promise<WindowContentOpen | undefined> {
+  async open(scanId: string, itemId: string, sessionId: string, context: DownloadContext & { position?: { x: number; y: number } }, signal: AbortSignal): Promise<WindowContentOpen | undefined> {
     const record = this.scans.get(scanId)
     if (!record || record.sessionId !== sessionId || record.expires <= Date.now()) return
     const item = record.scan.panes.flatMap(pane => pane.items).find(item => item.id === itemId)
@@ -115,7 +115,9 @@ export class WindowContentService {
         await upload.write(bytes)
       }
       controller.signal.throwIfAborted(); this.source(record)
-      const asset = await upload.complete({ ...context, sourceId: record.sourceId, windowId: record.windowId }, controller.signal)
+      const destination = context.position ? { canvasId: context.canvasId, position: context.position }
+        : { ...context, sourceId: record.sourceId, windowId: record.windowId }
+      const asset = await upload.complete(destination, controller.signal)
       const id = asset.temporary ? this.options.registerStaged(asset.id, sessionId) : asset.id
       return { id, filename: asset.filename, size: asset.size, mime: asset.mime, preview: asset.preview,
         temporary: asset.temporary, url: asset.temporary ? `/api/downloads/${id}` : `/api/files/${id}` }

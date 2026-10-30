@@ -1,5 +1,6 @@
 import type { Terminal } from '@xterm/xterm'
 import { isPasteShortcut } from './clipboard-shortcuts'
+import { clearCopiedFile } from './file-clipboard'
 
 const MAX_COPY_BYTES = 1024 * 1024
 const COPY_GESTURE_MS = 3000
@@ -10,6 +11,7 @@ export const clipboardRestoringFocus = () => restoringFocus
 export function copyText(text: string, failed: () => void): boolean {
   if (!text) return false
   if (new TextEncoder().encode(text).length > MAX_COPY_BYTES) { failed(); return false }
+  clearCopiedFile()
   const documentSelection = document.getSelection()
   const ranges = documentSelection ? Array.from({ length: documentSelection.rangeCount }, (_, index) => documentSelection.getRangeAt(index).cloneRange()) : []
   const previous = document.activeElement instanceof HTMLElement ? document.activeElement : undefined

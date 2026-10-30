@@ -3,12 +3,16 @@ import { useI18n } from 'vue-i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useActiveElement, useWindowFocus } from '@vueuse/core'
 import type { NodeProps } from '@vue-flow/core'
+import UButton from '@nuxt/ui/components/Button.vue'
 import { NodeResizer } from '@vue-flow/node-resizer'
 import Icon from './Icon.vue'
 import PaneIndicators from './PaneIndicators.vue'
 import MobileKeyboard from './MobileKeyboard.vue'
 import { statusColor } from '../status'
 import { needsAttention } from '../canvas-status'
+import { claimNoteDrop, readNoteTransfer } from '../note-transfer'
+import { isFileReference, readFileReference } from '../file-reference'
+import { copiedFile } from '../file-clipboard'
 import { mountTerminal, type TerminalStatus } from '../terminals'
 import { emptyModifiers, type TerminalModifiers } from '../terminal-input'
 import { terminalInsets } from '../terminal-geometry'
@@ -18,12 +22,17 @@ const { t } = useI18n()
 const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>>()
 const host = ref<HTMLElement>()
 const status = ref<TerminalStatus>({ status: 'connecting' })
+const noteDrag = ref(false)
+const fileDrag = ref(false)
 const mobilePreview = computed(() => !!props.data.mobile && !props.data.focus)
 const mobileFocus = computed(() => !!props.data.mobile && props.data.focus)
 const modifiers = computed(() => status.value.modifiers || emptyModifiers())
 const reconnecting = computed(() => status.value.status === 'connecting' && !!status.value.retryAttempt)
 const keepTerminal = computed(() => props.data.available || !!props.data.sourceOffline && (status.value.status === 'connected' || reconnecting.value))
 const maximizedElsewhere = computed(() => !!status.value.presentation?.maximized && (!status.value.presentation.owned || !props.data.focus))
+const noteDropAvailable = computed(() => keepTerminal.value && !mobilePreview.value && !maximizedElsewhere.value && status.value.status === 'connected')
+const noteDropLabel = computed(() => mobilePreview.value ? t('panels.note.openToPaste') : maximizedElsewhere.value ? t('terminal.maximized')
+  : status.value.status !== 'connected' || !keepTerminal.value ? t('terminal.upload.disconnected') : t('panels.note.paste'))
 const activeElement = useActiveElement({ triggerOnRemoval: true })
 const windowFocused = useWindowFocus()
 const inputFocused = computed(() => windowFocused.value && !mobilePreview.value && !maximizedElsewhere.value &&
@@ -96,9 +105,36 @@ function mobileModifiers(value: TerminalModifiers) { terminal?.setModifiers(valu
 function mobileMode(mode: 'scroll' | 'mouse' | 'select') { terminal?.setTouchMode(mode) }
 function mobileFiles(files: File[]) { terminal?.uploadFiles(files) }
 function mobilePaste(text: string) { terminal?.pasteText(text) }
+function noteDragOver(event: DragEvent) {
+  if (isFileReference(event.dataTransfer)) {
+    event.preventDefault(); event.stopPropagation()
+    event.dataTransfer.dropEffect = noteDropAvailable.value && !status.value.fileReading ? 'copy' : 'none'
+    fileDrag.value = true; noteDrag.value = false
+  } else if (claimNoteDrop(event, noteDropAvailable.value)) { noteDrag.value = true; fileDrag.value = false }
+}
+function clearNoteDrag() { noteDrag.value = false; fileDrag.value = false }
+function noteDragLeave(event: DragEvent) {
+  if (event.relatedTarget instanceof Node && (event.currentTarget as HTMLElement).contains(event.relatedTarget)) return
+  clearNoteDrag()
+}
+function dropNote(event: DragEvent) {
+  if (isFileReference(event.dataTransfer)) {
+    event.preventDefault(); event.stopPropagation(); clearNoteDrag()
+    const reference = readFileReference(event.dataTransfer)
+    if (reference && noteDropAvailable.value && !status.value.fileReading) void terminal?.uploadReference(reference)
+    return
+  }
+  if (!claimNoteDrop(event, noteDropAvailable.value)) return
+  clearNoteDrag()
+  const text = readNoteTransfer(event.dataTransfer)
+  if (!text || !noteDropAvailable.value || !terminal?.canPasteText()) return
+  terminal.focus({ keyboard: false })
+  terminal.pasteText(text)
+}
+function pasteFile() { if (copiedFile.value && noteDropAvailable.value && !status.value.fileReading) void terminal?.uploadReference(copiedFile.value.reference) }
 function mount() {
   if (host.value && keepTerminal.value) terminal = mountTerminal(host.value, props.data, state => {
-    const superseded = ownedPresentation && state.presentation?.maximized && !state.presentation.owned
+    const superseded = ownedPresentation && state.presentation && !state.presentation.owned
     ownedPresentation = props.data.focus && state.presentation?.owned === true
     status.value = state
     if (superseded) props.data.onAction('unfocus', props.id)
@@ -112,9 +148,9 @@ function mount() {
   }, { magnified: props.data.focus, mobile: props.data.mobile })
   if (mobileFocus.value) { terminal?.setTouchMode('scroll'); terminal?.focus({ keyboard: false }) }
 }
-onMounted(mount)
+onMounted(() => { mount(); document.addEventListener('dragend', clearNoteDrag); window.addEventListener('blur', clearNoteDrag) })
 watch([keepTerminal, () => props.data.mobile, () => props.data.focus], async () => { terminal?.dispose(); terminal = undefined; await nextTick(); mount() })
-onBeforeUnmount(() => { clearPreviewTap(); terminal?.dispose() })
+onBeforeUnmount(() => { clearPreviewTap(); terminal?.dispose(); document.removeEventListener('dragend', clearNoteDrag); window.removeEventListener('blur', clearNoteDrag) })
 function action(name: string) {
   if (name === 'reconnect') terminal?.reconnect()
   else { if (name === 'unfocus' && props.data.mobile) terminal?.blur(); props.data.onAction(name, props.id) }
@@ -144,7 +180,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
 </script>
 <template>
   <NodeResizer v-if="!data.mobile && !data.overview && !data.focus && !maximizedElsewhere" :is-visible="selected" :min-width="360" :min-height="220" :max-width="4000" :max-height="3000" @resize-start="resizeStarted" @resize-end="resized" />
-  <article tabindex="-1" class="terminal-card" :class="[{ selected, unavailable: !keepTerminal, focused: data.focus, 'input-focused': inputFocused, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="keepTerminal ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-status-pulse="statusPulse" :data-resize-state="resizeState" :data-input-focused="inputFocused" :style="{ '--program-color': statusColor(frameStatus), width: dimensions || mobileFocus ? '100%' : `${data.width}px`, height: dimensions || mobileFocus ? '100%' : `${data.height}px` }" :aria-label="`${data.name} · ${data.subtitle}`">
+  <article tabindex="-1" class="terminal-card" :class="[{ selected, unavailable: !keepTerminal, focused: data.focus, 'input-focused': inputFocused, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="keepTerminal ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-status-pulse="statusPulse" :data-resize-state="resizeState" :data-input-focused="inputFocused" :data-note-drop="noteDrag ? noteDropAvailable ? 'ready' : 'unavailable' : undefined" @dragenter.capture="noteDragOver" @dragover.capture="noteDragOver" @dragleave="noteDragLeave" @drop.capture="dropNote" :style="{ '--program-color': statusColor(frameStatus), width: dimensions || mobileFocus ? '100%' : `${data.width}px`, height: dimensions || mobileFocus ? '100%' : `${data.height}px` }" :aria-label="`${data.name} · ${data.subtitle}`">
     <header class="terminal-header drag-handle" :class="{ 'cutout-header': mobileFocus }" :data-cutout-position="mobileFocus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="mobileFocus ? { '--cutout-width': `${cutoutWidth}px` } : undefined">
       <PaneIndicators :panes="data.panes" :status="data.status" :available="keepTerminal" :connection="status.status" :error="status.error" :read-only="status.readOnly" />
       <span class="terminal-name" :class="{ 'cutout-title': mobileFocus }" :title="title"><span class="terminal-tab-name">{{ data.name }}</span><span v-if="liveTitle" class="terminal-live-title">{{ liveTitle }}</span></span>
@@ -161,16 +197,21 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <div v-if="keepTerminal" ref="host" class="terminal-host nodrag nopan nowheel" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop />
     <div v-if="mobilePreview" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: data.name })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
     <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">{{ t('terminal.upload.file') }}</div>
+    <div v-if="noteDrag || fileDrag" class="terminal-file-drop terminal-note-drop" :class="{ 'note-drop-unavailable': !noteDropAvailable }" aria-hidden="true">{{ !noteDropAvailable ? noteDropLabel : fileDrag ? t(status.fileReading ? 'fileTransfer.preparing' : 'fileTransfer.drop') : noteDropLabel }}</div>
+    <span v-if="status.fileReading && !fileDrag" class="terminal-copy-notice" role="status">{{ t('fileTransfer.preparing') }}</span>
     <span v-if="status.clipboardError" class="terminal-copy-notice" :class="{ 'copy-failed': status.clipboardError === 'failed' }" role="status">{{ t(`terminal.clipboard.${status.clipboardError}`) }}</span>
     <div v-if="status.upload" class="terminal-upload nodrag nopan" :class="{ 'upload-failed': status.upload.state === 'failed' }" :data-upload-id="status.upload.id" :data-upload-state="status.upload.state" @pointerdown.stop @mousedown.stop>
       <div class="terminal-upload-row"><span class="terminal-upload-name" :title="uploadName">{{ uploadName }}</span><small v-if="status.upload.queued">+{{ status.upload.queued }}</small><span class="terminal-upload-status" role="status">{{ uploadLabel }}</span><button :aria-label="uploadActive ? t('terminal.upload.cancel') : t('terminal.upload.close')" :disabled="status.upload.cancelling" @click.stop="terminal?.cancelUpload()"><Icon name="close" :size="13" /></button></div>
       <div v-if="uploadActive" class="terminal-upload-track" role="progressbar" :aria-valuenow="status.upload.transferred" :aria-valuemin="0" :aria-valuemax="status.upload.total" :aria-valuetext="`${uploadPercent}%`" :aria-label="t('terminal.upload.progress')"><span :style="{ width: `${uploadPercent}%` }" /></div>
     </div>
-    <div v-if="data.available && maximizedElsewhere" class="terminal-maximized">{{ t('terminal.maximized') }}</div>
+    <div v-if="data.available && maximizedElsewhere" class="terminal-maximized nodrag nopan" @pointerdown.stop @mousedown.stop @click.stop>
+      <span>{{ t('terminal.maximized') }}</span>
+      <UButton type="button" color="neutral" variant="outline" size="xs" :loading="status.presentationCancelling" :disabled="status.status !== 'connected' || status.presentation?.lease === undefined" @click.stop="terminal?.cancelMaximized()">{{ t('terminal.action.cancelMaximized') }}</UButton>
+    </div>
     <div v-if="!keepTerminal" class="terminal-unavailable"><Icon name="terminal" :size="28" /><strong>{{ t('terminal.unavailable') }}</strong></div>
     <div v-if="data.available && status.status === 'disconnected'" class="terminal-disconnected nodrag"><span>{{ status.error || t('terminal.connection.disconnected') }}</span><button @click.stop="action('reconnect')"><Icon name="refresh" :size="13" />{{ t('terminal.connection.reconnect') }}</button></div>
     <div v-if="keepTerminal && status.status === 'connecting'" class="terminal-loading nodrag" role="status"><span class="spinner" />{{ status.retryAttempt ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt }) : t('terminal.connection.connecting') }}</div>
-    <MobileKeyboard v-if="mobileFocus" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :read-text="readText" :copy-text="copyText" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @files="mobileFiles" @paste="mobilePaste" @reading="reading" />
+    <MobileKeyboard v-if="mobileFocus" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :read-text="readText" :copy-text="copyText" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @files="mobileFiles" @paste="mobilePaste" @paste-file="pasteFile" @reading="reading" />
   </article>
 </template>
 
@@ -182,12 +223,15 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-card.input-focused .terminal-name{color:#f4f6f9}
 .terminal-card.input-focused .terminal-live-title{color:#c4cbd5}
 .terminal-loading{background:#11131799;color:#b0b8c5}
+.terminal-maximized{z-index:5;flex-direction:column;gap:10px}
+.terminal-maximized>button{padding:5px 9px;gap:5px;min-height:28px}
 .terminal-tab-name{overflow:hidden;text-overflow:ellipsis;min-width:0}
 .terminal-name:has(.terminal-live-title) .terminal-tab-name{max-width:40%;flex-shrink:0}
 .terminal-live-title{color:#939ba8;overflow:hidden;text-overflow:ellipsis;min-width:0;font-weight:400}
 .terminal-drop-target{outline:1px solid var(--accent);outline-offset:-3px;background:#e9b18808}
 .terminal-copy-notice{position:absolute;bottom:8px;right:9px;padding:4px 7px;border:1px solid #424a56;border-radius:4px;background:#242930f2;color:#b6c0ce;font-size:10px;pointer-events:none}
 .terminal-copy-notice.copy-failed{border-color:#79545470;background:#33262bf2;color:#d6aaaa}
+.terminal-note-drop{z-index:5}.terminal-note-drop.note-drop-unavailable{color:#9aa4b3;background:#171b21df}
 .terminal-file-drop{position:absolute;inset:30px 0 0;display:flex;align-items:center;justify-content:center;pointer-events:none;background:#12151aca;color:var(--accent);font-size:12px}
 .terminal-upload{position:absolute;bottom:6px;left:8px;right:8px;padding:4px 7px;border:1px solid #424a56;border-radius:4px;background:#242930f2;color:#b6c0ce;box-shadow:0 2px 8px #0003;font-size:10px}
 .terminal-upload-row{display:flex;align-items:center;gap:8px;min-height:19px}

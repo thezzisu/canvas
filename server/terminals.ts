@@ -25,9 +25,12 @@ class LiveTerminal {
   serializer: InstanceType<typeof SerializeAddon>;
   clients = new Set<WebSocket>();
   private rendered = new Set<WebSocket>();
-  private maximized?: { owner: WebSocket; token: string };
+  private hidden = new Set<WebSocket>();
+  private maximized?: { owner: WebSocket; token: string; lease: number; releasing?: boolean };
   private presentationRevision = 0;
   private focusedPaneId?: string;
+  private cursorVisible = true;
+  private cursorShape = 0;
   controller?: WebSocket;
   private downloadController?: WebSocket;
   idle?: ReturnType<typeof setTimeout>;
@@ -61,6 +64,16 @@ class LiveTerminal {
     this.emulator.loadAddon(terminalUnicodeAddon());
     this.serializer = new SerializeAddon();
     this.emulator.loadAddon(this.serializer);
+    // SerializeAddon omits cursor appearance. Observe it on the same parser lane
+    // as screen writes so resumed snapshots retain the completed frame's state.
+    for (const final of ['h', 'l']) this.emulator.parser.registerCsiHandler({ prefix: '?', final }, params => {
+      if (params.includes(25)) this.cursorVisible = final === 'h';
+      return false;
+    });
+    this.emulator.parser.registerCsiHandler({ intermediates: ' ', final: 'q' }, params => {
+      if (typeof params[0] === 'number' && params[0] >= 0 && params[0] <= 6) this.cursorShape = params[0];
+      return false;
+    });
     this.geometry = new GeometryController(
       { cols, rows },
       (size) => this.adoptGeometry(size),
@@ -118,7 +131,7 @@ class LiveTerminal {
     this.proc.onExit(() => void this.close());
   }
   private canRender(ws: WebSocket) {
-    return this.rendered.has(ws) && (!this.maximized || this.maximized.owner === ws);
+    return !this.hidden.has(ws) && this.rendered.has(ws) && (!this.maximized || this.maximized.owner === ws);
   }
   downloadRecipient(): WebSocket | undefined {
     const ws = this.downloadController;
@@ -142,13 +155,13 @@ class LiveTerminal {
       type: "presentation",
       maximized: !!this.maximized,
       owned: this.maximized?.owner === ws,
-      ...(this.maximized ? { token: this.maximized.token } : {}),
+      ...(this.maximized ? { token: this.maximized.token, lease: this.maximized.lease } : {}),
     });
   }
   private snapshot(ws: WebSocket) {
     if (this.closed || !this.clients.has(ws) || ws.readyState !== 1) return;
     json(ws, { type: "pane-focus", paneId: this.focusedPaneId });
-    if (this.maximized && this.maximized.owner !== ws) {
+    if (this.hidden.has(ws) || this.maximized && this.maximized.owner !== ws) {
       this.rendered.delete(ws);
       this.presentation(ws);
       return;
@@ -158,7 +171,11 @@ class LiveTerminal {
     json(ws, { type: "reset" });
     json(ws, { type: "resize", cols: this.cols, rows: this.rows });
     // SerializeAddon restores tracking but omits its wire encoding.
-    ws.send(Buffer.from(this.serializer.serialize() + HERDR_MOUSE_ENCODING, "utf8"));
+    const cursor = this.emulator.buffer.active;
+    // Absolute positioning also avoids SerializeAddon's last-column relative
+    // cursor offset when the native projection has disabled wrapping.
+    ws.send(Buffer.from(this.serializer.serialize() + HERDR_MOUSE_ENCODING +
+      `\x1b[${cursor.cursorY + 1};${cursor.cursorX + 1}H\x1b[${this.cursorShape} q\x1b[?25${this.cursorVisible ? 'h' : 'l'}`, "utf8"));
     this.rendered.add(ws);
     this.presentation(ws);
   }
@@ -172,7 +189,7 @@ class LiveTerminal {
   }
   private maximize(ws: WebSocket, token: string) {
     this.presentationRevision++;
-    this.maximized = { owner: ws, token };
+    this.maximized = { owner: ws, token, lease: this.presentationRevision };
     this.controller = ws;
     this.downloadController = ws;
     for (const client of this.clients) {
@@ -186,7 +203,8 @@ class LiveTerminal {
   }
   private async releaseMaximized(ws: WebSocket, token?: string) {
     const current = this.maximized;
-    if (!current || current.owner !== ws || (token !== undefined && token !== current.token)) return;
+    if (!current || current.releasing || current.owner !== ws || (token !== undefined && token !== current.token)) return;
+    current.releasing = true;
     this.presentationRevision++;
     // Keep every view paused until viewport restoration completes.
     // A new owner can take over while it is queued; snapshots
@@ -214,6 +232,12 @@ class LiveTerminal {
       if (isBinary || Buffer.byteLength(data.toString()) > 128 * 1024) return;
       try {
         const msg = JSON.parse(data.toString());
+        if (msg.type === "view-visible" && typeof msg.visible === "boolean") {
+          if (msg.visible === !this.hidden.has(ws)) return;
+          if (msg.visible) { this.hidden.delete(ws); this.resume(); }
+          else { this.hidden.add(ws); this.rendered.delete(ws); }
+          return;
+        }
         if (msg.type === "focus") {
           if (this.maximized && this.maximized.owner !== ws) return;
           this.controller = ws;
@@ -246,6 +270,12 @@ class LiveTerminal {
           void this.releaseMaximized(ws, msg.token);
           return;
         }
+        if (msg.type === "presentation-cancel" && typeof msg.token === "string" && Number.isSafeInteger(msg.lease)) {
+          const current = this.maximized;
+          if (current && current.token === msg.token && current.lease === msg.lease) void this.releaseMaximized(current.owner, current.token);
+          else this.presentation(ws);
+          return;
+        }
         if (this.controller !== ws) return;
         if (this.maximized && this.maximized.owner !== ws) return;
         if (
@@ -266,6 +296,7 @@ class LiveTerminal {
     });
     ws.once("close", () => {
       this.clients.delete(ws);
+      this.hidden.delete(ws);
       if (this.downloadController === ws) this.downloadController = undefined;
       this.rendered.delete(ws);
       if (this.closed) return;
@@ -309,6 +340,7 @@ class LiveTerminal {
         ws.close(1000, "Terminal detached");
       }
       this.clients.clear();
+      this.hidden.clear();
       this.rendered.clear();
       this.maximized = undefined;
       try {

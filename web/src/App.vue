@@ -9,13 +9,15 @@ import { useI18n } from 'vue-i18n'
 import { uiLocale } from './i18n'
 import LanguageSelect from './components/LanguageSelect.vue'
 import InstancePicker from './components/InstancePicker.vue'
-import { activeInstance, activeInstanceId, instances, selectInstance } from './instances'
+import InstanceSetup from './components/InstanceSetup.vue'
+import { activeInstance, activeInstanceId, instances, invalidInstanceLink, rememberInstance, selectInstance } from './instances'
+import { isCanvasSession } from './instance-url'
 import CanvasNavItem from './components/CanvasNavItem.vue'
 import { canvasIndicators, needsAttention, windowVisualState } from './canvas-status'
 import { cameraFromViewport, recallFreeCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type CanvasLocation } from './canvas-location'
 import { useCanvasLocation } from './use-canvas-location'
 import { subscribeState } from './state-events'
-import { useMediaUrl } from './media'
+import { retainBackgrounds, useBackgroundUrl } from './backgrounds'
 import Icon from './components/Icon.vue'
 import TerminalNode from './components/TerminalNode.vue'
 import NoteNode from './components/NoteNode.vue'
@@ -29,13 +31,16 @@ import DirectoryDialog from './components/DirectoryDialog.vue'
 import UrlDialog from './components/UrlDialog.vue'
 import DownloadPreviewDialog from './components/DownloadPreviewDialog.vue'
 import WindowContentDialog from './components/WindowContentDialog.vue'
+import CanvasFileDrop from './components/CanvasFileDrop.vue'
 import WindowPickerTree from './components/WindowPickerTree.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
+import PwaUpdatePrompt from './components/PwaUpdatePrompt.vue'
 import CutoutPreview from './components/CutoutPreview.vue'
 import { directoryRequest } from './directories'
+import { copiedFile } from './file-clipboard'
 import { urlRequest } from './urls'
 import { api, apiContext, isCurrentApi, requireCurrentApi, resetApiRequests, setSessionToken, ApiError, segment, uuid, write } from './api'
-import { clearTerminals, focusWindow, hasLiveTerminal, setContentFont } from './terminals'
+import { clearTerminals, focusWindow, hasLiveTerminal, pasteFileIntoWindow, setContentFont } from './terminals'
 import { buildFontPresentation, ensureContentFont } from './fonts'
 import type { GlobalSettings } from '../../shared/settings'
 import { useCanvasNavigation } from './canvas-navigation'
@@ -65,6 +70,8 @@ let cameraResize = 0
 const ready = ref(false)
 const authenticated = ref(false)
 const checkingInstance = ref(false)
+const instanceUnavailable = ref(invalidInstanceLink)
+const instanceSetupMessage = ref(invalidInstanceLink ? 'instances.invalidUrl' : '')
 let instanceActivation = 0
 let instanceBooted = false
 useScreenWakeLock(authenticated)
@@ -91,7 +98,7 @@ const canvases = ref<Canvas[]>([])
 const windowSizes = ref<Record<string, WindowSize>>({})
 const overviewBackground = ref<Canvas['background']>(null)
 const activeId = ref('overview')
-const navigation = useCanvasLocation({ instanceId: activeInstanceId, hasInstance: id => instances.value.some(instance => instance.id === id), selectInstance: selectHashInstance })
+const navigation = useCanvasLocation({ instanceId: activeInstanceId, hasInstance: id => activeInstance.value.id === id || instances.value.some(instance => instance.id === id), selectInstance: selectHashInstance })
 const { unknownInstance } = navigation
 const indicators = computed(() => canvasIndicators(canvases.value, resources.value, freshStatuses.value))
 const nodes = shallowRef<Node[]>([])
@@ -306,7 +313,7 @@ const { surface: graphSurface, app: appElement, fullscreen: canvasFullscreen, re
   beforeFullscreen: () => { sourcePanel.value = false; sidebarOpen.value = false; canvasMenu.value = false },
 })
 const currentBackground = computed(() => isOverview.value ? overviewBackground.value : currentCanvas.value?.background)
-const { url: backgroundUrl } = useMediaUrl(() => currentBackground.value?.url)
+const { url: backgroundUrl } = useBackgroundUrl(() => currentBackground.value?.url)
 const canvasCounts = computed(() => {
   if (isOverview.value) return overviewFiltered.value
     ? t('app.filteredWindows', { visible: visibleOverviewCount.value, total: windowCount.value })
@@ -488,6 +495,7 @@ function applySettings(value: GlobalSettings) {
 function applySharedState(state: SharedState) {
   if (latestState?.instanceId === state.instanceId && state.revision < latestState.revision) return
   latestState = state
+  retainBackgrounds([state.overviewBackground, ...state.canvases.map(canvas => canvas.background)].flatMap(background => background ? [background.url] : []))
   applySettings(state.settings)
   const sourceChanged = JSON.stringify(sources.value) !== JSON.stringify(state.sources)
   const previousNodes = JSON.stringify(currentCanvas.value?.nodes)
@@ -787,16 +795,27 @@ function visibilityChanged() {
 function unauthorized() { setSessionToken(''); clearInstanceRuntime(); checkingInstance.value = false; void exitFullscreen() }
 async function activateInstance() {
   const activation = ++instanceActivation
-  clearInstanceRuntime(); ready.value = true; checkingInstance.value = true
+  clearInstanceRuntime(); ready.value = true; checkingInstance.value = true; instanceUnavailable.value = false; instanceSetupMessage.value = ''
   const context = apiContext()
   try {
     const session = await api<{ authenticated: boolean; username?: string }>('/api/session', { signal: AbortSignal.timeout(15_000) }, context)
     requireCurrentApi(context)
+    if (!isCanvasSession(session)) throw new Error('Invalid Canvas session')
+    rememberInstance()
+    if (!session.authenticated && context.token) setSessionToken('')
     authenticated.value = session.authenticated; username.value = session.username || ''
     if (authenticated.value) await load()
   } catch (reason) {
-    if (activation === instanceActivation && isCurrentApi(context)) loginFailure.value = reason instanceof ApiError ? reason : new Error(t('instances.unavailable'))
+    if (activation === instanceActivation && isCurrentApi(context)) {
+      if (!authenticated.value) { instanceUnavailable.value = true; instanceSetupMessage.value = instances.value.length ? 'instances.unavailable' : '' }
+      else loginFailure.value = reason
+    }
   } finally { if (activation === instanceActivation) checkingInstance.value = false }
+}
+function connectInstance() { if (!checkingInstance.value) void activateInstance() }
+function sessionChanged() {
+  if (authenticated.value) { rememberCurrentLocation(); navigation.visit(activeInstance.value.id, activeId.value) }
+  void activateInstance()
 }
 watch(() => `${activeInstance.value.id}:${activeInstance.value.base}`, () => {
   if (!instanceBooted) return
@@ -1256,6 +1275,7 @@ setDownloadContext(resource => {
 onMounted(async () => {
   for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.addEventListener(event, creationNavigation, { capture: true, passive: true })
   window.addEventListener('canvas:unauthorized', unauthorized)
+  window.addEventListener('canvas:session-changed', sessionChanged)
   window.addEventListener('canvas:error', requestError)
   window.addEventListener('keydown', keydown)
   window.addEventListener('resize', windowResize)
@@ -1264,23 +1284,27 @@ onMounted(async () => {
   document.addEventListener('pointerdown', outsideOverviewMenu, true)
   navigation.read()
   instanceBooted = true
-  if (unknownInstance.value) ready.value = true
+  if (unknownInstance.value || invalidInstanceLink) ready.value = true
   else await activateInstance()
   document.addEventListener('visibilitychange', visibilityChanged)
   refreshTimer = setInterval(() => { if (!document.hidden) void refreshResources(true) }, 2000)
 })
-onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('pointerdown', outsideCanvasMenu); document.removeEventListener('pointerdown', outsideOverviewMenu, true) })
+onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('pointerdown', outsideCanvasMenu); document.removeEventListener('pointerdown', outsideOverviewMenu, true) })
 </script>
 
 <template>
   <UApp :locale="uiLocale" :portal="appElement || false" :toaster="null">
+  <PwaUpdatePrompt :portal="appElement" />
   <div v-if="!ready" class="boot-screen"><span class="spinner" />{{ t('common.loading') }}</div>
   <div v-else-if="!authenticated || unknownInstance" class="login-screen" :class="{ 'mobile-layout': mobile }" :style="mobileViewportStyle">
     <main class="login-content">
       <div class="brand login-brand"><span class="brand-symbol"><Icon name="canvas" :size="27" /></span><span class="brand-name">canvas</span><LanguageSelect class="login-language" /></div>
-      <InstancePicker :disabled="busy" />
+      <InstancePicker v-if="instances.length" :disabled="busy" />
       <div v-if="unknownInstance" class="login-form"><p class="form-error" role="status">{{ t('canvasUi.unknownInstance') }}</p><button class="button primary login-button" @click="navigation.visit(activeInstance.id, 'overview'); activateInstance()">{{ t('canvasUi.openInstance') }}</button></div>
+      <div v-else-if="checkingInstance" class="instance-checking" role="status"><span class="spinner" />{{ t('common.loading') }}</div>
+      <InstanceSetup v-else-if="instanceUnavailable" :message="instanceSetupMessage ? t(instanceSetupMessage) : ''" @connect="connectInstance" />
       <form v-else class="login-form" @submit.prevent="login">
+        <p class="login-address" :title="activeInstance.base">{{ activeInstance.base }}</p>
         <label>{{ t('app.username') }}<input v-model="username" name="username" autocomplete="username" required autofocus /></label>
         <label>{{ t('app.passwordLabel') }}<input v-model="password" name="password" type="password" autocomplete="current-password" required /></label>
         <p v-if="loginError" class="form-error" role="alert">{{ loginError }}</p>
@@ -1319,6 +1343,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
         </div>
       </header>
       <div ref="graphSurface" class="graph-wrap" :class="{ 'has-background': currentBackground, paged: paging }" :data-page-window="paging ? currentPage?.id : undefined" @mousedown.capture="guardPageDrag" @wheel.capture="canvasWheel" @touchstart.capture="canvasTouchStart" @touchmove.capture="canvasTouchMove" @touchend.capture="canvasTouchEnd" @touchcancel.capture="canvasTouchCancel" @click.capture="canvasClick">
+        <CanvasFileDrop :canvas-id="currentCanvas?.id" :get-viewport="getViewport" />
         <img v-if="currentBackground && backgroundUrl" class="canvas-background" :src="backgroundUrl" :style="{ opacity: currentBackground.opacity }" alt="" aria-hidden="true" />
         <span id="canvas-card-select-help" hidden>{{ t('app.cardSelectHelp') }}</span>
         <span id="canvas-card-move-help" hidden>{{ t('app.cardMoveHelp') }}</span>
@@ -1336,7 +1361,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
     <DirectoryDialog :portal="appElement" />
     <UrlDialog :portal="appElement" />
     <DownloadPreviewDialog :portal="appElement" />
-    <WindowContentDialog :target="scanTarget" :portal="appElement" @close="scanTarget = null" />
+    <WindowContentDialog :target="scanTarget" :canvases="canvases" :portal="appElement" @close="scanTarget = null" />
     <SettingsDialog v-if="settings" :open="settingsDialog" :settings="settings" :has-display-cutout="hasSafeTop" :portal="appElement" @close="settingsDialog = false" @saved="settingsSaved" @error="showError" />
     <CutoutPreview v-if="settingsDialog && mobile && hasSafeTop" />
     <div v-if="modalOpen && !backgroundCanvas && !settingsDialog && !scanTarget" class="modal-backdrop" @click.self="!busy && (sourceDialog = false, canvasDialog = false, actionDialog = null, addDialog = false, windowMenu = null)">
@@ -1344,7 +1369,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
       <section v-else-if="canvasDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="canvas-title"><header><div><h2 id="canvas-title">{{ canvasDraft.id ? t('app.renameCanvas') : t('app.newCanvas') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="canvasDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitCanvas"><label>{{ t('app.canvasName') }}<input v-model="canvasDraft.name" name="canvasName" required autofocus :placeholder="t('app.canvasNamePlaceholder')" maxlength="80" /></label><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="canvasDialog = false">{{ t('common.cancel') }}</button><button class="button primary" :disabled="busy" type="submit">{{ canvasDraft.id ? t('common.save') : t('app.createCanvas') }}</button></footer></form></section>
       <section v-else-if="actionDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="action-title"><header><h2 id="action-title">{{ actionDialog.title }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" :disabled="busy" @click="actionDialog = null"><Icon name="close" /></button></header><p v-if="actionDialog.description">{{ actionDialog.description }}</p><form @submit.prevent="submitAction"><label v-if="actionDialog.label">{{ actionDialog.label }}<input v-model="actionDialog.value" name="resourceName" :required="!actionDialog.optional" :placeholder="actionDialog.optional ? t('app.automaticName') : undefined" autofocus maxlength="100" /></label><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" :disabled="busy" @click="actionDialog = null">{{ t('common.cancel') }}</button><button class="button" :class="actionDialog.danger ? 'danger' : 'primary'" :disabled="busy" type="submit">{{ actionDialog.button }}</button></footer></form></section>
       <section v-else-if="addDialog" class="modal add-modal" role="dialog" aria-modal="true" aria-labelledby="add-title"><header><div><h2 id="add-title">{{ t('app.addWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="addDialog = false"><Icon name="close" /></button></header><label>{{ t('app.targetCanvas') }}<select v-model="addTarget"><option v-for="canvas in canvases" :key="canvas.id" :value="canvas.id">{{ canvas.name }}</option><option value="">{{ t('app.newMyCanvas') }}</option></select></label><div class="search-field"><Icon name="search" :size="16" /><input v-model="addSearch" :aria-label="t('app.searchWindows')" :placeholder="t('app.searchPlaceholder')" /></div><WindowPickerTree v-model:selected="selectedWindows" :sources="sources" :resources="resources" :query="addSearch" :existing="existingAddWindows" /><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><span class="selection-count">{{ t('app.selectedWindows', selectedAddWindows.length) }}</span><button class="button primary" :disabled="busy || !selectedAddWindows.length" @click="submitAdd">{{ t('app.addToCanvas') }}<Icon name="arrow" :size="16" /></button></footer></section>
-      <section v-else-if="windowMenu" class="modal window-menu" role="dialog" aria-modal="true" aria-labelledby="window-title"><header><h2 id="window-title">{{ windowMenu.name }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" @click="windowMenu = null"><Icon name="close" /></button></header><button v-if="mobile" @click="windowMenu = null; openSettings()"><Icon name="canvas" />{{ t('common.settings') }}</button><button v-if="mobile && !isOverview && windowMenu.node.id" :disabled="!terminalData(windowMenu.node).available" @click="terminalData(windowMenu.node).newTab?.create(); windowMenu = null"><Icon name="plus" />{{ t('app.newTab') }}</button><button :disabled="!hasLiveTerminal(windowMenu.node.sourceId, windowMenu.node.windowId)" @click="scanWindowContent(windowMenu.node, windowMenu.name)"><Icon name="search" />{{ t('panels.scan.title') }}</button><button @click="openAdd(windowMenu.node); windowMenu = null"><Icon name="plus" />{{ t('app.addToOtherCanvas') }}</button><button @click="windowAction(windowMenu.node, 'rename')"><Icon name="edit" />{{ t('app.renameWindow') }}</button><button class="danger-text" @click="windowAction(windowMenu.node, 'close')"><Icon name="trash" />{{ t('app.closeWindow') }}</button></section>
+      <section v-else-if="windowMenu" class="modal window-menu" role="dialog" aria-modal="true" aria-labelledby="window-title"><header><h2 id="window-title">{{ windowMenu.name }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" @click="windowMenu = null"><Icon name="close" /></button></header><button v-if="mobile" @click="windowMenu = null; openSettings()"><Icon name="canvas" />{{ t('common.settings') }}</button><button v-if="mobile && !isOverview && windowMenu.node.id" :disabled="!terminalData(windowMenu.node).available" @click="terminalData(windowMenu.node).newTab?.create(); windowMenu = null"><Icon name="plus" />{{ t('app.newTab') }}</button><button v-if="copiedFile" :title="t('fileTransfer.pasteNamed', { name: copiedFile.filename })" :disabled="!hasLiveTerminal(windowMenu.node.sourceId, windowMenu.node.windowId)" @click="pasteFileIntoWindow(windowMenu.node.sourceId, windowMenu.node.windowId); windowMenu = null"><Icon name="file" />{{ t('fileTransfer.paste') }}</button><button :disabled="!hasLiveTerminal(windowMenu.node.sourceId, windowMenu.node.windowId)" @click="scanWindowContent(windowMenu.node, windowMenu.name)"><Icon name="search" />{{ t('panels.scan.title') }}</button><button @click="openAdd(windowMenu.node); windowMenu = null"><Icon name="plus" />{{ t('app.addToOtherCanvas') }}</button><button @click="windowAction(windowMenu.node, 'rename')"><Icon name="edit" />{{ t('app.renameWindow') }}</button><button class="danger-text" @click="windowAction(windowMenu.node, 'close')"><Icon name="trash" />{{ t('app.closeWindow') }}</button></section>
     </div>
     <div v-if="error || success" class="toast" :class="{ 'error-toast': error }" role="status"><Icon :name="error ? 'info' : 'check'" :size="17" /><span>{{ error || success }}</span><button class="icon-button" :aria-label="t('app.closeNotification')" @click="error = ''; success = ''"><Icon name="close" :size="15" /></button></div>
   </div>

@@ -9,12 +9,16 @@ import { clearUrls, receiveUrl } from './urls'
 import { bindFileInput, preventFileNavigation, TerminalUploads, type TerminalUploadState } from './uploads'
 import { clipboardRestoringFocus, TerminalClipboard, type ClipboardNotice } from './clipboard'
 import { emptyModifiers, hasModifiers, modifiedText, terminalKey, terminalShortcut, type TerminalModifiers } from './terminal-input'
+import { terminalInputChunks } from './terminal-input-chunks'
 import { bindTerminalKeyboardLock } from './terminal-keyboard-lock'
 import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch'
 import { defaultContentFont, type ContentFontSettings } from '../../shared/settings'
 import { applyTerminalFontFeatures, type FontPresentation } from './fonts'
 import { bindMobileKeyboard } from './mobile-keyboard'
 import { bindMobileInput } from './mobile-input'
+import { copiedFile } from './file-clipboard'
+import { loadCanvasFile } from './file-transfer'
+import type { CanvasFileReference } from './file-reference'
 import { fitTerminalGrid, terminalBox } from './terminal-geometry'
 import { TerminalReconnect } from './terminal-reconnect'
 
@@ -23,10 +27,12 @@ export type TerminalStatus = {
   error?: string
   readOnly?: boolean
   focusedPaneId?: string
-  presentation?: { maximized: boolean; owned: boolean }
+  presentation?: { maximized: boolean; owned: boolean; token?: string; lease?: number }
+  presentationCancelling?: boolean
   focusResize?: { owned: boolean }
   upload?: TerminalUploadState
   draggingFile?: boolean
+  fileReading?: boolean
   clipboardError?: ClipboardNotice
   modifiers?: TerminalModifiers
   touchMode?: TerminalTouchMode
@@ -39,6 +45,8 @@ interface Session {
   term: Terminal
   surface: HTMLDivElement
   host?: HTMLElement
+  viewVisible?: boolean
+  reportedVisible?: boolean
   magnified: boolean
   mobile: boolean
   modifiers: TerminalModifiers
@@ -68,9 +76,44 @@ interface Session {
   geometryListeners: Set<(geometry: TerminalGeometry) => void>
   resource: { sourceId: string; spaceId: string; windowId: string }
   uploads: TerminalUploads
+  fileRead?: AbortController
   clipboard?: TerminalClipboard
 }
 const sessions = new Map<string, Session>()
+function syncViewVisibility(session: Session) {
+  if (session.state.status !== 'connected' || session.socket?.readyState !== WebSocket.OPEN) return
+  const visible = !!session.host?.isConnected && session.viewVisible !== false && !document.hidden
+  if (session.reportedVisible === visible) return
+  session.reportedVisible = visible
+  session.socket.send(JSON.stringify({ type: 'view-visible', visible }))
+}
+function acceptsFile(session: Session) {
+  return interactive(session) && session.state.status === 'connected' && session.socket?.readyState === WebSocket.OPEN &&
+    !(session.state.presentation?.maximized && (!session.state.presentation.owned || !session.magnified))
+}
+async function uploadReference(session: Session, reference: CanvasFileReference) {
+  if (session.fileRead) return
+  if (!acceptsFile(session)) { session.uploads.reject(t('terminal.upload.disconnected')); return }
+  const context = apiContext(), controller = session.fileRead = new AbortController()
+  setState(session, { ...session.state, fileReading: true })
+  try {
+    const file = await loadCanvasFile(reference, AbortSignal.any([context.signal, controller.signal]))
+    if (!isCurrentApi(context) || controller.signal.aborted) return
+    if (!acceptsFile(session)) throw new Error('terminal.upload.disconnected')
+    session.uploads.enqueue([file])
+  } catch (reason) {
+    if (!isCurrentApi(context) || controller.signal.aborted) return
+    const message = reason instanceof Error && (reason.message.startsWith('fileTransfer.') || reason.message === 'terminal.upload.disconnected') ? t(reason.message) : t('fileTransfer.failed')
+    session.uploads.reject(message)
+  } finally {
+    if (session.fileRead === controller) { session.fileRead = undefined; setState(session, { ...session.state, fileReading: false }) }
+  }
+}
+export function pasteFileIntoWindow(sourceId: string, windowId: string) {
+  const reference = copiedFile.value?.reference
+  const session = [...sessions.values()].find(value => value.resource.sourceId === sourceId && value.resource.windowId === windowId && value.host?.isConnected)
+  if (reference && session) return uploadReference(session, reference)
+}
 watch(locale, () => {
   Terminal.strings.promptLabel = t('terminal.keyboard.input')
   Terminal.strings.tooMuchOutput = t('terminal.tooMuchOutput')
@@ -179,6 +222,7 @@ function schedulePresentation(session: Session) {
   })
 }
 function disconnect(session: Session) {
+  session.reportedVisible = undefined
   session.connectionRevision++
   session.connectionProbe?.abort(); session.connectionProbe = undefined
   endFocusSize(session)
@@ -187,7 +231,7 @@ function disconnect(session: Session) {
   if (socket) { disconnectDownloads(socket); socket.close() }
   session.uploads.disconnected()
   session.presentationRevision = (session.presentationRevision || 0) + 1
-  setState(session, { ...session.state, readOnly: true, presentation: undefined, focusResize: undefined })
+  setState(session, { ...session.state, readOnly: true, presentation: undefined, presentationCancelling: false, focusResize: undefined })
 }
 function connectionFailed(session: Session, error = t('terminal.connection.disconnected'), retry = true) {
   disconnect(session)
@@ -196,6 +240,7 @@ function connectionFailed(session: Session, error = t('terminal.connection.disco
 }
 function terminalVisibilityChanged() {
   for (const session of sessions.values()) {
+    syncViewVisibility(session)
     if (document.hidden) {
       session.reconnect?.pause()
       // Keep healthy sockets alive. Pending authentication and handshakes are
@@ -256,10 +301,12 @@ async function connect(session: Session, probe: boolean) {
         else if (message.type === 'pane-focus') setState(session, { ...session.state, focusedPaneId: typeof message.paneId === 'string' ? message.paneId : undefined })
         else if (message.type === 'presentation') {
           const revision = session.presentationRevision = (session.presentationRevision || 0) + 1
-          const presentation = { maximized: message.maximized === true, owned: message.owned === true }
+          const presentation = { maximized: message.maximized === true, owned: message.owned === true,
+            ...(typeof message.token === 'string' && Number.isSafeInteger(message.lease) ? { token: message.token, lease: message.lease as number } : {}) }
           const update = () => {
             if (session.socket !== socket || session.presentationRevision !== revision) return
-            setState(session, { ...session.state, presentation })
+            if (!presentation.owned && session.state.presentation?.owned && session.focusResize) session.focusResize.suspended = true
+            setState(session, { ...session.state, presentation, presentationCancelling: false })
             schedulePresentation(session)
           }
           if (presentation.maximized && !presentation.owned) update()
@@ -273,6 +320,7 @@ async function connect(session: Session, probe: boolean) {
           if (message.status === 'connected') session.reconnect?.connected()
           setState(session, { ...session.state, status: message.status, error: undefined,
             retryAttempt: message.status === 'connected' ? undefined : session.state.retryAttempt, readOnly: message.readOnly === true })
+          syncViewVisibility(session)
           schedulePresentation(session)
         }
         else if (message.type === 'resize' && Number.isInteger(message.cols) && Number.isInteger(message.rows)) {
@@ -441,12 +489,19 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     function sendInput(data: string, binary = false) {
       // onData includes terminal query replies; passive viewers must never
       // claim control or send duplicate replies merely by rendering output.
-      if (current.suppressInput || !interactive(current) || current.socket?.readyState !== WebSocket.OPEN || current.state.readOnly || current.state.status !== 'connected' || (current.state.presentation?.maximized && !current.state.presentation.owned)) return
+      const socket = current.socket, context = apiContext()
+      const writable = () => isCurrentApi(context) && current.socket === socket && socket?.readyState === WebSocket.OPEN &&
+        !current.suppressInput && interactive(current) && !current.state.readOnly && current.state.status === 'connected' &&
+        !(current.state.presentation?.maximized && !current.state.presentation.owned)
+      if (!writable()) return
       if (current.mobile && !binary && data.length === 1 && hasModifiers(current.modifiers)) {
         data = modifiedText(data, current.modifiers)
         setModifiers(current)
       }
-      current.socket.send(JSON.stringify({ type: 'input', data, ...(binary ? { encoding: 'binary' } : {}) }))
+      for (const chunk of binary ? [data] : terminalInputChunks(data)) {
+        if (!writable()) return
+        socket!.send(JSON.stringify({ type: 'input', data: chunk, ...(binary ? { encoding: 'binary' } : {}) }))
+      }
     }
     term.onData(data => sendInput(data))
     // Legacy mouse coordinates are bytes, not UTF-8 text. Encoding them as
@@ -497,6 +552,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   // the current host owns its presentation and temporary size request.
   if (session.host !== host) endFocusSize(session)
   session.host = host
+  session.viewVisible = true
   session.mobile = options.mobile === true
   session.magnified = options.magnified === true
   session.nativeKey = undefined
@@ -577,12 +633,24 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   if (!session.socket || session.socket.readyState === WebSocket.CLOSED) session.reconnect?.resume()
   else if (session.state.status === 'connected') session.reconnect?.connected()
   const current = session
+  const mountingContext = apiContext()
   const removeFileInput = bindFileInput(host, current.uploads, draggingFile => {
     if (current.host === host) setState(current, { ...current.state, draggingFile })
   })
   const observer = new ResizeObserver(() => { if (current.host === host) schedulePresentation(current) })
   observer.observe(host)
+  const intersection = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
+    if (current.host !== host) return
+    const entry = entries.at(-1)
+    if (!entry) return
+    current.viewVisible = entry.isIntersecting
+    syncViewVisibility(current)
+  }, { rootMargin: '96px' }) : undefined
+  intersection?.observe(host)
+  syncViewVisibility(current)
   schedulePresentation(current)
+  const canPasteText = () => isCurrentApi(mountingContext) && current.host === host && host.isConnected && interactive(current) && current.state.status === 'connected' && current.socket?.readyState === WebSocket.OPEN &&
+    !(current.state.presentation?.maximized && (!current.state.presentation.owned || !current.magnified))
   return {
     focus(options: { keyboard?: boolean } = {}) { focusTerminal(current, options.keyboard) },
     blur() { if (current.mobile) current.keyboard?.blur(); else current.term.blur(); setModifiers(current) },
@@ -591,6 +659,14 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       sendTerminalKey(current, key, modifiers)
     },
     uploadFiles(files: File[]) { current.uploads.enqueue(files) },
+    uploadReference(reference: CanvasFileReference) { return uploadReference(current, reference) },
+    cancelMaximized() {
+      const presentation = current.state.presentation
+      if (!isCurrentApi(mountingContext) || !presentation?.maximized || presentation.lease === undefined || !presentation.token ||
+          current.state.presentationCancelling || current.state.status !== 'connected' || current.socket?.readyState !== WebSocket.OPEN) return
+      setState(current, { ...current.state, presentationCancelling: true })
+      current.socket.send(JSON.stringify({ type: 'presentation-cancel', token: presentation.token, lease: presentation.lease }))
+    },
     selectionText() { return current.term.getSelection() },
     viewportText() {
       const buffer = current.term.buffer.active, lines: string[] = []
@@ -598,7 +674,12 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       return lines.join('\n').trimEnd()
     },
     copySelection(text = current.term.getSelection()) { return current.clipboard?.copyText(text) ?? false },
-    pasteText(text: string) { if (interactive(current)) { setModifiers(current); claimFocus(current); current.term.paste(text) } },
+    canPasteText,
+    pasteText(text: string) {
+      if (!text || !canPasteText()) return false
+      current.nativeKey = undefined; setModifiers(current); claimFocus(current); current.term.paste(text)
+      return true
+    },
     setTouchMode(mode: TerminalTouchMode) { current.touchMode = mode; setModifiers(current); setState(current, { ...current.state, touchMode: mode }) },
     resize() { return resize(current) },
     cancelUpload() { current.uploads.cancel() },
@@ -609,12 +690,14 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     dispose() {
       removeFileInput()
       observer.disconnect()
+      intersection?.disconnect()
       current.listeners.delete(listener)
       if (onGeometry) current.geometryListeners.delete(onGeometry)
       if (current.host === host) {
         endFocusSize(current)
         if (current.mobile) current.keyboard?.blur()
         current.host = undefined
+        syncViewVisibility(current)
         current.keyboardLock?.dispose(); current.keyboardLock = undefined
         current.magnified = false
         current.keyboardRequested = false
@@ -629,6 +712,7 @@ export function clearTerminals() {
   clearDirectories()
   clearUrls()
   for (const session of sessions.values()) {
+    session.fileRead?.abort(); session.fileRead = undefined
     session.uploads.clear()
     session.keyboardLock?.dispose()
     session.removeTouch?.()

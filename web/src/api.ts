@@ -1,7 +1,8 @@
 import { ref, watch } from 'vue'
 import { t } from './i18n'
-import { activeInstance, tokenKey } from './instances'
-import { instanceToken, resolveApiUrl } from './instance-url'
+import { activeInstance } from './instances'
+import { resolveApiUrl } from './instance-url'
+import { sessionToken, storeSessionToken, tokenKey } from './instance-session'
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) { super(message) }
@@ -14,17 +15,21 @@ export function resetApiRequests() {
   lifetime.abort(); lifetime = new AbortController(); apiRevision.value++
 }
 watch(() => `${activeInstance.value.id}:${activeInstance.value.base}`, resetApiRequests, { flush: 'sync' })
+window.addEventListener('storage', event => {
+  if (event.storageArea !== localStorage || event.key !== null && (event.key !== tokenKey(activeInstance.value.id) || event.oldValue === event.newValue)) return
+  resetApiRequests()
+  window.dispatchEvent(new Event('canvas:session-changed'))
+})
 export function apiContext(): ApiContext {
   const instance = activeInstance.value
-  return { id: instance.id, base: instance.base, token: instanceToken(sessionStorage.getItem(tokenKey(instance.id)), instance.base), revision: apiRevision.value, signal: lifetime.signal }
+  return { id: instance.id, base: instance.base, token: sessionToken(instance), revision: apiRevision.value, signal: lifetime.signal }
 }
 export function isCurrentApi(context: ApiContext) { return context.revision === apiRevision.value && !context.signal.aborted }
 export function requireCurrentApi(context: ApiContext) {
   if (!isCurrentApi(context)) throw new DOMException('Canvas instance changed', 'AbortError')
 }
 export function setSessionToken(token: string) {
-  if (token) sessionStorage.setItem(tokenKey(activeInstance.value.id), JSON.stringify({ base: activeInstance.value.base, token }))
-  else sessionStorage.removeItem(tokenKey(activeInstance.value.id))
+  storeSessionToken(activeInstance.value, token)
   resetApiRequests()
 }
 export function apiUrl(path: string, context = apiContext()) { return resolveApiUrl(context.base, path) }

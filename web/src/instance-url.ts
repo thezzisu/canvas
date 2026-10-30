@@ -6,6 +6,26 @@ export function normalizeApiBase(value: string): string {
   return url.href
 }
 
+/** Import only connection details; query parameters never supply a session. */
+export function parseInstanceLink(href: string): { url: URL; server?: { base: string; name: string }; invalid: boolean } | undefined {
+  const url = new URL(href)
+  if (!url.searchParams.has('server') && !url.searchParams.has('name')) return
+  const servers = url.searchParams.getAll('server'), name = url.searchParams.get('name') || ''
+  url.searchParams.delete('server'); url.searchParams.delete('name')
+  if (!servers.length) return { url, invalid: false }
+  try {
+    if (servers.length !== 1) throw new Error('Ambiguous server')
+    const base = normalizeApiBase(servers[0]!)
+    return { url, server: { base, name: name.trim().replace(/\s+/g, ' ').slice(0, 80) || new URL(base).host }, invalid: false }
+  } catch { return { url, invalid: true } }
+}
+
+export function isCanvasSession(value: unknown): value is { authenticated: boolean; username?: string } {
+  if (!value || typeof value !== 'object') return false
+  const session = value as { authenticated?: unknown; username?: unknown }
+  return typeof session.authenticated === 'boolean' && (session.username === undefined || typeof session.username === 'string')
+}
+
 /** API paths are relative to the selected application, including its deployment prefix. */
 export function resolveApiUrl(base: string, value: string): URL {
   const root = new URL(base)

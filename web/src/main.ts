@@ -2,7 +2,9 @@ import { createApp } from 'vue'
 import ui from '@nuxt/ui/vue-plugin'
 import App from './App.vue'
 import { initializeViewportPolicy } from './developer-mode'
+import { initializePwa } from './pwa'
 import { i18n, watchDocumentLocale } from './i18n'
+import { clearCopiedFile } from './file-clipboard'
 import './ui.css'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
@@ -14,5 +16,7 @@ import './card-presentation.css'
 
 document.documentElement.classList.add('dark')
 initializeViewportPolicy()
+initializePwa()
 watchDocumentLocale()
+document.addEventListener('copy', clearCopiedFile)
 createApp(App).use(i18n).use(ui).mount('#app')

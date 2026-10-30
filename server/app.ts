@@ -5,6 +5,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { verifyPassword, bearerToken, allowedOrigin } from "./auth.ts";
 import { MediaTickets, mediaPath } from "./media.ts";
+import { receiveCanvasFile } from "./canvas-files.ts";
 import { settingsPatchSchema } from "./settings.ts";
 import {
   Store,
@@ -71,6 +72,8 @@ const isBackgroundUpload = (method: string, path: string) =>
   method === "PUT" && /^\/api\/canvases\/[^/]+\/background$/.test(path);
 const isInboxUpload = (method: string, path: string) =>
   method === "PUT" && /^\/api\/uploads\/[A-Za-z0-9_-]+$/.test(path);
+const isCanvasFileUpload = (method: string, path: string) =>
+  method === 'POST' && /^\/api\/canvases\/[^/]+\/files$/.test(path);
 export type Account = { username: string; passwordHash: string };
 export interface DownloadResponse {
   body: Readable;
@@ -126,7 +129,7 @@ export function createApp(
     if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method)) {
       if (isBackgroundUpload(c.req.method, c.req.path))
         backgroundContentType(c.req.header("content-type"));
-      else if (isInboxUpload(c.req.method, c.req.path)) {
+      else if (isInboxUpload(c.req.method, c.req.path) || isCanvasFileUpload(c.req.method, c.req.path)) {
         if (c.req.header("content-type") !== "application/octet-stream") return c.json({ error: "File bytes required" }, 415);
       }
       else if (!c.req.header("content-type")?.startsWith("application/json"))
@@ -139,7 +142,7 @@ export function createApp(
     onError: (c) => c.json({ error: "Request too large" }, 413),
   });
   app.use("/api/*", (c, next) =>
-    isBackgroundUpload(c.req.method, c.req.path) || isInboxUpload(c.req.method, c.req.path)
+    isBackgroundUpload(c.req.method, c.req.path) || isInboxUpload(c.req.method, c.req.path) || isCanvasFileUpload(c.req.method, c.req.path)
       ? next()
       : jsonBodyLimit(c, next),
   );
@@ -161,6 +164,14 @@ export function createApp(
   app.put("/api/uploads/:token", async c => {
     const status = await options.uploads?.receive(c.req.param("token"), bearerToken(c.req.header("authorization")), c.req.raw) ?? 404;
     return status === 204 ? c.body(null, 204) : c.json({ error: status === 404 ? "Upload expired" : "Upload failed" }, status);
+  });
+  app.post('/api/canvases/:id/files', async c => {
+    const id = c.req.param('id');
+    if (id === 'overview') return c.json({ error: 'Overview is read-only' }, 403);
+    if (!store.get('canvas', id) || !options.assets) return c.json({ error: 'Canvas not found' }, 404);
+    const input = z.object({ filename: z.string().min(1).max(255), size: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      x: z.coerce.number().finite().min(-1e7).max(1e7), y: z.coerce.number().finite().min(-1e7).max(1e7) }).strict().parse(c.req.query());
+    return c.json(await receiveCanvasFile(store, options.assets, id, input, c.req.raw, bearerToken(c.req.header('authorization'))), 201);
   });
   app.get("/api/downloads/:ticket", async (c) => {
     if (c.req.method !== "GET") return c.body(null, 405);
@@ -189,7 +200,9 @@ export function createApp(
   app.post("/api/content-scans/:scan/items/:item/open", async c => {
     const context = z.object({
       canvasId: z.union([z.string().uuid(), z.literal("overview")]).optional(), anchorId: z.string().max(150).optional(),
-    }).strict().parse(await c.req.json());
+      position: nodeLayoutSchema.pick({ x: true, y: true }).optional(),
+    }).strict().refine(value => !value.position || !!value.canvasId && value.canvasId !== 'overview' && !value.anchorId)
+      .parse(await c.req.json());
     const opened = await options.windowContent?.open(c.req.param("scan"), c.req.param("item"),
       bearerToken(c.req.header("authorization")), context, c.req.raw.signal);
     return opened ? c.json(opened) : c.json({ error: "Scan expired; scan this window again" }, 404);

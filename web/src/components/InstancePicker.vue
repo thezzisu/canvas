@@ -20,6 +20,7 @@ async function change(action: () => void) {
   finally { working.value = false }
 }
 function edit(add = false) {
+  if (!add && activeInstance.value.builtin) return
   Object.assign(draft, add ? { id: '', name: '', base: '' } : activeInstance.value)
   error.value = ''; open.value = true
 }
@@ -32,8 +33,8 @@ const items = computed<DropdownMenuItem[][]>(() => [
   instances.value.map(instance => ({ label: instance.name, type: 'checkbox' as const,
     checked: instance.id === activeInstance.value.id, onSelect: (): void => { void change(() => selectInstance(instance.id)) } })),
   [{ label: t('instances.add'), onSelect: () => edit(true) },
-    { label: t('instances.edit'), onSelect: () => edit() },
-    { label: t('instances.remove'), disabled: instances.value.length < 2,
+    { label: t('instances.edit'), disabled: !!activeInstance.value.builtin, onSelect: () => edit() },
+    { label: t('instances.remove'), disabled: !!activeInstance.value.builtin,
       onSelect: (): void => { void change(() => removeInstance(activeInstance.value.id)) } }],
 ])
 </script>
@@ -41,7 +42,7 @@ const items = computed<DropdownMenuItem[][]>(() => [
 <template>
   <UDropdownMenu :items="items" :portal="portal || false" :content="{ side: 'top', align: 'start', sideOffset: 6 }"
     :ui="{ content: 'instance-menu' }">
-    <button type="button" class="instance-trigger" :disabled="disabled || working" :title="activeInstance.base" :aria-label="`${t('instances.instance')}: ${activeInstance.name}`">
+    <button type="button" class="instance-trigger" :disabled="disabled || working" :aria-busy="working" :title="activeInstance.base" :aria-label="`${t('instances.instance')}: ${activeInstance.name}`">
       <Icon name="server" :size="15" /><span>{{ activeInstance.name }}</span><Icon name="down" :size="12" />
     </button>
   </UDropdownMenu>
@@ -63,6 +64,7 @@ const items = computed<DropdownMenuItem[][]>(() => [
 .instance-trigger>span{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .instance-trigger>svg{flex:none;color:#7f8da0}.instance-trigger:hover{color:#e1d1c2}
 .instance-menu{min-width:200px;max-width:min(320px,calc(100vw - 24px));z-index:90}
+.instance-menu [data-disabled]{cursor:not-allowed}
 .instance-dialog{width:min(420px,calc(100vw - 28px));max-height:calc(100dvh - 32px);z-index:92}
 .instance-dialog-body{padding:16px 20px}.instance-dialog form{display:flex;flex-direction:column;gap:16px}
 .instance-dialog label{margin-top:0}.instance-dialog input{margin-top:0;font-size:13px}

@@ -6,13 +6,18 @@ import { NodeResizeControl } from '@vue-flow/node-resizer'
 import type { FileData } from '../types'
 import Icon from './Icon.vue'
 import { readTextPreview } from '../text-preview'
+import TextPreview from './TextPreview.vue'
+import { activeInstance } from '../instances'
 import { downloadMedia, useMediaUrl } from '../media'
 import { reportDownloadError } from '../downloads'
 import { apiFetch } from '../api'
+import { copyCanvasFile, fileReference } from '../file-transfer'
+import { writeFileReference } from '../file-reference'
 
 const { t, n } = useI18n()
 
 const props = defineProps<Pick<NodeProps<FileData>, 'id' | 'data' | 'selected'>>()
+const sourceInstance = { id: activeInstance.value.id, base: activeInstance.value.base }
 const pdfPreview = navigator.pdfViewerEnabled
 const path = computed(() => `/api/files/${encodeURIComponent(props.data.assetId)}`)
 const { url, error: ticketError, retry: retryTicket } = useMediaUrl(() => ['image', 'pdf'].includes(props.data.asset.preview) ? path.value : undefined)
@@ -22,6 +27,18 @@ const text = ref('')
 const textLoading = ref(false)
 const textError = ref<string | Error>('')
 const truncated = ref(false)
+const copyFeedback = ref('')
+let copyTimer: ReturnType<typeof setTimeout> | undefined
+function copyFile() {
+  clearTimeout(copyTimer)
+  try { copyCanvasFile(props.data.asset, sourceInstance); copyFeedback.value = 'fileTransfer.copied' }
+  catch (error) { copyFeedback.value = error instanceof Error ? error.message : 'fileTransfer.failed' }
+  copyTimer = setTimeout(() => { copyFeedback.value = '' }, 2200)
+}
+function dragFile(event: DragEvent) {
+  if (!writeFileReference(event.dataTransfer, fileReference(props.data.assetId, sourceInstance))) event.preventDefault()
+  event.stopPropagation()
+}
 let visibility: IntersectionObserver | undefined
 let request: AbortController | undefined
 async function loadText() {
@@ -48,7 +65,7 @@ watch([fileBody, () => props.data.assetId, () => props.data.asset.preview], ([el
   }, { rootMargin: '200px' })
   visibility.observe(element)
 }, { immediate: true, flush: 'post' })
-onBeforeUnmount(() => { request?.abort(); visibility?.disconnect() })
+onBeforeUnmount(() => { clearTimeout(copyTimer); request?.abort(); visibility?.disconnect() })
 const size = computed(() => {
   const bytes = props.data.asset.size
   if (bytes < 1024) return `${n(bytes)} B`
@@ -66,6 +83,8 @@ const size = computed(() => {
       <Icon name="file" :size="13" />
       <span class="file-title" :title="data.asset.filename">{{ data.asset.filename }}</span>
       <span class="file-size">{{ size }}</span>
+      <button type="button" class="file-action file-copy nodrag" draggable="true" :title="t(copyFeedback || 'fileTransfer.copyOrDrag')" :aria-label="t('fileTransfer.copy')" @pointerdown.stop @click.stop="copyFile" @dragstart="dragFile"><Icon :name="copyFeedback === 'fileTransfer.copied' ? 'check' : 'copy'" :size="14" /></button>
+      <span class="sr-only" role="status">{{ copyFeedback ? t(copyFeedback) : '' }}</span>
       <button type="button" class="file-action nodrag" @click.stop="download" :title="t('panels.file.download')" :aria-label="t('panels.file.download')" @pointerdown.stop><Icon name="download" :size="14" /></button>
       <button class="file-action nodrag" :title="t('panels.file.remove')" :aria-label="t('panels.file.remove')" @click.stop="data.onRemove(id)"><Icon name="close" :size="14" /></button>
     </header>
@@ -78,7 +97,7 @@ const size = computed(() => {
       <div v-else-if="data.asset.preview === 'text'" class="file-text-body nowheel" @wheel.stop>
         <div v-if="textLoading" class="file-text-status" role="status"><span class="spinner" /> {{ t('common.loading') }}</div>
         <div v-else-if="textError" class="file-text-status" role="alert"><span>{{ textError instanceof Error ? textError.message : t(textError) }}</span><button type="button" @click="loadText">{{ t('common.retry') }}</button></div>
-        <pre v-else class="file-text-preview" :aria-label="data.asset.filename" tabindex="0">{{ text }}</pre>
+        <TextPreview v-else :text="text" :filename="data.asset.filename" />
         <div v-if="truncated" class="file-text-truncated"><span>{{ t('panels.preview.truncated') }}</span><button type="button" @click="download">{{ t('panels.file.downloadOriginal') }}</button></div>
       </div>
       <iframe v-else-if="data.asset.preview === 'pdf' && pdfPreview && url" class="file-preview nowheel" :src="url" :title="data.asset.filename" loading="lazy" referrerpolicy="no-referrer" />
@@ -94,12 +113,12 @@ const size = computed(() => {
 .file-size { font-size: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .file-action { display: inline-flex; justify-content: center; align-items: center; flex: 0 0 23px; width: 23px; height: 23px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #a9b0be; cursor: pointer; }
 .file-action:hover { color: #fff; background: #ffffff12; }
+.file-copy{cursor:grab}.file-copy:active{cursor:grabbing}
 .file-action:focus-visible, .file-download:focus-visible { outline: 2px solid #8c9ef8; outline-offset: -2px; }
 .file-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
 .file-image { width: 100%; height: 100%; object-fit: contain; }
 .file-preview { border: 0; width: 100%; height: 100%; background: #fff; color-scheme: light; }
 .file-text-body { display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 0; background: #14191f; }
-.file-text-preview { flex: 1; min-width: 0; min-height: 0; overflow: auto; margin: 0; padding: 12px; font-family: var(--content-font-family); font-feature-settings: var(--content-font-features); font-size: 13px; line-height: 1.5; white-space: pre; tab-size: 4; color: #cdd5e1; user-select: text; -webkit-user-select: text; touch-action: pan-x pan-y; scrollbar-width: thin; outline: none; }
 .file-text-status { display: flex; flex: 1; align-items: center; justify-content: center; gap: 8px; padding: 12px; color: #8b98a9; font-size: 11px; }
 .file-text-status button { color: #d4ac8e; font-size: 11px; }
 .file-text-truncated { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; flex: 0 0 auto; padding: 7px 10px; border-top: 1px solid #303947; font-size: 10px; color: #7f8da1; }

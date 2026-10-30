@@ -5,6 +5,7 @@ import UModal from '@nuxt/ui/components/Modal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import Icon from './Icon.vue'
 import ImagePreview from './ImagePreview.vue'
+import TextPreview from './TextPreview.vue'
 import { downloadPreview, downloadPreviewCount, dismissDownloadPreview } from '../downloads'
 import { readTextPreview } from '../text-preview'
 import { downloadMedia, useMediaUrl } from '../media'
@@ -102,7 +103,7 @@ onBeforeUnmount(() => request?.abort())
           <div v-else class="download-preview-status">{{ t('panels.preview.pdfUnavailable') }}</div>
         </template>
         <template v-else-if="downloadPreview.preview === 'text' && !loading && !error">
-          <pre class="download-preview-text" :aria-label="downloadPreview.filename" tabindex="0">{{ text }}</pre>
+          <TextPreview :text="text" :filename="downloadPreview.filename" />
           <div v-if="truncated" class="download-preview-truncated">{{ t('panels.preview.truncated') }}</div>
         </template>
       </div>
@@ -126,7 +127,6 @@ onBeforeUnmount(() => request?.abort())
 .download-preview-status{display:flex;align-items:center;justify-content:center;gap:8px;position:absolute;inset:0;padding:16px;color:#8d9aaa;font-size:12px;text-align:center;z-index:1}
 .download-preview-status button{color:#d4ac8e}
 .download-preview-pdf{display:block;flex:1;width:100%;height:100%;border:0;background:#fff;color-scheme:light}
-.download-preview-text{display:block;flex:1;min-height:0;margin:0;padding:14px;overflow:auto;white-space:pre;tab-size:4;font-family:var(--content-font-family,monospace);font-feature-settings:var(--content-font-features);font-size:13px;line-height:1.5;color:#ccd5e1;user-select:text;-webkit-user-select:text;touch-action:pan-x pan-y;scrollbar-width:thin;outline:none}
 .download-preview-text:focus-visible{box-shadow:inset 0 0 0 1px #b18a6d}
 .download-preview-truncated{padding:7px 12px;border-top:1px solid #303947;flex:none;font-size:10px;color:#8190a3}
 @media(max-width:600px){.download-preview-header{padding-left:10px}.download-preview-download{min-height:36px}.download-preview-close,.download-preview-expand{width:36px;min-width:36px;min-height:36px}}

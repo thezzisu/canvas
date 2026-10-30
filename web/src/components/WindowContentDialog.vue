@@ -3,6 +3,8 @@ import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue
 import { useI18n } from 'vue-i18n'
 import UModal from '@nuxt/ui/components/Modal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
+import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
+import type { Canvas } from '../types'
 import type { WindowContentItem, WindowContentOpen, WindowContentScan } from '../../../shared/window-content'
 import { api, apiContext, apiUrl, requireCurrentApi, segment, uuid } from '../api'
 import { copyText } from '../clipboard'
@@ -12,7 +14,7 @@ import { presentUrl } from '../urls'
 
 type Target = { sourceId: string; spaceId: string; windowId: string; name: string; context: DownloadContext }
 type FileItem = Extract<WindowContentItem, { kind: 'file' }>
-const props = defineProps<{ target: Target | null; portal?: HTMLElement }>()
+const props = defineProps<{ target: Target | null; canvases: Canvas[]; portal?: HTMLElement }>()
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
 const result = shallowRef<{ scan: WindowContentScan; target: Target; context: DownloadContext }>()
@@ -20,6 +22,7 @@ const loading = ref(false)
 const opening = ref('')
 const error = shallowRef<string | Error>('')
 const copied = ref<{ id: string; failed: boolean }>()
+const added = ref<string>()
 const errorMessage = computed(() => error.value instanceof Error ? error.value.message : error.value ? t(error.value) : '')
 const panes = computed(() => result.value?.scan.panes.filter(pane => pane.items.length).map(pane => ({ ...pane,
   items: pane.items.map(item => ({ ...item,
@@ -29,7 +32,7 @@ const panes = computed(() => result.value?.scan.panes.filter(pane => pane.items.
 let scanRequest: AbortController | undefined
 let fileRequest: AbortController | undefined
 let copyTimer: ReturnType<typeof setTimeout> | undefined
-let retryItem: { item: FileItem; download: boolean } | undefined
+let retryItem: { item: FileItem; canvas?: Canvas } | undefined
 
 function externalLink(value: string) {
   try {
@@ -71,35 +74,38 @@ function close(open = false) {
   cancelRequests()
   emit('close')
 }
-async function openFile(item: FileItem, download = false) {
+async function openFile(item: FileItem, canvas?: Canvas) {
   const snapshot = result.value
   if (!snapshot || !item.path || opening.value || loading.value || props.target !== snapshot.target) return
   const context = apiContext()
   const current = fileRequest = new AbortController()
   opening.value = item.id; error.value = ''; retryItem = undefined
+  const anchor = canvas?.nodes.find(node => node.type === 'terminal' && node.sourceId === snapshot.target.sourceId && node.windowId === snapshot.target.windowId)
+  const destination = !canvas ? {} : anchor ? { canvasId: canvas.id, anchorId: anchor.id } : { canvasId: canvas.id,
+    position: { x: Math.min(1e7, canvas.nodes.length ? Math.max(...canvas.nodes.map(node => node.x + node.width)) + 24 : 80), y: 80 } }
   try {
     const file = await api<WindowContentOpen>(`/api/content-scans/${segment(snapshot.scan.id)}/items/${segment(item.id)}/open`,
-      { method: 'POST', body: JSON.stringify(snapshot.context), signal: current.signal })
+      { method: 'POST', body: JSON.stringify(destination), signal: current.signal }, context)
     if (fileRequest !== current || current.signal.aborted || result.value !== snapshot || props.target !== snapshot.target) return
     const url = apiUrl(file.url, context)
     if (!/^api\/(?:files|downloads)\/[^/]+$/.test(url.pathname.slice(new URL(context.base).pathname.length)) || url.search) throw new Error(t('panels.scan.openFailed'))
     fileRequest = undefined; opening.value = ''
-    if (!download && file.preview !== 'file') {
-      emit('close')
-      await nextTick()
-    }
     requireCurrentApi(context)
-    await presentDownload(file, download)
+    if (canvas) added.value = item.id
+    else await presentDownload(file, true)
   } catch (reason) {
     if (!current.signal.aborted && result.value === snapshot && props.target === snapshot.target) {
       error.value = reason instanceof Error ? reason : 'panels.scan.openFailed'
-      retryItem = { item, download }
+      retryItem = { item, canvas }
     }
   } finally {
     if (fileRequest === current) { fileRequest = undefined; opening.value = '' }
   }
 }
-function retry() { if (retryItem) void openFile(retryItem.item, retryItem.download); else void scan() }
+function retry() { if (retryItem) void openFile(retryItem.item, retryItem.canvas); else void scan() }
+function destinations(item: FileItem): DropdownMenuItem[] {
+  return props.canvases.map(canvas => ({ label: canvas.name, onSelect: () => { void openFile(item, canvas) } }))
+}
 async function openLink(item: Extract<WindowContentItem, { kind: 'link' }>) {
   const snapshot = result.value, context = apiContext()
   if (!snapshot || opening.value || props.target !== snapshot.target) return
@@ -125,7 +131,7 @@ function copy(item: WindowContentItem) {
 }
 const modalContent = { onCloseAutoFocus: (event: Event) => event.preventDefault(), onEscapeKeyDown: (event: Event) => event.stopPropagation() }
 watch(() => props.target, target => {
-  cancelRequests(); result.value = undefined; error.value = ''; copied.value = undefined; retryItem = undefined; clearTimeout(copyTimer)
+  cancelRequests(); result.value = undefined; error.value = ''; copied.value = undefined; added.value = undefined; retryItem = undefined; clearTimeout(copyTimer)
   if (target) void scan()
 }, { immediate: true })
 onBeforeUnmount(() => { cancelRequests(); clearTimeout(copyTimer) })
@@ -145,13 +151,22 @@ onBeforeUnmount(() => { cancelRequests(); clearTimeout(copyTimer) })
       <section v-for="pane in panes" :key="pane.id" class="content-scan-pane" :data-scan-pane="pane.id">
         <header><strong>{{ pane.name || t('terminal.pane', { name: pane.id.split(':').at(-1) || pane.id }) }}</strong><span v-if="pane.cwd" :title="pane.cwd">{{ pane.cwd }}</span></header>
         <div v-for="item in pane.items" :key="item.id" class="content-scan-item" :data-scan-item="item.id" :data-item-kind="item.kind" :aria-busy="opening === item.id">
-          <a v-if="item.kind === 'link' && item.href" class="content-scan-open" :href="item.href" target="_blank" rel="noopener noreferrer" :title="item.url"><Icon name="globe" :size="16" /><span><strong>{{ item.label }}</strong><small v-if="item.url !== item.label">{{ item.url }}</small></span></a>
-          <button v-else class="content-scan-open" type="button" :disabled="!!opening" :title="item.kind === 'file' ? item.path || item.label : item.url" @click="item.kind === 'link' ? openLink(item) : item.path ? openFile(item) : copy(item)">
-            <span v-if="opening === item.id" class="spinner" /><Icon v-else :name="item.kind === 'file' ? 'file' : 'globe'" :size="16" />
-            <span><strong>{{ item.displayLabel }}</strong><small v-if="item.kind === 'link'">{{ t('urls.open') }}</small><small v-else-if="!item.path">{{ t('panels.scan.unresolved') }}</small><small v-else-if="item.path !== item.displayLabel">{{ item.path }}</small></span>
+          <div v-if="item.kind === 'file'" class="content-scan-open content-scan-file-label" :title="item.path || item.label">
+            <span v-if="opening === item.id" class="spinner" /><Icon v-else name="file" :size="16" />
+            <span><strong>{{ item.displayLabel }}</strong><small v-if="item.path !== item.displayLabel">{{ item.path || t('panels.scan.unresolved') }}</small></span>
+          </div>
+          <a v-else-if="item.href" class="content-scan-open" :href="item.href" target="_blank" rel="noopener noreferrer" :title="item.url"><Icon name="globe" :size="16" /><span><strong>{{ item.label }}</strong><small v-if="item.url !== item.label">{{ item.url }}</small></span></a>
+          <button v-else class="content-scan-open" type="button" :disabled="!!opening" :title="item.url" @click="openLink(item)">
+            <span v-if="opening === item.id" class="spinner" /><Icon v-else name="globe" :size="16" />
+            <span><strong>{{ item.displayLabel }}</strong><small>{{ t('urls.open') }}</small></span>
           </button>
-          <UButton v-if="item.kind === 'file' && item.path" type="button" color="neutral" variant="ghost" class="content-scan-action" :disabled="!!opening" :aria-label="t('panels.file.downloadNamed', { name: item.label })" :title="t('panels.file.download')" @click="openFile(item, true)"><Icon name="download" :size="15" /></UButton>
           <UButton type="button" color="neutral" variant="ghost" class="content-scan-action" :aria-label="t(item.kind === 'file' ? 'panels.scan.copyPath' : 'panels.scan.copyLink')" :title="copied?.id === item.id ? t(copied.failed ? 'terminal.clipboard.failed' : 'terminal.clipboard.copied') : t(item.kind === 'file' ? 'panels.scan.copyPath' : 'panels.scan.copyLink')" @click="copy(item)"><Icon :name="copied?.id === item.id ? copied.failed ? 'info' : 'check' : 'copy'" :size="15" /></UButton>
+          <div v-if="item.kind === 'file' && item.path" class="content-scan-file-actions">
+            <UButton type="button" color="neutral" variant="ghost" size="xs" :disabled="!!opening" @click="openFile(item)"><Icon name="download" :size="13" />{{ t('panels.file.download') }}</UButton>
+            <UDropdownMenu :items="destinations(item)" :portal="portal || false" :content="{ side: 'bottom', align: 'start' }" :ui="{ content: 'content-scan-destinations' }">
+              <UButton type="button" color="neutral" variant="ghost" size="xs" :disabled="!!opening || !canvases.length" :title="!canvases.length ? t('panels.scan.createCanvasFirst') : undefined"><Icon :name="added === item.id ? 'check' : 'plus'" :size="13" />{{ t(added === item.id ? 'panels.scan.added' : 'panels.scan.addNote') }}<Icon name="down" :size="11" /></UButton>
+            </UDropdownMenu>
+          </div>
         </div>
       </section>
       <p v-if="result?.scan.truncated" class="content-scan-truncated">{{ t('panels.scan.truncated') }}</p>
@@ -177,6 +192,9 @@ onBeforeUnmount(() => { cancelRequests(); clearTimeout(copyTimer) })
 .content-scan-pane>header strong{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;color:#b8c3d1}
 .content-scan-pane>header>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--content-font-family,monospace)}
 .content-scan-item{display:flex;align-items:center;gap:2px;min-width:0;border-radius:6px}
+.content-scan-item[data-item-kind='file']{display:grid;grid-template-columns:minmax(0,1fr) auto}
+.content-scan-file-label{cursor:default;padding-bottom:3px;min-height:43px}
+.content-scan-file-actions{grid-column:1/-1;display:flex;gap:5px;padding:0 5px 6px 29px}.content-scan-file-actions>button,.content-scan-file-actions>span{font-size:10px}.content-scan-destinations{z-index:90;max-width:280px}
 .content-scan-item:hover{background:#ffffff04}
 .content-scan-open{display:flex;align-items:center;flex:1;min-width:0;gap:9px;min-height:47px;padding:8px 6px;color:#b9c5d4;text-align:left;text-decoration:none;border-radius:5px}
 .content-scan-open>svg,.content-scan-open>.spinner{flex:none;color:#8796aa}

@@ -16,6 +16,7 @@ import { developerMode, viewportFit, interactiveWidget, viewportReloadRequired }
 import { keepScreenAwake, retryScreenWakeLock, screenWakeLockState, screenWakeLockUnavailable } from '../screen-wake-lock'
 import Icon from './Icon.vue'
 import LanguageSelect from './LanguageSelect.vue'
+import PwaControls from './PwaControls.vue'
 
 const { t, n } = useI18n()
 
@@ -198,6 +199,7 @@ onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer) })
           <template v-else-if="screenWakeLockState === 'denied' || screenWakeLockState === 'released'"><small role="status">{{ t(screenWakeLockState === 'denied' ? 'settings.wakeDenied' : 'settings.wakePaused') }}</small><UButton type="button" color="neutral" variant="link" size="xs" :aria-label="t('settings.retryWake')" @click="retryScreenWakeLock">{{ t('common.retry') }}</UButton></template>
         </template>
       </div>
+      <PwaControls :can-reload="canReload" />
       <div class="developer-setting">
         <USwitch v-model="developerMode" :label="t('settings.developerMode')" :aria-label="t('settings.developerMode')" size="sm" class="settings-switch" />
         <section v-if="developerMode" class="viewport-experiments" :aria-label="t('settings.developerAdvanced')">

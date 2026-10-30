@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { TerminalModifiers } from '../terminal-input'
 import Icon from './Icon.vue'
+import { copiedFile } from '../file-clipboard'
 
 const { t } = useI18n()
 
@@ -22,6 +23,7 @@ const emit = defineEmits<{
   mode: [value: TouchMode]
   files: [files: File[]]
   paste: [text: string]
+  pasteFile: []
   reading: [active: boolean]
 }>()
 const more = ref(false)
@@ -241,9 +243,10 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
             @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ keyLabel(key) }}</button>
         </div>
       </div>
-      <div class="mobile-key-actions" role="toolbar" :aria-label="t('terminal.keyboard.actions')">
+      <div class="mobile-key-actions" :style="copiedFile ? { gridTemplateColumns: 'repeat(6,minmax(0,1fr))' } : undefined" role="toolbar" :aria-label="t('terminal.keyboard.actions')">
         <button type="button" :disabled="disabled" :aria-label="t('terminal.upload.file')" :title="t('terminal.upload.file')" @pointerdown.prevent @click="pickFiles"><Icon name="file" :size="18" /></button>
         <button type="button" :disabled="disabled" :aria-label="t('terminal.keyboard.pasteText')" :title="t('terminal.keyboard.pasteText')" @pointerdown.prevent @click="openSheet('paste')"><Icon name="copy" :size="18" /></button>
+        <button v-if="copiedFile" type="button" :disabled="disabled" :aria-label="t('fileTransfer.paste')" :title="t('fileTransfer.pasteNamed', { name: copiedFile.filename })" @pointerdown.prevent @click="emit('pasteFile')"><Icon name="clipboard" :size="18" /></button>
         <button type="button" :aria-label="t('terminal.keyboard.selectText')" :title="t('terminal.keyboard.selectText')" @pointerdown.prevent @click="openSheet('select')"><Icon name="note" :size="18" /></button>
         <button type="button" :aria-pressed="touchMode === 'scroll'" :aria-label="t('terminal.keyboard.touchScroll')" :title="t('terminal.keyboard.touchScroll')" @pointerdown.prevent @click="chooseMode('scroll')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18 M8 7l4-4 4 4 M8 17l4 4 4-4" /></svg></button>
         <button type="button" :disabled="disabled" :aria-pressed="touchMode === 'mouse'" :aria-label="t('terminal.keyboard.touchMouse')" :title="t('terminal.keyboard.touchMouse')" @pointerdown.prevent @click="chooseMode('mouse')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="6" /><path d="M12 3v6" /></svg></button>

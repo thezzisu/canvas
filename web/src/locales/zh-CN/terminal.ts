@@ -13,6 +13,7 @@ export default {
     foldersUnsupported: '暂不支持文件夹',
   },
   action: {
+    cancelMaximized: '取消最大化',
     addToCanvas: '加入画布', removeFromCanvas: '从画布移除', focus: '聚焦窗口', hideKeyboard: '隐藏键盘',
     showKeyboard: '打开键盘', windowActions: '窗口操作', restore: '退出放大', openWindow: '打开窗口 {name}',
   },
