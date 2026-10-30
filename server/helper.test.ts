@@ -23,15 +23,34 @@ async function fixture(t: TestContext) {
   const env = { PATH: process.env.PATH, LANG: "C.UTF-8", CANVAS_BRIDGE_REGISTRY_DIR: registry,
     HERDR_SOCKET_PATH: nativeSocket, HERDR_PANE_ID: "w1:p2" };
   t.after(() => rm(root, { recursive: true, force: true }));
-  const run = (path: string, extra: NodeJS.ProcessEnv = {}, timeouts?: { start: number; idle: number }, tty = false) => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+  const run = (path: string, extra: NodeJS.ProcessEnv = {}, timeouts?: { start: number; idle: number }, tty = false,
+    fault?: { stage: "registry" | "record" | "probe" | "connect"; errno: number }) => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
     // Load the real executable and shorten only its inactivity intervals. This
     // exercises the same main/transport code without adding a production env knob.
     const setup = ["import runpy, sys", "module = runpy.run_path(sys.argv.pop(1))"];
     if (timeouts) setup.push(`module["transfer_file"].__defaults__ = (None, ${timeouts.start}, ${timeouts.idle})`);
     if (timeouts) setup.push(`module["open_directory"].__defaults__ = (${timeouts.start},)`);
     if (tty) setup.push("sys.stderr.isatty = lambda: True");
+    if (fault) {
+      setup.push("import os, socket");
+      if (fault.stage === "registry" || fault.stage === "record") setup.push(`original_open = os.open
+def injected_open(path, flags, *args, **kwargs):
+    if ${fault.stage === "registry" ? 'path == os.environ["CANVAS_BRIDGE_REGISTRY_DIR"]' : '"dir_fd" in kwargs'}:
+        raise OSError(${fault.errno}, "private failure detail")
+    return original_open(path, flags, *args, **kwargs)
+os.open = injected_open`);
+      else setup.push(`original_connect = socket.socket.connect
+connect_calls = 0
+def injected_connect(connection, address):
+    global connect_calls
+    connect_calls += 1
+    if connect_calls == ${fault.stage === "probe" ? 1 : 2}:
+        raise OSError(${fault.errno}, "private failure detail")
+    return original_connect(connection, address)
+socket.socket.connect = injected_connect`);
+    }
     setup.push('sys.exit(module["main"]())');
-    const args = timeouts || tty ? ["-c", setup.join("\n"), helper, "open", "--", path] : [helper, "open", "--", path];
+    const args = timeouts || tty || fault ? ["-c", setup.join("\n"), helper, "open", "--", path] : [helper, "open", "--", path];
     const child = spawn("python3", args, { cwd: root, env: { ...env, ...extra } });
     let stdout = "", stderr = "";
     child.stdout.on("data", data => stdout += data);
@@ -336,6 +355,31 @@ test("canvas open exits promptly when no browser bridge is attached", async t =>
   assert.equal(result.code, 1);
   assert.equal(result.stderr, "canvas: no browser attached to this window\n");
   assert(Date.now() - began < 2000, "missing bridge must not wait for a browser decision");
+});
+
+test("canvas open distinguishes denied bridge access from absent browsers without sending file data", async t => {
+  for (const errno of [1, 13]) {
+    for (const stage of ["registry", "record", "probe", "connect"] as const) await t.test(`${stage}: errno ${errno}`, async t => {
+      const f = await fixture(t), endpoint = await f.endpoint("active");
+      await writeFile(join(f.root, "file"), "must not be sent");
+      assert.deepEqual(await f.run("file", {}, undefined, false, { stage, errno }), {
+        code: 1, stdout: "", stderr: "canvas: cannot access Canvas bridge: permission denied\n",
+      });
+      assert.equal(endpoint.headers.length, 0);
+      assert.equal(endpoint.bodies.length, 0);
+    });
+  }
+});
+
+test("canvas open still reports a missing browser for stale or refused bridge sockets", async t => {
+  for (const errno of [2, 111]) await t.test(`errno ${errno}`, async t => {
+    const f = await fixture(t), endpoint = await f.endpoint("stale");
+    await writeFile(join(f.root, "file"), "must not be sent");
+    assert.deepEqual(await f.run("file", {}, undefined, false, { stage: "probe", errno }), {
+      code: 1, stdout: "", stderr: "canvas: no browser attached to this window\n",
+    });
+    assert.equal(endpoint.headers.length, 0);
+  });
 });
 
 test("canvas open exits promptly when the server has only passive browser viewers", async t => {

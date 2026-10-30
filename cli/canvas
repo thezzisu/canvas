@@ -15,6 +15,9 @@ class CanvasError(Exception):
     pass
 
 
+BRIDGE_PERMISSION_DENIED = "cannot access Canvas bridge: permission denied"
+
+
 def terminal_identity():
     native_socket = os.environ.get("HERDR_SOCKET_PATH", "")
     pane = os.environ.get("HERDR_PANE_ID", "")
@@ -31,6 +34,8 @@ def registry_entries(native_socket):
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
         parent = os.open(directory, flags | getattr(os, "O_DIRECTORY", 0))
+    except PermissionError:
+        raise CanvasError(BRIDGE_PERMISSION_DENIED) from None
     except OSError:
         return []
     entries = []
@@ -64,6 +69,8 @@ def registry_entries(native_socket):
                 if (not stat.S_ISSOCK(endpoint_stat.st_mode) or endpoint_stat.st_uid != os.getuid()):
                     continue
                 entries.append((info.st_mtime_ns, entry))
+            except PermissionError:
+                raise CanvasError(BRIDGE_PERMISSION_DENIED) from None
             except (OSError, ValueError, UnicodeError):
                 continue
     finally:
@@ -74,14 +81,14 @@ def registry_entries(native_socket):
     result = []
     for _, entry in entries:
         if entry["socket"] not in seen:
-            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            probe.settimeout(0.5)
             try:
-                probe.connect(entry["socket"])
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                    probe.settimeout(0.5)
+                    probe.connect(entry["socket"])
+            except PermissionError:
+                raise CanvasError(BRIDGE_PERMISSION_DENIED) from None
             except OSError:
-                probe.close()
                 continue
-            probe.close()
             seen.add(entry["socket"])
             result.append(entry)
     if len(result) > 1:
@@ -338,7 +345,10 @@ def open_file(path):
         # Registry discovery has already rejected ambiguous destinations.
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(30)
-            connection.connect(entry["socket"])
+            try:
+                connection.connect(entry["socket"])
+            except PermissionError:
+                raise CanvasError(BRIDGE_PERMISSION_DENIED) from None
             transfer(connection, entry, native_socket, pane)
     finally:
         if file:

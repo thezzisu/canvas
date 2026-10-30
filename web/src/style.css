@@ -22,13 +22,14 @@
 .font-family-trailing{position:absolute;right:3px;top:0;bottom:0;display:flex;align-items:center;justify-content:center;width:23px;padding:0;color:#8b97a6}
 .font-local-hint{display:block;padding:5px 9px;color:#8795a8;font-size:11px}
 .font-options{display:flex;flex-wrap:wrap;gap:11px 22px;min-height:24px;align-items:center}
-.font-switch{display:flex;align-items:center;gap:8px}
-.font-switch [data-slot=container]{display:flex;align-items:center}
-.font-switch [data-slot=base]{position:relative;display:block;width:29px;min-width:29px;height:17px;padding:2px;border:1px solid #566170;border-radius:20px;background:#38414e;cursor:pointer}
-.font-switch [data-slot=thumb]{display:block;width:11px;height:11px;border-radius:50%;background:#bdc6d2;transition:transform .12s;transform:translateX(0);translate:none}
-.font-switch [data-slot=base][data-state=checked]{border-color:#bf9779;background:#c6a084}
-.font-switch [data-slot=base][data-state=checked] [data-slot=thumb]{background:#28221e;transform:translateX(12px)}
-.font-switch [data-slot=label]{margin:0;font-size:11px;line-height:1.5;color:#b7c1cf;cursor:pointer}
+.settings-switch{display:flex;align-items:center;gap:8px;min-height:28px}
+.settings-switch [data-slot=container]{display:flex;align-items:center}
+.settings-switch [data-slot=base]{position:relative;display:block;width:29px;min-width:29px;height:17px;padding:2px;border:1px solid #566170;border-radius:20px;background:#38414e;cursor:pointer}
+.settings-switch [data-slot=thumb]{display:block;width:11px;height:11px;border-radius:50%;background:#bdc6d2;transition:transform .12s;transform:translateX(0);translate:none}
+.settings-switch [data-slot=base][data-state=checked]{border-color:#bf9779;background:#c6a084}
+.settings-switch [data-slot=base][data-state=checked] [data-slot=thumb]{background:#28221e;transform:translateX(12px)}
+.settings-switch [data-slot=base]:disabled{opacity:.45;cursor:default}
+.settings-switch [data-slot=label]{margin:0;font-size:11px;line-height:1.5;color:#b7c1cf;cursor:pointer}
 .font-preview-wrap{overflow:hidden;border:1px solid #35404e;border-radius:7px;background:#151a21}
 .font-preview-heading{display:flex;align-items:center;justify-content:space-between;min-height:29px;padding:0 10px;border-bottom:1px solid #2d3642;color:#8290a2;font-size:10px}
 .font-loading{display:flex;align-items:center;gap:6px}
@@ -56,12 +57,13 @@
 .sidebar-settings{flex:0 0 auto}
 .sidebar-account{flex:1;min-width:0}
 .mobile-layout .settings-modal{left:calc(var(--mobile-left,0px) + (var(--mobile-width,100vw) + env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px))/2);top:calc(var(--mobile-top,0px) + (var(--mobile-height,100dvh) + var(--mobile-safe-top,0px) - var(--mobile-safe-bottom,0px))/2);width:calc(var(--mobile-width,100vw) - 20px - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px));max-width:440px;max-height:calc(var(--mobile-height,100dvh) - 24px - var(--mobile-safe-top,0px) - var(--mobile-safe-bottom,0px))}
+.mobile-layout .settings-switch{min-height:40px}
 .mobile-layout .settings-body{padding:14px}
 .mobile-layout .settings-header{padding:14px;min-height:50px}
 .mobile-layout .settings-footer{padding:10px 14px}
 .mobile-layout .font-family-input input{height:40px;font-size:16px}
 .mobile-layout .font-options{min-height:34px}
-.mobile-layout .font-switch [data-slot=container]{min-height:34px}
+.mobile-layout .settings-switch [data-slot=container]{min-height:34px}
 .mobile-layout .font-order-button{height:40px;flex-basis:28px;width:28px}
 .mobile-layout .font-cancel,.mobile-layout .font-save{height:40px}
 .mobile-layout .font-preview{font-size:12px}

@@ -10,6 +10,7 @@ import { write } from '../api'
 import { useMobileLayout } from '../mobile-layout'
 import { cutoutPosition, cutoutWidth, type CutoutPosition } from '../display-cutout'
 import { developerMode } from '../developer-mode'
+import { keepScreenAwake, retryScreenWakeLock, screenWakeLockState, screenWakeLockUnavailable } from '../screen-wake-lock'
 import Icon from './Icon.vue'
 
 const props = defineProps<{ settings: GlobalSettings; portal?: HTMLElement; hasDisplayCutout?: boolean }>()
@@ -132,14 +133,23 @@ onBeforeUnmount(() => { disposed = true; previewRevision++; clearTimeout(preview
             </div>
           </li>
         </ol>
-        <div class="font-options"><USwitch v-model="draft.ligatures" :disabled="saving" label="连字" aria-label="连字" size="sm" class="font-switch" /><span class="font-stack-hint">从上到下依次回退</span></div>
+        <div class="font-options"><USwitch v-model="draft.ligatures" :disabled="saving" label="连字" aria-label="连字" size="sm" class="settings-switch" /><span class="font-stack-hint">从上到下依次回退</span></div>
         <div class="font-preview-wrap">
           <div class="font-preview-heading"><span>预览</span><span v-if="loading" class="font-loading" role="status"><span class="spinner" />加载字体</span></div>
           <pre class="font-preview" :style="previewStyle" :aria-busy="loading" aria-label="字体预览">{{ previewText }}</pre>
         </div>
         <div v-if="fontError || error" class="font-error" role="alert"><span>{{ fontError || error }}</span><UButton v-if="fontError" type="button" color="neutral" variant="link" size="xs" aria-label="重新加载字体" @click="retryPreview">重试</UButton></div>
       </form>
-      <div class="developer-setting"><USwitch v-model="developerMode" label="开发者模式" aria-label="开发者模式" size="sm" /></div>
+      <div class="wake-lock-setting">
+        <USwitch :model-value="!screenWakeLockUnavailable && keepScreenAwake" :disabled="!!screenWakeLockUnavailable" label="保持屏幕常亮" aria-label="保持屏幕常亮" size="sm" class="settings-switch" @update:model-value="keepScreenAwake = $event" />
+        <small v-if="screenWakeLockUnavailable">{{ screenWakeLockUnavailable }}</small>
+        <template v-else-if="keepScreenAwake">
+          <small v-if="screenWakeLockState === 'active'" role="status">已开启</small>
+          <small v-else-if="screenWakeLockState === 'pending'" role="status">请求中…</small>
+          <template v-else-if="screenWakeLockState === 'denied' || screenWakeLockState === 'released'"><small role="status">{{ screenWakeLockState === 'denied' ? '未能保持常亮' : '常亮已暂停' }}</small><UButton type="button" color="neutral" variant="link" size="xs" aria-label="重试常亮" @click="retryScreenWakeLock">重试</UButton></template>
+        </template>
+      </div>
+      <div class="developer-setting"><USwitch v-model="developerMode" label="开发者模式" aria-label="开发者模式" size="sm" class="settings-switch" /></div>
     </template>
     <template #footer><UButton color="neutral" variant="outline" class="font-cancel" :disabled="saving" @click="close()">{{ changed ? '取消' : '完成' }}</UButton><UButton type="submit" form="content-font-form" class="font-save" :disabled="saving || loading || invalid || !changed || !!fontError"><span v-if="saving" class="spinner" />{{ saving ? '保存中…' : '保存' }}</UButton></template>
   </UModal>
@@ -160,4 +170,7 @@ onBeforeUnmount(() => { disposed = true; previewRevision++; clearTimeout(preview
 .cutout-preview .cutout-title{font-size:12px;color:#d3d8e1}
 .cutout-preview .cutout-actions>span{display:flex;width:44px;height:44px;align-items:center;justify-content:center}
 .developer-setting{margin-top:18px;padding-top:16px;border-top:1px solid #343b46}
+.wake-lock-setting{display:flex;align-items:center;gap:8px;margin-top:18px;padding-top:16px;border-top:1px solid #343b46}
+.wake-lock-setting>small{margin-left:auto;color:#8793a4;font-size:11px}
+.wake-lock-setting+.developer-setting{margin-top:14px;padding-top:0;border-top:0}
 </style>

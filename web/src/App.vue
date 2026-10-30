@@ -28,6 +28,7 @@ import { useMobileLayout } from './mobile-layout'
 import { hideMobileKeyboard } from './mobile-keyboard'
 import { useDisplayCutout } from './display-cutout'
 import { developerMode } from './developer-mode'
+import { useScreenWakeLock } from './screen-wake-lock'
 import { canvasFrame, preserveCanvasCenter, useMobileViewport, type CanvasFrame } from './viewport'
 import { statusColor, statusLabel } from './status'
 import { overviewResources, overviewLayoutKey, overviewStatuses, type OverviewInteraction, type OverviewOrder } from './overview'
@@ -47,6 +48,7 @@ let cameraFrame: CanvasFrame | undefined
 let cameraResize = 0
 const ready = ref(false)
 const authenticated = ref(false)
+useScreenWakeLock(authenticated)
 const username = ref('')
 const password = ref('')
 const busy = ref(false)
