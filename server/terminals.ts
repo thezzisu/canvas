@@ -135,7 +135,7 @@ class LiveTerminal {
           void this.close();
         });
     });
-    this.proc.onExit(() => void this.close());
+    this.proc.onExit(event => void this.close(event.reason));
   }
   private canRender(ws: WebSocket) {
     return !this.hidden.has(ws) && this.rendered.has(ws) && (!this.maximized || this.maximized.owner === ws);
@@ -336,15 +336,21 @@ class LiveTerminal {
         readOnly: this.controller !== ws || (!!this.maximized && this.maximized.owner !== ws),
       });
   }
-  close(): Promise<void> {
+  close(reason?: 'removed'): Promise<void> {
     if (this.closing) return this.closing;
     this.closed = true;
     clearTimeout(this.idle);
+    // A native snapshot confirmed the tab is gone. Notify before asynchronous
+    // viewport/tunnel cleanup so viewers never treat that cleanup as an outage.
+    if (reason === 'removed') for (const ws of this.clients) {
+      json(ws, { type: "status", status: "removed" });
+      ws.close(1000, "Window removed");
+    }
     this.closing = (async () => {
       // Restore the viewport before detaching this client.
       await this.geometry.close();
       for (const ws of this.clients) {
-        json(ws, { type: "status", status: "closed" });
+        if (reason !== 'removed') json(ws, { type: "status", status: "closed" });
         ws.close(1000, "Terminal detached");
       }
       this.clients.clear();

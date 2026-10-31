@@ -774,6 +774,7 @@ function saveViewport() {
 
 watch(resources, (next, previous) => {
   if (!authenticated.value) return
+  if (focused.value && liveTerminalMetadata.value.get(`${focused.value.sourceId}/${focused.value.windowId}`) === null) void closeFocus()
   const signature = JSON.stringify(next)
   if (signature === resourceSignature) return
   const layoutSignature = JSON.stringify(next.map(source => {

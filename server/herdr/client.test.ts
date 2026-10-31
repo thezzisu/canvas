@@ -4,7 +4,7 @@ import { createServer, type Socket } from 'node:net'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHerdrClient } from './client.ts'
+import { createHerdrClient, type HerdrClientExit } from './client.ts'
 import { Writer } from './wire.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
 
@@ -18,7 +18,7 @@ function readHeader(payload: Buffer) {
   return { tag: payload[0]!, string }
 }
 
-async function fixture(t: TestContext, options: { holdFocus?: boolean; badWelcome?: boolean; closeEarly?: boolean; readSelection?: (params: Record<string, unknown>) => Promise<unknown>; readContent?: (params: Record<string, unknown>) => Promise<unknown> } = {}) {
+async function fixture(t: TestContext, options: { holdFocus?: boolean; badWelcome?: boolean; closeEarly?: boolean; missingTarget?: boolean; readSelection?: (params: Record<string, unknown>) => Promise<unknown>; readContent?: (params: Record<string, unknown>) => Promise<unknown> } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'cv-native-')), path = join(directory, 'client.sock')
   const sockets = new Set<Socket>(), requests: { id: string; method: string; params: Record<string, unknown> }[] = [], tags: number[] = [], focuses: boolean[] = []
   let peer: Socket, pending = Buffer.alloc(0), hello: Record<string, unknown> | undefined
@@ -28,6 +28,10 @@ async function fixture(t: TestContext, options: { holdFocus?: boolean; badWelcom
     boot_id: boot, revision, focused_workspace_id: 'space', focused_tab_id: focused, focused_pane_id: pane,
     tabs: [{ tab_id: 'target', workspace_id: 'space', focused: focused === 'target' }, { tab_id: 'other', workspace_id: 'space', focused: focused === 'other' }],
     panes: [{ pane_id: pane, tab_id: 'target', workspace_id: 'space', focused: true, right_click_passthrough: false }],
+  })
+  const removeTarget = (revision = 2, boot = 'boot') => control('shell.snapshot.v1', {
+    boot_id: boot, revision, focused_workspace_id: 'space', focused_tab_id: 'other', focused_pane_id: null,
+    tabs: [{ tab_id: 'other', workspace_id: 'space', focused: true }], panes: [],
   })
   const surface = (revision = 1, surfaceRevision = 1, text = 'READY', boot = 'boot', pane = 'pane') => {
     const writer = new Writer().uint(13).string(boot).uint(revision).uint(surfaceRevision)
@@ -56,7 +60,8 @@ async function fixture(t: TestContext, options: { holdFocus?: boolean; badWelcom
           assert.equal(header.string(), 'endpoint.hello.v1'); hello = JSON.parse(header.string())
           control('endpoint.welcome.v1', { generation: options.badWelcome ? 2 : 1, snapshot_codec: 'shell.snapshot.v1', surface_codec: 'shell.surface.v1',
             input_codec: 'shell.input.semantic.v1', blob_codec: 'shell.blob.v1', methods: ['tab.focus', 'pane.focus', 'pane.scroll'] })
-          snapshot(); surface()
+          if (options.missingTarget) removeTarget(1)
+          else { snapshot(); surface() }
         } else if (header.tag === 15) {
           assert.equal(header.string(), 'boot')
           requests.push(JSON.parse(header.string()))
@@ -67,7 +72,7 @@ async function fixture(t: TestContext, options: { holdFocus?: boolean; badWelcom
   })
   await new Promise<void>(resolve => server.listen(path, resolve))
   t.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(directory, { recursive: true, force: true }) })
-  return { path, requests, tags, focuses, snapshot, surface, response, control, send, peer: () => peer, hello: () => hello,
+  return { path, requests, tags, focuses, snapshot, removeTarget, surface, response, control, send, peer: () => peer, hello: () => hello,
     connect: (handshakeTimeoutMs = 300) => createHerdrClient({ socketPath: path, tabId: 'target', cols: 8, rows: 1, handshakeTimeoutMs, readSelection: options.readSelection, readContent: options.readContent }) }
 }
 
@@ -212,6 +217,61 @@ test('native client rejects incomplete handshakes and closes malformed establish
   let code: number | undefined; client.onExit(exit => code = exit.exitCode)
   f.peer().end(Buffer.from([20, 0, 0, 0, 20]))
   await until(() => code !== undefined); assert.equal(code, 1)
+})
+
+test('only an authoritative missing-tab snapshot confirms removal, with one exit and accurate late replay', async t => {
+  const f = await fixture(t), client = await f.connect(), exits: HerdrClientExit[] = []
+  client.onExit(exit => exits.push(exit))
+  client.write('\x04')
+  await until(() => f.tags.includes(13))
+  assert.deepEqual(exits, [], 'Ctrl+D alone is not proof that a native tab closed')
+  f.removeTarget()
+  await until(() => exits.length === 1)
+  assert.deepEqual(exits, [{ exitCode: 0, reason: 'removed' }])
+  client.kill(); client.write('ignored')
+  const late: HerdrClientExit[] = []
+  client.onExit(exit => late.push(exit))
+  await until(() => late.length === 1)
+  assert.deepEqual(late, exits)
+  await delay(10)
+  assert.equal(exits.length, 1, 'socket cleanup or kill emitted a second exit')
+})
+
+test('stale missing-tab snapshots and pane-only changes never remove a surviving tab', async t => {
+  const f = await fixture(t), client = await f.connect(), exits: HerdrClientExit[] = [], panes: (string | undefined)[] = []
+  t.after(() => client.kill())
+  client.onExit(exit => exits.push(exit)); client.onPaneFocus(pane => panes.push(pane))
+  f.snapshot(2, 'target', 'boot', 'remaining-pane'); f.surface(2, 2, 'REMAIN', 'boot', 'remaining-pane')
+  await until(() => panes.at(-1) === 'remaining-pane')
+  f.removeTarget(1)
+  client.write('q')
+  await until(() => f.tags.includes(13))
+  assert.deepEqual(exits, [])
+  f.control('shell.snapshot.v1', { boot_id: 'boot', revision: 3, focused_workspace_id: 'space', focused_tab_id: 'target', focused_pane_id: null,
+    tabs: [{ tab_id: 'target', workspace_id: 'space', focused: true }], panes: [] })
+  await delay(15)
+  assert.deepEqual(exits, [], 'empty pane geometry is not proof that the tab was removed')
+})
+
+test('a missing target in the initial snapshot rejects creation with the native tab error', async t => {
+  const f = await fixture(t, { missingTarget: true })
+  await assert.rejects(f.connect(), { message: 'Herdr tab no longer exists' })
+  assert.equal(f.requests.length, 0, 'a missing initial tab must not be focused')
+})
+
+test('restarts, shutdown, EOF, local detach and protocol errors do not claim native tab removal', async t => {
+  for (const mode of ['restart', 'shutdown', 'eof', 'kill', 'error'] as const) await t.test(mode, async t => {
+    const f = await fixture(t), client = await f.connect(), exits: HerdrClientExit[] = []
+    client.onExit(exit => exits.push(exit))
+    if (mode === 'restart') f.removeTarget(2, 'new-boot')
+    else if (mode === 'shutdown') f.send(new Writer().uint(3).byte(0))
+    else if (mode === 'eof') f.peer().end()
+    else if (mode === 'kill') client.kill()
+    else f.peer().end(Buffer.from([20, 0, 0, 0, 20]))
+    await until(() => exits.length === 1)
+    assert.equal(exits[0]!.reason, undefined)
+    assert.equal(exits[0]!.exitCode, mode === 'restart' || mode === 'error' ? 1 : 0)
+  })
 })
 
 test('clipboard messages reach the hosting terminal only and late focus responses cannot resurrect a killed client', async t => {

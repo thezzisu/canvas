@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { computed, ref } from 'vue'
-import { mergeLiveResources, metadataAfterPoll } from './live-resources.ts'
+import { mergeLiveResources, metadataAfterPoll, type LiveWindowMetadata } from './live-resources.ts'
 import { canvasIndicators, windowVisualState } from './canvas-status.ts'
 import { overviewResources } from './overview.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
@@ -60,3 +60,19 @@ test('a newer successful poll can refresh fields not pushed by herdr while in-fl
   refreshed.spaces[0]!.windows[0]!.panes![0]!.terminalTitle = 'New API title'
   assert.equal(mergeLiveResources([refreshed], after)[0]!.spaces[0]!.windows[0]!.panes?.[0]?.terminalTitle, 'New API title')
 })
+
+test('confirmed window removal wins over in-flight and offline polls until a newer online snapshot', () => {
+  const started = new Map<string, LiveWindowMetadata>([['source/window', metadata('done')]])
+  const removed = new Map<string, LiveWindowMetadata>([['source/window', null]])
+  const stale = metadataAfterPoll(removed, started, ['source'])
+  assert.equal(stale.get('source/window'), null)
+  assert.deepEqual(mergeLiveResources([source()], stale)[0]!.spaces[0]!.windows, [], 'an older poll resurrected the closed window')
+  const offline = { ...source(), status: 'offline', error: 'Connection lost' }
+  const hidden = metadataAfterPoll(removed, removed, [])
+  assert.deepEqual(mergeLiveResources([offline], hidden)[0]!.spaces[0]!.windows, [], 'offline fallback resurrected the closed window')
+  assert.deepEqual(canvasIndicators([], mergeLiveResources([source()], stale)).overview, { count: 0, status: null })
+  const fresh = metadataAfterPoll(removed, removed, ['source'])
+  assert.equal(fresh.has('source/window'), false, 'a new authoritative poll must be able to describe a replacement native window')
+  assert.equal(mergeLiveResources([source()], fresh)[0]!.spaces[0]!.windows.length, 1)
+  assert.equal(mergeLiveResources([{ ...source(), id: 'unrelated' }], removed)[0]!.spaces[0]!.windows.length, 1)
+});

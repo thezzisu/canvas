@@ -98,6 +98,7 @@ test('native agent metadata reaches both viewers and late joiners without resour
   const metadata = (client: Client) => messages(client).filter(message => message.type === 'metadata').at(-1)?.window;
   await f.manager.connect(f.source, f.target, first.socket);
   await f.manager.connect(f.source, f.target, second.socket);
+  await f.ready();
   await waitFor(() => !!metadata(first)?.panes.length && !!metadata(second), 'initial native metadata was not replayed');
   second.command({ type: 'focus' });
   second.command({ type: 'input', data: '\x1b[O' });
@@ -116,8 +117,11 @@ test('native agent metadata reaches both viewers and late joiners without resour
   await f.manager.connect(f.source, f.target, late.socket);
   assert.deepEqual(metadata(late), metadata(second));
   assert.equal(f.manager.entries.size, 1, 'metadata opened another native attachment');
-  second.command({ type: 'input', data: "printf '\\033]0;Live title\\007'\r" });
-  await waitFor(() => metadata(first)?.panes[0].terminalTitle === 'Live title', 'native title was not pushed');
+  assert.equal(await f.shellResult(second, "printf '\\033]0;Live title\\007' >&2; printf ready"), 'ready');
+  // Herdr 0.9.5 can coalesce a title-only change; an agent report explicitly
+  // publishes its current snapshot, whose title must reach every viewer.
+  f.reportAgent(paneId, 'working');
+  await waitFor(() => metadata(first)?.panes[0].terminalTitle === 'Live title', 'native title snapshot was not pushed');
   assert.equal(metadata(second).panes[0].terminalTitle, 'Live title');
 });
 
@@ -128,6 +132,54 @@ test("a transport closing during queued browser join rejects the connection", as
   manager.entries.set("join-race/window", Promise.resolve(terminal) as never);
   await assert.rejects(manager.connect(source, { sourceId: source.id, spaceId: "space", windowId: "window" }, client.socket), /detached while connecting/);
   manager.entries.clear();
+});
+
+test('native shell EOF removes every viewer before maximized cleanup without a reconnect status', async t => {
+  const f = await fixture(t); if (!f) return;
+  const first = new Client(), maximized = new Client();
+  const sibling = await createWindow(f.source, f.target.spaceId, 'Still running');
+  await f.manager.connect(f.source, f.target, first.socket);
+  await f.manager.connect(f.source, f.target, maximized.socket);
+  await f.ready();
+  maximized.command({ type: 'focus-resize-begin', token: randomUUID(), cols: 130, rows: 40 });
+  await waitFor(() => size(maximized)?.cols === 130, 'maximized viewport did not settle');
+  const terminal = (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!;
+  const close = terminal.geometry.close.bind(terminal.geometry);
+  let release!: () => void;
+  const cleanup = new Promise<void>(resolve => { release = resolve; });
+  terminal.geometry.close = async () => { await cleanup; await close(); };
+  try {
+    maximized.command({ type: 'input', data: '\x04' });
+    await waitFor(() => first.readyState === 3 && maximized.readyState === 3, 'confirmed native EOF did not immediately retire both viewers');
+    for (const client of [first, maximized]) {
+      assert.equal(messages(client).at(-1)?.status, 'removed');
+      assert.equal(messages(client).some(message => ['closed', 'error'].includes(message.status)), false);
+    }
+    assert.equal(f.manager.entries.size, 1, 'test did not hold the asynchronous cleanup');
+  } finally { release(); }
+  await waitFor(() => f.manager.entries.size === 0, 'native cleanup did not finish');
+  const resources = await listResources(f.source);
+  assert.equal(resources.status, 'online');
+  const windows = resources.spaces.flatMap(space => space.windows);
+  assert.equal(windows.some(window => window.id === f.target.windowId), false);
+  assert.equal(windows.some(window => window.id === sibling.windowId), true, 'EOF stopped another native window');
+});
+
+test('clean transport detachment remains reconnectable while its native tab exists', async t => {
+  const f = await fixture(t); if (!f) return;
+  const first = new Client();
+  await f.manager.connect(f.source, f.target, first.socket);
+  await f.ready();
+  const terminal = (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!;
+  terminal.proc.kill();
+  await waitFor(() => first.readyState === 3 && f.manager.entries.size === 0, 'transport did not detach');
+  assert.equal(messages(first).at(-1)?.status, 'closed');
+  assert.equal(messages(first).some(message => message.status === 'removed'), false);
+  const second = new Client();
+  await f.manager.connect(f.source, f.target, second.socket);
+  await f.ready();
+  assert.equal(messages(second).filter(message => message.type === 'status').at(-1)?.status, 'connected');
+  assert.equal(f.manager.entries.size, 1);
 });
 
 test("file downloads require explicit interaction and never follow passive controller fallback", async t => {

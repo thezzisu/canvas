@@ -147,3 +147,26 @@ test('authorization or source removal stops retries and disposed handshakes cann
   f.control.restart(); f.detach(); t.mock.timers.tick(60_000)
   assert.equal(f.timeouts(), 0); assert.equal(f.attempts.length, 2)
 })
+
+for (const background of [false, true]) test(`confirmed removal silently retires retries while ${background ? 'backgrounded' : 'visible'}`, t => {
+    const f = fixture(t); f.control.resume(); f.control.connected()
+    if (background) f.detach()
+    f.control.failed()
+    const attempts = f.attempts.length, waiting = f.waiting.length
+    f.control.stop(); f.attach(); t.mock.timers.tick(60_000)
+    assert.equal(f.attempts.length, attempts)
+    assert.equal(f.waiting.length, waiting, 'removal showed another loading state')
+    assert.equal(f.exhausted(), 0, 'normal window exit was reported as a connection error')
+    assert.equal(f.timeouts(), 0)
+})
+
+test('a newly confirmed window can reuse a removed identity without resetting ordinary exhausted budgets', t => {
+  const f = fixture(t); f.control.resume(); f.control.stop()
+  f.control.resume(); assert.equal(f.attempts.length, 1)
+  f.control.resume(true); assert.deepEqual(f.attempts, [false, true])
+  for (const delay of [500, 1500, 3000]) { f.control.failed(); t.mock.timers.tick(delay) }
+  f.control.failed(); assert.equal(f.exhausted(), 1)
+  const count = f.attempts.length
+  f.control.resume(true); t.mock.timers.tick(60_000)
+  assert.equal(f.attempts.length, count, 'mere window existence reset an exhausted connection budget')
+})

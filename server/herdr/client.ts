@@ -11,7 +11,7 @@ export interface HerdrClientTransport {
   onData(listener: (data: string) => void): { dispose(): void }
   onPaneFocus(listener: (paneId: string | undefined) => void): { dispose(): void }
   onMetadata(listener: (metadata: WindowMetadata) => void): { dispose(): void }
-  onExit(listener: (event: { exitCode: number; signal?: number }) => void): { dispose(): void }
+  onExit(listener: (event: HerdrClientExit) => void): { dispose(): void }
   content(): Promise<NativeContentPane[] | undefined>
   write(data: string | Buffer): void
   resize(cols: number, rows: number): void
@@ -26,7 +26,7 @@ export interface HerdrClientOptions {
   readSelection?(params: Record<string, unknown>): Promise<unknown>
   readContent?(params: Record<string, unknown>): Promise<unknown>
 }
-type Exit = { exitCode: number; signal?: number }
+export type HerdrClientExit = { exitCode: number; signal?: number; reason?: 'removed' }
 interface Request { boot: string; chunks: Buffer[]; size: number; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
 const MAX_BUFFER = 8 * 1024 * 1024
 // Semantic surfaces always use cell-based SGR mouse reports. Native pane modes
@@ -56,7 +56,7 @@ class HerdrClient implements HerdrClientTransport {
   private metadata?: WindowMetadata
   private metadataSignature = ''
   private focusedPaneId?: string
-  private readonly exitListeners = new Set<(event: Exit) => void>()
+  private readonly exitListeners = new Set<(event: HerdrClientExit) => void>()
   private readonly requests = new Map<string, Request>()
   private requestLane: Promise<unknown> = Promise.resolve()
   private queuedRequests = 0
@@ -74,7 +74,7 @@ class HerdrClient implements HerdrClientTransport {
   private focusReady = false
   private initialized = false
   private closed = false
-  private exit?: Exit
+  private exit?: HerdrClientExit
   private writeQueue: Buffer[] = []
   private writeBytes = 0
   private writeBlocked = false
@@ -195,7 +195,10 @@ class HerdrClient implements HerdrClientTransport {
       if (this.snapshot && snapshot.boot_id !== this.snapshot.boot_id) throw new Error('Herdr endpoint restarted; reconnect this window')
       if (this.snapshot && snapshot.revision < this.snapshot.revision) return
       this.snapshot = snapshot
-      if (!snapshot.tabs.some(tab => tab.tab_id === this.options.tabId)) throw new Error('Herdr tab no longer exists')
+      if (!snapshot.tabs.some(tab => tab.tab_id === this.options.tabId)) {
+        this.finish({ exitCode: 0, reason: 'removed' }, new Error('Herdr tab no longer exists'))
+        return
+      }
       const metadata = windowMetadata(snapshot, this.options.tabId), signature = JSON.stringify(metadata)
       if (signature !== this.metadataSignature) {
         this.metadata = metadata; this.metadataSignature = signature
@@ -309,7 +312,7 @@ class HerdrClient implements HerdrClientTransport {
     queueMicrotask(() => { if (!this.closed && current && this.metadata === current && this.metadataListeners.has(listener)) listener(current) })
     return { dispose: () => { this.metadataListeners.delete(listener) } }
   }
-  onExit(listener: (event: Exit) => void) {
+  onExit(listener: (event: HerdrClientExit) => void) {
     this.exitListeners.add(listener)
     if (this.exit) queueMicrotask(() => { if (this.exitListeners.has(listener)) listener(this.exit!) })
     return { dispose: () => { this.exitListeners.delete(listener) } }
@@ -360,7 +363,7 @@ class HerdrClient implements HerdrClientTransport {
     if (!this.initialized) this.reject(error)
     this.finish({ exitCode: 1 }, error)
   }
-  private finish(exit: Exit, error = new Error('Herdr endpoint connection closed')) {
+  private finish(exit: HerdrClientExit, error = new Error('Herdr endpoint connection closed')) {
     if (this.closed) return
     this.closed = true; this.exit = exit
     clearTimeout(this.deadline)

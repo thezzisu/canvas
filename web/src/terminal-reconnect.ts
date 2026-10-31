@@ -22,6 +22,7 @@ export class TerminalReconnect {
   private attempt = 0
   private started = false
   private exhausted = false
+  private removed = false
   private retryTimer?: ReturnType<typeof setTimeout>
   private handshakeTimer?: ReturnType<typeof setTimeout>
   private stableTimer?: ReturnType<typeof setTimeout>
@@ -40,14 +41,17 @@ export class TerminalReconnect {
     this.options.connect(probe)
   }
 
-  resume() {
+  resume(windowPresent = false) {
+    if (windowPresent && this.removed) {
+      this.removed = false; this.attempt = 0; this.exhausted = false
+    }
     if (!this.options.active() || this.exhausted || this.retryTimer !== undefined || this.handshakeTimer !== undefined) return
     if (this.attempt) this.retryTimer = setTimeout(() => this.connect(), retryDelays[this.attempt - 1]!)
     else this.connect()
   }
 
   restart() {
-    this.pause(); this.attempt = 0; this.exhausted = false
+    this.pause(); this.attempt = 0; this.exhausted = false; this.removed = false
     this.connect()
   }
 
@@ -59,6 +63,11 @@ export class TerminalReconnect {
       this.stableTimer = undefined
       if (this.options.active()) this.attempt = 0
     }, stableConnection)
+  }
+
+  /** A confirmed window removal retires this view without showing an outage. */
+  stop() {
+    this.pause(); this.exhausted = true; this.removed = true
   }
 
   failed(retry = true) {

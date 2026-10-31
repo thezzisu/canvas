@@ -1,16 +1,18 @@
 import type { WindowMetadata } from '../../shared/window-metadata'
 import type { SourceResource } from './types'
 
+export type LiveWindowMetadata = WindowMetadata | null
+
 /** A poll may supersede only metadata that was already known when it began. */
-export function metadataAfterPoll(current: ReadonlyMap<string, WindowMetadata>, started: ReadonlyMap<string, WindowMetadata>, sourceIds: readonly string[]) {
+export function metadataAfterPoll(current: ReadonlyMap<string, LiveWindowMetadata>, started: ReadonlyMap<string, LiveWindowMetadata>, sourceIds: readonly string[]) {
   const sources = new Set(sourceIds)
   return new Map([...current].filter(([key, value]) => !sources.has(key.slice(0, key.indexOf('/'))) || started.get(key) !== value))
 }
 
 /** Live endpoint metadata wins over an older or slow all-source poll. */
-export function mergeLiveResources(sources: readonly SourceResource[], metadata: ReadonlyMap<string, WindowMetadata>): SourceResource[] {
+export function mergeLiveResources(sources: readonly SourceResource[], metadata: ReadonlyMap<string, LiveWindowMetadata>): SourceResource[] {
   return sources.map(source => ({ ...source, spaces: source.spaces.map(space => ({ ...space,
-    windows: space.windows.map(window => {
+    windows: space.windows.filter(window => metadata.get(`${source.id}/${window.id}`) !== null).map(window => {
       const live = metadata.get(`${source.id}/${window.id}`)
       if (!live) return window
       return { ...live, panes: live.panes.map(pane => ({ ...pane,

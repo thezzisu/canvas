@@ -1,6 +1,6 @@
 import { shallowRef, watch } from 'vue'
 import { isWindowMetadata, type WindowMetadata } from '../../shared/window-metadata'
-import { metadataAfterPoll } from './live-resources'
+import { metadataAfterPoll, type LiveWindowMetadata } from './live-resources'
 import { locale, t } from './i18n'
 import { Terminal } from '@xterm/xterm'
 import { terminalUnicodeAddon } from '../../shared/terminal-unicode'
@@ -83,7 +83,7 @@ interface Session {
   clipboard?: TerminalClipboard
 }
 const sessions = new Map<string, Session>()
-export const liveTerminalMetadata = shallowRef<ReadonlyMap<string, WindowMetadata>>(new Map())
+export const liveTerminalMetadata = shallowRef<ReadonlyMap<string, LiveWindowMetadata>>(new Map())
 let metadataSources = new Set<string>()
 function updateMetadata(session: Session, metadata?: WindowMetadata) {
   if (metadata && !metadataSources.has(session.resource.sourceId)) return
@@ -95,6 +95,7 @@ function updateMetadata(session: Session, metadata?: WindowMetadata) {
     other.socket?.readyState === WebSocket.OPEN && other.metadata)?.metadata : undefined
   const key = `${session.resource.sourceId}/${session.resource.windowId}`
   const previous = liveTerminalMetadata.value.get(key)
+  if (previous === null) return
   if (JSON.stringify(previous) === JSON.stringify(metadata)) return
   const next = new Map(liveTerminalMetadata.value)
   if (metadata) next.set(key, metadata)
@@ -110,7 +111,7 @@ export function retainTerminalMetadata(sourceIds: readonly string[]) {
   }
   if (next.size !== liveTerminalMetadata.value.size) liveTerminalMetadata.value = next
 }
-export function acknowledgeTerminalMetadata(started: ReadonlyMap<string, WindowMetadata>, sourceIds: readonly string[]) {
+export function acknowledgeTerminalMetadata(started: ReadonlyMap<string, LiveWindowMetadata>, sourceIds: readonly string[]) {
   const next = metadataAfterPoll(liveTerminalMetadata.value, started, sourceIds)
   if (next.size !== liveTerminalMetadata.value.size) liveTerminalMetadata.value = next
 }
@@ -273,6 +274,17 @@ function connectionFailed(session: Session, error = t('terminal.connection.disco
   session.connectionError = error
   session.reconnect?.failed(retry)
 }
+function windowRemoved(session: Session) {
+  const { sourceId, windowId } = session.resource
+  for (const view of sessions.values()) if (view.resource.sourceId === sourceId && view.resource.windowId === windowId) {
+    view.reconnect?.stop()
+    disconnect(view)
+    setState(view, { ...view.state, status: 'disconnected', error: undefined, retryAttempt: undefined })
+  }
+  const next = new Map(liveTerminalMetadata.value)
+  next.set(`${sourceId}/${windowId}`, null)
+  liveTerminalMetadata.value = next
+}
 function terminalVisibilityChanged() {
   for (const session of sessions.values()) {
     syncViewVisibility(session)
@@ -349,6 +361,7 @@ async function connect(session: Session, probe: boolean) {
           else session.term.write('', update)
         }
         else if (message.type === 'status') {
+          if (message.status === 'removed') { windowRemoved(session); return }
           if (message.status === 'closed' || message.status === 'error') {
             connectionFailed(session, typeof message.error === 'string' ? message.error : undefined); return
           }
@@ -670,7 +683,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   session.listeners.add(listener)
   if (onGeometry) session.geometryListeners.add(onGeometry)
   listener(session.state)
-  if (!session.socket || session.socket.readyState === WebSocket.CLOSED) session.reconnect?.resume()
+  if (!session.socket || session.socket.readyState === WebSocket.CLOSED)
+    session.reconnect?.resume(liveTerminalMetadata.value.get(`${resource.sourceId}/${resource.windowId}`) !== null)
   else if (session.state.status === 'connected') session.reconnect?.connected()
   const current = session
   const mountingContext = apiContext()
