@@ -57,7 +57,7 @@ async function save() {
 
 <template>
   <UModal :open="open" :portal="portal || false" :title="t(sharing ? 'account.shareQr' : 'account.title')" :dismissible="!saving"
-    :close="{ 'aria-label': t('common.close'), disabled: saving }" :ui="{ content: 'account-dialog' }" @update:open="value => { if (!value) close() }">
+    :close="{ 'aria-label': t('common.close'), disabled: saving }" :ui="{ content: 'account-dialog', overlay: 'app-dialog-overlay' }" @update:open="value => { if (!value) close() }">
     <template #body>
       <InstanceQrShare v-if="sharing" :link="shareLink" :name="activeInstance.name" :base="activeInstance.base" :username="username" />
       <form v-else :id="formId" class="account-form" @submit.prevent="save">
@@ -83,7 +83,7 @@ async function save() {
 </template>
 
 <style>
-.account-dialog{width:min(420px,calc(100vw - 28px));max-height:calc(100dvh - 32px)}
+.account-dialog{z-index:50;width:min(420px,calc(100vw - 28px));max-height:calc(100dvh - 32px)}
 .account-form{display:flex;flex-direction:column;gap:16px}.account-form label,.account-form input{margin-top:0}.account-form input{font-size:13px}
 .account-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;width:100%}.account-share-button{margin-right:auto;align-self:stretch;min-width:32px;justify-content:center}.account-session-hint{font-size:11px;color:#96a0af;line-height:1.5}.account-error{font-size:12px;color:#e0aaa5}
 </style>
