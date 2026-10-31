@@ -7,6 +7,7 @@ import { createApp } from "./app.ts";
 import { Store, sourceConnectionKey, type Source } from "./state.ts";
 import { hashPassword } from "./auth.ts";
 import type { TerminalManager } from "./terminals.ts";
+import { buildInfo } from "./build-info.ts";
 
 test("authentication, CSRF rejection and persistent canvas CRUD", async () => {
   const dir = mkdtempSync(join(tmpdir(), "canvas-unit-"));
@@ -40,6 +41,9 @@ test("authentication, CSRF rejection and persistent canvas CRUD", async () => {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   try {
+    const probe = await call("/api/session");
+    assert.equal(probe.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await probe.json(), { authenticated: false, username: "test", server: buildInfo });
     assert.equal((await call("/api/state")).status, 401);
     assert.equal(
       (
@@ -67,12 +71,13 @@ test("authentication, CSRF rejection and persistent canvas CRUD", async () => {
       password: "fixture-password",
     });
     assert.equal(login.status, 200);
-    const { token, expiresAt } = await login.json();
+    const { token, expiresAt, server } = await login.json();
+    assert.deepEqual(server, buildInfo);
     assert.match(token, /^[A-Za-z0-9_-]{43}$/u);
     assert(expiresAt > Date.now() + 6 * 86400_000);
     assert.equal(login.headers.get("set-cookie"), null);
     assert.equal((await app.request("http://localhost/api/state", { headers: { Cookie: `canvas_session=${token}` } })).status, 401);
-    assert.deepEqual(await (await call("/api/session", "GET", undefined, token)).json(), { authenticated: true, username: "test" });
+    assert.deepEqual(await (await call("/api/session", "GET", undefined, token)).json(), { authenticated: true, username: "test", server: buildInfo });
     const created = await call(
       "/api/canvases",
       "POST",

@@ -5,6 +5,7 @@ import { formatCanvasLocation, parseCanvasLocation } from './canvas-location'
 import { removeSessionToken } from './instance-session'
 import { instanceConfiguration, type CanvasInstance } from './instance-config'
 import { clearInstanceFileViews } from './file-view'
+import { forgetInstanceBuild } from './instance-builds'
 
 export type { CanvasInstance } from './instance-config'
 function identity() {
@@ -47,7 +48,7 @@ export function saveInstance(value: { id?: string; name: string; base: string })
   const previous = instances.value.find(instance => instance.id === value.id)
   if (previous?.builtin) throw new Error('instances.readOnly')
   const result = { id: previous?.id || identity(), name, base }
-  if (previous && previous.base !== base) { removeSessionToken(previous.id); clearInstanceFileViews(previous.id) }
+  if (previous && previous.base !== base) { removeSessionToken(previous.id); clearInstanceFileViews(previous.id); forgetInstanceBuild(previous.id) }
   instances.value = previous ? instances.value.map(instance => instance.id === result.id ? result : instance) : [...instances.value, result]
   selectInstance(result.id)
   return result
@@ -56,6 +57,7 @@ export function removeInstance(id: string) {
   if (instances.value.find(instance => instance.id === id)?.builtin) return
   removeSessionToken(id)
   clearInstanceFileViews(id)
+  forgetInstanceBuild(id)
   instances.value = instances.value.filter(instance => instance.id !== id)
   if (activeInstanceId.value === id) activeInstanceId.value = instances.value[0]?.id || sameOriginInstance?.id || ''
 }

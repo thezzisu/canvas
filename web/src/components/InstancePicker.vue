@@ -8,11 +8,24 @@ import UInput from '@nuxt/ui/components/Input.vue'
 import UFormField from '@nuxt/ui/components/FormField.vue'
 import { activeInstance, instances, removeInstance, saveInstance, selectInstance } from '../instances'
 import Icon from './Icon.vue'
+import { instanceBuild, observeInstanceBuild } from '../instance-builds'
+import { buildLabel } from '../../../shared/build-info'
+import { useInstanceProbe } from '../instance-probe'
+import { normalizeApiBase } from '../instance-url'
 
 const props = defineProps<{ portal?: HTMLElement; beforeChange?: () => Promise<boolean>; disabled?: boolean }>()
 const { t } = useI18n()
 const open = ref(false), working = ref(false), error = ref('')
 const draft = reactive({ id: '', name: '', base: '' })
+const draftBuild = computed(() => draft.id ? instanceBuild(draft) : undefined)
+const original = computed(() => instances.value.find(instance => instance.id === draft.id))
+const needsProbe = computed(() => {
+  try { return !original.value || original.value.base !== normalizeApiBase(draft.base) }
+  catch { return true }
+})
+const probe = useInstanceProbe(() => draft.base, () => open.value && needsProbe.value)
+const canSubmit = computed(() => open.value && !!draft.name.trim() && !!probe.base.value && (!needsProbe.value || probe.ready.value))
+const displayedBuild = computed(() => needsProbe.value ? probe.result.value?.build : draftBuild.value?.build)
 async function change(action: () => void) {
   if (working.value || props.disabled) return
   working.value = true
@@ -25,12 +38,19 @@ function edit(add = false) {
   error.value = ''; open.value = true
 }
 async function submit() {
+  if (!canSubmit.value) return
   error.value = ''
-  try { await change(() => { saveInstance(draft); open.value = false }) }
+  try { await change(() => {
+    if (!canSubmit.value) return
+    const build = probe.result.value?.build
+    const instance = saveInstance(draft)
+    if (build) observeInstanceBuild(instance, build)
+    open.value = false
+  }) }
   catch (reason) { error.value = reason instanceof Error && reason.message.startsWith('instances.') ? reason.message : 'instances.invalidUrl' }
 }
 const items = computed<DropdownMenuItem[][]>(() => [
-  instances.value.map(instance => ({ label: instance.name, type: 'checkbox' as const,
+  instances.value.map(instance => ({ label: instance.name, type: 'checkbox' as const, server: instanceBuild(instance),
     checked: instance.id === activeInstance.value.id, onSelect: (): void => { void change(() => selectInstance(instance.id)) } })),
   [{ label: t('instances.add'), onSelect: () => edit(true) },
     { label: t('instances.edit'), disabled: !!activeInstance.value.builtin, onSelect: () => edit() },
@@ -42,6 +62,9 @@ const items = computed<DropdownMenuItem[][]>(() => [
 <template>
   <UDropdownMenu :items="items" :portal="portal || false" :content="{ side: 'top', align: 'start', sideOffset: 6 }"
     :ui="{ content: 'instance-menu' }">
+    <template #item-label="{ item }">
+      <span class="instance-menu-label"><span>{{ item.label }}</span><small v-if="item.server" class="instance-version" :class="{ stale: !item.server.fresh }" :title="`${t('instances.serverVersion')}: ${item.server.build.version}${item.server.build.revision ? ` · ${item.server.build.revision}` : ''}${!item.server.fresh ? ` · ${t('instances.lastSeen')}` : ''}`">{{ buildLabel(item.server.build) }}<span v-if="!item.server.fresh"> · {{ t('instances.lastSeen') }}</span></small></span>
+    </template>
     <button type="button" class="instance-trigger" :disabled="disabled || working" :aria-busy="working" :title="activeInstance.base" :aria-label="`${t('instances.instance')}: ${activeInstance.name}`">
       <Icon name="server" :size="15" /><span>{{ activeInstance.name }}</span><Icon name="down" :size="12" />
     </button>
@@ -52,10 +75,11 @@ const items = computed<DropdownMenuItem[][]>(() => [
       <form id="instance-form" @submit.prevent="submit">
         <UFormField :label="t('instances.name')" name="name" required><UInput v-model="draft.name" autofocus maxlength="80" class="w-full" :disabled="working" /></UFormField>
         <UFormField :label="t('instances.address')" name="address" required><UInput v-model="draft.base" type="url" placeholder="https://canvas.example/" autocomplete="url" class="w-full" :disabled="working" /></UFormField>
+        <dl v-if="draftBuild" class="instance-build-detail"><dt>{{ t('instances.serverVersion') }}</dt><dd>{{ buildLabel(draftBuild.build) }}<small v-if="!draftBuild.fresh">{{ t('instances.lastSeen') }}</small></dd><template v-if="draftBuild.build.revision"><dt>{{ t('instances.revision') }}</dt><dd class="instance-revision">{{ draftBuild.build.revision }}</dd></template></dl>
         <p v-if="error" role="alert" class="instance-error">{{ t(error) }}</p>
       </form>
     </template>
-    <template #footer><UButton type="submit" form="instance-form" :loading="working" :disabled="!draft.name.trim() || !draft.base.trim()">{{ t(draft.id ? 'common.save' : 'instances.connect') }}</UButton></template>
+    <template #footer><div class="instance-probe-footer"><UButton type="submit" form="instance-form" :loading="working" :disabled="!canSubmit">{{ t(draft.id ? 'common.save' : 'instances.connect') }}</UButton><span class="instance-probe-status" role="status"><span v-if="probe.pending.value">{{ t('instances.probing') }}</span><button v-else-if="probe.failed.value" type="button" @click="probe.retry">{{ t('instances.probeFailed') }} · {{ t('instances.retry') }}</button><span v-else-if="displayedBuild" :title="`${t('instances.serverVersion')}: ${displayedBuild.version}${displayedBuild.revision ? ` · ${displayedBuild.revision}` : ''}`">{{ buildLabel(displayedBuild) }}</span></span></div></template>
   </UModal>
 </template>
 
@@ -65,9 +89,13 @@ const items = computed<DropdownMenuItem[][]>(() => [
 .instance-trigger>svg{flex:none;color:#7f8da0}.instance-trigger:hover{color:#e1d1c2}
 .instance-menu{min-width:200px;max-width:min(320px,calc(100vw - 24px));z-index:90}
 .instance-menu [data-disabled]{cursor:not-allowed}
+.instance-menu-label{display:flex;align-items:center;gap:10px;min-width:0}.instance-menu-label>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.instance-version{flex:0 1 auto;min-width:0;max-width:60%;overflow:hidden;text-overflow:ellipsis;color:#7d899a;font-size:10px;font-weight:400;white-space:nowrap}.instance-version.stale{color:#707b8a}
+.instance-build-detail{display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 12px;margin:0;font-size:11px;color:#8995a6}.instance-build-detail dt{font-weight:400}.instance-build-detail dd{margin:0;color:#bbc5d2;overflow-wrap:anywhere}.instance-build-detail small{margin-left:7px;color:#7d899a}.instance-revision{font-family:monospace;overflow-wrap:anywhere;font-size:10px}
 .instance-dialog{width:min(420px,calc(100vw - 28px));max-height:calc(100dvh - 32px);z-index:92}
 .instance-dialog-body{padding:16px 20px}.instance-dialog form{display:flex;flex-direction:column;gap:16px}
 .instance-dialog label{margin-top:0}.instance-dialog input{margin-top:0;font-size:13px}
 .instance-error{color:#dfaaa5;font-size:12px}.login-content>.instance-trigger{margin:6px 0 2px}
+.instance-probe-footer{display:flex;align-items:center;gap:12px;min-width:0;width:100%}.instance-probe-footer>button{flex:none}.instance-probe-status{display:block;flex:1;min-width:0;margin-left:auto;text-align:right;color:#8391a4;font-size:11px}.instance-probe-status>span,.instance-probe-status>button{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.instance-probe-status>button{margin-left:auto;padding:0;font-size:inherit;color:inherit}
 .sidebar-footer>.instance-trigger{flex:1}.sidebar-footer>.instance-trigger>span{max-width:100px}
 </style>

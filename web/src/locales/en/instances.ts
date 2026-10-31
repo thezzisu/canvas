@@ -4,4 +4,6 @@ export default {
   invalidUrl: 'Enter an HTTP or HTTPS server URL without a query or fragment.',
   connect: 'Connect', unavailable: 'Unable to reach this instance.', retry: 'Retry',
   readOnly: 'The default instance cannot be changed.',
+  serverVersion: 'Canvas Server', revision: 'Revision', lastSeen: 'Last seen',
+  probing: 'Checking…', probeFailed: 'Unavailable',
 }

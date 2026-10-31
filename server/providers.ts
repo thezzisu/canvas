@@ -34,6 +34,7 @@ export interface SourceResource {
   name: string;
   status: "online" | "offline";
   error?: string;
+  serverVersion?: string;
   spaces: SpaceResource[];
 }
 export interface TerminalHandle {
@@ -240,24 +241,26 @@ function tunnelRequest(
   };
 }
 
-async function discoverHerdrSockets(source: Source): Promise<HerdrSockets> {
+async function discoverHerdrSockets(source: Source, signal?: AbortSignal): Promise<HerdrSockets> {
+  signal?.throwIfAborted();
   validateHerdrLocation(source);
   if (source.transport === "local") return localHerdrSockets(source);
   const location = { herdrSocket: source.herdrSocket, herdrSession: source.herdrSession };
-  return parseHerdrSockets(await execute(sourcePythonCommand(source, discoverHerdrPython, [JSON.stringify(location)])));
+  return parseHerdrSockets(await execute(sourcePythonCommand(source, discoverHerdrPython, [JSON.stringify(location)]), commandEnvironment(), signal));
 }
 
-async function connectedHerdrSockets(source: Source): Promise<HerdrSockets> {
-  const paths = await discoverHerdrSockets(source);
+async function connectedHerdrSockets(source: Source, signal?: AbortSignal): Promise<HerdrSockets> {
+  const paths = await discoverHerdrSockets(source, signal);
+  signal?.throwIfAborted();
   if (source.transport === "local") return paths;
-  const tunnel = await ensureSocketTunnel(tunnelRequest(source, { "herdr.sock": paths.api, "herdr-client.sock": paths.client }));
+  const tunnel = await ensureSocketTunnel({ ...tunnelRequest(source, { "herdr.sock": paths.api, "herdr-client.sock": paths.client }), signal });
   return { api: tunnel.sockets["herdr.sock"]!, client: tunnel.sockets["herdr-client.sock"]! };
 }
 
-async function requestHerdr(source: Source, method: string, params: Record<string, unknown> = {}) {
+async function requestHerdr(source: Source, method: string, params: Record<string, unknown> = {}, signal?: AbortSignal) {
   validateSource(source);
   preparing.set(source.id, (preparing.get(source.id) || 0) + 1);
-  try { return await herdrApiRequest((await connectedHerdrSockets(source)).api, method, params); }
+  try { return await herdrApiRequest((await connectedHerdrSockets(source, signal)).api, method, params, { signal }); }
   finally {
     const count = preparing.get(source.id)! - 1;
     if (count) preparing.set(source.id, count); else preparing.delete(source.id);
@@ -593,6 +596,7 @@ export async function closeProviderConnections(sourceId?: string): Promise<void>
 async function execute(
   command: { file: string; args: string[] },
   env = commandEnvironment(),
+  signal?: AbortSignal,
 ): Promise<string> {
   return await new Promise((resolve, reject) => {
     execFile(
@@ -603,6 +607,7 @@ async function execute(
         timeout: COMMAND_TIMEOUT,
         maxBuffer: 4 * 1024 * 1024,
         encoding: "utf8",
+        signal,
       },
       (error, stdout, stderr) => {
         if (error) {
@@ -622,16 +627,17 @@ function name(value: string): string {
   return value.trim();
 }
 
-async function herdrSpaces(source: Source): Promise<SpaceResource[]> {
-  const response = await requestHerdr(source, "session.snapshot");
+async function herdrResources(source: Source, signal?: AbortSignal): Promise<Pick<SourceResource, "spaces" | "serverVersion">> {
+  const response = await requestHerdr(source, "session.snapshot", {}, signal);
   const snapshot = response.snapshot as {
+    version?: unknown;
     workspaces: Array<{ workspace_id: string; label: string }>;
     tabs: Array<{ workspace_id: string; tab_id: string; label: string; agent_status?: string }>;
     panes?: Array<{ tab_id: string; pane_id: string; label?: string; display_agent?: string; agent?: string; focused?: boolean; agent_status?: string; terminal_title_stripped?: string }>;
   };
   if (!snapshot || !Array.isArray(snapshot.workspaces) || !Array.isArray(snapshot.tabs))
     throw new Error("Unexpected herdr snapshot response");
-  return snapshot.workspaces.map(
+  const spaces = snapshot.workspaces.map(
     (workspace: { workspace_id: string; label: string }) => ({
       id: workspace.workspace_id,
       name: workspace.label || workspace.workspace_id,
@@ -686,6 +692,20 @@ async function herdrSpaces(source: Source): Promise<SpaceResource[]> {
         ),
     }),
   );
+  // This is the connected server's build identity, already included in its resource snapshot.
+  const version = typeof snapshot.version === "string" ? snapshot.version.trim() : "";
+  const serverVersion = version && version.length <= 128 && !/[\x00-\x1f\x7f-\x9f]/u.test(version) ? version : undefined;
+  return { spaces, ...(serverVersion ? { serverVersion } : {}) };
+}
+
+/** A draft probe owns its temporary forward and never joins an existing connection. */
+export async function probeSource(draft: Omit<Source, "id" | "name">, signal?: AbortSignal): Promise<{ status: "online"; serverVersion: string }> {
+  const source: Source = { ...draft, id: randomUUID(), name: "Connection probe" };
+  try {
+    const { serverVersion } = await herdrResources(source, signal);
+    if (!serverVersion) throw new Error("Herdr did not report a server version");
+    return { status: "online", serverVersion };
+  } finally { await closeProviderConnections(source.id); }
 }
 
 export async function listResources(source: Source): Promise<SourceResource> {
@@ -697,7 +717,7 @@ export async function listResources(source: Source): Promise<SourceResource> {
     spaces: [],
   };
   try {
-    result.spaces = await herdrSpaces(source);
+    Object.assign(result, await herdrResources(source));
   } catch (error) {
     result.status = "offline";
     result.error = error instanceof Error ? error.message : "Connection failed";

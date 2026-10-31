@@ -12,6 +12,8 @@ import InstancePicker from './components/InstancePicker.vue'
 import InstanceSetup from './components/InstanceSetup.vue'
 import { activeInstance, activeInstanceId, hasActiveInstance, instances, invalidInstanceLink, rememberInstance, selectInstance } from './instances'
 import { isCanvasSession } from './instance-url'
+import { instanceBuild, observeInstanceBuild, staleInstanceBuild } from './instance-builds'
+import { buildLabel } from '../../shared/build-info'
 import CanvasNavItem from './components/CanvasNavItem.vue'
 import { canvasIndicators, needsAttention, windowVisualState } from './canvas-status'
 import { cameraFromViewport, recallFreeCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type CanvasLocation } from './canvas-location'
@@ -40,7 +42,7 @@ import CutoutPreview from './components/CutoutPreview.vue'
 import { directoryRequest } from './directories'
 import { copiedFile } from './file-clipboard'
 import { urlRequest } from './urls'
-import { api, apiContext, isCurrentApi, requireCurrentApi, resetApiRequests, setSessionToken, ApiError, segment, uuid, write } from './api'
+import { api, apiContext, apiRevision, apiUrl, isCurrentApi, requireCurrentApi, resetApiRequests, setSessionToken, ApiError, segment, uuid, write } from './api'
 import { clearTerminals, focusWindow, hasLiveTerminal, pasteFileIntoWindow, setContentFont } from './terminals'
 import { buildFontPresentation, ensureContentFont } from './fonts'
 import type { GlobalSettings } from '../../shared/settings'
@@ -71,9 +73,11 @@ let cameraResize = 0
 const ready = ref(false)
 const authenticated = ref(false)
 const checkingInstance = ref(false)
+const serverBuild = computed(() => instanceBuild(activeInstance.value))
 const instanceUnavailable = ref(invalidInstanceLink)
 const instanceSetupMessage = ref(invalidInstanceLink ? 'instances.invalidUrl' : '')
 let instanceActivation = 0
+let authorizationCheck: Promise<void> | undefined
 let instanceBooted = false
 useScreenWakeLock(authenticated)
 const username = ref('')
@@ -111,6 +115,18 @@ const sourcePanel = ref(false)
 const expandedSource = ref('')
 const sourceDialog = ref(false)
 const sourceDraft = reactive<Source>({ id: '', name: '', transport: 'local', target: '', herdrSession: '', herdrSocket: '', sshIdentityFile: '', sshKnownHostsFile: '' })
+const sourceProbe = ref<{ key: string; pending: boolean; version?: string; error?: string }>({ key: '', pending: false })
+const sourceProbeRetry = ref(0)
+function sourceConnection(source: Source) {
+  return { transport: source.transport, herdrSession: source.herdrSession?.trim() || '', herdrSocket: source.herdrSocket?.trim() || '',
+    ...(source.transport === 'ssh' ? { target: source.target?.trim() || '', sshIdentityFile: source.sshIdentityFile || '', sshKnownHostsFile: source.sshKnownHostsFile || '' } : {}) }
+}
+const sourceProbeKey = computed(() => JSON.stringify(sourceConnection(sourceDraft)))
+const sourceConfigUnchanged = computed(() => {
+  const original = sources.value.find(source => source.id === sourceDraft.id)
+  return !!original && JSON.stringify(sourceConnection(original)) === sourceProbeKey.value
+})
+const sourceProbeReady = computed(() => sourceConfigUnchanged.value || sourceProbe.value.key === sourceProbeKey.value && !!sourceProbe.value.version)
 const canvasDialog = ref(false)
 const backgroundCanvas = ref<Canvas | null>(null)
 const settingsDialog = ref(false)
@@ -753,8 +769,9 @@ async function login() {
   const context = apiContext()
   busy.value = true; loginFailure.value = undefined
   try {
-    const session = await api<{ token: string }>('/api/login', { method: 'POST', body: JSON.stringify({ username: username.value, password: password.value }) }, context)
+    const session = await api<{ token: string; server: unknown }>('/api/login', { method: 'POST', body: JSON.stringify({ username: username.value, password: password.value }) }, context)
     requireCurrentApi(context)
+    observeInstanceBuild(context, session.server)
     setSessionToken(session.token); password.value = ''; authenticated.value = true
     await load()
   } catch (reason) { if (context.id === activeInstance.value.id && !(reason instanceof Error && reason.name === 'AbortError')) loginFailure.value = reason }
@@ -808,16 +825,41 @@ function visibilityChanged() {
   pageVisible.value = !document.hidden
   if (!document.hidden) { resourcesFresh.value = false; void refreshResources(true) }
 }
-function unauthorized() { setSessionToken(''); clearInstanceRuntime(); checkingInstance.value = false; void exitFullscreen() }
+async function unauthorized() {
+  const context = apiContext()
+  if (!context.token || authorizationCheck) return authorizationCheck
+  authorizationCheck = (async () => {
+    try {
+      const headers = new Headers({ Authorization: `Bearer ${context.token}` })
+      const response = await fetch(apiUrl('/api/session', context), {
+        headers, credentials: 'omit', cache: 'no-store', signal: AbortSignal.timeout(10_000),
+      })
+      if (!isCurrentApi(context)) return
+      if (response.status === 401) {
+        setSessionToken(''); clearInstanceRuntime(); checkingInstance.value = false; void exitFullscreen()
+        return
+      }
+      if (!response.ok) return
+      const session: unknown = await response.json()
+      if (isCanvasSession(session) && session.authenticated === false) {
+        setSessionToken(''); clearInstanceRuntime(); checkingInstance.value = false; void exitFullscreen()
+      }
+    } catch { /* A transient transport failure must not sign out a valid session. */ }
+    finally { authorizationCheck = undefined }
+  })()
+  return authorizationCheck
+}
 async function activateInstance() {
   const activation = ++instanceActivation
   clearInstanceRuntime(); ready.value = true; checkingInstance.value = true; instanceUnavailable.value = false; instanceSetupMessage.value = ''
   if (!hasActiveInstance.value) { checkingInstance.value = false; instanceUnavailable.value = true; return }
   const context = apiContext()
+  staleInstanceBuild(context)
   try {
-    const session = await api<{ authenticated: boolean; username?: string }>('/api/session', { signal: AbortSignal.timeout(15_000) }, context)
+    const session = await api<{ authenticated: boolean; username?: string; server: unknown }>('/api/session', { signal: AbortSignal.timeout(15_000) }, context)
     requireCurrentApi(context)
     if (!isCanvasSession(session)) throw new Error('Invalid Canvas session')
+    observeInstanceBuild(context, session.server)
     rememberInstance()
     if (!session.authenticated && context.token) setSessionToken('')
     authenticated.value = session.authenticated; username.value = session.username || ''
@@ -912,7 +954,31 @@ function openSource(source?: Source) {
   Object.assign(sourceDraft, { id: '', name: '', transport: 'local', target: '', herdrSession: '', herdrSocket: '', sshIdentityFile: '', sshKnownHostsFile: '' }, source || {})
   dialogError.value = ''; sourceDialog.value = true
 }
+watch([sourceDialog, sourceProbeKey, apiRevision, sourceProbeRetry, sourceConfigUnchanged], ([open, key], _previous, onCleanup) => {
+  sourceProbe.value = { key: '', pending: false }
+  if (!open) return
+  if (sourceConfigUnchanged.value) {
+    sourceProbe.value = { key, pending: false, version: resources.value.find(source => source.id === sourceDraft.id)?.serverVersion }
+    return
+  }
+  if (sourceDraft.transport === 'ssh' && !sourceDraft.target?.trim()) return
+  const controller = new AbortController(), context = apiContext(), body = sourceConnection(sourceDraft)
+  sourceProbe.value = { key: '', pending: true }
+  const timer = setTimeout(async () => {
+    try {
+      const result = await api<{ status: string; serverVersion?: string }>('/api/sources/probe', { method: 'POST', body: JSON.stringify(body), signal: controller.signal }, context)
+      if (controller.signal.aborted || !isCurrentApi(context) || !sourceDialog.value || sourceProbeKey.value !== key) return
+      if (result.status !== 'online' || !result.serverVersion) throw new Error(t('app.connectionVersionMissing'))
+      sourceProbe.value = { key, pending: false, version: result.serverVersion }
+    } catch (reason) {
+      if (!controller.signal.aborted && isCurrentApi(context) && sourceDialog.value && sourceProbeKey.value === key)
+        sourceProbe.value = { key: '', pending: false, error: reason instanceof Error ? reason.message : String(reason) }
+    }
+  }, 500)
+  onCleanup(() => { clearTimeout(timer); controller.abort() })
+}, { flush: 'sync' })
 async function submitSource() {
+  if (!sourceProbeReady.value || !sourceDraft.name.trim() || busy.value) return
   busy.value = true; dialogError.value = ''
   try {
     const body = { ...sourceDraft, name: sourceDraft.name.trim(), target: sourceDraft.target?.trim() }
@@ -1347,7 +1413,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
       <div v-else-if="checkingInstance" class="instance-checking" role="status"><span class="spinner" />{{ t('common.loading') }}</div>
       <InstanceSetup v-else-if="instanceUnavailable" :message="instanceSetupMessage ? t(instanceSetupMessage) : ''" @connect="connectInstance" />
       <form v-else class="login-form" @submit.prevent="login">
-        <p class="login-address" :title="activeInstance.base">{{ activeInstance.base }}</p>
+        <div class="login-endpoint"><p class="login-address" :title="activeInstance.base">{{ activeInstance.base }}</p><span v-if="serverBuild" class="login-version" :title="`${t('instances.serverVersion')}: ${serverBuild.build.version}${serverBuild.build.revision ? ` · ${serverBuild.build.revision}` : ''}`">{{ buildLabel(serverBuild.build) }}</span></div>
         <label>{{ t('app.username') }}<input v-model="username" name="username" autocomplete="username" required autofocus /></label>
         <label>{{ t('app.passwordLabel') }}<input v-model="password" name="password" type="password" autocomplete="current-password" required /></label>
         <p v-if="loginError" class="form-error" role="alert">{{ loginError }}</p>
@@ -1367,7 +1433,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
       </nav>
       <div class="sidebar-divider" />
       <div class="nav-section-label"><span>{{ t('app.connections') }}</span><button class="icon-button" :title="t('app.addConnection')" :aria-label="t('app.addConnection')" @click="openSource()"><Icon name="plus" :size="16" /></button></div>
-      <div class="source-nav"><button v-for="source in sources" :key="source.id" class="source-nav-item" :title="`${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}`" @click="sourcePanel = true; expandedSource = source.id"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}</span><span class="source-nav-status"><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : 'connected'" /></span></button><button v-if="!sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="15" />{{ t('app.addConnection') }}</button></div>
+      <div class="source-nav"><button v-for="source in sources" :key="source.id" class="source-nav-item" :title="`${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}${resources.find(item => item.id === source.id)?.serverVersion ? ` · herdr ${resources.find(item => item.id === source.id)!.serverVersion}` : ''}`" @click="sourcePanel = true; expandedSource = source.id"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}</span><span class="source-nav-status"><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : 'connected'" /></span></button><button v-if="!sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="15" />{{ t('app.addConnection') }}</button></div>
       <div class="sidebar-footer"><button class="icon-button sidebar-settings" :title="t('common.settings')" :aria-label="t('common.settings')" :aria-busy="fontLoading" :disabled="!settings" @click="openSettings"><span v-if="fontLoading" class="spinner" /><svg v-else width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.5 3-.6 2.3-2 .9-2.1-.7-2.5 4.3 1.7 1.6v2.3L2.3 15l2.5 4.3 2.1-.7 2 .9.6 2.3h5l.6-2.3 2-.9 2.1.7 2.5-4.3-1.7-1.6v-2.3l1.7-1.6-2.5-4.3-2.1.7-2-.9-.6-2.3z" /><circle cx="12" cy="12" r="3" /></svg></button><button class="icon-button" :title="t('app.signOut')" :aria-label="t('app.signOut')" @click="logout"><Icon name="logout" :size="17" /></button></div>
     </aside>
     <main class="workspace" :inert="!!focusedCard || undefined" :aria-hidden="!!focusedCard || undefined">
@@ -1397,7 +1463,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
         <div v-if="showNavigation && !focused" class="canvas-toolbar"><button v-if="canvasFullscreen" :title="t('app.globalSettings')" :aria-label="t('app.globalSettings')" :disabled="!settings" @click="openSettings"><Icon name="settings" :size="17" /></button><button :title="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-label="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-pressed="canvasFullscreen" @click="toggleFullscreen"><Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button><button v-if="isOverview" :title="t('app.pagedBrowsing')" :aria-label="t('app.pagedBrowsing')" :aria-pressed="overviewPaged" @click="togglePaging"><Icon name="pages" :size="17" /></button><button v-if="!isOverview" :title="t('app.snapToGrid')" :aria-label="t('app.snapToGrid')" :aria-pressed="!!currentCanvas?.snapToGrid" @click="toggleSnap"><Icon name="grid" :size="15" /></button><template v-if="paging"><button v-for="item in pageDirections" :key="item.direction" :title="item.label" :aria-label="item.label" :disabled="!pageNeighbor(item.direction)" @pointerdown.prevent @click="movePage(item.direction)"><Icon :name="item.icon" :size="16" :style="{ transform: item.rotation }" /></button></template><button v-if="!paging" :title="t('app.zoomOut')" :aria-label="t('app.zoomOut')" @click="zoomOut({ duration: 150 })"><Icon name="minus" :size="17" /></button><button :title="paging ? t('app.centerWindow') : t('app.fitCanvas')" :aria-label="paging ? t('app.centerWindow') : t('app.fitCanvas')" @click="fitCanvas"><Icon name="fit" :size="17" /></button><button v-if="!paging" :title="t('app.zoomIn')" :aria-label="t('app.zoomIn')" @click="zoomIn({ duration: 150 })"><Icon name="plus" :size="17" /></button></div>
       </div>
     </main>
-    <Transition name="slide"><aside v-if="sourcePanel" class="source-panel"><header><div><h2>{{ t('app.connectionsWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeConnections')" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />{{ t('app.addConnection') }}</button><div class="source-panel-content"><div v-for="source in sources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small>{{ source.transport === 'local' ? t('app.local') : source.target }}</small></span></button><button class="icon-button" :title="t('app.editConnection')" :aria-label="t('app.editConnection')" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" :title="t('app.removeConnection')" :aria-label="t('app.removeConnection')" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><div v-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" :title="t('app.newWindow')" :aria-label="t('app.newWindow')" @click="windowAction({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="tab-plus" :size="14" /></button><button class="icon-button" :title="t('app.renameSpace')" :aria-label="t('app.renameSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" :title="t('app.closeSpace')" :aria-label="t('app.closeSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :style="{ '--program-color': statusColor(window.status) }" :title="statusLabel(window.status)" /><span>{{ window.name }}</span><button class="icon-button" :title="t('app.addToCanvas')" :aria-label="t('app.addToCanvas')" @click="openAdd({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 })"><Icon name="layers" :size="14" /></button><button class="icon-button" :title="t('app.windowActions')" :aria-label="t('app.windowActions')" @click="windowMenu = { name: window.name, node: { type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" @click="spaceAction(resources.find(item => item.id === source.id) || { ...source, status: '', spaces: [] }, undefined, 'create')"><Icon name="plus" :size="14" />{{ t('app.newSpace') }}</button></template></div><p v-if="!sources.length" class="panel-empty">{{ t('app.noConnections') }}</p></div></aside></Transition>
+    <Transition name="slide"><aside v-if="sourcePanel" class="source-panel"><header><div><h2>{{ t('app.connectionsWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeConnections')" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />{{ t('app.addConnection') }}</button><div class="source-panel-content"><div v-for="source in sources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small><span class="source-address">{{ source.transport === 'local' ? t('app.local') : source.target }}</span><span v-if="resources.find(item => item.id === source.id)?.serverVersion" class="source-version">herdr {{ resources.find(item => item.id === source.id)!.serverVersion }}</span></small></span></button><button class="icon-button" :title="t('app.editConnection')" :aria-label="t('app.editConnection')" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" :title="t('app.removeConnection')" :aria-label="t('app.removeConnection')" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><div v-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" :title="t('app.newWindow')" :aria-label="t('app.newWindow')" @click="windowAction({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="tab-plus" :size="14" /></button><button class="icon-button" :title="t('app.renameSpace')" :aria-label="t('app.renameSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" :title="t('app.closeSpace')" :aria-label="t('app.closeSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :style="{ '--program-color': statusColor(window.status) }" :title="statusLabel(window.status)" /><span>{{ window.name }}</span><button class="icon-button" :title="t('app.addToCanvas')" :aria-label="t('app.addToCanvas')" @click="openAdd({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 })"><Icon name="layers" :size="14" /></button><button class="icon-button" :title="t('app.windowActions')" :aria-label="t('app.windowActions')" @click="windowMenu = { name: window.name, node: { type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" @click="spaceAction(resources.find(item => item.id === source.id) || { ...source, status: '', spaces: [] }, undefined, 'create')"><Icon name="plus" :size="14" />{{ t('app.newSpace') }}</button></template></div><p v-if="!sources.length" class="panel-empty">{{ t('app.noConnections') }}</p></div></aside></Transition>
     <div v-if="focused || focusedCard" ref="focusViewportElement" class="focus-overlay" :class="{ 'card-focus-overlay': focusedCard }">
       <TerminalNode v-if="focused" :key="focused.id" :id="focused.id" :data="{ ...terminalData(focused, isOverview), ...focusedSize, overview: isOverview, focus: true }" />
       <NoteNode v-else-if="focusedCard?.type === 'note'" :key="focusedCard.id" :id="focusedCard.id" :selected="false" :data="noteData(focusedCard, true)" />
@@ -1412,7 +1478,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
     <SettingsDialog v-if="settings" :open="settingsDialog" :settings="settings" :has-display-cutout="hasSafeTop" :portal="appElement" @close="settingsDialog = false" @saved="settingsSaved" @error="showError" />
     <CutoutPreview v-if="settingsDialog && mobile && hasSafeTop" />
     <div v-if="modalOpen && !backgroundCanvas && !settingsDialog && !scanTarget" class="modal-backdrop" @click.self="!busy && (sourceDialog = false, canvasDialog = false, actionDialog = null, addDialog = false, windowMenu = null)">
-      <section v-if="sourceDialog" class="modal source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title"><header><div><h2 id="source-title">{{ sourceDraft.id ? t('app.editConnection') : t('app.addConnection') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="sourceDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitSource"><label>{{ t('app.connectionName') }}<input v-model="sourceDraft.name" name="sourceName" required :placeholder="t('app.connectionNamePlaceholder')" /></label><div class="segmented-control"><button type="button" :class="{ selected: sourceDraft.transport === 'local' }" @click="sourceDraft.transport = 'local'"><Icon name="server" :size="15" />{{ t('app.local') }}</button><button type="button" :class="{ selected: sourceDraft.transport === 'ssh' }" @click="sourceDraft.transport = 'ssh'"><Icon name="globe" :size="15" />{{ t('app.remoteSsh') }}</button></div><label v-if="sourceDraft.transport === 'ssh'">{{ t('app.sshAddress') }}<input v-model="sourceDraft.target" name="target" placeholder="ssh://user@hostname:22" :required="sourceDraft.transport === 'ssh'" /></label><label>{{ t('app.session') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.herdrSession" name="herdrSession" placeholder="default" /></label><details><summary>{{ t('app.advanced') }}</summary><template v-if="sourceDraft.transport === 'ssh'"><label>{{ t('app.sshIdentity') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.sshIdentityFile" name="sshIdentityFile" placeholder="/path/to/id_ed25519" /></label><label>{{ t('app.sshKnownHosts') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.sshKnownHostsFile" name="sshKnownHostsFile" placeholder="/path/to/known_hosts" /></label></template><label>{{ t('app.socketPath') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.herdrSocket" name="herdrSocket" placeholder="/path/to/herdr.sock" /></label></details><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="sourceDialog = false">{{ t('common.cancel') }}</button><button class="button primary" type="submit" :disabled="busy"><span v-if="busy" class="spinner" />{{ busy ? t('app.saving') : t('common.save') }}</button></footer></form></section>
+      <section v-if="sourceDialog" class="modal source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title"><header><div><h2 id="source-title">{{ sourceDraft.id ? t('app.editConnection') : t('app.addConnection') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="sourceDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitSource"><label>{{ t('app.connectionName') }}<input v-model="sourceDraft.name" name="sourceName" required :placeholder="t('app.connectionNamePlaceholder')" /></label><div class="segmented-control"><button type="button" :class="{ selected: sourceDraft.transport === 'local' }" @click="sourceDraft.transport = 'local'"><Icon name="server" :size="15" />{{ t('app.local') }}</button><button type="button" :class="{ selected: sourceDraft.transport === 'ssh' }" @click="sourceDraft.transport = 'ssh'"><Icon name="globe" :size="15" />{{ t('app.remoteSsh') }}</button></div><label v-if="sourceDraft.transport === 'ssh'">{{ t('app.sshAddress') }}<input v-model="sourceDraft.target" name="target" placeholder="ssh://user@hostname:22" :required="sourceDraft.transport === 'ssh'" /></label><label>{{ t('app.session') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.herdrSession" name="herdrSession" placeholder="default" /></label><details><summary>{{ t('app.advanced') }}</summary><template v-if="sourceDraft.transport === 'ssh'"><label>{{ t('app.sshIdentity') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.sshIdentityFile" name="sshIdentityFile" placeholder="/path/to/id_ed25519" /></label><label>{{ t('app.sshKnownHosts') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.sshKnownHostsFile" name="sshKnownHostsFile" placeholder="/path/to/known_hosts" /></label></template><label>{{ t('app.socketPath') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.herdrSocket" name="herdrSocket" placeholder="/path/to/herdr.sock" /></label></details><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><div class="source-probe-status" :class="{ failed: sourceProbe.error }" role="status"><span v-if="sourceProbe.pending" class="spinner" /><span :title="sourceProbe.error || sourceProbe.version">{{ sourceProbe.pending ? t('app.checkingConnection') : sourceProbe.error ? t('app.connectionProbeFailed') : sourceProbe.version ? `herdr ${sourceProbe.version}` : '' }}</span><button v-if="sourceProbe.error" type="button" class="icon-button" :aria-label="t('common.retry')" :title="t('common.retry')" @click="sourceProbeRetry++"><Icon name="refresh" :size="14" /></button></div><button class="button subtle" type="button" @click="sourceDialog = false">{{ t('common.cancel') }}</button><button class="button primary" type="submit" :disabled="busy || !sourceProbeReady || !sourceDraft.name.trim()"><span v-if="busy" class="spinner" />{{ busy ? t('app.saving') : t('common.save') }}</button></footer></form></section>
       <section v-else-if="canvasDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="canvas-title"><header><div><h2 id="canvas-title">{{ canvasDraft.id ? t('app.renameCanvas') : t('app.newCanvas') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="canvasDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitCanvas"><label>{{ t('app.canvasName') }}<input v-model="canvasDraft.name" name="canvasName" required autofocus :placeholder="t('app.canvasNamePlaceholder')" maxlength="80" /></label><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="canvasDialog = false">{{ t('common.cancel') }}</button><button class="button primary" :disabled="busy" type="submit">{{ canvasDraft.id ? t('common.save') : t('app.createCanvas') }}</button></footer></form></section>
       <section v-else-if="actionDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="action-title"><header><h2 id="action-title">{{ actionDialog.title }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" :disabled="busy" @click="actionDialog = null"><Icon name="close" /></button></header><p v-if="actionDialog.description">{{ actionDialog.description }}</p><form @submit.prevent="submitAction"><label v-if="actionDialog.label">{{ actionDialog.label }}<input v-model="actionDialog.value" name="resourceName" :required="!actionDialog.optional" :placeholder="actionDialog.optional ? t('app.automaticName') : undefined" autofocus maxlength="100" /></label><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" :disabled="busy" @click="actionDialog = null">{{ t('common.cancel') }}</button><button class="button" :class="actionDialog.danger ? 'danger' : 'primary'" :disabled="busy" type="submit">{{ actionDialog.button }}</button></footer></form></section>
       <section v-else-if="addDialog" class="modal add-modal" role="dialog" aria-modal="true" aria-labelledby="add-title"><header><div><h2 id="add-title">{{ t('app.addWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="addDialog = false"><Icon name="close" /></button></header><label>{{ t('app.targetCanvas') }}<select v-model="addTarget"><option v-for="canvas in canvases" :key="canvas.id" :value="canvas.id">{{ canvas.name }}</option><option value="">{{ t('app.newMyCanvas') }}</option></select></label><div class="search-field"><Icon name="search" :size="16" /><input v-model="addSearch" :aria-label="t('app.searchWindows')" :placeholder="t('app.searchPlaceholder')" /></div><WindowPickerTree v-model:selected="selectedWindows" :sources="sources" :resources="resources" :query="addSearch" :existing="existingAddWindows" /><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><span class="selection-count">{{ t('app.selectedWindows', selectedAddWindows.length) }}</span><button class="button primary" :disabled="busy || !selectedAddWindows.length" @click="submitAdd">{{ t('app.addToCanvas') }}<Icon name="arrow" :size="16" /></button></footer></section>

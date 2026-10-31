@@ -62,7 +62,7 @@ onBeforeUnmount(() => { clearTimeout(copyTimer); document.removeEventListener('p
 </script>
 
 <template>
-  <template v-if="selected && !data.minimized && !data.mobile && !data.focus">
+  <template v-if="!data.minimized && !data.mobile && !data.focus">
     <NodeResizeControl v-for="position in (['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const)" :key="position" :node-id="id" :position="position" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
   </template>
   <article class="note-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus }" :data-note-id="id" :style="{ '--note-color': noteColor(color) }">

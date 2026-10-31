@@ -6,6 +6,7 @@ import { z } from "zod";
 import { verifyPassword, bearerToken, allowedOrigin } from "./auth.ts";
 import { MediaTickets, mediaPath } from "./media.ts";
 import { receiveCanvasFile } from "./canvas-files.ts";
+import { buildInfo } from "./build-info.ts";
 import { settingsPatchSchema } from "./settings.ts";
 import {
   Store,
@@ -37,6 +38,7 @@ import {
 const nameSchema = z
   .object({ name: z.string().trim().min(1).max(100) })
   .strict();
+const sourceProbeSchema = z.object(sourceSchema.shape).omit({ id: true, name: true }).strict();
 const createWindowSchema = z.object({ name: z.string().trim().max(100).optional() }).strict();
 const createSpaceSchema = createWindowSchema.extend({ sourceSpaceId: z.string().min(1).max(100).optional() });
 const opacitySchema = z.number().finite().min(0).max(1);
@@ -150,6 +152,7 @@ export function createApp(
     c.json({
       authenticated: store.hasSession(bearerToken(c.req.header("authorization"))),
       username: account.username,
+      server: buildInfo,
     }),
   );
   app.post('/api/media-tickets', async c => {
@@ -257,7 +260,7 @@ export function createApp(
     if (old) store.removeSession(old);
     const token = randomBytes(32).toString("base64url");
     store.addSession(token);
-    return c.json({ authenticated: true, username: account.username, token, expiresAt: Date.now() + 7 * 86400_000 });
+    return c.json({ authenticated: true, username: account.username, token, expiresAt: Date.now() + 7 * 86400_000, server: buildInfo });
   });
   app.post("/api/logout", async (c) => {
     store.removeSession(bearerToken(c.req.header("authorization")));
@@ -356,6 +359,8 @@ export function createApp(
       ),
     }),
   );
+  app.post("/api/sources/probe", async c =>
+    c.json(await providers.probeSource(sourceProbeSchema.parse(await c.req.json()), c.req.raw.signal)));
   app.post("/api/sources", async (c) => {
     const s = sourceSchema.parse(await c.req.json());
     if (s.id) return c.json({ error: "ID is assigned by the server" }, 400);

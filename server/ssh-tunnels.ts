@@ -31,6 +31,7 @@ interface TunnelRequest {
   tcp?: Record<string, { host: string; port: number }>;
   reverse?: Record<string, { remotePath: string; localPath: string }>;
   cleanupRemote?(): Promise<void>;
+  signal?: AbortSignal;
 }
 
 const tunnels = new Map<string, TunnelEntry>();
@@ -97,7 +98,9 @@ async function remoteSocketState(
 }
 
 async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
+  request.signal?.throwIfAborted();
   const remote = await request.discover();
+  request.signal?.throwIfAborted();
   const entries = Object.entries(remote);
   const reverse = Object.entries(request.reverse || {});
   const tcp = Object.entries(request.tcp || {});
@@ -237,6 +240,7 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
   const close = () =>
     (closing ??= (async () => {
       stopped = true;
+      request.signal?.removeEventListener("abort", aborted);
       if (retry) clearTimeout(retry);
       wakeRetry?.();
       await terminate();
@@ -254,6 +258,9 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
       }
       await request.cleanupRemote?.();
     })());
+  const aborted = () => { stopped = true; child?.kill("SIGTERM"); wakeRetry?.(); };
+  request.signal?.addEventListener("abort", aborted, { once: true });
+  if (request.signal?.aborted) aborted();
   try {
     await connect();
     reconnecting = (async () => {

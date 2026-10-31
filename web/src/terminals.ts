@@ -344,10 +344,11 @@ async function connect(session: Session, probe: boolean) {
   socket.onerror = () => {
     if (session.socket === socket) connectionFailed(session, t('terminal.connection.failed'))
   }
-  socket.onclose = event => {
+  socket.onclose = () => {
     if (session.socket === socket) {
-      connectionFailed(session, event.code === 1008 ? t('terminal.connection.expired') : undefined, event.code !== 1008)
-      if (event.code === 1008) window.dispatchEvent(new Event('canvas:unauthorized'))
+      // A policy close can also mean an authentication timeout or a changed
+      // connection. The reconnect probe verifies the session before signing out.
+      connectionFailed(session)
     }
   }
 }

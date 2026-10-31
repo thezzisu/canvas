@@ -32,6 +32,7 @@ export interface SourceResource {
   name: string
   status: string
   error?: string
+  serverVersion?: string
   spaces: SpaceResource[]
 }
 export interface NodeLayout {

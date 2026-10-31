@@ -20,6 +20,7 @@ import { dirname, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import {
   listResources,
+  probeSource,
   openTerminal,
   installCanvasHelper,
   nativeSocketForSource,
@@ -269,7 +270,7 @@ test("SSH herdr discovers native sockets and shares direct API forwarding withou
       input += data.toString(); if (!input.includes("\n")) return;
       const request = JSON.parse(input.split("\n")[0]!);
       assert.equal(request.method, "session.snapshot");
-      socket.end(JSON.stringify({ id: request.id, result: { snapshot: { workspaces: [{ workspace_id: "space", label: "Space" }], tabs: [{ workspace_id: "space", tab_id: "tab", label: "Window" }],
+      socket.end(JSON.stringify({ id: request.id, result: { snapshot: { version: "0.9.5-remote.fixture", protocol: 888, workspaces: [{ workspace_id: "space", label: "Space" }], tabs: [{ workspace_id: "space", tab_id: "tab", label: "Window" }],
         panes: [{ pane_id: "pane", tab_id: "tab", terminal_title_stripped: " \x1b\x07" + "中🙂".repeat(600) + "\x9f " }] } } }) + "\n");
     });
   });
@@ -345,7 +346,9 @@ process.on('SIGTERM',()=>{ for(const socket of sockets) socket.destroy(); for(co
     ]);
     assert.equal(typeof first.connect, "function");
     assert.equal(readFileSync(forwards, "utf8").trim().split("\n").length, 1);
-    const window = (await listResources(source)).spaces[0]!.windows[0]!;
+    const discovered = await listResources(source);
+    assert.equal(discovered.serverVersion, "0.9.5-remote.fixture", "SSH reports the remote server identity through its forwarded API socket");
+    const window = discovered.spaces[0]!.windows[0]!;
     assert.equal(window.id, "tab");
     assert.equal(window.panes[0]?.terminalTitle, "中🙂".repeat(512), "pane title strips controls and bounds Unicode codepoints without splitting emoji");
     await second.cleanup(); second = undefined;
@@ -359,6 +362,14 @@ process.on('SIGTERM',()=>{ for(const socket of sockets) socket.destroy(); for(co
     assert.equal(forwardingCount(), 3, "failed preparation releases its tunnel before the next attach");
     await first.cleanup(); first = undefined;
     assert.equal(existsSync(requests), false, "neither discovery nor API calls execute herdr");
+
+    first = await openTerminal(source, "space", "tab");
+    const beforeProbe = forwardingCount();
+    assert.deepEqual(await probeSource(source), { status: "online", serverVersion: "0.9.5-remote.fixture" });
+    assert.equal(forwardingCount(), beforeProbe + 1, "a draft probe owns a separate temporary forward");
+    assert.equal((await listResources(source)).status, "online");
+    assert.equal(forwardingCount(), beforeProbe + 1, "probe cleanup leaves the existing connection's forward alive");
+    await first.cleanup(); first = undefined;
 
     const localBridgeSocket = join(root, "open.sock"), bridgeServer = createServer(socket => socket.on("data", data => socket.write(Buffer.concat([Buffer.from("download:"), Buffer.isBuffer(data) ? data : Buffer.from(data)]))));
     await new Promise<void>(resolve => bridgeServer.listen(localBridgeSocket, resolve));

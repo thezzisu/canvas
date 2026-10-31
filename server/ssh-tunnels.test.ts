@@ -206,6 +206,23 @@ test("closing one source does not disconnect another source tunnel", async () =>
   }
 });
 
+test("aborting a draft forward during startup removes only its own process and socket directory", async () => {
+  const setup = await fixture();
+  try {
+    const live = await ensureSocketTunnel(setup.request);
+    await writeFile(join(setup.root, "ssh"), `#!${process.execPath}\nconst fs=require('node:fs');fs.appendFileSync(${JSON.stringify(setup.log)},JSON.stringify({pid:process.pid,args:process.argv.slice(2)})+'\\n');process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000);\n`, { mode: 0o700 });
+    const controller = new AbortController();
+    const opening = ensureSocketTunnel({ ...setup.request, sourceId: "draft-probe", key: `draft-${setup.root}`, signal: controller.signal });
+    const starts = await waitFor(async () => (await readFile(setup.log, "utf8")).trim().split("\n").map(line => JSON.parse(line)), rows => rows.length === 2);
+    const probe = starts[1]!, forwarded = probe.args[probe.args.indexOf("-L") + 1].split(":")[0];
+    controller.abort();
+    await assert.rejects(opening);
+    assert.throws(() => process.kill(probe.pid, 0), { code: "ESRCH" });
+    await assert.rejects(stat(dirname(forwarded)), { code: "ENOENT" });
+    assert.equal(await echo(live.sockets["herdr.sock"]!, "still-connected"), "still-connected");
+  } finally { await setup.close(); }
+});
+
 test("SSH TCP loopback forwarding uses a private Unix listener and rejects arbitrary destinations", async () => {
   const setup = await fixture();
   const target = createServer(socket => socket.on("data", bytes => socket.write(bytes)));

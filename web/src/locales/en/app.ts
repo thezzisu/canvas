@@ -125,5 +125,8 @@ export default {
   "cardSelectHelp": "Press Enter or Space to select this card. Press Escape to clear the selection.",
   "cardMoveHelp": "Press Enter or Space to select this card, then use the arrow keys to move it. Hold Shift to move farther. Press Escape to clear the selection.",
   "cardMoved": "Moved {name}. Position: {x}, {y}.",
-  "cardsMoved": "Moved {count} card. | Moved {count} cards."
+  "cardsMoved": "Moved {count} card. | Moved {count} cards.",
+  "checkingConnection": "Connecting…",
+  "connectionProbeFailed": "Connection failed",
+  "connectionVersionMissing": "Herdr did not report its version"
 }

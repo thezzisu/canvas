@@ -125,5 +125,8 @@ export default {
   "cardSelectHelp": "按 Enter 或空格键选择卡片，按 Escape 取消选择。",
   "cardMoveHelp": "按 Enter 或空格键选择卡片，再用方向键移动。按住 Shift 可增加移动距离，按 Escape 取消选择。",
   "cardMoved": "已移动「{name}」，位置：{x}，{y}。",
-  "cardsMoved": "已移动 {count} 张卡片。"
+  "cardsMoved": "已移动 {count} 张卡片。",
+  "checkingConnection": "连接中…",
+  "connectionProbeFailed": "连接失败",
+  "connectionVersionMissing": "herdr 未提供版本信息"
 }

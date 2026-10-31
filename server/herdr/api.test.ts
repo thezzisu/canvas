@@ -74,18 +74,24 @@ test("herdr provider discovers sockets and performs resource CRUD without execut
   await mkdir(directory);
   const paths = herdrSocketPaths({ herdrSocket: join(directory, "herdr.sock") }), requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   const snapshot = {
+    version: "0.9.5-preview.fixture" as unknown,
+    protocol: 999,
     workspaces: [{ workspace_id: "w1", label: "Workspace" }],
     tabs: [{ workspace_id: "w1", tab_id: "w1:t1", label: "Window", agent_status: "idle" },
       { workspace_id: "w1", tab_id: "w1:t2", label: "Empty", agent_status: "done" }],
     panes: [{ tab_id: "w1:t1", pane_id: "w1:p1", agent_status: "working", focused: true },
       { tab_id: "w1:t1", pane_id: "w1:p2", agent_status: "done", focused: false }],
   };
-  let malformedCreation = false;
+  let malformedCreation = false, snapshotUnavailable = false;
   const api = createServer(socket => {
     clients.add(socket); socket.on("close", () => clients.delete(socket)); socket.on("error", () => {});
     let input = ""; socket.on("data", chunk => {
       input += chunk.toString(); if (!input.includes("\n")) return;
       const request = JSON.parse(input.split("\n")[0]!); requests.push({ method: request.method, params: request.params });
+      if (request.method === "session.snapshot" && snapshotUnavailable) {
+        socket.end(JSON.stringify({ id: request.id, error: { message: "Fixture offline" } }) + "\n");
+        return;
+      }
       const result = request.method === "session.snapshot" ? { type: "session_snapshot", snapshot }
         : request.method === "workspace.create" && !malformedCreation ? { type: "workspace_created", tab: { workspace_id: "w2", tab_id: "w2:t1" } }
         : request.method === "tab.create" && !malformedCreation ? { type: "tab_created", tab: { workspace_id: request.params.workspace_id, tab_id: `${request.params.workspace_id}:t3` } }
@@ -101,6 +107,22 @@ test("herdr provider discovers sockets and performs resource CRUD without execut
   assert.deepEqual(parseHerdrSockets(execFileSync("python3", ["-c", discoverHerdrPython, JSON.stringify({ herdrSocket: paths.api })], { encoding: "utf8" })), paths);
   assert.equal(await nativeSocketForSource(source), paths.api);
   const resources = await listResources(source); assert.equal(resources.status, "online");
+  assert.equal(resources.serverVersion, "0.9.5-preview.fixture", "the connected server reports its build version, not its protocol number");
+  for (const version of [undefined, null, 999, "", " ", "0.9.5\x00bad", "v".repeat(129)]) {
+    snapshot.version = version;
+    const unknown = await listResources(source);
+    assert.equal(unknown.status, "online", "missing or malformed version metadata does not fail a healthy resource snapshot");
+    assert.equal(unknown.serverVersion, undefined);
+  }
+  snapshot.version = "0.9.6";
+  assert.equal((await listResources(source)).serverVersion, "0.9.6", "a restarted or upgraded server updates its version on the next resource snapshot");
+  snapshotUnavailable = true;
+  const offline = await listResources(source);
+  assert.equal(offline.status, "offline");
+  assert.equal(offline.serverVersion, undefined, "an unavailable connection never reports a stale cached version");
+  snapshotUnavailable = false;
+  assert.equal((await listResources(source)).serverVersion, "0.9.6", "reconnection obtains the current server version");
+  assert(requests.every(request => request.method === "session.snapshot"), "version discovery sends no extra probe, CLI command or terminal attachment");
   const windows = resources.spaces[0]!.windows;
   assert.deepEqual(windows.map(window => window.id), ["w1:t1", "w1:t2"], "resources retain native tab order");
   assert.equal(windows[0]!.panes[0]!.status, "working");

@@ -63,18 +63,21 @@ export function parseHerdrSockets(text: string): HerdrSockets {
 
 /** One bounded newline-JSON API request; mutations are never retried. */
 export function herdrApiRequest(socketPath: string, method: string, params: Record<string, unknown> = {},
-  options: { timeoutMs?: number; maxResponseBytes?: number } = {}): Promise<Record<string, unknown>> {
+  options: { timeoutMs?: number; maxResponseBytes?: number; signal?: AbortSignal } = {}): Promise<Record<string, unknown>> {
+  if (options.signal?.aborted) return Promise.reject(options.signal.reason);
   const id = randomUUID(), maxBytes = options.maxResponseBytes ?? 8 * 1024 * 1024;
   return new Promise((resolve, reject) => {
     const socket = createConnection(socketPath);
     let bytes = Buffer.alloc(0), settled = false;
     const done = (error?: Error, result?: Record<string, unknown>) => {
       if (settled) return;
-      settled = true; clearTimeout(timer); socket.destroy();
+      settled = true; clearTimeout(timer); options.signal?.removeEventListener("abort", aborted); socket.destroy();
       if (error) reject(error); else resolve(result!);
     };
     const timer = setTimeout(() => done(new Error("Herdr API request timed out")), options.timeoutMs ?? 15_000);
     timer.unref();
+    const aborted = () => done(new DOMException("Herdr request cancelled", "AbortError"));
+    options.signal?.addEventListener("abort", aborted, { once: true });
     socket.once("connect", () => socket.write(JSON.stringify({ id, method, params }) + "\n"));
     socket.on("error", error => done(new Error(`Herdr API connection failed: ${error.message}`)));
     socket.once("end", () => done(new Error("Herdr API closed before its response")));
