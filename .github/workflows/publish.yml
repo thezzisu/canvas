@@ -1,0 +1,102 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" != tag || ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo 'Select a stable vX.Y.Z release tag to publish.' >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify release and install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global 'npm@^11.5.1'
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          import { execFileSync } from 'node:child_process'
+          const { name, version } = JSON.parse(readFileSync('package.json', 'utf8'))
+          if (process.env.RELEASE_TAG !== `v${version}`) {
+            throw new Error(`Release tag ${process.env.RELEASE_TAG} must match package version v${version}`)
+          }
+          const versions = JSON.parse(execFileSync('npm', ['view', name, 'versions', '--json'], { encoding: 'utf8' }))
+          if ([].concat(versions).includes(version)) throw new Error(`${name}@${version} is already published; bump the version and create a new tag`)
+          NODE
+          npm ci
+
+      - run: npm run typecheck
+      - name: Test with the official herdr server
+        shell: bash
+        env:
+          CANVAS_TEST_HERDR_SERVER_BINARY: ${{ runner.temp }}/herdr
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error --output "$CANVAS_TEST_HERDR_SERVER_BINARY" \
+            https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-x86_64
+          printf '%s  %s\n' 14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d "$CANVAS_TEST_HERDR_SERVER_BINARY" | sha256sum --check --strict
+          chmod +x "$CANVAS_TEST_HERDR_SERVER_BINARY"
+          npm test
+      - run: npm run build
+        env:
+          VITE_CANVAS_BUILTIN_SERVER: 'true'
+
+      - name: Pack and verify release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm pack --ignore-scripts --json > "$RUNNER_TEMP/npm-pack.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync, existsSync } from 'node:fs'
+          import { createHash } from 'node:crypto'
+          const [pack] = JSON.parse(readFileSync(process.env.RUNNER_TEMP + '/npm-pack.json', 'utf8'))
+          const files = new Set(pack.files.map(file => file.path))
+          for (const path of ['dist/cli/main.js', 'dist/web/index.html']) {
+            if (!files.has(path)) throw new Error(`Release archive is missing ${path}`)
+          }
+          if (!existsSync(pack.filename)) throw new Error(`Release archive was not created: ${pack.filename}`)
+          console.log(`Verified ${pack.filename} (${pack.entryCount} files, ${pack.size} bytes)`)
+          console.log(`SHA-256: ${createHash('sha256').update(readFileSync(pack.filename)).digest('hex')}`)
+          NODE
+
+      - name: Publish with npm Trusted Publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$(node --input-type=module -e "import { readFileSync } from 'node:fs'; console.log(JSON.parse(readFileSync(process.env.RUNNER_TEMP + '/npm-pack.json', 'utf8'))[0].filename)")"
+          npm publish "$archive" --provenance --access public --tag latest
