@@ -71,7 +71,7 @@ onBeforeUnmount(() => { fileAttempt++ })
 
 <template>
   <UModal :open="open" :portal="portal || false" :title="t('instances.scanQr')" :close="{ 'aria-label': t('common.close') }"
-    :ui="{ content: 'instance-qr-dialog' }" @update:open="value => { if (!value) emit('close') }">
+    :ui="{ content: 'instance-qr-dialog', overlay: 'instance-qr-overlay' }" @update:open="value => { if (!value) emit('close') }">
     <template #body>
       <div class="instance-qr-body">
         <div v-if="cameraAvailable" class="instance-qr-camera">
@@ -96,7 +96,7 @@ onBeforeUnmount(() => { fileAttempt++ })
 </template>
 
 <style>
-.instance-qr-dialog{--qr-safe-top:max(16px,env(safe-area-inset-top));--qr-safe-bottom:max(16px,env(safe-area-inset-bottom));top:calc((100dvh + var(--qr-safe-top) - var(--qr-safe-bottom))/2);width:min(420px,calc(100vw - 28px));max-height:calc(100dvh - var(--qr-safe-top) - var(--qr-safe-bottom))}
+.instance-qr-overlay{z-index:95}.instance-qr-dialog{z-index:96;--qr-safe-top:max(16px,env(safe-area-inset-top));--qr-safe-bottom:max(16px,env(safe-area-inset-bottom));top:calc((100dvh + var(--qr-safe-top) - var(--qr-safe-bottom))/2);width:min(420px,calc(100vw - 28px));max-height:calc(100dvh - var(--qr-safe-top) - var(--qr-safe-bottom))}
 .instance-qr-body{display:flex;flex-direction:column;gap:12px}.instance-qr-camera{position:relative;overflow:hidden;aspect-ratio:1;border:1px solid var(--border);border-radius:8px;background:#101216}
 .instance-qr-camera video{display:block;width:100%;height:100%;object-fit:cover}.instance-qr-camera-status{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#96a0af;font-size:12px;background:#101216}
 .instance-qr-camera-status>span:first-child{width:30px;height:30px}.instance-qr-hint,.instance-qr-error{margin:0;font-size:12px;line-height:1.5}.instance-qr-hint{color:#96a0af}.instance-qr-error{color:#e0aaa5}.instance-qr-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%}

@@ -106,8 +106,9 @@ PWA installation; updates wait for an explicit reload. The app shell and icons
 are precached; public fonts are cached when used.
 
 Share an instance from the account dialog's QR button. Scan it on the connection
-screen with a camera (HTTPS) or an image to fill the server and username, then
-enter your password to sign in.
+screen or in Add instance with a camera (HTTPS) or an image to fill the server and
+username, then enter your password to sign in. Scanning keeps the current frontend
+and preserves the display name of an instance already in your list.
 
 ## Development
 

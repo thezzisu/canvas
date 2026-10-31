@@ -1473,7 +1473,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
   <div v-else-if="!authenticated || unknownInstance" class="login-screen" :class="{ 'mobile-layout': mobile }" :style="mobileViewportStyle">
     <main class="login-content">
       <div class="brand login-brand"><span class="brand-symbol"><Icon name="canvas" :size="27" /></span><span class="brand-name">canvas</span><LanguageSelect class="login-language" /></div>
-      <InstancePicker v-if="instances.length" :disabled="busy" />
+      <InstancePicker v-if="instances.length" :disabled="busy" @connect="connectInstance" />
       <InstanceSetup v-if="!hasActiveInstance" :message="instanceSetupMessage ? t(instanceSetupMessage) : ''" @connect="connectInstance" />
       <div v-else-if="unknownInstance" class="login-form"><p class="form-error" role="status">{{ t('canvasUi.unknownInstance') }}</p><button class="button primary login-button" @click="navigation.visit(activeInstance.id, 'overview'); activateInstance()">{{ t('canvasUi.openInstance') }}</button></div>
       <div v-else-if="checkingInstance" class="instance-checking" role="status"><span class="spinner" />{{ t('common.loading') }}</div>
