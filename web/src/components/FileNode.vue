@@ -112,7 +112,7 @@ const size = computed(() => {
     <NodeResizeControl v-for="position in (['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const)" :key="position" :node-id="id" :position="position" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
   </template>
   <article class="file-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus }" :data-asset-id="data.assetId" :data-preview-kind="preview">
-    <header ref="header" class="file-header drag-handle" :class="{ 'cutout-header': data.focus }" :data-cutout-position="data.focus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus ? { '--cutout-width': `${cutoutWidth}px` } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
+    <header ref="header" class="file-header drag-handle" :class="{ 'cutout-header': data.focus }" :data-cutout-position="data.focus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
       <span class="file-icon" :class="{ 'cutout-status': data.focus }"><Icon name="file" :size="13" /></span>
       <span class="file-title" :class="{ 'cutout-title': data.focus }" :title="data.asset.filename">{{ data.asset.filename }}</span>
       <span v-if="!data.focus" class="file-size">{{ size }}</span>

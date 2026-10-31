@@ -50,7 +50,7 @@ const checkboxUi = { root: 'picker-checkbox', base: 'picker-checkbox-base' }
 </template>
 
 <style>
-.window-picker-tree{margin-top:12px;max-height:min(420px,50dvh);min-height:100px;overflow:auto;overscroll-behavior:contain;border:1px solid #343b47;border-radius:7px;background:#191e25;scrollbar-width:thin}
+.window-picker-tree{margin-top:12px;max-height:min(420px,calc(var(--mobile-height,var(--ui-viewport-height)) / 2));min-height:100px;overflow:auto;overscroll-behavior:contain;border:1px solid #343b47;border-radius:7px;background:#191e25;scrollbar-width:thin}
 .window-picker-tree .picker-source,.window-picker-tree .picker-space,.window-picker-tree .picker-window-row{margin:0}
 .picker-source+.picker-source{border-top:1px solid #303844}
 .picker-group-row{list-style:none;display:flex;align-items:center;gap:8px;min-height:38px;padding:5px 10px;color:#a6b2c3;cursor:pointer;user-select:none}

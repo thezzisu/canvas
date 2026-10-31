@@ -20,3 +20,13 @@ export function fitTerminalGrid(available: { width: number; height: number }, re
     rows: Math.max(5, Math.min(200, Math.floor(available.height * rendered.rows / rendered.height))),
   }
 }
+
+export interface RenderedTerminalGrid { width: number; height: number; cols: number; rows: number }
+
+/** DOM renderer totals are pixel-rounded. Resizing the grid must not turn that
+ * rounding back into a new cell metric and alternate between adjacent grids. */
+export function terminalMetrics(reference: RenderedTerminalGrid | undefined,
+  previous: RenderedTerminalGrid | undefined, next: RenderedTerminalGrid): RenderedTerminalGrid {
+  return !reference || previous && previous.cols === next.cols && previous.rows === next.rows &&
+    (previous.width !== next.width || previous.height !== next.height) ? next : reference
+}

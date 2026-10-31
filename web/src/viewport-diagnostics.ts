@@ -4,7 +4,9 @@ import { developerMode, viewportFit, interactiveWidget, viewportPolicy, viewport
 import { cutoutPosition, cutoutWidth } from './display-cutout'
 import { languagePreference, locale } from './i18n'
 import { keepScreenAwake, screenWakeLockState } from './screen-wake-lock'
-import { keyboardLockState, keyboardLockUnavailableReason } from './terminal-keyboard-lock'
+import { keyboardLockState, keyboardLockUnavailableReason, keyboardLockError } from './terminal-keyboard-lock'
+import { inputMode, isMobileLayout, type MobileCapabilities } from './mobile-layout'
+import { uiScale } from './ui-scale'
 
 /** Explicit, local-only geometry and viewport policy. No terminal content or identity. */
 export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
@@ -21,6 +23,10 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
   const app = query('.app-shell'), input = query('.focus-overlay .terminal-mobile-input')
   const xtermInput = query('.focus-overlay .xterm-helper-textarea')
   const visual = window.visualViewport, active = document.activeElement, fullscreen = document.fullscreenElement
+  const device = navigator as Navigator & Pick<MobileCapabilities, 'userAgentData'>
+  const inputCapabilities = { coarsePointer: matchMedia('(pointer: coarse)').matches, noHover: matchMedia('(hover: none)').matches,
+    touchPoints: device.maxTouchPoints, userAgent: device.userAgent, platform: device.platform,
+    userAgentData: device.userAgentData ? { mobile: device.userAgentData.mobile, platform: device.userAgentData.platform } : undefined }
   const keyboard = (navigator as Navigator & { virtualKeyboard?: { boundingRect: DOMRectReadOnly; overlaysContent?: boolean } }).virtualKeyboard
   const held = mobileKeyboardFrame.value
   const appBox = app?.getBoundingClientRect()
@@ -29,7 +35,7 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
   const boundsOpen = boundsSupported && bounds?.matches(':popover-open') === true
   const probe = document.createElement('i')
   probe.setAttribute('aria-hidden', 'true')
-  probe.style.cssText = 'all:initial;position:fixed;inset:0;visibility:hidden;pointer-events:none;box-sizing:border-box;contain:strict'
+  probe.style.cssText = 'all:initial;position:fixed;inset:0;zoom:calc(1 / var(--ui-zoom,1));visibility:hidden;pointer-events:none;box-sizing:border-box;contain:strict'
   let probes
   try {
     document.body.append(probe)
@@ -53,13 +59,18 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
       viewportFit: viewportFit.value, interactiveWidget: interactiveWidget.value,
       displayCutout: { position: cutoutPosition.value, width: cutoutWidth.value },
       language: { preference: languagePreference.value, resolved: locale.value },
+      inputMode: { preference: inputMode.value, resolved: isMobileLayout(inputCapabilities, inputMode.value) ? 'touch' : 'keyboard' },
+      uiScale: uiScale.value,
       keepScreenAwake: keepScreenAwake.value,
       contentFont: settings?.contentFont || null,
     },
-    browser: { userAgent: navigator.userAgent, secureContext: window.isSecureContext },
+    browser: { userAgent: navigator.userAgent, secureContext: window.isSecureContext,
+      platform: inputCapabilities.platform, userAgentData: inputCapabilities.userAgentData || null,
+      inputCapabilities: { coarsePointer: inputCapabilities.coarsePointer, noHover: inputCapabilities.noHover, touchPoints: inputCapabilities.touchPoints } },
     screen: { width: number(screen.width), height: number(screen.height), availableWidth: number(screen.availWidth), availableHeight: number(screen.availHeight) },
     wakeLock: screenWakeLockState.value,
-    keyboardLock: { state: keyboardLockState.value, unavailableReason: keyboardLockUnavailableReason.value || null },
+    keyboardLock: { state: keyboardLockState.value, unavailableReason: keyboardLockUnavailableReason.value || null,
+      error: keyboardLockError.value || null },
     viewportPolicy: { ...viewportPolicy.value, reloadRequired: viewportReloadRequired.value,
       meta: document.querySelector<HTMLMetaElement>('meta[name="viewport"]')?.content || null },
     fullscreen: !fullscreen ? 'none' : fullscreen === document.documentElement ? 'document' : fullscreen === app ? 'app' : 'other',

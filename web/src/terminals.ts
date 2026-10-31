@@ -21,7 +21,7 @@ import { bindMobileInput } from './mobile-input'
 import { copiedFile } from './file-clipboard'
 import { loadCanvasFile } from './file-transfer'
 import type { CanvasFileReference } from './file-reference'
-import { fitTerminalGrid, terminalBox } from './terminal-geometry'
+import { fitTerminalGrid, terminalBox, terminalMetrics, type RenderedTerminalGrid } from './terminal-geometry'
 import { TerminalReconnect, terminalInputHasFocus } from './terminal-reconnect'
 
 export type TerminalStatus = {
@@ -72,7 +72,11 @@ interface Session {
   connectionProbe?: AbortController
   connectionError?: string
   opened: boolean
-  rendered?: TerminalGeometry & { cols: number; rows: number }
+  rendered?: RenderedTerminalGrid
+  metrics?: RenderedTerminalGrid
+  parsedGrid?: { cols: number; rows: number }
+  paintedGrid?: { cols: number; rows: number }
+  resetPending?: boolean
   state: TerminalStatus
   metadata?: WindowMetadata
   listeners: Set<(state: TerminalStatus) => void>
@@ -166,6 +170,7 @@ export function setContentFont(settings: ContentFontSettings, presentation: Font
   fontPresentation = presentation
   for (const session of sessions.values()) {
     session.rendered = undefined
+    session.metrics = undefined
     session.term.options.fontFamily = presentation.family
     if (session.opened) session.removeFontFeatures = applyTerminalFontFeatures(session.term, contentFont)
     // Fonts alter cell metrics, not the shared native grid. Only an existing
@@ -238,6 +243,7 @@ function focusTerminal(session: Session, keyboard?: boolean) {
   claimFocus(session)
   if (session.mobile) session.keyboard?.focus(keyboard)
   else session.term.focus()
+  session.keyboardLock?.refresh(true)
 }
 export function focusWindow(sourceId: string, spaceId: string, windowId: string, keyboard?: boolean): boolean {
   const session = sessions.get(key(sourceId, spaceId, windowId))
@@ -260,6 +266,7 @@ function disconnect(session: Session) {
   updateMetadata(session)
   session.reportedVisible = undefined
   session.connectionRevision++
+  session.parsedGrid = undefined; session.paintedGrid = undefined; session.resetPending = false
   session.connectionProbe?.abort(); session.connectionProbe = undefined
   endFocusSize(session)
   const socket = session.socket
@@ -338,14 +345,25 @@ async function connect(session: Session, probe: boolean) {
   }
   socket.onmessage = event => {
     if (session.socket !== socket || !isCurrentApi(context)) return
-    if (event.data instanceof ArrayBuffer) session.term.write(new Uint8Array(event.data))
+    if (event.data instanceof ArrayBuffer) {
+      let data = new Uint8Array(event.data)
+      if (session.resetPending) {
+        const complete = new Uint8Array(data.length + 2)
+        complete.set([27, 99]); complete.set(data, 2)
+        data = complete; session.resetPending = false
+      }
+      const grid = { cols: session.term.cols, rows: session.term.rows }
+      session.term.write(data, () => {
+        if (session.socket === socket && session.term.cols === grid.cols && session.term.rows === grid.rows) session.parsedGrid = grid
+      })
+    }
     else {
       try {
         const message = JSON.parse(event.data)
         if (receiveDownload(socket, message, session.resource)) return
         if (receiveDirectory(socket, message) || receiveUrl(socket, message) || session.uploads.receive(message)) return
         if (message.type === 'metadata' && isWindowMetadata(message.window) && message.window.id === session.resource.windowId) updateMetadata(session, message.window)
-        else if (message.type === 'reset') session.term.write('\x1bc')
+        else if (message.type === 'reset') session.resetPending = true
         else if (message.type === 'pane-focus') setState(session, { ...session.state, focusedPaneId: typeof message.paneId === 'string' ? message.paneId : undefined })
         else if (message.type === 'presentation') {
           const revision = session.presentationRevision = (session.presentationRevision || 0) + 1
@@ -376,7 +394,11 @@ async function connect(session: Session, probe: boolean) {
             terminalInputHasFocus(session.mobile ? session.mobileInput?.element : session.term.textarea)) claimFocus(session)
         }
         else if (message.type === 'resize' && Number.isInteger(message.cols) && Number.isInteger(message.rows)) {
+          if (session.term.cols !== message.cols || session.term.rows !== message.rows) {
+            session.parsedGrid = undefined; session.paintedGrid = undefined
+          }
           session.term.resize(message.cols, message.rows)
+          present(session)
           schedulePresentation(session)
         }
         else if (message.type === 'focus-resize') {
@@ -426,16 +448,24 @@ function present(session: Session) {
   if (session.state.status === 'connected') {
     for (const listener of session.geometryListeners) listener({ width, height })
   }
-  const scale = session.magnified ? 1 : available.width / width
+  const requested = session.focusResize?.requested, painted = session.paintedGrid
+  const desired = session.magnified ? proposedSize(session) : undefined
+  // Keep the complete old frame fitted while the native resize is in flight.
+  // Geometry acknowledgements alone do not mean xterm has painted that grid.
+  const native = session.magnified && session.state.focusResize?.owned === true && requested && painted && desired &&
+    desired.cols === requested.cols && desired.rows === requested.rows &&
+    painted.cols === requested.cols && painted.rows === requested.rows &&
+    session.term.cols === requested.cols && session.term.rows === requested.rows
+  const scale = native ? 1 : session.magnified ? Math.min(available.width / width, available.height / height) : available.width / width
   if (!(scale > 0)) return
-  Object.assign(session.surface.style, { width: `${width}px`, height: `${height}px`, transform: session.magnified ? 'none' : `scale(${scale})` })
+  Object.assign(session.surface.style, { width: `${width}px`, height: `${height}px`, transform: native ? 'none' : `scale(${scale})` })
 }
 function proposedSize(session: Session) {
   if (!session.host?.isConnected || !session.opened) return
   const available = availableSize(session.host)
-  if (!session.rendered) return
+  if (!session.metrics) return
   if (!(available.width > 0 && available.height > 0)) return
-  return fitTerminalGrid(available, session.rendered)
+  return fitTerminalGrid(available, session.metrics)
 }
 function updateFocusSize(session: Session) {
   if (!session.magnified || session.focusResize?.suspended || session.state.status !== 'connected' || session.socket?.readyState !== WebSocket.OPEN) return
@@ -534,9 +564,16 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     term.onRender(() => {
       const grid = terminalGeometry(current)
       if (!grid) return
+      const parsed = current.parsedGrid, painted = current.paintedGrid
+      const frameReady = parsed && parsed.cols === term.cols && parsed.rows === term.rows &&
+        (painted?.cols !== parsed.cols || painted.rows !== parsed.rows)
+      if (frameReady) current.paintedGrid = parsed
       const previous = current.rendered
-      if (previous?.width === grid.width && previous.height === grid.height && previous.cols === term.cols && previous.rows === term.rows) return
-      current.rendered = { ...grid, cols: term.cols, rows: term.rows }
+      const next = { ...grid, cols: term.cols, rows: term.rows }
+      current.metrics = terminalMetrics(current.metrics, previous, next)
+      if (!frameReady && previous?.width === grid.width && previous.height === grid.height && previous.cols === term.cols && previous.rows === term.rows) return
+      current.rendered = next
+      present(current)
       schedulePresentation(current)
     })
     function sendInput(data: string, binary = false) {
@@ -691,7 +728,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   const removeFileInput = bindFileInput(host, current.uploads, draggingFile => {
     if (current.host === host) setState(current, { ...current.state, draggingFile })
   })
-  const observer = new ResizeObserver(() => { if (current.host === host) schedulePresentation(current) })
+  const observer = new ResizeObserver(() => { if (current.host === host) { present(current); schedulePresentation(current) } })
   observer.observe(host)
   const intersection = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
     if (current.host !== host) return
@@ -702,6 +739,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   }, { rootMargin: '96px' }) : undefined
   intersection?.observe(host)
   syncViewVisibility(current)
+  present(current)
   schedulePresentation(current)
   const canPasteText = () => isCurrentApi(mountingContext) && current.host === host && host.isConnected && interactive(current) && current.state.status === 'connected' && current.socket?.readyState === WebSocket.OPEN &&
     !(current.state.presentation?.maximized && (!current.state.presentation.owned || !current.magnified))

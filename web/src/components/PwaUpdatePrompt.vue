@@ -16,5 +16,5 @@ const actions = computed(() => [{ label: t('settings.updateApp'), color: 'neutra
   </Teleport>
 </template>
 <style scoped>
-.pwa-update-prompt{position:fixed;z-index:99;right:max(12px,env(safe-area-inset-right));bottom:calc(12px + env(safe-area-inset-bottom));width:min(320px,calc(100vw - 24px));box-shadow:0 8px 30px #0005}
+.pwa-update-prompt{position:fixed;z-index:99;right:max(12px,var(--ui-safe-right));bottom:calc(12px + var(--ui-safe-bottom));width:min(320px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px));box-shadow:0 8px 30px #0005}
 </style>

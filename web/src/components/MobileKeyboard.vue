@@ -280,7 +280,7 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
 .mobile-keyboard button:disabled{opacity:.4;cursor:default}
 .mobile-keyboard .arrow-key{font-size:21px;font-family:system-ui,sans-serif}
 .mobile-keys-dismiss{position:fixed;inset:0;z-index:1;background:transparent}
-.mobile-keys-more{position:absolute;left:50%;bottom:calc(100% + 5px);width:min(760px,calc(100% - 8px));transform:translateX(-50%);z-index:2;display:flex;flex-direction:column;max-height:min(460px,calc(var(--mobile-height,100dvh) - 110px - var(--mobile-safe-top,0px) - var(--mobile-safe-bottom,0px)));overflow:hidden;background:#20252d;border:1px solid #48515e;border-radius:9px;box-shadow:0 8px 32px #0008}
+.mobile-keys-more{position:absolute;left:50%;bottom:calc(100% + 5px);width:min(760px,calc(100% - 8px));transform:translateX(-50%);z-index:2;display:flex;flex-direction:column;max-height:min(460px,calc(var(--mobile-height,var(--ui-viewport-height)) - 110px - var(--mobile-safe-top,0px) - var(--mobile-safe-bottom,0px)));overflow:hidden;background:#20252d;border:1px solid #48515e;border-radius:9px;box-shadow:0 8px 32px #0008}
 .mobile-key-deck{container-type:inline-size;flex:1 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;padding:6px;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:thin;scrollbar-color:#515c6b transparent}
 .mobile-key-deck-row{display:grid;gap:2px;margin-bottom:4px;min-width:0}
 .mobile-key-deck-row:last-child{margin-bottom:0}
@@ -298,7 +298,7 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
 .mobile-key-actions button:active{background:#3b4654}
 .mobile-keyboard button:is([aria-pressed=true],.active):active:not(:disabled){background:var(--toggle-pressed)}
 .mobile-file-input{display:none}
-.mobile-text-backdrop{--text-safe-top:var(--mobile-safe-top,env(safe-area-inset-top,0px));--text-safe-bottom:var(--mobile-safe-bottom,env(safe-area-inset-bottom,0px));box-sizing:border-box;position:fixed;left:var(--mobile-left,0);top:var(--mobile-top,0);width:var(--mobile-width,100%);height:var(--mobile-height,100dvh);z-index:90;display:flex;align-items:center;justify-content:center;padding:calc(12px + var(--text-safe-top)) calc(12px + env(safe-area-inset-right,0px)) calc(12px + var(--text-safe-bottom)) calc(12px + env(safe-area-inset-left,0px));background:#070a10b0}
+.mobile-text-backdrop{--text-safe-top:var(--mobile-safe-top,var(--ui-safe-top));--text-safe-bottom:var(--mobile-safe-bottom,var(--ui-safe-bottom));box-sizing:border-box;position:fixed;inset:0;z-index:90;display:flex;align-items:center;justify-content:center;padding:calc(12px + var(--text-safe-top)) calc(12px + var(--ui-safe-right)) calc(12px + var(--text-safe-bottom)) calc(12px + var(--ui-safe-left));background:#070a10b0}
 .mobile-text-sheet{width:min(600px,100%);max-height:100%;min-height:0;height:min(520px,80%);display:flex;flex-direction:column;overflow:auto;overscroll-behavior:contain;border:1px solid #48515f;border-radius:9px;background:#20252d;box-shadow:0 16px 50px #0008}
 .mobile-text-sheet header{display:flex;align-items:center;justify-content:space-between;flex:0 0 48px;padding:0 6px 0 15px;border-bottom:1px solid #353e4b}
 .mobile-text-sheet strong{font-size:14px;font-weight:500}
@@ -307,5 +307,5 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
 .mobile-text-sheet footer>span{margin-right:auto;color:#a0b6a9;font-size:11px}
 .mobile-text-sheet footer button{background:#333c49;color:#d4dfed;font-size:12px}
 @media(hover:hover){.mobile-keyboard button:hover:not(:disabled):not([aria-pressed=true]):not(.active){background:#37414e;border-color:#526071}.mobile-keyboard button:is([aria-pressed=true],.active):hover:not(:active):not(:disabled){background:var(--toggle-hover)}}
-@media(max-height:400px){.mobile-text-backdrop{padding:calc(5px + var(--text-safe-top)) calc(5px + env(safe-area-inset-right,0px)) calc(5px + var(--text-safe-bottom)) calc(5px + env(safe-area-inset-left,0px))}.mobile-text-sheet{height:100%;}.mobile-text-sheet header{flex-basis:44px}.mobile-text-sheet footer{flex-basis:44px}}
+@media(max-height:400px){.mobile-text-backdrop{padding:calc(5px + var(--text-safe-top)) calc(5px + var(--ui-safe-right)) calc(5px + var(--text-safe-bottom)) calc(5px + var(--ui-safe-left))}.mobile-text-sheet{height:100%;}.mobile-text-sheet header{flex-basis:44px}.mobile-text-sheet footer{flex-basis:44px}}
 </style>

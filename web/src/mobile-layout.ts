@@ -1,42 +1,43 @@
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed } from 'vue'
+import { createSharedComposable, useMediaQuery, useStorage } from '@vueuse/core'
+
+export type InputMode = 'auto' | 'touch' | 'keyboard'
+export const inputMode = useStorage<InputMode>('canvas:input-mode', 'auto', undefined, {
+  serializer: {
+    read: value => value === 'touch' || value === 'keyboard' ? value : 'auto',
+    write: value => value,
+  },
+})
 
 export interface MobileCapabilities {
   coarsePointer: boolean
   noHover: boolean
   touchPoints: number
-  width: number
-  screenWidth: number
-  screenHeight: number
+  userAgent?: string
+  platform?: string
+  userAgentData?: { mobile?: boolean; platform?: string }
 }
 
-export function isMobileLayout(capabilities: MobileCapabilities): boolean {
-  const { coarsePointer, noHover, touchPoints, width, screenWidth, screenHeight } = capabilities
-  return coarsePointer && noHover && touchPoints > 0 && width > 0 && width <= 1366 &&
-    Math.min(screenWidth, screenHeight) > 0 && Math.min(screenWidth, screenHeight) <= 900
+export function isMobileLayout(capabilities: MobileCapabilities, mode: InputMode = 'auto'): boolean {
+  if (mode === 'touch') return true
+  if (mode === 'keyboard') return false
+  const { touchPoints, userAgent = '', platform, userAgentData } = capabilities
+  if (!(touchPoints > 0)) return false
+  // These browser hints identify common phone/tablet environments, not whether
+  // a physical keyboard is present. Explicit input mode always takes priority.
+  const mobileDevice = userAgentData?.mobile === true || /^(Android|iOS)$/i.test(userAgentData?.platform || '') ||
+    /Android|iPhone|iPad|iPod/i.test(userAgent) || platform === 'MacIntel' && touchPoints > 1 && !userAgentData?.platform
+  return mobileDevice || capabilities.coarsePointer && capabilities.noHover
 }
 
-export function useMobileLayout() {
-  const coarse = matchMedia('(pointer: coarse)')
-  const hover = matchMedia('(hover: none)')
-  const read = () => isMobileLayout({ coarsePointer: coarse.matches, noHover: hover.matches,
-    touchPoints: navigator.maxTouchPoints, width: window.innerWidth,
-    screenWidth: window.screen.width || window.innerWidth, screenHeight: window.screen.height || window.innerHeight })
-  const mobile = ref(read())
-  const update = () => { mobile.value = read() }
-  onMounted(() => {
-    coarse.addEventListener('change', update)
-    hover.addEventListener('change', update)
-    window.addEventListener('resize', update)
-    window.addEventListener('orientationchange', update)
-  })
-  onBeforeUnmount(() => {
-    coarse.removeEventListener('change', update)
-    hover.removeEventListener('change', update)
-    window.removeEventListener('resize', update)
-    window.removeEventListener('orientationchange', update)
-  })
-  return mobile
-}
+export const useMobileLayout = createSharedComposable(() => {
+  const coarse = useMediaQuery('(pointer: coarse)')
+  const noHover = useMediaQuery('(hover: none)')
+  const device = navigator as Navigator & Pick<MobileCapabilities, 'userAgentData'>
+  return computed(() => isMobileLayout({ coarsePointer: coarse.value, noHover: noHover.value,
+    touchPoints: device.maxTouchPoints, userAgent: device.userAgent, platform: device.platform,
+    userAgentData: device.userAgentData }, inputMode.value))
+})
 
 export interface CanvasViewport { x: number; y: number; zoom: number }
 export interface TouchPosition { x: number; y: number }

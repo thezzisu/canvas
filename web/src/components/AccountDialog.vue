@@ -83,7 +83,7 @@ async function save() {
 </template>
 
 <style>
-.account-dialog{z-index:50;width:min(420px,calc(100vw - 28px));max-height:calc(100dvh - 32px)}
+.account-dialog{z-index:50;width:min(420px,calc(var(--mobile-width,var(--ui-viewport-width)) - 28px));max-height:calc(var(--mobile-height,var(--ui-viewport-height)) - 32px)}
 .account-form{display:flex;flex-direction:column;gap:16px}.account-form label,.account-form input{margin-top:0}.account-form input{font-size:13px}
 .account-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;width:100%}.account-share-button{margin-right:auto;align-self:stretch;min-width:32px;justify-content:center}.account-session-hint{font-size:11px;color:#96a0af;line-height:1.5}.account-error{font-size:12px;color:#e0aaa5}
 </style>

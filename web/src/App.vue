@@ -55,6 +55,7 @@ import { buildFontPresentation, ensureContentFont } from './fonts'
 import type { GlobalSettings } from '../../shared/settings'
 import { useCanvasNavigation } from './canvas-navigation'
 import { useMobileLayout } from './mobile-layout'
+import { uiZoom } from './ui-scale'
 import { hideMobileKeyboard } from './mobile-keyboard'
 import { cutoutActiveKey, useDisplayCutout } from './display-cutout'
 import { developerMode } from './developer-mode'
@@ -207,7 +208,7 @@ function creationNavigation(event: Event) {
       (event.type === 'pointerdown' || (event instanceof KeyboardEvent && ['Enter', ' '].includes(event.key)))) return
   cancelCreatedReveal()
 }
-const focusedSize = reactive({ width: mobile.value ? visibleViewport.value.width : window.innerWidth - 32, height: mobile.value ? visibleViewport.value.height : window.innerHeight - 32 })
+const focusedSize = reactive({ width: mobile.value ? visibleViewport.value.width : window.innerWidth / uiZoom.value - 32, height: mobile.value ? visibleViewport.value.height : window.innerHeight / uiZoom.value - 32 })
 type WindowGeometry = { ratio: number; insetX: number; insetY: number }
 const windowGeometry = reactive(new Map<string, WindowGeometry>())
 let geometryFrame = 0
@@ -1500,7 +1501,7 @@ function beforeUnload(event: BeforeUnloadEvent) {
 function windowResize() {
   queueCameraResize()
   if (!mobile.value) {
-    focusedSize.width = window.innerWidth - 32; focusedSize.height = window.innerHeight - 32
+    focusedSize.width = window.innerWidth / uiZoom.value - 32; focusedSize.height = window.innerHeight / uiZoom.value - 32
   }
 }
 function queueCameraResize() {
@@ -1531,6 +1532,7 @@ watch(graphSurface, element => {
   }
 })
 watch(visibleViewport, () => { if (mobile.value) void nextTick(windowResize) })
+watch(uiZoom, () => { void nextTick(windowResize) })
 watch(mobile, () => { sidebarOpen.value = false; if (!mobile.value && focusedCardId.value) void closeCardFocus(); canvasTouchCancel(); rebuildNodes() })
 watch(sourcePanel, value => { if (value && mobile.value) sidebarOpen.value = false })
 watch(sidebarOpen, value => { if (value) canvasMenu.value = false })

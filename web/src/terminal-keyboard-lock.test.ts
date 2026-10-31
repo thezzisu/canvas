@@ -1,19 +1,20 @@
 import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
-import { bindTerminalKeyboardLock, keyboardLockState, keyboardLockUnavailableReason } from './terminal-keyboard-lock.ts'
+import { bindTerminalKeyboardLock, keyboardLockState, keyboardLockUnavailableReason, keyboardLockError } from './terminal-keyboard-lock.ts'
 
 async function settle() { for (let index = 0; index < 4; index++) await Promise.resolve() }
 function fixture(t: TestContext, options: { secure?: boolean; supported?: boolean } = {}) {
-  const requests: Array<{ codes: string[]; resolve(): void; reject(): void }> = []
+  const requests: Array<{ codes: string[]; resolve(): void; reject(error?: Error): void }> = []
   let unlocks = 0
   const keyboard = {
     lock(codes: string[]) {
-      return new Promise<void>((resolve, reject) => requests.push({ codes: [...codes], resolve, reject: () => reject(new Error('Denied')) }))
+      return new Promise<void>((resolve, reject) => requests.push({ codes: [...codes], resolve, reject: error => reject(error || new Error('Denied')) }))
     },
     unlock() { unlocks++ },
   }
+  const activation = { isActive: false }
   const view = Object.assign(new EventTarget(), { isSecureContext: options.secure !== false,
-    navigator: options.supported === false ? {} : { keyboard } })
+    navigator: options.supported === false ? {} : { keyboard, userActivation: activation } })
   const document = Object.assign(new EventTarget(), { defaultView: view, fullscreenElement: {} as object | null,
     activeElement: null as object | null, visibilityState: 'visible', focused: true, hasFocus() { return this.focused } })
   const inputs: Array<{ ownerDocument: typeof document; isConnected: boolean }> = []
@@ -36,7 +37,7 @@ function fixture(t: TestContext, options: { secure?: boolean; supported?: boolea
     for (const request of requests) request.reject()
     await settle()
   })
-  return { document, view, requests, input, focus, unlocks: () => unlocks }
+  return { document, view, requests, input, focus, activation, unlocks: () => unlocks }
 }
 
 test('keyboard lock is unavailable on insecure origins and unsupported browsers', t => {
@@ -140,6 +141,41 @@ test('denial is retried only after focus or other eligibility changes', async t 
   assert.equal(f.requests.length, 2)
   f.requests[1]!.resolve(); await settle()
   assert.equal(keyboardLockState.value, 'active')
+})
+
+test('a new user gesture retries a denied lock without requiring terminal focus to move', async t => {
+  const f = fixture(t), { element, refresh } = f.input()
+  await f.focus(element)
+  f.requests[0]!.reject(new DOMException('Fixture denial', 'NotAllowedError')); await settle()
+  assert.equal(keyboardLockState.value, 'denied'); assert.equal(keyboardLockError.value, 'NotAllowedError')
+  refresh(true)
+  assert.equal(f.requests.length, 1, 'programmatic focus must not retry a denial')
+  f.activation.isActive = true
+  refresh()
+  assert.equal(f.requests.length, 1, 'state refresh must not repeat a request even during an activation')
+  refresh(true)
+  assert.equal(f.requests.length, 2); assert.equal(keyboardLockState.value, 'pending')
+  assert.equal(keyboardLockError.value, undefined)
+  f.requests[1]!.resolve(); await settle()
+  assert.equal(keyboardLockState.value, 'active'); assert.equal(keyboardLockError.value, undefined)
+  assert.equal(f.document.activeElement, element)
+  refresh(true); assert.equal(f.requests.length, 2, 'an already active lock must not be reacquired')
+})
+
+test('late grants recheck native fullscreen, focus and current eligibility before reporting active', async t => {
+  for (const change of ['fullscreen', 'focus', 'eligibility'] as const) await t.test(change, async t => {
+    const f = fixture(t)
+    let eligible = true
+    const { element } = f.input(() => eligible)
+    await f.focus(element)
+    // The browser can update these properties before dispatching the associated event.
+    if (change === 'fullscreen') f.document.fullscreenElement = null
+    else if (change === 'focus') f.document.activeElement = {}
+    else eligible = false
+    f.requests[0]!.resolve(); await settle()
+    assert.equal(keyboardLockState.value, 'idle')
+    assert.equal(f.unlocks(), 1); assert.equal(f.requests.length, 1)
+  })
 })
 
 test('replacement inputs serialize permission requests and stale grants cannot revoke the new owner', async t => {

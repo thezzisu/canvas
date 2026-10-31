@@ -1,6 +1,9 @@
 import { viewportPolicy, type InteractiveWidget } from './developer-mode'
 
 export interface ViewportFrame { width: number; height: number; top: number; left: number }
+export function logicalViewportFrame(frame: ViewportFrame, zoom: number): ViewportFrame {
+  return { width: frame.width / zoom, height: frame.height / zoom, top: frame.top / zoom, left: frame.left / zoom }
+}
 interface VisualFrame { width: number; height: number; offsetTop: number; offsetLeft: number }
 export function viewportFrame(layout: { width: number; height: number }, visual?: VisualFrame | null,
   policy: InteractiveWidget = 'resizes-content'): ViewportFrame {
@@ -18,7 +21,7 @@ export function viewportProbe(): HTMLElement {
   if (!probe) {
     probe = document.createElement('i')
     probe.setAttribute('aria-hidden', 'true')
-    probe.style.cssText = 'all:initial;position:fixed;top:0;left:0;width:100dvw;height:var(--canvas-viewport-height,100dvh);visibility:hidden;pointer-events:none;contain:strict'
+    probe.style.cssText = 'all:initial;position:fixed;top:0;left:0;width:100dvw;height:var(--canvas-viewport-height,100dvh);zoom:calc(1 / var(--ui-zoom,1));visibility:hidden;pointer-events:none;contain:strict'
     document.body.append(probe)
     probes.set(document, probe)
   }

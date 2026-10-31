@@ -1,6 +1,8 @@
 export default {
   installApp: '安装 Canvas', updateApp: '刷新并更新', updateReady: '有新版本可用', pwaFailed: '操作未完成，请重试',
   close: '关闭设置', thisBrowser: '仅此浏览器', cutout: '顶部避让', position: '位置', width: '宽度',
+  inputMode: '操作模式', inputAuto: '自动', inputTouch: '纯触摸', inputKeyboard: '键鼠',
+  uiScale: '界面缩放',
   left: '左', center: '中', right: '右', contentFont: '内容字体', addFont: '添加字体', add: '添加',
   fontOrder: '字体顺序', primaryFont: '主字体', fallbackFont: '回退字体', font: '字体 {index}',
   fontPlaceholder: '选择或输入字体名称', localFont: '使用本机字体', moveFontUp: '上移字体 {index}',

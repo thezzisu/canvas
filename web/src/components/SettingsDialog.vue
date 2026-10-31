@@ -10,7 +10,8 @@ import USwitch from '@nuxt/ui/components/Switch.vue'
 import type { ContentFontSettings, GlobalSettings } from '../../../shared/settings'
 import { FONT_CATALOG, buildFontPresentation, ensureContentFont } from '../fonts'
 import { write } from '../api'
-import { useMobileLayout } from '../mobile-layout'
+import { inputMode, useMobileLayout } from '../mobile-layout'
+import { uiScale, uiZoom } from '../ui-scale'
 import { cutoutPosition, cutoutWidth, type CutoutPosition } from '../display-cutout'
 import { developerMode, viewportFit, interactiveWidget, viewportReloadRequired } from '../developer-mode'
 import { keepScreenAwake, retryScreenWakeLock, screenWakeLockState, screenWakeLockUnavailable } from '../screen-wake-lock'
@@ -26,10 +27,16 @@ const mobile = useMobileLayout()
 const viewportFits = ['cover', 'contain']
 const interactiveWidgets = ['resizes-content', 'resizes-visual', 'overlays-content']
 const viewportSelectUi = { content: 'settings-select-menu', item: 'settings-select-item' }
+const inputModes = computed(() => [
+  { value: 'auto', label: t('settings.inputAuto') },
+  { value: 'touch', label: t('settings.inputTouch') },
+  { value: 'keyboard', label: t('settings.inputKeyboard') },
+])
+const uiScales = [75, 90, 100, 110, 125, 150].map(value => ({ value, label: `${value}%` }))
 const cutoutPositions = computed<Array<{ value: CutoutPosition; label: string }>>(() => [
   { value: 'left', label: t('settings.left') }, { value: 'center', label: t('settings.center') }, { value: 'right', label: t('settings.right') },
 ])
-const cutoutMaximum = computed(() => Math.max(0, Math.min(240, Math.min(window.screen.width, window.screen.height) - 176)))
+const cutoutMaximum = computed(() => Math.max(0, Math.min(240, Math.min(window.screen.width, window.screen.height) - 176 * uiZoom.value)))
 const displayedCutoutWidth = computed({
   get: () => Math.max(0, Math.min(cutoutWidth.value, cutoutMaximum.value)),
   set: (width: number) => { cutoutWidth.value = width },
@@ -164,7 +171,11 @@ onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer) })
   <UModal :open="open" :title="t('common.settings')" :portal="portal || false" :close="{ 'aria-label': t('settings.close') }"
     :ui="{ content: 'settings-modal', overlay: 'settings-overlay', header: 'settings-header', body: 'settings-body', footer: 'settings-footer', title: 'settings-title', close: 'settings-close' }" @update:open="close">
     <template #body>
-      <div class="settings-language-row"><span>{{ t('common.language') }}</span><LanguageSelect :portal="portal" /></div>
+      <div class="settings-preferences">
+        <div class="settings-preference-row"><span>{{ t('common.language') }}</span><LanguageSelect :portal="portal" /></div>
+        <div class="settings-preference-row"><label for="input-mode">{{ t('settings.inputMode') }}</label><USelect id="input-mode" v-model="inputMode" :items="inputModes" :portal="portal || false" :ui="viewportSelectUi" color="neutral" size="sm" class="settings-select settings-preference-select" :aria-label="t('settings.inputMode')" /></div>
+        <div class="settings-preference-row"><label for="ui-scale">{{ t('settings.uiScale') }}</label><USelect id="ui-scale" v-model="uiScale" :items="uiScales" :portal="portal || false" :ui="viewportSelectUi" color="neutral" size="sm" class="settings-select settings-preference-select" :aria-label="t('settings.uiScale')" /></div>
+      </div>
       <section v-if="mobile && hasDisplayCutout" class="cutout-settings" :aria-label="t('settings.cutout')">
         <div class="cutout-heading"><span>{{ t('settings.cutout') }}</span><small>{{ t('settings.thisBrowser') }}</small></div>
         <div class="cutout-row"><span id="cutout-position-label">{{ t('settings.position') }}</span><div class="cutout-positions" role="group" aria-labelledby="cutout-position-label"><UButton v-for="position in cutoutPositions" :key="position.value" type="button" color="neutral" :variant="cutoutPosition === position.value ? 'solid' : 'outline'" :aria-pressed="cutoutPosition === position.value" @click="cutoutPosition = position.value">{{ position.label }}</UButton></div></div>
@@ -226,8 +237,10 @@ onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer) })
 </template>
 
 <style scoped>
-.settings-language-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-bottom:18px;margin-bottom:18px;border-bottom:1px solid #343b46;color:#c4cbd6;font-size:12px}
-.settings-language-row>span{flex-shrink:0;white-space:nowrap}
+.settings-preferences{display:grid;gap:12px;padding-bottom:18px;margin-bottom:18px;border-bottom:1px solid #343b46}
+.settings-preference-row{display:flex;align-items:center;justify-content:space-between;gap:16px;color:#c4cbd6;font-size:12px}
+.settings-preference-row>span,.settings-preference-row>label{flex-shrink:0;white-space:nowrap;margin:0}
+.settings-preference-select{width:150px;max-width:100%;flex-shrink:0}
 .font-done{height:32px;min-width:62px;padding:0 12px;border:1px solid #485262;border-radius:6px;font-size:11px;font-weight:500;color:#c3cdd9;background:#2a323e}
 .font-done:hover{background:#343e4b}
 .mobile-layout .font-done{height:40px}

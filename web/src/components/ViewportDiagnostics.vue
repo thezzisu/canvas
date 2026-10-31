@@ -103,7 +103,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.debug-toolbar{position:fixed;top:max(8px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:120;display:flex;max-width:calc(100vw - 16px);border:1px solid #46505b;border-radius:6px;background:#23272ef2;color:#c6ced8;font-size:11px;box-shadow:0 3px 12px #0003}
+.debug-toolbar{position:fixed;top:calc(max(8px,var(--mobile-safe-top,var(--ui-safe-top))) + 44px);left:50%;transform:translateX(-50%);z-index:120;display:flex;max-width:calc(var(--mobile-width,var(--ui-viewport-width)) - 16px);border:1px solid #46505b;border-radius:6px;background:#23272ef2;color:#c6ced8;font-size:11px;box-shadow:0 3px 12px #0003}
 .viewport-diagnostics{position:relative;min-height:32px;padding:4px 10px;white-space:nowrap}
 .debug-copy-feedback{position:absolute;inset:0;display:grid;place-items:center}
 .debug-settings-trigger{display:flex;align-items:center;justify-content:center;flex:0 0 32px;width:32px;min-height:32px;padding:0;border:0;border-left:1px solid #46505b;border-radius:0 5px 5px 0;color:#9ba8b9;background:transparent}
@@ -124,7 +124,7 @@ onBeforeUnmount(() => {
 .debug-bounds-toggle[aria-pressed=true]{border-color:#a78770;background:#e9b18812;color:#e9c9b0}
 /* Native top layer escapes ancestor clipping. Eight pixels inside the CSS
    viewport are the positive control; the remaining stripe tests its boundary. */
-.viewport-bounds-probe{position:fixed;inset:calc(100dvh - 8px) auto auto 0;width:100dvw;height:72px;max-width:none;max-height:none;margin:0;padding:0;border:0;pointer-events:none;background:repeating-linear-gradient(135deg,#00e5ff 0 8px,#ff2da4 8px 16px);box-shadow:none;overflow:clip}
+.viewport-bounds-probe{zoom:calc(1 / var(--ui-zoom));position:fixed;inset:calc(100dvh - 8px) auto auto 0;width:100dvw;height:72px;max-width:none;max-height:none;margin:0;padding:0;border:0;pointer-events:none;background:repeating-linear-gradient(135deg,#00e5ff 0 8px,#ff2da4 8px 16px);box-shadow:none;overflow:clip}
 .viewport-bounds-probe::before{content:'';position:absolute;top:7px;left:0;right:0;height:2px;background:#fff}
 .viewport-bounds-probe::backdrop{display:none}
 .mobile-layout .debug-toolbar>button,.mobile-layout .debug-settings-trigger{min-height:40px}

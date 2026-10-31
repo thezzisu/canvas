@@ -11,7 +11,7 @@ const compact = useCompactHeader(header, true)
 
 <template>
   <div class="cutout-preview-frame" aria-hidden="true">
-    <div ref="header" class="cutout-preview cutout-header" :data-cutout-position="cutoutWidth > 0 ? cutoutPosition : undefined" :style="{ '--cutout-width': `${cutoutWidth}px` }">
+    <div ref="header" class="cutout-preview cutout-header" :data-cutout-position="cutoutWidth > 0 ? cutoutPosition : undefined" :style="{ '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` }">
       <span class="cutout-status cutout-preview-control"><i /></span>
       <span class="cutout-title">{{ t('terminal.previewTitle') }}</span>
       <div class="cutout-actions">
@@ -24,7 +24,7 @@ const compact = useCompactHeader(header, true)
 </template>
 
 <style scoped>
-.cutout-preview-frame{position:absolute;top:0;left:env(safe-area-inset-left,0px);right:env(safe-area-inset-right,0px);z-index:80;container-type:inline-size;pointer-events:none;user-select:none}
+.cutout-preview-frame{position:absolute;top:0;left:var(--ui-safe-left);right:var(--ui-safe-right);z-index:80;container-type:inline-size;pointer-events:none;user-select:none}
 .cutout-preview{position:relative;height:44px;background:#252a32;border-bottom:1px solid #414752;color:#d3d8e1;font-size:13px;font-weight:500}
 .cutout-preview-control{display:flex;align-items:center;justify-content:center;width:44px;height:44px;min-width:44px;color:#8592a3}
 .cutout-status>i{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px color-mix(in srgb,var(--green) 8%,transparent)}

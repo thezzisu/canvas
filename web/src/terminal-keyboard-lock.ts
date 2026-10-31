@@ -4,6 +4,7 @@ export type KeyboardLockState = 'unavailable' | 'idle' | 'pending' | 'active' | 
 export type KeyboardLockUnavailableReason = 'insecure-context' | 'unsupported'
 export const keyboardLockState = ref<KeyboardLockState>('unavailable')
 export const keyboardLockUnavailableReason = ref<KeyboardLockUnavailableReason>()
+export const keyboardLockError = ref<string>()
 
 // Keyboard Lock takes physical key codes, not shortcuts. Escape remains the
 // browser's fullscreen exit; Meta and operating-system keys are not requested.
@@ -46,31 +47,40 @@ function drive() {
   const request = pending = { binding: desired, revision }
   attempted = revision
   keyboardLockState.value = 'pending'
+  keyboardLockError.value = undefined
   void (async () => {
     try {
       await keyboard.lock(terminalCodes)
-      if (request.revision === revision && desired === request.binding) {
+      if (request.revision === revision && desired === request.binding && focusedBinding() === request.binding) {
         active = request.binding
         keyboardLockState.value = 'active'
       } else keyboard.unlock()
-    } catch {
-      if (request.revision === revision && desired === request.binding) keyboardLockState.value = 'denied'
+    } catch (error) {
+      if (request.revision === revision && desired === request.binding) {
+        keyboardLockError.value = error instanceof Error ? error.name : 'Error'
+        keyboardLockState.value = 'denied'
+      }
     } finally {
       pending = undefined
-      drive()
+      refresh()
     }
   })()
 }
-function refresh() {
-  if (!context) return
+function focusedBinding() {
+  if (!context) return undefined
   const { document } = context
-  const next = !pageHidden && windowFocused && document.hasFocus() && document.visibilityState === 'visible' && document.fullscreenElement
+  return !pageHidden && windowFocused && document.hasFocus() && document.visibilityState === 'visible' && document.fullscreenElement
     ? [...bindings].find(binding => binding.input.isConnected && document.activeElement === binding.input && binding.eligible())
     : undefined
+}
+function refresh() {
+  if (!context) return
+  const next = focusedBinding()
   if (next !== desired) {
     desired = next
     revision++
     release()
+    keyboardLockError.value = undefined
     keyboardLockState.value = desired ? 'pending' : 'idle'
   }
   drive()
@@ -100,13 +110,13 @@ function listen(add: boolean) {
 }
 
 /** One page-wide lock follows the currently focused terminal input. */
-export function bindTerminalKeyboardLock(input: HTMLElement, eligible: () => boolean): { refresh(): void; dispose(): void } {
+export function bindTerminalKeyboardLock(input: HTMLElement, eligible: () => boolean): { refresh(retryDenied?: boolean): void; dispose(): void } {
   const document = input.ownerDocument
   const window = document.defaultView
   const keyboard = (window?.navigator as Navigator & { keyboard?: KeyboardLock } | undefined)?.keyboard
   const reason = !window?.isSecureContext ? 'insecure-context' : !keyboard?.lock || !keyboard.unlock ? 'unsupported' : undefined
   keyboardLockUnavailableReason.value = reason
-  if (reason || !window || !keyboard) { keyboardLockState.value = 'unavailable'; return { refresh() {}, dispose() {} } }
+  if (reason || !window || !keyboard) { keyboardLockState.value = 'unavailable'; keyboardLockError.value = undefined; return { refresh() {}, dispose() {} } }
   if (!bindings.size) {
     // A pending permission request remains serialized across replacement inputs.
     context = { document, window, keyboard }
@@ -118,7 +128,10 @@ export function bindTerminalKeyboardLock(input: HTMLElement, eligible: () => boo
   bindings.add(binding)
   refresh()
   return {
-    refresh,
+    refresh(retryDenied = false) {
+      if (retryDenied && window.navigator.userActivation?.isActive && keyboardLockState.value === 'denied') attempted = -1
+      refresh()
+    },
     dispose() {
       if (!bindings.delete(binding)) return
       refresh()

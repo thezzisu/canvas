@@ -2,7 +2,8 @@ import { computed, onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 import type { CanvasViewport } from './mobile-layout'
 import { mobileKeyboardFrame, mobileKeyboardVisible, refreshMobileKeyboardViewport } from './mobile-keyboard'
 import { viewportPolicy } from './developer-mode'
-import { readViewportFrame, viewportProbe } from './viewport-frame'
+import { logicalViewportFrame, readViewportFrame, viewportProbe } from './viewport-frame'
+import { uiZoom } from './ui-scale'
 export { viewportFrame, type ViewportFrame } from './viewport-frame'
 
 export interface CanvasFrame { layoutWidth: number; width: number; height: number }
@@ -24,7 +25,8 @@ export function canvasFrame(surface: HTMLElement | undefined): CanvasFrame | und
 /** Keep the app inside the visible viewport, including a persistently open keyboard. */
 export function useMobileViewport(mobile: Ref<boolean>) {
   const measured = ref(readViewportFrame())
-  const viewport = computed(() => mobile.value && mobileKeyboardFrame.value ? mobileKeyboardFrame.value : measured.value)
+  const physicalViewport = computed(() => mobile.value && mobileKeyboardFrame.value ? mobileKeyboardFrame.value : measured.value)
+  const viewport = computed(() => logicalViewportFrame(physicalViewport.value, uiZoom.value))
   const update = () => {
     const next = readViewportFrame(), previous = measured.value
     if (next.width !== previous.width || next.height !== previous.height || next.top !== previous.top || next.left !== previous.left) measured.value = next
@@ -58,8 +60,8 @@ export function useMobileViewport(mobile: Ref<boolean>) {
     return {
       ...(override ? { '--mobile-width': `${frame.width}px`, '--mobile-height': `${frame.height}px`,
         '--mobile-top': `${frame.top}px`, '--mobile-left': `${frame.left}px` } : {}),
-      '--mobile-safe-top': override ? `max(0px, calc(env(safe-area-inset-top) - ${frame.top}px))` : 'env(safe-area-inset-top)',
-      '--mobile-safe-bottom': mobileKeyboardVisible.value ? '0px' : 'env(safe-area-inset-bottom)',
+      '--mobile-safe-top': override ? `max(0px, calc((env(safe-area-inset-top) - ${physicalViewport.value.top}px) / var(--ui-zoom)))` : 'var(--ui-safe-top)',
+      '--mobile-safe-bottom': mobileKeyboardVisible.value ? '0px' : 'var(--ui-safe-bottom)',
     }
   })
   return { viewport, style }
