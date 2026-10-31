@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { defaultSettings, type GlobalSettings } from "../shared/settings.ts";
 import { settingsPatchSchema } from "./settings.ts";
+import { getMimeType } from "hono/utils/mime";
 
 export const sourceSchema = z
   .object({
@@ -55,7 +56,7 @@ export const terminalNodeSchema = nodeLayoutSchema.extend({
 export const noteColorSchema = z.enum(["yellow", "blue", "green", "pink", "neutral"]);
 export const noteNodeSchema = nodeLayoutSchema.extend({
   type: z.literal("note"),
-  title: z.string().max(200).default("便签"),
+  title: z.string().max(200).default(""),
   content: z.string().max(200_000).default(""),
   color: noteColorSchema.default("yellow"),
   minimized: z.boolean().default(false),
@@ -65,7 +66,6 @@ export const fileAssetSchema = z.object({
   filename: z.string().min(1).max(255),
   size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   mime: z.string().max(100),
-  preview: z.enum(["image", "pdf", "text", "file"]),
   createdAt: z.number().int().nonnegative(),
 }).strict();
 export const fileNodeSchema = nodeLayoutSchema.extend({
@@ -83,7 +83,6 @@ export type FileAsset = {
   filename: string;
   size: number;
   mime: string;
-  preview: "image" | "pdf" | "text" | "file";
   createdAt: number;
 };
 export type FileNodeView = FileNode & { asset: FileAsset };
@@ -128,15 +127,17 @@ export class Store extends EventEmitter {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(path);
     this.db.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (kind TEXT, id TEXT, body TEXT, PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER); CREATE TABLE IF NOT EXISTS canvas_backgrounds (canvas_id TEXT PRIMARY KEY, image_id TEXT NOT NULL UNIQUE, opacity REAL NOT NULL CHECK(opacity >= 0 AND opacity <= 1), data BLOB NOT NULL, document_kind TEXT NOT NULL DEFAULT 'canvas' CHECK(document_kind = 'canvas'), FOREIGN KEY(document_kind, canvas_id) REFERENCES documents(kind, id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS canvas_files (id TEXT PRIMARY KEY, canvas_id TEXT NOT NULL, filename TEXT NOT NULL, size INTEGER NOT NULL CHECK(size >= 0), mime TEXT NOT NULL, preview TEXT NOT NULL, created_at INTEGER NOT NULL);",
+      "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (kind TEXT, id TEXT, body TEXT, PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER); CREATE TABLE IF NOT EXISTS canvas_backgrounds (canvas_id TEXT PRIMARY KEY, image_id TEXT NOT NULL UNIQUE, opacity REAL NOT NULL CHECK(opacity >= 0 AND opacity <= 1), data BLOB NOT NULL, document_kind TEXT NOT NULL DEFAULT 'canvas' CHECK(document_kind = 'canvas'), FOREIGN KEY(document_kind, canvas_id) REFERENCES documents(kind, id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS canvas_files (id TEXT PRIMARY KEY, canvas_id TEXT NOT NULL, filename TEXT NOT NULL, size INTEGER NOT NULL CHECK(size >= 0), mime TEXT NOT NULL, created_at INTEGER NOT NULL);",
     );
+    if (this.db.prepare('PRAGMA table_info(canvas_files)').all().some(column => column.name === 'preview'))
+      this.db.exec('ALTER TABLE canvas_files DROP COLUMN preview');
     // The overview only owns its background. Its name and generated window
     // layout never enter the editable canvas collection.
     this.db
       .prepare(
         "INSERT OR IGNORE INTO documents(kind,id,body) VALUES('canvas','overview',?)",
       )
-      .run(JSON.stringify({ id: "overview", name: "总览", nodes: [] }));
+      .run(JSON.stringify({ id: "overview", name: "overview", nodes: [] }));
   }
   list<T>(kind: string): T[] {
     return this.db
@@ -217,7 +218,7 @@ export class Store extends EventEmitter {
     return {
       ...canvas,
       nodes: canvas.nodes.map(node => node.type === "file"
-        ? { ...node, asset: this.fileAssetForCanvas(node.assetId, canvas.id)! }
+        ? { ...node, asset: this.fileAsset(node.assetId)! }
         : node.type === "note" ? node : { ...node, ...this.windowSize(node.sourceId, node.windowId) }),
       background: background
         ? {
@@ -239,8 +240,13 @@ export class Store extends EventEmitter {
     // The owning canvas write publishes the combined geometry/layout snapshot.
   }
   private normalizeNodes(nodes: Canvas["nodes"]): Canvas["nodes"] {
+    const notes = nodes.some(node => node.type === "note") ? new Map(this.list<Canvas>("canvas").flatMap(canvas =>
+      canvas.nodes.filter((node): node is NoteNode => node.type === "note").map(node => [node.id, node] as const))) : new Map<string, NoteNode>();
     return nodes.map(node => {
-      if (node.type === "note") return node;
+      if (node.type === "note") {
+        const current = notes.get(node.id);
+        return current ? { ...node, title: current.title, content: current.content, color: current.color } : node;
+      }
       if (node.type === "file") {
         const { asset: _asset, ...stored } = node;
         return stored;
@@ -250,9 +256,56 @@ export class Store extends EventEmitter {
   }
 
   private validateFileNodes(canvas: Canvas) {
+    const references = new Set(this.get<Canvas>("canvas", canvas.id)?.nodes.flatMap(node => node.type === "file" ? [node.assetId] : []));
     for (const node of canvas.nodes)
-      if (node.type === "file" && !this.fileAssetForCanvas(node.assetId, canvas.id))
+      if (node.type === "file" && (!references.has(node.assetId) || !this.fileAsset(node.assetId)))
         throw new Error("File asset not found in this canvas");
+  }
+
+  updateNote(canvasId: string, nodeId: string, patch: Partial<Pick<NoteNode, "title" | "content" | "color" | "minimized">>): Canvas {
+    this.db.exec("BEGIN IMMEDIATE");
+    let selected: Canvas | undefined;
+    try {
+      const canvases = this.list<Canvas>("canvas");
+      selected = canvases.find(canvas => canvas.id === canvasId);
+      if (!selected?.nodes.some(node => node.id === nodeId && node.type === "note")) throw new Error("Note not found");
+      const { minimized, ...shared } = patch;
+      const update = this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?");
+      for (const canvas of canvases) {
+        const node = canvas.nodes.find((item): item is NoteNode => item.id === nodeId && item.type === "note");
+        if (!node) continue;
+        Object.assign(node, shared, canvas.id === canvasId && minimized !== undefined ? { minimized } : {});
+        update.run(JSON.stringify(canvas), canvas.id);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    this.changed();
+    return selected;
+  }
+
+  addNodeReference(sourceCanvasId: string, nodeId: string, targetCanvasId: string, position: { x: number; y: number }): { canvas: Canvas; added: boolean } {
+    if (sourceCanvasId === "overview" || targetCanvasId === "overview") throw new Error("Overview is read-only");
+    const coordinates = nodeLayoutSchema.pick({ x: true, y: true }).parse(position);
+    this.db.exec("BEGIN IMMEDIATE");
+    let canvas: Canvas, added = false;
+    try {
+      const source = this.get<Canvas>("canvas", sourceCanvasId), target = this.get<Canvas>("canvas", targetCanvasId);
+      if (!source || !target) throw new Error("Canvas not found");
+      const node = source.nodes.find(item => item.id === nodeId);
+      if (!node || node.type === "terminal") throw new Error("Shareable card not found");
+      if (node.type === "file" && !this.fileAssetForCanvas(node.assetId, sourceCanvasId)) throw new Error("File asset not found");
+      canvas = target;
+      const existing = target.nodes.some(item => item.id === node.id || node.type === "file" && item.type === "file" && item.assetId === node.assetId);
+      if (!existing) {
+        if (target.nodes.length >= 500) throw new Error("Canvas contains too many items");
+        target.nodes.push({ ...node, ...coordinates });
+        this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?").run(JSON.stringify(target), targetCanvasId);
+        added = true;
+      }
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    if (added) this.changed();
+    return { canvas, added };
   }
 
   addFileNode(asset: FileAsset, context: FileNodeContext): boolean {
@@ -276,15 +329,12 @@ export class Store extends EventEmitter {
         y = Math.min(1e7, occupied === anchor.y ? anchor.y : occupied + 16);
       }
       if (canvas.nodes.length >= 500) throw new Error("Canvas contains too many items");
-      this.db.prepare("INSERT INTO canvas_files(id,canvas_id,filename,size,mime,preview,created_at) VALUES(?,?,?,?,?,?,?)")
-        .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.preview, asset.createdAt);
-      const dimensions = asset.preview === "pdf" ? { width: 420, height: 480 }
-        : asset.preview === "file" ? { width: 320, height: 160 }
-        : { width: 360, height: 280 };
+      this.db.prepare("INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)")
+        .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.createdAt);
       const node: FileNode = {
         id: randomUUID(), type: "file", assetId: asset.id,
         x, y,
-        ...dimensions,
+        width: 360, height: 280,
       };
       canvas.nodes.push(node);
       this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
@@ -296,21 +346,20 @@ export class Store extends EventEmitter {
   }
 
   fileAsset(id: string): FileAsset | undefined {
-    const row = this.db.prepare("SELECT id,filename,size,mime,preview,created_at FROM canvas_files WHERE id=?")
+    const row = this.db.prepare("SELECT id,filename,size,mime,created_at FROM canvas_files WHERE id=?")
       .get(id);
     return row ? this.fileAssetFromRow(row) : undefined;
   }
 
   fileAssetForCanvas(id: string, canvasId: string): FileAsset | undefined {
-    const row = this.db.prepare("SELECT id,filename,size,mime,preview,created_at FROM canvas_files WHERE id=? AND canvas_id=?")
-      .get(id, canvasId);
-    return row ? this.fileAssetFromRow(row) : undefined;
+    const canvas = this.get<Canvas>("canvas", canvasId);
+    return canvas?.nodes.some(node => node.type === "file" && node.assetId === id) ? this.fileAsset(id) : undefined;
   }
 
   private fileAssetFromRow(row: Record<string, unknown>): FileAsset {
     return {
       id: String(row.id), filename: String(row.filename), size: Number(row.size),
-      mime: String(row.mime), preview: String(row.preview) as FileAsset["preview"],
+      mime: getMimeType(String(row.filename)) || "application/octet-stream",
       createdAt: Number(row.created_at),
     };
   }

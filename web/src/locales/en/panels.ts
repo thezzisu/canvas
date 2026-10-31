@@ -15,7 +15,7 @@ export default {
   preview: {
     source: 'Show source', rendered: 'Render Markdown', wrap: 'Wrap text',
     close: 'Close preview', remaining: '{count} more file to preview | {count} more files to preview', fullscreen: 'Fullscreen preview', exitFullscreen: 'Exit fullscreen preview',
-    unavailable: 'Unable to preview this file', pdfUnavailable: 'This browser cannot preview PDFs', truncated: 'Showing the first 1 MiB',
+    unavailable: 'Unable to preview this file', mediaUnavailable: 'This browser cannot play this file.', pdfUnavailable: 'This browser cannot preview PDFs', truncated: 'Showing the first 1 MiB',
   },
   file: { addFailed: 'Could not add this file', dropToAdd: 'Drop to add file notes', adding: 'Adding files', download: 'Download file', remove: 'Delete file', downloadNamed: 'Download {name}', downloadOriginal: 'Download original', unreadable: 'Unable to read this text file' },
   image: { zoom: 'Image zoom', zoomOut: 'Zoom out', zoomIn: 'Zoom in', fit: 'Fit image', scale: 'Zoom level' },

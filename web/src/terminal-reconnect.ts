@@ -2,6 +2,13 @@ const retryDelays = [500, 1500, 3000] as const
 const handshakeTimeout = 12_000
 const stableConnection = 5000
 
+/** A reconnect may reclaim only the input the user still has focused. */
+export function terminalInputHasFocus(input?: HTMLElement): boolean {
+  if (!input?.isConnected) return false
+  const document = input.ownerDocument
+  return !document.hidden && document.hasFocus() && document.activeElement === input
+}
+
 interface ReconnectOptions {
   active(): boolean
   connect(probe: boolean): void

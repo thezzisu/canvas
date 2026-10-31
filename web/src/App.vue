@@ -18,7 +18,7 @@ import { buildLabel } from '../../shared/build-info'
 import CanvasNavItem from './components/CanvasNavItem.vue'
 import { canvasIndicators, needsAttention, windowVisualState } from './canvas-status'
 import { createLayoutSaves, type LayoutPatch } from './layout-saves'
-import { createPendingEdits, type NoteEdit } from './pending-edits'
+import { createPendingEdits, retargetNoteEdit, type NoteEdit } from './pending-edits'
 import { cameraFromViewport, recallFreeCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type CanvasLocation } from './canvas-location'
 import { useCanvasLocation } from './use-canvas-location'
 import { usePointerDismiss } from './pointer-dismiss'
@@ -49,7 +49,8 @@ import { directoryRequest } from './directories'
 import { copiedFile } from './file-clipboard'
 import { urlRequest } from './urls'
 import { api, apiContext, apiRevision, apiUrl, isCurrentApi, requireCurrentApi, resetApiRequests, setSessionToken, ApiError, segment, uuid, write } from './api'
-import { clearTerminals, focusWindow, hasLiveTerminal, pasteFileIntoWindow, setContentFont } from './terminals'
+import { acknowledgeTerminalMetadata, clearTerminals, focusWindow, hasLiveTerminal, liveTerminalMetadata, pasteFileIntoWindow, retainTerminalMetadata, setContentFont } from './terminals'
+import { mergeLiveResources } from './live-resources'
 import { buildFontPresentation, ensureContentFont } from './fonts'
 import type { GlobalSettings } from '../../shared/settings'
 import { useCanvasNavigation } from './canvas-navigation'
@@ -101,7 +102,8 @@ const loginError = computed(() => {
 const error = ref('')
 const success = ref('')
 const sources = ref<Source[]>([])
-const resources = ref<SourceResource[]>([])
+const polledResources = ref<SourceResource[]>([])
+const resources = computed(() => mergeLiveResources(polledResources.value, liveTerminalMetadata.value))
 const resourcesFresh = ref(false)
 const resourcesLoaded = ref(false)
 const pageVisible = ref(!document.hidden)
@@ -119,6 +121,7 @@ const refreshedAt = ref(0)
 const refreshedTime = computed(() => refreshedAt.value ? new Date(refreshedAt.value).toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit' }) : '')
 const loading = ref(false)
 const sourcePanel = ref(false)
+const sourcePanelElement = ref<HTMLElement>()
 const expandedSource = ref('')
 const sourceDialog = ref(false)
 let sourceDialogRevision = 0
@@ -156,15 +159,21 @@ let addDialogRevision = 0
 const addTarget = ref('')
 const addSearch = ref('')
 const selectedWindows = ref<string[]>([])
+const shareCard = ref<{ canvasId: string; node: NoteCanvasNode | FileCanvasNode }>()
+const shareTarget = ref('')
+const shareTargets = computed(() => canvases.value.filter(canvas => canvas.id !== shareCard.value?.canvasId).map(canvas => ({ ...canvas,
+  disabled: canvas.nodes.some(node => node.id === shareCard.value?.node.id ||
+    node.type === 'file' && shareCard.value?.node.type === 'file' && node.assetId === shareCard.value.node.assetId),
+})))
 const windowMenu = ref<{ node: TerminalCanvasNode; name: string } | null>(null)
-const appDialogOpen = computed(() => sourceDialog.value || canvasDialog.value || !!actionDialog.value || addDialog.value || !!windowMenu.value)
+const appDialogOpen = computed(() => sourceDialog.value || canvasDialog.value || !!actionDialog.value || addDialog.value || !!shareCard.value || !!windowMenu.value)
 const appDialogTitle = computed(() => sourceDialog.value ? t(sourceDraft.id ? 'app.editConnection' : 'app.addConnection')
   : canvasDialog.value ? t(canvasDraft.id ? 'app.renameCanvas' : 'app.newCanvas') : actionDialog.value?.title
-    || (addDialog.value ? t('app.addWindows') : windowMenu.value?.name || ''))
+    || (addDialog.value ? t('app.addWindows') : shareCard.value ? t('app.addToOtherCanvas') : windowMenu.value?.name || ''))
 let pendingKeyboard: TerminalCanvasNode | undefined
 function closeAppDialog(open = false) {
   if (open || busy.value) return
-  sourceDialog.value = false; canvasDialog.value = false; actionDialog.value = null; addDialog.value = false; windowMenu.value = null
+  sourceDialog.value = false; canvasDialog.value = false; actionDialog.value = null; addDialog.value = false; shareCard.value = undefined; windowMenu.value = null
 }
 function restoreDialogFocus(event: Event) {
   if (!pendingKeyboard) return
@@ -358,7 +367,11 @@ watch([allWindows, existingAddWindows], () => {
   const next = selectedAddWindows.value.map(item => item.key)
   if (next.length !== selectedWindows.value.length || next.some((key, index) => selectedWindows.value[index] !== key)) selectedWindows.value = next
 })
-const modalOpen = computed(() => sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || windowMenu.value || backgroundCanvas.value || settingsDialog.value || accountDialog.value || scanTarget.value)
+const modalOpen = computed(() => sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || shareCard.value || windowMenu.value || backgroundCanvas.value || settingsDialog.value || accountDialog.value || scanTarget.value)
+usePointerDismiss(computed({
+  get: () => sourcePanel.value && !modalOpen.value && !directoryRequest.value && !urlRequest.value && !downloadPreview.value,
+  set: value => { sourcePanel.value = value },
+}), sourcePanelElement)
 const { surface: graphSurface, app: appElement, fullscreen: canvasFullscreen, resetPagingFeedback, wheel: canvasWheel, touchStart: canvasTouchStart, touchMove: canvasTouchMove, touchEnd: canvasTouchEnd, touchCancel: canvasTouchCancel, click: canvasClick, toggleFullscreen, exitFullscreen } = useCanvasNavigation({
   getCanvasId: () => `${activeInstance.value.id}/${activeId.value}`, getViewport, setViewport, saveViewport,
   onError: showError,
@@ -568,6 +581,7 @@ function applySharedState(state: SharedState) {
     for (const [canvasId, nodes] of drafts.layouts) for (const [id, patch] of nodes) layoutSaves.set(canvasId, id, patch)
     for (const edit of drafts.notes) pendingNotes.set(noteKey(edit.canvasId, edit.id), edit)
   }
+  reconcileNoteEdits(state.canvases)
   latestState = state
   pruneFileViews(activeInstance.value.id, state.canvases)
   retainBackgrounds([state.overviewBackground, ...state.canvases.map(canvas => canvas.background)].flatMap(background => background ? [background.url] : []))
@@ -587,8 +601,19 @@ function applySharedState(state: SharedState) {
   const sizesChanged = JSON.stringify(windowSizes.value) !== JSON.stringify(nextSizes)
   windowSizes.value = nextSizes
   sources.value = state.sources
+  retainTerminalMetadata(state.sources.map(source => source.id))
   overviewBackground.value = state.overviewBackground
-  canvases.value = state.canvases.map(canvas => ({ ...canvas, nodes: (canvas.nodes || []).map(node => ({ ...node, ...pendingLayouts.get(canvas.id)?.get(node.id), ...(node.type === 'note' ? { ...savingNotes.get(noteKey(canvas.id, node.id))?.patch, ...pendingNotes.get(noteKey(canvas.id, node.id))?.patch } : {}) })) }))
+  const sharedNoteDrafts = new Map<string, NotePatch>()
+  for (const edit of [...savingNotes.values(), ...pendingNotes.values()]) {
+    if (!state.canvases.some(canvas => canvas.id === edit.canvasId && canvas.nodes.some(node => node.id === edit.id && node.type === 'note'))) continue
+    const { minimized: _minimized, ...shared } = edit.patch
+    sharedNoteDrafts.set(edit.id, { ...sharedNoteDrafts.get(edit.id), ...shared })
+  }
+  canvases.value = state.canvases.map(canvas => ({ ...canvas, nodes: (canvas.nodes || []).map(node => {
+    const minimized = pendingNotes.get(noteKey(canvas.id, node.id))?.patch.minimized ?? savingNotes.get(noteKey(canvas.id, node.id))?.patch.minimized
+    return { ...node, ...pendingLayouts.get(canvas.id)?.get(node.id), ...(node.type === 'note'
+      ? { ...sharedNoteDrafts.get(node.id), ...(minimized === undefined ? {} : { minimized }) } : {}) }
+  }) }))
   for (const [id, timer] of saveTimers) if (!canvases.value.some(canvas => canvas.id === id)) { clearTimeout(timer); saveTimers.delete(id); pendingLayouts.delete(id) }
   for (const id of pendingLayouts.keys()) if (!canvases.value.some(canvas => canvas.id === id)) pendingLayouts.delete(id)
   for (const edit of [...pendingNotes.values(), ...savingNotes.values()]) if (!canvases.value.find(canvas => canvas.id === edit.canvasId)?.nodes.some(node => node.id === edit.id)) clearNoteEdits(edit.canvasId, edit.id)
@@ -602,7 +627,7 @@ function applySharedState(state: SharedState) {
   if (backgroundCanvas.value && backgroundCanvas.value.id !== 'overview' && !canvases.value.some(canvas => canvas.id === backgroundCanvas.value?.id)) backgroundCanvas.value = null
   if (sourceChanged) {
     resourcesFresh.value = false
-    resources.value = resources.value.filter(resource => sources.value.some(source => source.id === resource.id))
+    polledResources.value = polledResources.value.filter(resource => sources.value.some(source => source.id === resource.id))
     if (focused.value && !sources.value.some(source => source.id === focused.value?.sourceId)) focused.value = null
     resourceSignature = ''; resourceLayoutSignature = ''
     if (isOverview.value && !layoutGesture) rebuildNodes()
@@ -743,6 +768,26 @@ function saveViewport() {
   navigation.save(currentLocation())
 }
 
+watch(resources, (next, previous) => {
+  if (!authenticated.value) return
+  const signature = JSON.stringify(next)
+  if (signature === resourceSignature) return
+  const layoutSignature = JSON.stringify(next.map(source => {
+    const config = sources.value.find(item => item.id === source.id)
+    return [source.id, config?.transport, config?.target, source.spaces.map(space => [space.id, space.windows.map(window => window.id)])]
+  }))
+  const overviewChanged = isOverview.value && overviewLayoutKey(overviewResources(previous, overviewSelected.value, overviewOrder.value, overviewInteraction.value))
+    !== overviewLayoutKey(overviewResources(next, overviewSelected.value, overviewOrder.value, overviewInteraction.value))
+  resourceSignature = signature
+  if (layoutSignature !== resourceLayoutSignature || overviewChanged) { if (!layoutGesture) rebuildNodes() }
+  else {
+    // Status updates preserve the current drag, selection and card geometry.
+    const updated = new Map((isOverview.value ? overviewNodes() : (currentCanvas.value?.nodes || []).map(flowNode)).map(node => [node.id, node.data]))
+    nodes.value = nodes.value.map(node => ({ ...node, data: updated.get(node.id) || node.data }))
+  }
+  resourceLayoutSignature = layoutSignature
+})
+
 async function refreshResources(silent = false): Promise<void> {
   if (resourceRequest) {
     if (silent) return
@@ -753,6 +798,7 @@ async function refreshResources(silent = false): Promise<void> {
   loading.value = !silent
   const context = apiContext()
   const sourceConfiguration = JSON.stringify(sources.value)
+  const metadataAtStart = liveTerminalMetadata.value
   resourceRequest = (async () => {
     try {
       const body = await api<{ sources: SourceResource[] }>('/api/resources')
@@ -763,25 +809,9 @@ async function refreshResources(silent = false): Promise<void> {
           return windows.length ? [{ ...space, windows }] : []
         }),
       } : source)
-      const freshnessChanged = !resourcesFresh.value
       resourcesFresh.value = true; resourcesLoaded.value = true
-      const signature = JSON.stringify(body.sources)
-      if (signature !== resourceSignature || freshnessChanged) {
-        const layoutSignature = JSON.stringify(body.sources.map(source => {
-          const config = sources.value.find(item => item.id === source.id)
-          return [source.id, config?.transport, config?.target, source.spaces.map(space => [space.id, space.windows.map(window => window.id)])]
-        }))
-        const overviewChanged = isOverview.value && overviewLayoutKey(visibleOverview.value) !== overviewLayoutKey(overviewResources(body.sources, overviewSelected.value, overviewOrder.value, overviewInteraction.value))
-        resources.value = body.sources
-        resourceSignature = signature
-        if (layoutSignature !== resourceLayoutSignature || overviewChanged) { if (!layoutGesture) rebuildNodes() }
-        else {
-          // Status updates must preserve the current drag, selection and card geometry.
-          const updated = new Map((isOverview.value ? overviewNodes() : (currentCanvas.value?.nodes || []).map(flowNode)).map(node => [node.id, node.data]))
-          nodes.value = nodes.value.map(node => ({ ...node, data: updated.get(node.id) || node.data }))
-        }
-        resourceLayoutSignature = layoutSignature
-      }
+      polledResources.value = body.sources
+      acknowledgeTerminalMetadata(metadataAtStart, body.sources.filter(source => source.status === 'online' && !source.error).map(source => source.id))
       refreshedAt.value = Date.now()
     } catch (reason) {
       if (isCurrentApi(context)) {
@@ -854,10 +884,10 @@ function clearInstanceRuntime() {
   authenticated.value = false; focused.value = null; focusedCardId.value = ''; scanTarget.value = null
   sourceDialog.value = false; sourcePanel.value = false; canvasDialog.value = false; actionDialog.value = null
   sourceDialogRevision++; canvasDialogRevision++; addDialogRevision++; pendingKeyboard = undefined
-  addDialog.value = false; windowMenu.value = null; backgroundCanvas.value = null; settingsDialog.value = false; accountDialog.value = false
+  addDialog.value = false; shareCard.value = undefined; windowMenu.value = null; backgroundCanvas.value = null; settingsDialog.value = false; accountDialog.value = false
   sidebarOpen.value = false; overviewMenuOpen.value = false; canvasMenu.value = false
   settings.value = null; fontRevision++; fontSignature = ''; latestState = undefined
-  sources.value = []; resources.value = []; canvases.value = []; nodes.value = []; windowSizes.value = {}
+  sources.value = []; polledResources.value = []; canvases.value = []; nodes.value = []; windowSizes.value = {}
   resourcesFresh.value = false; resourcesLoaded.value = false
   overviewBackground.value = null; windowGeometry.clear(); resourceSignature = ''; resourceLayoutSignature = ''; resourceRequest = undefined
   currentPage.value = undefined; overviewPaged.value = false; preferredPageX.value = undefined
@@ -996,7 +1026,14 @@ async function submitCanvas() {
 function deleteCanvas() {
   const canvas = currentCanvas.value
   if (!canvas) return
-  actionDialog.value = { get title() { return t('app.deleteNamed', { name: canvas.name }) }, get description() { return t('app.deleteCanvasDescription') }, value: '', danger: true, get button() { return t('app.deleteCanvas') }, submit: async () => { clearTimeout(saveTimers.get(canvas.id)); saveTimers.delete(canvas.id); pendingLayouts.delete(canvas.id); clearNoteEdits(canvas.id); await write(`/api/canvases/${segment(canvas.id)}`, 'DELETE'); await syncState(); switchCanvas('overview') } }
+  actionDialog.value = { get title() { return t('app.deleteNamed', { name: canvas.name }) }, get description() { return t('app.deleteCanvasDescription') }, value: '', danger: true, get button() { return t('app.deleteCanvas') }, submit: async () => {
+    const context = apiContext()
+    if (!await flushNotes(canvas.id) || !isCurrentApi(context) || !canvases.value.some(item => item.id === canvas.id)) return
+    await api(`/api/canvases/${segment(canvas.id)}`, { method: 'DELETE' }, context)
+    if (!isCurrentApi(context)) return
+    clearTimeout(saveTimers.get(canvas.id)); saveTimers.delete(canvas.id); pendingLayouts.delete(canvas.id); clearNoteEdits(canvas.id)
+    await syncState(); if (isCurrentApi(context) && activeId.value === canvas.id) switchCanvas('overview')
+  } }
 }
 function openSource(source?: Source) {
   sourceDialogRevision++
@@ -1165,6 +1202,14 @@ async function closeFocus() {
 }
 function cardAction(action: string, id: string) {
   if (action === 'settings') { openSettings(); return }
+  if (action === 'add') {
+    const canvas = currentCanvas.value, node = canvas?.nodes.find(item => item.id === id)
+    if (!canvas || !node || node.type === 'terminal') return
+    shareCard.value = { canvasId: canvas.id, node }
+    shareTarget.value = shareTargets.value.find(target => !target.disabled)?.id || shareTargets.value[0]?.id || ''
+    dialogError.value = ''
+    return
+  }
   if (action === 'unfocus') { void closeCardFocus(); return }
   if (action !== 'focus' || !mobile.value || !currentCanvas.value?.nodes.some(node => node.id === id && node.type !== 'terminal')) return
   sidebarOpen.value = false; sourcePanel.value = false; canvasMenu.value = false
@@ -1180,15 +1225,35 @@ async function closeCardFocus() {
   await restoreViewport()
 }
 watch(focusedCard, card => { if (focusedCardId.value && !card) void closeCardFocus() })
+async function submitCardReference() {
+  const chosen = shareCard.value, target = shareTargets.value.find(canvas => canvas.id === shareTarget.value && !canvas.disabled)
+  if (!chosen || !target || busy.value) return
+  const context = apiContext(), current = () => isCurrentApi(context) && shareCard.value === chosen && shareTarget.value === target.id
+  busy.value = true; dialogError.value = ''
+  try {
+    if (!await flushInstanceEdits() || !current()) return
+    const x = Math.max(80, ...target.nodes.map(node => node.x + node.width + 24))
+    await api(`/api/canvases/${segment(target.id)}/references`, { method: 'POST', body: JSON.stringify({ sourceCanvasId: chosen.canvasId, nodeId: chosen.node.id, x, y: 80 }) }, context)
+    if (!current()) return
+    await syncState()
+    if (!current()) return
+    shareCard.value = undefined; notify(t('app.addedToCanvas', { name: target.name }))
+  } catch (reason) { if (current()) dialogError.value = reason instanceof Error ? reason.message : String(reason) }
+  finally { if (isCurrentApi(context)) busy.value = false }
+}
 async function removeNode(id: string) {
   const canvas = currentCanvas.value
   if (!canvas) return
+  const context = apiContext()
   try {
-    await write(`/api/canvases/${segment(canvas.id)}/nodes/${segment(id)}`, 'DELETE')
+    if (canvas.nodes.find(node => node.id === id)?.type === 'note' && !await flushNotes(canvas.id)) return
+    if (!isCurrentApi(context) || !canvases.value.find(item => item.id === canvas.id)?.nodes.some(node => node.id === id)) return
+    await api(`/api/canvases/${segment(canvas.id)}/nodes/${segment(id)}`, { method: 'DELETE' }, context)
+    if (!isCurrentApi(context)) return
     pendingLayouts.get(canvas.id)?.delete(id)
     clearNoteEdits(canvas.id, id)
     await syncState()
-  } catch (reason) { showError(reason) }
+  } catch (reason) { if (isCurrentApi(context)) showError(reason) }
 }
 function openAdd(node?: TerminalCanvasNode) {
   addDialogRevision++
@@ -1222,6 +1287,22 @@ async function submitAdd() {
   finally { if (current()) busy.value = false }
 }
 function noteKey(canvasId: string, id: string) { return `${canvasId}/${id}` }
+function reconcileNoteEdits(next: Canvas[]) {
+  let moved = false
+  for (const key of new Set([...savingNotes.keys(), ...pendingNotes.keys()])) {
+    const saving = savingNotes.get(key), pending = pendingNotes.get(key), previous = pending || saving
+    if (!previous) continue
+    const edit = { ...previous, patch: { ...saving?.patch, ...pending?.patch } }
+    const target = retargetNoteEdit(edit, next)
+    if (target?.canvasId === edit.canvasId) continue
+    clearNoteEdits(edit.canvasId, edit.id)
+    if (!target) continue
+    const nextKey = noteKey(target.canvasId, target.id)
+    pendingNotes.set(nextKey, { ...target, patch: { ...target.patch, ...pendingNotes.get(nextKey)?.patch } })
+    moved = true
+  }
+  if (moved) queueMicrotask(() => { void flushNotes() })
+}
 function clearNoteEdits(canvasId?: string, id?: string) {
   for (const [key, edit] of pendingNotes) if ((!canvasId || edit.canvasId === canvasId) && (!id || edit.id === id)) {
     clearTimeout(noteTimers.get(key)); noteTimers.delete(key); pendingNotes.delete(key)
@@ -1233,16 +1314,22 @@ function editNote(canvasId: string, id: string, patch: NotePatch) {
   if (!node || node.type !== 'note') return
   const changed = Object.fromEntries(Object.entries(patch).filter(([key, value]) => node[key as keyof NotePatch] !== value)) as NotePatch
   if (!Object.keys(changed).length) return
+  const { minimized: _minimized, ...shared } = changed
+  for (const canvas of canvases.value) for (const reference of canvas.nodes)
+    if (reference.type === 'note' && reference.id === id) Object.assign(reference, shared)
+  // Queued writes from another canvas must not replay an older shared field.
+  for (const edit of [...savingNotes.values(), ...pendingNotes.values()]) if (edit.id === id)
+    for (const [field, value] of Object.entries(shared)) if (Object.hasOwn(edit.patch, field)) Object.assign(edit.patch, { [field]: value })
   Object.assign(node, changed)
   const key = noteKey(canvasId, id)
   pendingNotes.set(key, { canvasId, id, patch: { ...pendingNotes.get(key)?.patch, ...changed } })
   checkpointEdits()
   clearTimeout(noteTimers.get(key))
   noteTimers.set(key, setTimeout(() => { noteTimers.delete(key); void flushNotes(canvasId) }, 400))
-  if (activeId.value === canvasId) {
-    saveState.value = 'saving'
-    nodes.value = nodes.value.map(flow => flow.id === id ? { ...flow, data: { ...flow.data, ...changed }, style: changed.minimized === undefined ? flow.style : { ...flow.style, height: `${changed.minimized ? 30 : node.height}px` } } : flow)
-  }
+  if (activeId.value === canvasId) saveState.value = 'saving'
+  const visible = currentCanvas.value?.nodes.find((item): item is NoteCanvasNode => item.id === id && item.type === 'note')
+  if (visible) nodes.value = nodes.value.map(flow => flow.id === id ? { ...flow, data: { ...flow.data, ...visible },
+    style: { ...flow.style, height: `${visible.minimized ? 30 : visible.height}px` } } : flow)
 }
 async function flushNotes(canvasId?: string): Promise<boolean> {
   const context = apiContext()
@@ -1260,6 +1347,7 @@ async function flushNotes(canvasId?: string): Promise<boolean> {
         if (savingNotes.get(key) === edit) savingNotes.delete(key)
       } catch (reason) {
         if (!isCurrentApi(context)) return false
+        if (savingNotes.get(key) !== edit) continue
         failed = true
         if (savingNotes.get(key) === edit) {
           savingNotes.delete(key)
@@ -1310,7 +1398,7 @@ async function addNote() {
   const y = Math.round(((area?.height || 600) / 2 - viewport.y) / viewport.zoom - 120)
   try {
     const previous = new Set(canvas.nodes.map(node => node.id))
-    const result = await write<Canvas>(`/api/canvases/${segment(canvas.id)}/notes`, 'POST', { x, y })
+    const result = await write<Canvas>(`/api/canvases/${segment(canvas.id)}/notes`, 'POST', { x, y, title: t('panels.note.name') })
     await syncState()
     const added = result.nodes.find(node => !previous.has(node.id))
     if (added && activeId.value === canvas.id) {
@@ -1536,7 +1624,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
         <div v-if="showNavigation && !focused" class="canvas-toolbar"><button v-if="canvasFullscreen" :title="t('app.globalSettings')" :aria-label="t('app.globalSettings')" :disabled="!settings" @click="openSettings"><Icon name="settings" :size="17" /></button><button :title="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-label="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-pressed="canvasFullscreen" @click="toggleFullscreen"><Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button><button v-if="isOverview" :title="t('app.pagedBrowsing')" :aria-label="t('app.pagedBrowsing')" :aria-pressed="overviewPaged" @click="togglePaging"><Icon name="pages" :size="17" /></button><button v-if="!isOverview" :title="t('app.snapToGrid')" :aria-label="t('app.snapToGrid')" :aria-pressed="!!currentCanvas?.snapToGrid" @click="toggleSnap"><Icon name="grid" :size="15" /></button><template v-if="paging"><button v-for="item in pageDirections" :key="item.direction" :title="item.label" :aria-label="item.label" :disabled="!pageNeighbor(item.direction)" @pointerdown.prevent @click="movePage(item.direction)"><Icon :name="item.icon" :size="16" :style="{ transform: item.rotation }" /></button></template><button v-if="!paging" :title="t('app.zoomOut')" :aria-label="t('app.zoomOut')" @click="zoomOut({ duration: 150 })"><Icon name="minus" :size="17" /></button><button :title="paging ? t('app.centerWindow') : t('app.fitCanvas')" :aria-label="paging ? t('app.centerWindow') : t('app.fitCanvas')" @click="fitCanvas"><Icon name="fit" :size="17" /></button><button v-if="!paging" :title="t('app.zoomIn')" :aria-label="t('app.zoomIn')" @click="zoomIn({ duration: 150 })"><Icon name="plus" :size="17" /></button></div>
       </div>
     </main>
-    <Transition name="slide"><aside v-if="sourcePanel" class="source-panel"><header><div><h2>{{ t('app.connectionsWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeConnections')" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />{{ t('app.addConnection') }}</button><div class="source-panel-content"><div v-for="source in sources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small><span class="source-address">{{ source.transport === 'local' ? t('app.local') : source.target }}</span><span v-if="resources.find(item => item.id === source.id)?.serverVersion" class="source-version" :title="`herdr ${resources.find(item => item.id === source.id)!.serverVersion}`">herdr {{ resources.find(item => item.id === source.id)!.serverVersion }}</span></small></span></button><button class="icon-button" :title="t('app.editConnection')" :aria-label="t('app.editConnection')" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" :title="t('app.removeConnection')" :aria-label="t('app.removeConnection')" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><div v-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" :title="t('app.newWindow')" :aria-label="t('app.newWindow')" @click="windowAction({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="tab-plus" :size="14" /></button><button class="icon-button" :title="t('app.renameSpace')" :aria-label="t('app.renameSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" :title="t('app.closeSpace')" :aria-label="t('app.closeSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :style="{ '--program-color': statusColor(window.status) }" :title="statusLabel(window.status)" /><span>{{ window.name }}</span><button class="icon-button" :title="t('app.addToCanvas')" :aria-label="t('app.addToCanvas')" @click="openAdd({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 })"><Icon name="layers" :size="14" /></button><button class="icon-button" :title="t('app.windowActions')" :aria-label="t('app.windowActions')" @click="windowMenu = { name: window.name, node: { type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" @click="spaceAction(resources.find(item => item.id === source.id) || { ...source, status: '', spaces: [] }, undefined, 'create')"><Icon name="plus" :size="14" />{{ t('app.newSpace') }}</button></template></div><p v-if="!sources.length" class="panel-empty">{{ t('app.noConnections') }}</p></div></aside></Transition>
+    <Transition name="slide"><aside v-if="sourcePanel" ref="sourcePanelElement" class="source-panel"><header><div><h2>{{ t('app.connectionsWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeConnections')" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />{{ t('app.addConnection') }}</button><div class="source-panel-content"><div v-for="source in sources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small><span class="source-address">{{ source.transport === 'local' ? t('app.local') : source.target }}</span><span v-if="resources.find(item => item.id === source.id)?.serverVersion" class="source-version" :title="`herdr ${resources.find(item => item.id === source.id)!.serverVersion}`">herdr {{ resources.find(item => item.id === source.id)!.serverVersion }}</span></small></span></button><button class="icon-button" :title="t('app.editConnection')" :aria-label="t('app.editConnection')" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" :title="t('app.removeConnection')" :aria-label="t('app.removeConnection')" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><div v-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" :title="t('app.newWindow')" :aria-label="t('app.newWindow')" @click="windowAction({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="tab-plus" :size="14" /></button><button class="icon-button" :title="t('app.renameSpace')" :aria-label="t('app.renameSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" :title="t('app.closeSpace')" :aria-label="t('app.closeSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :style="{ '--program-color': statusColor(window.status) }" :title="statusLabel(window.status)" /><span>{{ window.name }}</span><button class="icon-button" :title="t('app.addToCanvas')" :aria-label="t('app.addToCanvas')" @click="openAdd({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 })"><Icon name="layers" :size="14" /></button><button class="icon-button" :title="t('app.windowActions')" :aria-label="t('app.windowActions')" @click="windowMenu = { name: window.name, node: { type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" @click="spaceAction(resources.find(item => item.id === source.id) || { ...source, status: '', spaces: [] }, undefined, 'create')"><Icon name="plus" :size="14" />{{ t('app.newSpace') }}</button></template></div><p v-if="!sources.length" class="panel-empty">{{ t('app.noConnections') }}</p></div></aside></Transition>
     <div v-if="focused || focusedCard" ref="focusViewportElement" class="focus-overlay" :class="{ 'card-focus-overlay': focusedCard }">
       <TerminalNode v-if="focused" :key="focused.id" :id="focused.id" :data="{ ...terminalData(focused, isOverview), ...focusedSize, overview: isOverview, focus: true }" />
       <NoteNode v-else-if="focusedCard?.type === 'note'" :key="focusedCard.id" :id="focusedCard.id" :selected="false" :data="noteData(focusedCard, true)" />
@@ -1557,6 +1645,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
       <section v-else-if="canvasDialog" class="modal"><header><div><h2 id="canvas-title">{{ canvasDraft.id ? t('app.renameCanvas') : t('app.newCanvas') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="canvasDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitCanvas"><label>{{ t('app.canvasName') }}<input v-model="canvasDraft.name" name="canvasName" required autofocus :placeholder="t('app.canvasNamePlaceholder')" maxlength="80" /></label><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="canvasDialog = false">{{ t('common.cancel') }}</button><button class="button primary" :disabled="busy" type="submit">{{ canvasDraft.id ? t('common.save') : t('app.createCanvas') }}</button></footer></form></section>
       <section v-else-if="actionDialog" class="modal"><header><h2 id="action-title">{{ actionDialog.title }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" :disabled="busy" @click="actionDialog = null"><Icon name="close" /></button></header><p v-if="actionDialog.description">{{ actionDialog.description }}</p><form @submit.prevent="submitAction"><label v-if="actionDialog.label">{{ actionDialog.label }}<input v-model="actionDialog.value" name="resourceName" :required="!actionDialog.optional" :placeholder="actionDialog.optional ? t('app.automaticName') : undefined" autofocus maxlength="100" /></label><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" :disabled="busy" @click="actionDialog = null">{{ t('common.cancel') }}</button><button class="button" :class="actionDialog.danger ? 'danger' : 'primary'" :disabled="busy" type="submit">{{ actionDialog.button }}</button></footer></form></section>
       <section v-else-if="addDialog" class="modal add-modal"><header><div><h2 id="add-title">{{ t('app.addWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="addDialog = false"><Icon name="close" /></button></header><label>{{ t('app.targetCanvas') }}<select v-model="addTarget"><option v-for="canvas in canvases" :key="canvas.id" :value="canvas.id">{{ canvas.name }}</option><option value="">{{ t('app.newMyCanvas') }}</option></select></label><div class="search-field"><Icon name="search" :size="16" /><input v-model="addSearch" :aria-label="t('app.searchWindows')" :placeholder="t('app.searchPlaceholder')" /></div><WindowPickerTree v-model:selected="selectedWindows" :sources="sources" :resources="resources" :query="addSearch" :existing="existingAddWindows" /><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><span class="selection-count">{{ t('app.selectedWindows', selectedAddWindows.length) }}</span><button class="button primary" :disabled="busy || !selectedAddWindows.length" @click="submitAdd">{{ t('app.addToCanvas') }}<Icon name="arrow" :size="16" /></button></footer></section>
+      <section v-else-if="shareCard" class="modal share-card-modal"><header><h2>{{ t('app.addToOtherCanvas') }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" @click="shareCard = undefined"><Icon name="close" /></button></header><form @submit.prevent="submitCardReference"><label>{{ t('app.targetCanvas') }}<select v-model="shareTarget" name="targetCanvas"><option v-if="!shareTargets.length" value="" disabled>{{ t('app.noOtherCanvases') }}</option><option v-for="canvas in shareTargets" :key="canvas.id" :value="canvas.id" :disabled="canvas.disabled">{{ canvas.name }}</option></select></label><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="shareCard = undefined">{{ t('common.cancel') }}</button><button class="button primary" type="submit" :disabled="busy || !shareTargets.some(canvas => canvas.id === shareTarget && !canvas.disabled)">{{ t('app.addToCanvas') }}</button></footer></form></section>
       <section v-else-if="windowMenu" class="modal window-menu"><header><h2 id="window-title">{{ windowMenu.name }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" @click="windowMenu = null"><Icon name="close" /></button></header><button v-if="mobile && focused?.id === windowMenu.node.id" @pointerdown.prevent @click="showWindowKeyboard"><Icon name="terminal" />{{ t('terminal.action.showKeyboard') }}</button><button v-if="mobile" @click="windowMenu = null; openSettings()"><Icon name="canvas" />{{ t('common.settings') }}</button><button v-if="mobile && !isOverview && windowMenu.node.id" :disabled="!terminalData(windowMenu.node).available" @click="terminalData(windowMenu.node).newTab?.create(); windowMenu = null"><Icon name="tab-plus" />{{ t('app.newTab') }}</button><button v-if="copiedFile" :title="t('fileTransfer.pasteNamed', { name: copiedFile.filename })" :disabled="!hasLiveTerminal(windowMenu.node.sourceId, windowMenu.node.windowId)" @click="pasteFileIntoWindow(windowMenu.node.sourceId, windowMenu.node.windowId); windowMenu = null"><Icon name="file" />{{ t('fileTransfer.paste') }}</button><button :disabled="!hasLiveTerminal(windowMenu.node.sourceId, windowMenu.node.windowId)" @click="scanWindowContent(windowMenu.node, windowMenu.name)"><Icon name="search" />{{ t('panels.scan.title') }}</button><button @click="openAdd(windowMenu.node); windowMenu = null"><Icon name="layers" />{{ t('app.addToOtherCanvas') }}</button><button @click="windowAction(windowMenu.node, 'rename')"><Icon name="edit" />{{ t('app.renameWindow') }}</button><button class="danger-text" @click="windowAction(windowMenu.node, 'close')"><Icon name="trash" />{{ t('app.closeWindow') }}</button></section>
       </fieldset></template>
     </UModal>

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { FONT_CATALOG, contentFontCss, fontChain } from './font-catalog.ts'
-import manifest from '../public/fonts/manifest.json' with { type: 'json' }
+import manifest from './assets/fonts/manifest.json' with { type: 'json' }
 
 test('bundled assets retain every upstream glyph, native style and verified byte', async () => {
   const files = FONT_CATALOG.flatMap(font => font.faces.map(face => face.file)).sort()

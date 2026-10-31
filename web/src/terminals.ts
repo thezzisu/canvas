@@ -1,4 +1,6 @@
-import { watch } from 'vue'
+import { shallowRef, watch } from 'vue'
+import { isWindowMetadata, type WindowMetadata } from '../../shared/window-metadata'
+import { metadataAfterPoll } from './live-resources'
 import { locale, t } from './i18n'
 import { Terminal } from '@xterm/xterm'
 import { terminalUnicodeAddon } from '../../shared/terminal-unicode'
@@ -20,7 +22,7 @@ import { copiedFile } from './file-clipboard'
 import { loadCanvasFile } from './file-transfer'
 import type { CanvasFileReference } from './file-reference'
 import { fitTerminalGrid, terminalBox } from './terminal-geometry'
-import { TerminalReconnect } from './terminal-reconnect'
+import { TerminalReconnect, terminalInputHasFocus } from './terminal-reconnect'
 
 export type TerminalStatus = {
   status: 'connecting' | 'connected' | 'disconnected'
@@ -72,6 +74,7 @@ interface Session {
   opened: boolean
   rendered?: TerminalGeometry & { cols: number; rows: number }
   state: TerminalStatus
+  metadata?: WindowMetadata
   listeners: Set<(state: TerminalStatus) => void>
   geometryListeners: Set<(geometry: TerminalGeometry) => void>
   resource: { sourceId: string; spaceId: string; windowId: string }
@@ -80,6 +83,37 @@ interface Session {
   clipboard?: TerminalClipboard
 }
 const sessions = new Map<string, Session>()
+export const liveTerminalMetadata = shallowRef<ReadonlyMap<string, WindowMetadata>>(new Map())
+let metadataSources = new Set<string>()
+function updateMetadata(session: Session, metadata?: WindowMetadata) {
+  if (metadata && !metadataSources.has(session.resource.sourceId)) return
+  session.metadata = metadata
+  // A native window can move between spaces while its previous view retires.
+  // Closing that view must not erase metadata from its replacement socket.
+  metadata ??= metadataSources.has(session.resource.sourceId) ? [...sessions.values()].find(other => other !== session &&
+    other.resource.sourceId === session.resource.sourceId && other.resource.windowId === session.resource.windowId &&
+    other.socket?.readyState === WebSocket.OPEN && other.metadata)?.metadata : undefined
+  const key = `${session.resource.sourceId}/${session.resource.windowId}`
+  const previous = liveTerminalMetadata.value.get(key)
+  if (JSON.stringify(previous) === JSON.stringify(metadata)) return
+  const next = new Map(liveTerminalMetadata.value)
+  if (metadata) next.set(key, metadata)
+  else next.delete(key)
+  liveTerminalMetadata.value = next
+}
+export function retainTerminalMetadata(sourceIds: readonly string[]) {
+  metadataSources = new Set(sourceIds)
+  const next = new Map(liveTerminalMetadata.value)
+  for (const session of sessions.values()) if (!metadataSources.has(session.resource.sourceId)) {
+    session.metadata = undefined
+    next.delete(`${session.resource.sourceId}/${session.resource.windowId}`)
+  }
+  if (next.size !== liveTerminalMetadata.value.size) liveTerminalMetadata.value = next
+}
+export function acknowledgeTerminalMetadata(started: ReadonlyMap<string, WindowMetadata>, sourceIds: readonly string[]) {
+  const next = metadataAfterPoll(liveTerminalMetadata.value, started, sourceIds)
+  if (next.size !== liveTerminalMetadata.value.size) liveTerminalMetadata.value = next
+}
 function syncViewVisibility(session: Session) {
   if (session.state.status !== 'connected' || session.socket?.readyState !== WebSocket.OPEN) return
   const visible = !!session.host?.isConnected && session.viewVisible !== false && !document.hidden
@@ -222,6 +256,7 @@ function schedulePresentation(session: Session) {
   })
 }
 function disconnect(session: Session) {
+  updateMetadata(session)
   session.reportedVisible = undefined
   session.connectionRevision++
   session.connectionProbe?.abort(); session.connectionProbe = undefined
@@ -290,14 +325,15 @@ async function connect(session: Session, probe: boolean) {
     socket.send(JSON.stringify({ type: 'auth', token: context.token }))
   }
   socket.onmessage = event => {
-    if (session.socket !== socket) return
+    if (session.socket !== socket || !isCurrentApi(context)) return
     if (event.data instanceof ArrayBuffer) session.term.write(new Uint8Array(event.data))
     else {
       try {
         const message = JSON.parse(event.data)
         if (receiveDownload(socket, message, session.resource)) return
         if (receiveDirectory(socket, message) || receiveUrl(socket, message) || session.uploads.receive(message)) return
-        if (message.type === 'reset') session.term.write('\x1bc')
+        if (message.type === 'metadata' && isWindowMetadata(message.window) && message.window.id === session.resource.windowId) updateMetadata(session, message.window)
+        else if (message.type === 'reset') session.term.write('\x1bc')
         else if (message.type === 'pane-focus') setState(session, { ...session.state, focusedPaneId: typeof message.paneId === 'string' ? message.paneId : undefined })
         else if (message.type === 'presentation') {
           const revision = session.presentationRevision = (session.presentationRevision || 0) + 1
@@ -317,11 +353,14 @@ async function connect(session: Session, probe: boolean) {
             connectionFailed(session, typeof message.error === 'string' ? message.error : undefined); return
           }
           if (message.status !== 'connected' && message.status !== 'connecting') return
+          const restoreInputFocus = probe && message.status === 'connected' && session.state.status !== 'connected'
           if (message.status === 'connected') session.reconnect?.connected()
           setState(session, { ...session.state, status: message.status, error: undefined,
             retryAttempt: message.status === 'connected' ? undefined : session.state.retryAttempt, readOnly: message.readOnly === true })
           syncViewVisibility(session)
           schedulePresentation(session)
+          if (restoreInputFocus && session.host?.isConnected && session.viewVisible !== false &&
+            terminalInputHasFocus(session.mobile ? session.mobileInput?.element : session.term.textarea)) claimFocus(session)
         }
         else if (message.type === 'resize' && Number.isInteger(message.cols) && Number.isInteger(message.rows)) {
           session.term.resize(message.cols, message.rows)
@@ -709,6 +748,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   }
 }
 export function clearTerminals() {
+  liveTerminalMetadata.value = new Map()
+  metadataSources.clear()
   clearDownloads()
   clearDirectories()
   clearUrls()

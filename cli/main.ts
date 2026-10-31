@@ -9,6 +9,9 @@ const help = `Usage: canvas [serve | open <path-or-url> | version]
   open        Open a file, directory or URL from a connected herdr pane
   version     Print the installed version
   --help      Show this help
+
+open uses the caller's HERDR_SOCKET_PATH and HERDR_PANE_ID.
+Daemon callers must supply the originating pane's values per invocation.
 `
 const [command = 'serve', ...args] = process.argv.slice(2)
 if (['--help', '-h', 'help'].includes(command) || command === 'serve' && args.length === 1 && ['--help', '-h'].includes(args[0]!)) {

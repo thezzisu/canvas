@@ -7,10 +7,11 @@ import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/Dropdo
 import { DialogTitle } from 'reka-ui'
 import Icon from './Icon.vue'
 import ImagePreview from './ImagePreview.vue'
+import MediaPreview from './MediaPreview.vue'
 import TextPreview from './TextPreview.vue'
 import TextPreviewActions from './TextPreviewActions.vue'
 import { downloadPreview, downloadPreviewCount, dismissDownloadPreview } from '../downloads'
-import { readTextPreview } from '../text-preview'
+import { BinaryFileError, readTextPreview } from '../text-preview'
 import { downloadMedia, useMediaUrl } from '../media'
 import { reportDownloadError } from '../downloads'
 import { apiFetch } from '../api'
@@ -77,7 +78,10 @@ async function loadText() {
     if (request !== current || current.signal.aborted) return
     text.value = result.text; truncated.value = result.truncated
   } catch (reason) {
-    if (request === current && !current.signal.aborted) error.value = reason instanceof Error ? reason : 'panels.preview.unavailable'
+    if (request === current && !current.signal.aborted) {
+      if (reason instanceof BinaryFileError) { download(); dismissDownloadPreview() }
+      else error.value = reason instanceof Error ? reason : 'panels.preview.unavailable'
+    }
   } finally { if (request === current) loading.value = false }
 }
 watch(downloadPreview, preview => {
@@ -132,6 +136,7 @@ onBeforeUnmount(() => request?.abort())
         <div v-else-if="loading || (downloadPreview.preview !== 'text' && !previewUrl)" class="download-preview-status" role="status"><span class="spinner" /> {{ t('common.loading') }}</div>
         <div v-if="error" class="download-preview-status" role="alert"><span>{{ error instanceof Error ? error.message : t(error) }}</span><button v-if="downloadPreview.preview === 'text'" type="button" @click="loadText">{{ t('common.retry') }}</button></div>
         <ImagePreview v-if="downloadPreview.preview === 'image' && previewUrl && !error" :key="downloadPreview.id" :id="downloadPreview.id" :src="previewUrl" :alt="downloadPreview.filename" @loaded="imageLoaded" @failed="imageFailed" />
+        <MediaPreview v-else-if="(downloadPreview.preview === 'audio' || downloadPreview.preview === 'video') && previewUrl" :key="downloadPreview.id" :kind="downloadPreview.preview" :src="previewUrl" :title="downloadPreview.filename" @download="download" />
         <template v-else-if="downloadPreview.preview === 'pdf'">
           <iframe v-if="pdfPreview && previewUrl" class="download-preview-pdf" :src="previewUrl" :title="downloadPreview.filename" referrerpolicy="no-referrer" />
           <div v-else class="download-preview-status">{{ t('panels.preview.pdfUnavailable') }}</div>

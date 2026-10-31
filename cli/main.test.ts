@@ -20,6 +20,7 @@ function run(args: string[]) {
 test('help and version need neither an account nor package working directory', () => {
   const help = run(['--help'])
   assert.equal(help.status, 0); assert.match(help.stdout, /serve.*open.*version/u); assert(!help.stdout.includes('setup'))
+  assert.match(help.stdout, /HERDR_SOCKET_PATH and HERDR_PANE_ID/u)
   assert.equal(run(['serve', '--help']).status, 0)
   const version = run(['version'])
   assert.equal(version.status, 0); assert.equal(version.stdout.trim(), 'development')
@@ -40,4 +41,6 @@ test('open delegates to the bundled Python core without changing the caller work
   assert(!result.stderr.includes('file not found'))
   const help = run(['open', '--help'])
   assert.equal(help.status, 0); assert.match(help.stdout, /path/u)
+  assert.match(help.stdout, /HERDR_SOCKET_PATH and HERDR_PANE_ID/u)
+  assert.match(help.stdout, /each invocation/u)
 })

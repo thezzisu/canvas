@@ -32,7 +32,7 @@ export class MediaTickets {
     if (ticket.expiresAt <= this.now() || !this.validSession(ticket.session)) { this.tickets.delete(id); return }
     const media = await this.read(ticket.path, ticket.session, ticket.download)
     if (!media) return
-    if (!this.validSession(ticket.session)) { media.body.destroy(); return }
+    if (ticket.expiresAt <= this.now() || !this.validSession(ticket.session)) { media.body.destroy(); return }
     const headers = new Headers(media.headers)
     headers.set('Cache-Control', 'private, no-store')
     headers.set('Referrer-Policy', 'no-referrer')
@@ -61,6 +61,13 @@ export class MediaTickets {
       headers.set('Content-Length', String(end - start + 1))
     }
     if (method === 'HEAD') { media.body.destroy(); return new Response(null, { status, headers }) }
+    if (range && media.readRange) {
+      media.body.destroy()
+      const body = await media.readRange(start, end)
+      if (!body) return
+      if (ticket.expiresAt <= this.now() || !this.validSession(ticket.session)) { body.destroy(); return }
+      return new Response(Readable.toWeb(body) as ReadableStream, { status, headers })
+    }
     const source = media.body
     async function* bytes() {
       let position = 0

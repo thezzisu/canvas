@@ -6,6 +6,7 @@ import { sourceConnectionKey, type Source } from "./state.ts";
 import { openTerminal } from "./providers.ts";
 import { GeometryController, type Size } from "./geometry.ts";
 import { HERDR_MOUSE_ENCODING, type HerdrClientTransport } from "./herdr/client.ts";
+import type { WindowMetadata } from "../shared/window-metadata.ts";
 const { Terminal } = headless;
 const { SerializeAddon } = serialize;
 export type TerminalTarget = {
@@ -29,6 +30,7 @@ class LiveTerminal {
   private maximized?: { owner: WebSocket; token: string; lease: number; releasing?: boolean };
   private presentationRevision = 0;
   private focusedPaneId?: string;
+  private metadata?: WindowMetadata;
   private cursorVisible = true;
   private cursorShape = 0;
   controller?: WebSocket;
@@ -90,6 +92,11 @@ class LiveTerminal {
       if (this.closed || this.focusedPaneId === paneId) return;
       this.focusedPaneId = paneId;
       for (const ws of this.clients) json(ws, { type: "pane-focus", paneId });
+    });
+    this.proc.onMetadata(metadata => {
+      if (this.closed) return;
+      this.metadata = metadata;
+      for (const ws of this.clients) json(ws, { type: "metadata", window: metadata });
     });
     this.proc.onData((data) => {
       if (this.closed) return;
@@ -222,6 +229,7 @@ class LiveTerminal {
       if (this.closed || ws.readyState !== 1) return;
       this.clients.add(ws);
       if (!this.controller) this.controller = ws;
+      if (this.metadata) json(ws, { type: "metadata", window: this.metadata });
       this.snapshot(ws);
       this.status();
       json(ws, this.geometry.state(ws));

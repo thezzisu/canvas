@@ -15,7 +15,7 @@ export default {
   preview: {
     source: '显示源码', rendered: '渲染 Markdown', wrap: '自动换行',
     close: '关闭预览', remaining: '还有 {count} 个文件待预览', fullscreen: '全屏预览', exitFullscreen: '退出全屏预览',
-    unavailable: '无法预览此文件', pdfUnavailable: '浏览器不支持 PDF 预览', truncated: '已显示前 1 MiB',
+    unavailable: '无法预览此文件', mediaUnavailable: '当前浏览器无法播放此文件。', pdfUnavailable: '浏览器不支持 PDF 预览', truncated: '已显示前 1 MiB',
   },
   file: { addFailed: '无法添加文件', dropToAdd: '松开以添加为便签', adding: '正在添加文件', download: '下载文件', remove: '删除文件', downloadNamed: '下载 {name}', downloadOriginal: '下载原文件', unreadable: '无法读取文本' },
   image: { zoom: '图片缩放', zoomOut: '缩小图片', zoomIn: '放大图片', fit: '适合图片', scale: '缩放比例' },

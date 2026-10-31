@@ -1,7 +1,7 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,10 +9,12 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const helper = fileURLToPath(new URL("./canvas", import.meta.url));
+const routingError = (nativeSocket: string, message: string, pane = "w1:p2") =>
+  `canvas: ${message}\n  HERDR_SOCKET_PATH=${JSON.stringify(nativeSocket)} HERDR_PANE_ID=${JSON.stringify(pane)}\n`;
 interface Header {
   version: number; secret: string; nativeSocket: string;
   paneId: string; filename: string; size: number;
-  kind: "file" | "directory"; path?: string;
+  kind: "file" | "directory" | "url"; path?: string; url?: string;
 }
 
 async function fixture(t: TestContext) {
@@ -65,6 +67,7 @@ socket.socket.connect = injected_connect`);
     acceptDelay?: number; rejectReason?: unknown; startResponse?: unknown; finalResponse?: unknown;
     cancelDelay?: number; pauseInput?: boolean; progressDelay?: number; neverComplete?: boolean;
     repeatedProgress?: boolean; directoryDelay?: number;
+    closeWithoutReply?: boolean;
   } = {}) {
     const socket = join(root, `${name}.sock`), record = join(registry, `${name}.json`);
     const secret = randomBytes(32).toString("base64url");
@@ -97,21 +100,22 @@ socket.socket.connect = injected_connect`);
         const end = data.indexOf(10);
         if (end < 0) return;
         header = JSON.parse(data.subarray(0, end).toString()) as Header;
-        // Check credentials without including their values in assertion output.
-        assert(header.secret === secret, "bridge credential matches");
+        // Reject credentials without including their values in assertion output.
+        if (header.secret !== secret) { client.end('{"ok":false}\n'); return; }
         const { secret: ignored, ...publicHeader } = header;
         headers.push(publicHeader);
         assert.equal(data.length, end + 1, "helper waits before transferring bytes");
-        if (header.kind === "directory") {
+        if (options.closeWithoutReply) { client.end(); return; }
+        if (header.kind === "directory" || header.kind === "url") {
           if (options.neverComplete) return;
           const received = () => client.end(JSON.stringify(options.reject || options.rejectReason !== undefined
-            ? { ok: false, reason: options.rejectReason } : { ok: true }) + "\n");
+            ? { ok: false, reason: options.rejectReason ?? "not-attached" } : { ok: true }) + "\n");
           if (options.directoryDelay) later(received, options.directoryDelay); else received();
           return;
         }
         const accept = () => {
           if (options.reject || options.rejectReason !== undefined) {
-            client.end(JSON.stringify({ ok: false, reason: options.rejectReason, error: "No active browser" }) + "\n"); return;
+            client.end(JSON.stringify({ ok: false, reason: options.rejectReason ?? "not-attached", error: "No active browser" }) + "\n"); return;
           }
           accepted = true;
           send(options.startResponse ?? { ok: true, state: "transferring", transferred: 0, size: header!.size });
@@ -128,7 +132,7 @@ socket.socket.connect = injected_connect`);
         } else accept();
       });
       client.on("end", () => {
-        if (header?.kind === "directory") return;
+        if (header?.kind === "directory" || header?.kind === "url") return;
         if (!accepted) { client.end(); return; }
         bodies.push(body);
         if (options.neverComplete) return;
@@ -204,7 +208,7 @@ test("canvas open rejects nonfiles and reports unavailable recipients without se
   assert.equal(nonFile.code, 1); assert.match(nonFile.stderr, /file or directory/u);
   assert.equal(endpoint.headers.length, 0);
   const denied = await f.run("file");
-  assert.equal(denied.code, 1); assert.match(denied.stderr, /no browser attached to this window/u);
+  assert.equal(denied.code, 1); assert.equal(denied.stderr, routingError(f.nativeSocket, "no browser ready to receive from this pane"));
   assert.equal(denied.stdout, ""); assert.equal(endpoint.bodies.length, 0);
   assert.equal(endpoint.headers.length, 1);
 });
@@ -228,7 +232,7 @@ test("canvas open directories fail promptly without a controlling browser and bo
   const f = await fixture(t), endpoint = await f.endpoint("directory", { rejectReason: "not-attached" });
   const rejected = await f.run(".");
   assert.equal(rejected.code, 1);
-  assert.equal(rejected.stderr, "canvas: no browser attached to this window\n");
+  assert.equal(rejected.stderr, routingError(f.nativeSocket, "no browser ready to receive from this pane"));
   await rm(endpoint.record);
   await f.endpoint("unresponsive-directory", { neverComplete: true });
   const timedOut = await f.run(".", {}, { start: 0.1, idle: 1 });
@@ -344,7 +348,7 @@ test("canvas open never reflects a remote error or terminal controls", async t =
   await writeFile(join(f.root, "file"), "fixture");
   const result = await f.run("file");
   assert.equal(result.code, 1);
-  assert.equal(result.stderr, "canvas: no browser attached to this window\n");
+  assert.equal(result.stderr, "canvas: open request rejected\n");
 });
 
 test("canvas open exits promptly when no browser bridge is attached", async t => {
@@ -353,7 +357,7 @@ test("canvas open exits promptly when no browser bridge is attached", async t =>
   const began = Date.now();
   const result = await f.run("file");
   assert.equal(result.code, 1);
-  assert.equal(result.stderr, "canvas: no browser attached to this window\n");
+  assert.equal(result.stderr, routingError(f.nativeSocket, "no Canvas bridge for this herdr socket"));
   assert(Date.now() - began < 2000, "missing bridge must not wait for a browser decision");
 });
 
@@ -371,12 +375,12 @@ test("canvas open distinguishes denied bridge access from absent browsers withou
   }
 });
 
-test("canvas open still reports a missing browser for stale or refused bridge sockets", async t => {
+test("canvas open distinguishes stale or refused bridges from a pane without a browser", async t => {
   for (const errno of [2, 111]) await t.test(`errno ${errno}`, async t => {
     const f = await fixture(t), endpoint = await f.endpoint("stale");
     await writeFile(join(f.root, "file"), "must not be sent");
     assert.deepEqual(await f.run("file", {}, undefined, false, { stage: "probe", errno }), {
-      code: 1, stdout: "", stderr: "canvas: no browser attached to this window\n",
+      code: 1, stdout: "", stderr: routingError(f.nativeSocket, "no Canvas bridge for this herdr socket"),
     });
     assert.equal(endpoint.headers.length, 0);
   });
@@ -388,9 +392,21 @@ test("canvas open exits promptly when the server has only passive browser viewer
   const began = Date.now();
   const result = await f.run("file");
   assert.equal(result.code, 1);
-  assert.equal(result.stderr, "canvas: no browser attached to this window\n");
+  assert.equal(result.stderr, routingError(f.nativeSocket, "no browser ready to receive from this pane"));
   assert.equal(endpoint.bodies.length, 0);
   assert(Date.now() - began < 2000, "passive viewers must not leave the helper waiting");
+});
+
+test("routing diagnostics quote inherited identities instead of rendering terminal controls", async t => {
+  const f = await fixture(t);
+  await f.endpoint("passive", { rejectReason: "not-attached" });
+  await writeFile(join(f.root, "file"), "fixture");
+  const pane = 'pane"\u009b31m\u202e';
+  const result = await f.run("file", { HERDR_PANE_ID: pane });
+  assert.equal(result.code, 1);
+  assert(result.stderr.includes('HERDR_PANE_ID="pane\\"\\u009b31m\\u202e"'));
+  assert(!result.stderr.includes('\u009b')); assert(!result.stderr.includes('\u202e'));
+  assert(!result.stderr.includes("No active browser"));
 });
 
 test("canvas open bounds a transfer that stops reporting progress", async t => {
@@ -445,4 +461,30 @@ test("canvas open ignores unsafe, unrelated and symlinked registry records", asy
   await chmod(f.registry, 0o755);
   assert.equal((await f.run("file")).code, 1);
   assert.equal(endpoint.headers.length, 0);
+});
+
+test("file, directory and URL calls ignore dead bridge records but never retry an expired bridge credential", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("active");
+  await writeFile(join(f.root, "file"), "scoped fixture");
+  const record = JSON.parse(await readFile(endpoint.record, "utf8"));
+  await writeFile(join(f.registry, "stale.json"), JSON.stringify({ ...record, socket: join(f.root, "gone.sock") }), { mode: 0o600 });
+  for (const path of ["file", ".", "https://example.test/fixture"]) assert.deepEqual(await f.run(path), { code: 0, stdout: "", stderr: "" });
+  assert.deepEqual(endpoint.headers.map(header => header.kind), ["file", "directory", "url"]);
+  const bodyCount = endpoint.bodies.length;
+  await writeFile(endpoint.record, JSON.stringify({ ...record, secret: "expired-fixture-credential" }), { mode: 0o600 });
+  for (const path of ["file", ".", "https://example.test/fixture"]) {
+    assert.deepEqual(await f.run(path), { code: 1, stdout: "", stderr: "canvas: open request rejected\n" });
+  }
+  assert.equal(endpoint.headers.length, 3);
+  assert.equal(endpoint.bodies.length, bodyCount, "expired credentials release no file bytes or references");
+});
+
+test("directory and URL peer closure is immediate and distinct from a timeout", async t => {
+  const f = await fixture(t);
+  await f.endpoint("closed", { closeWithoutReply: true });
+  for (const path of [".", "https://example.test/fixture"]) {
+    const start = Date.now();
+    assert.deepEqual(await f.run(path), { code: 1, stdout: "", stderr: "canvas: open connection closed\n" });
+    assert(Date.now() - start < 2000);
+  }
 });

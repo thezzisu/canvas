@@ -1,6 +1,29 @@
 import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
-import { TerminalReconnect } from './terminal-reconnect.ts'
+import { TerminalReconnect, terminalInputHasFocus } from './terminal-reconnect.ts'
+
+test('reconnect focus requires the exact live desktop or mobile input in the foreground document', () => {
+  const document = { hidden: false, focused: true, activeElement: null as unknown, hasFocus() { return this.focused } }
+  const desktop = { isConnected: true, ownerDocument: document } as unknown as HTMLElement
+  const mobile = { isConnected: true, ownerDocument: document } as unknown as HTMLElement
+  assert.equal(terminalInputHasFocus(), false)
+  assert.equal(terminalInputHasFocus(desktop), false, 'a passive or merely centered window has no input focus')
+  document.activeElement = desktop
+  assert.equal(terminalInputHasFocus(desktop), true)
+  assert.equal(terminalInputHasFocus(mobile), false, 'another input cannot inherit desktop focus')
+  document.activeElement = mobile
+  assert.equal(terminalInputHasFocus(mobile), true)
+  assert.equal(terminalInputHasFocus(desktop), false)
+  document.hidden = true
+  assert.equal(terminalInputHasFocus(mobile), false)
+  document.hidden = false; document.focused = false
+  assert.equal(terminalInputHasFocus(mobile), false, 'background windows may retain activeElement')
+  document.focused = true
+  Object.assign(mobile, { isConnected: false })
+  assert.equal(terminalInputHasFocus(mobile), false)
+  document.activeElement = {}
+  assert.equal(terminalInputHasFocus(desktop), false, 'modal and header controls do not authorize terminal delivery')
+})
 
 function fixture(t: TestContext) {
   t.mock.timers.enable({ apis: ['setTimeout'] })

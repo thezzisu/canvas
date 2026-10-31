@@ -31,7 +31,7 @@ test('authenticated raw file uploads stream past the JSON limit into persistent 
   const response = await f.upload('记录.md', content)
   assert.equal(response.status, 201)
   const asset = await response.json()
-  assert.equal(asset.filename, '记录.md'); assert.equal(asset.size, content.length); assert.equal(asset.preview, 'text')
+  assert.equal(asset.filename, '记录.md'); assert.equal(asset.size, content.length); assert.equal('preview' in asset, false)
   const card = f.store.get<Canvas>('canvas', f.canvas.id)!.nodes[0]!
   assert.equal(card.type, 'file'); assert.equal(card.x, -123.5); assert.equal(card.y, 87.25)
   const served = await f.app.request(`http://canvas.test/api/files/${asset.id}`, { headers: { Authorization: 'Bearer fixture' } })

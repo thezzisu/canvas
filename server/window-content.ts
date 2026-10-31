@@ -119,7 +119,7 @@ export class WindowContentService {
         : { ...context, sourceId: record.sourceId, windowId: record.windowId }
       const asset = await upload.complete(destination, controller.signal)
       const id = asset.temporary ? this.options.registerStaged(asset.id, sessionId) : asset.id
-      return { id, filename: asset.filename, size: asset.size, mime: asset.mime, preview: asset.preview,
+      return { id, filename: asset.filename, size: asset.size, mime: asset.mime,
         temporary: asset.temporary, url: asset.temporary ? `/api/downloads/${id}` : `/api/files/${id}` }
     } catch (error) {
       await upload?.abort()

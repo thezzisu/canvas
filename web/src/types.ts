@@ -61,7 +61,6 @@ export interface FileAsset {
   filename: string
   size: number
   mime: string
-  preview: 'image' | 'pdf' | 'text' | 'file'
   createdAt: number
 }
 export interface FileCanvasNode extends NodeLayout {

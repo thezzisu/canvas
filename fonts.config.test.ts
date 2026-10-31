@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import { build } from 'vite'
 import { contentFontsPlugin } from './fonts.config.ts'
-import manifest from './web/public/fonts/manifest.json' with { type: 'json' }
+import manifest from './web/src/assets/fonts/manifest.json' with { type: 'json' }
 
 test('Vite emits each complete font once under a hashed URL shared by every CSS alias', async () => {
   const result = await build({

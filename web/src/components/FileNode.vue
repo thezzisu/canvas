@@ -7,9 +7,11 @@ import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/Dropdo
 import type { FileData } from '../types'
 import Icon from './Icon.vue'
 import CardPreview from './CardPreview.vue'
-import { readTextPreview } from '../text-preview'
+import { BinaryFileError, readTextPreview } from '../text-preview'
+import { filePreview } from '../file-preview'
 import TextPreview from './TextPreview.vue'
 import TextPreviewActions from './TextPreviewActions.vue'
+import MediaPreview from './MediaPreview.vue'
 import { isMarkdownFile } from '../markdown'
 import { activeInstance } from '../instances'
 import { downloadMedia, useMediaUrl } from '../media'
@@ -24,25 +26,31 @@ import { usePointerDismiss } from '../pointer-dismiss'
 const { t, n } = useI18n()
 
 const props = withDefaults(defineProps<Pick<NodeProps<FileData>, 'id' | 'data'> & { selected?: boolean }>(), { selected: false })
+const binary = ref(false)
+const preview = computed(() => binary.value ? 'file' : filePreview(props.data.asset))
+watch(() => props.data.assetId, () => { binary.value = false })
 const mobilePreview = computed(() => !!props.data.mobile && !props.data.focus)
 const header = ref<HTMLElement>()
 const compact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined))
-const markdown = computed(() => props.data.asset.preview === 'text' && isMarkdownFile(props.data.asset.filename))
+const markdown = computed(() => preview.value === 'text' && isMarkdownFile(props.data.asset.filename))
 const { rendered, wrap, reading, remember } = useFileView(props.data.instanceId, props.data.canvasId, props.id, markdown.value, props.data.canPersistView)
 const menuOpen = ref(false), menuTrigger = ref<HTMLButtonElement>()
 const menuDismiss = usePointerDismiss(menuOpen, menuTrigger)
 const menu = computed<DropdownMenuItem[]>(() => [
   ...(markdown.value && compact.value ? [{ label: t('panels.preview.source'), type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
-  ...(props.data.asset.preview === 'text' && (!markdown.value || !rendered.value) ? [{ label: t('panels.preview.wrap'), type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } }] : []),
+  ...(preview.value === 'text' && (!markdown.value || !rendered.value) ? [{ label: t('panels.preview.wrap'), type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } }] : []),
   { label: t('panels.file.download'), onSelect: download },
   { label: t('fileTransfer.copy'), onSelect: copyFile },
+  { label: t('app.addToOtherCanvas'), onSelect: () => props.data.onAction?.('add', props.id) },
   { label: t('panels.file.remove'), onSelect: () => props.data.onRemove(props.id) },
   { label: t('common.settings'), onSelect: () => props.data.onAction?.('settings', props.id) },
 ])
 const sourceInstance = { id: activeInstance.value.id, base: activeInstance.value.base }
 const pdfPreview = navigator.pdfViewerEnabled
 const path = computed(() => `/api/files/${encodeURIComponent(props.data.assetId)}`)
-const { url, error: ticketError, retry: retryTicket } = useMediaUrl(() => ['image', 'pdf'].includes(props.data.asset.preview) ? path.value : undefined)
+const { url, error: ticketError, retry: retryTicket } = useMediaUrl(() => ['image', 'audio', 'video', 'pdf'].includes(preview.value) ? path.value : undefined)
+const imageFailed = ref(false)
+watch(() => props.data.assetId, () => { imageFailed.value = false })
 function download() { void downloadMedia(path.value, props.data.asset.filename).catch(reportDownloadError) }
 const fileBody = ref<HTMLElement>()
 const text = ref('')
@@ -64,7 +72,7 @@ function dragFile(event: DragEvent) {
 let visibility: IntersectionObserver | undefined
 let request: AbortController | undefined
 async function loadText() {
-  if (props.data.asset.preview !== 'text') return
+  if (preview.value !== 'text') return
   request?.abort()
   const current = request = new AbortController()
   textLoading.value = true; textError.value = ''; truncated.value = false
@@ -73,10 +81,13 @@ async function loadText() {
     if (request !== current || current.signal.aborted) return
     text.value = result.text; truncated.value = result.truncated
   } catch (reason) {
-    if (request === current && !current.signal.aborted) textError.value = reason instanceof Error ? reason : 'panels.file.unreadable'
+    if (request === current && !current.signal.aborted) {
+      if (reason instanceof BinaryFileError) binary.value = true
+      else textError.value = reason instanceof Error ? reason : 'panels.file.unreadable'
+    }
   } finally { if (request === current) textLoading.value = false }
 }
-watch([fileBody, () => props.data.assetId, () => props.data.asset.preview], ([element, _id, preview]) => {
+watch([fileBody, () => props.data.assetId, () => preview.value], ([element, _id, preview]) => {
   request?.abort(); request = undefined; visibility?.disconnect()
   text.value = ''; textError.value = ''; truncated.value = false; textLoading.value = preview === 'text'
   if (!element || preview !== 'text') return
@@ -100,14 +111,15 @@ const size = computed(() => {
   <template v-if="!data.mobile && !data.focus">
     <NodeResizeControl v-for="position in (['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const)" :key="position" :node-id="id" :position="position" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
   </template>
-  <article class="file-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus }" :data-asset-id="data.assetId" :data-preview-kind="data.asset.preview">
+  <article class="file-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus }" :data-asset-id="data.assetId" :data-preview-kind="preview">
     <header ref="header" class="file-header drag-handle" :class="{ 'cutout-header': data.focus }" :data-cutout-position="data.focus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus ? { '--cutout-width': `${cutoutWidth}px` } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
       <span class="file-icon" :class="{ 'cutout-status': data.focus }"><Icon name="file" :size="13" /></span>
       <span class="file-title" :class="{ 'cutout-title': data.focus }" :title="data.asset.filename">{{ data.asset.filename }}</span>
       <span v-if="!data.focus" class="file-size">{{ size }}</span>
       <div class="file-actions" :class="{ 'cutout-actions': data.focus }">
-      <TextPreviewActions v-if="data.asset.preview === 'text' && (!data.focus || markdown && !compact)" v-model:rendered="rendered" v-model:wrap="wrap" :filename="data.asset.filename" :hide-wrap="data.focus" />
+      <TextPreviewActions v-if="preview === 'text' && (!data.focus || markdown && !compact)" v-model:rendered="rendered" v-model:wrap="wrap" :filename="data.asset.filename" :hide-wrap="data.focus" />
       <button v-if="!data.focus" type="button" class="file-action file-copy nodrag" draggable="true" :title="t(copyFeedback || 'fileTransfer.copyOrDrag')" :aria-label="t('fileTransfer.copy')" @pointerdown.stop @click.stop="copyFile" @dragstart="dragFile"><Icon :name="copyFeedback === 'fileTransfer.copied' ? 'check' : 'copy'" :size="14" /></button>
+      <button v-if="!data.focus" type="button" class="file-action nodrag" :title="t('app.addToOtherCanvas')" :aria-label="t('app.addToOtherCanvas')" @click.stop="data.onAction?.('add', id)"><Icon name="layers" :size="14" /></button>
       <span class="sr-only" role="status">{{ copyFeedback ? t(copyFeedback) : '' }}</span>
       <button v-if="!data.focus || !markdown && !compact" type="button" class="file-action nodrag" @click.stop="download" :title="t('panels.file.download')" :aria-label="t('panels.file.download')" @pointerdown.stop><Icon name="download" :size="14" /></button>
       <template v-if="data.focus">
@@ -120,18 +132,19 @@ const size = computed(() => {
       </div>
     </header>
     <div ref="fileBody" class="file-body nodrag nopan" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.stop @dblclick.stop>
-      <div v-if="(data.asset.preview === 'image' || data.asset.preview === 'pdf' && pdfPreview) && !url" class="file-text-status" :role="ticketError ? 'alert' : 'status'">
+      <div v-if="(['image', 'audio', 'video'].includes(preview) || preview === 'pdf' && pdfPreview) && !url" class="file-text-status" :role="ticketError ? 'alert' : 'status'">
         <template v-if="ticketError"><span>{{ t('panels.preview.unavailable') }}</span><button type="button" @click="retryTicket">{{ t('common.retry') }}</button></template>
         <template v-else><span class="spinner" />{{ t('common.loading') }}</template>
       </div>
-      <img v-else-if="data.asset.preview === 'image' && url" class="file-image" :src="url" :alt="data.asset.filename" draggable="false" loading="lazy" />
-      <div v-else-if="data.asset.preview === 'text'" class="file-text-body nowheel" @wheel.stop>
+      <img v-else-if="preview === 'image' && url && !imageFailed" class="file-image" :src="url" :alt="data.asset.filename" draggable="false" loading="lazy" @error="imageFailed = true" />
+      <MediaPreview v-else-if="(preview === 'audio' || preview === 'video') && url" :key="data.assetId" :kind="preview" :src="url" :title="data.asset.filename" :read-only="mobilePreview" @download="download" />
+      <div v-else-if="preview === 'text'" class="file-text-body nowheel" @wheel.stop>
         <div v-if="textLoading" class="file-text-status" role="status"><span class="spinner" /> {{ t('common.loading') }}</div>
         <div v-else-if="textError" class="file-text-status" role="alert"><span>{{ textError instanceof Error ? textError.message : t(textError) }}</span><button type="button" @click="loadText">{{ t('common.retry') }}</button></div>
         <TextPreview v-else :text="text" :filename="data.asset.filename" :rendered="rendered" :wrap="wrap" :reading="reading" :read-only="mobilePreview" @reading="remember" />
         <div v-if="truncated" class="file-text-truncated"><span>{{ t('panels.preview.truncated') }}</span><button type="button" @click="download">{{ t('panels.file.downloadOriginal') }}</button></div>
       </div>
-      <iframe v-else-if="data.asset.preview === 'pdf' && pdfPreview && url" class="file-preview nowheel" :src="url" :title="data.asset.filename" loading="lazy" referrerpolicy="no-referrer" />
+      <iframe v-else-if="preview === 'pdf' && pdfPreview && url" class="file-preview nowheel" :src="url" :title="data.asset.filename" loading="lazy" referrerpolicy="no-referrer" />
       <button v-else type="button" class="file-download" @click="download" :aria-label="t('panels.file.downloadNamed', { name: data.asset.filename })"><Icon name="file" :size="42" /><span>{{ data.asset.filename }}</span></button>
     </div>
     <CardPreview v-if="mobilePreview" :label="t('common.openCard', { name: data.asset.filename })" @open="data.onAction?.('focus', id)" />

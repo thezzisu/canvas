@@ -125,5 +125,4 @@ herdr executable for native integration tests.
 
 ## License
 
-[Apache License 2.0](LICENSE). [Third-party notices](THIRD_PARTY_NOTICES) identify
-bundled components. Fonts retain their SIL Open Font License 1.1 terms.
+[Apache License 2.0](LICENSE).

@@ -22,6 +22,7 @@ const compact = useCompactHeader(computed(() => props.data.mobile && props.data.
 const menu = computed(() => [
   ...(compact.value ? [{ label: t('panels.note.copy'), disabled: !content.value, onSelect: copyNote }] : []),
   { label: t('panels.note.rename'), onSelect: () => { void rename() } },
+  { label: t('app.addToOtherCanvas'), onSelect: () => props.data.onAction('add', props.id) },
   { label: t('panels.note.remove'), onSelect: () => props.data.onAction('remove', props.id) },
   { label: t('common.settings'), onSelect: () => props.data.onAction('settings', props.id) },
 ])
@@ -86,6 +87,7 @@ onBeforeUnmount(() => clearTimeout(copyTimer))
           <button type="button" :title="t('common.returnToCanvas')" :aria-label="t('common.returnToCanvas')" @click.stop="data.onAction('unfocus', id)"><Icon name="collapse" :size="17" /></button>
         </template>
         <template v-else>
+          <button :title="t('app.addToOtherCanvas')" :aria-label="t('app.addToOtherCanvas')" @click.stop="data.onAction('add', id)"><Icon name="layers" :size="13" /></button>
           <button :title="t('panels.note.rename')" :aria-label="t('panels.note.rename')" @click.stop="rename"><Icon name="edit" :size="13" /></button>
           <button :title="t(data.minimized ? 'panels.note.expand' : 'panels.note.collapse')" :aria-label="t(data.minimized ? 'panels.note.expand' : 'panels.note.collapse')" @click.stop="toggleMinimize"><Icon :name="data.minimized ? 'expand' : 'minus'" :size="14" /></button>
           <button :title="t('panels.note.remove')" :aria-label="t('panels.note.remove')" @click.stop="data.onAction('remove', id)"><Icon name="close" :size="14" /></button>

@@ -41,7 +41,7 @@ const downloads = new OpenDownloadService({
   openUrl: (source, url, session) => urlForwards.open(source, url, session),
   directoryUri: async (source, path) => vscodeDirectoryUri(await editorAuthority(source), path),
   createUpload: metadata => assets.begin(metadata),
-  readTemporary: id => assets.readTemporary(id),
+  readTemporary: (id, range) => assets.readTemporary(id, range),
   prepare: prepareOpenBridge,
   publishRemote: writeRemoteBridgeRegistry,
   installHelper: (source) => installCanvasHelper(source, helperBytes),
@@ -50,7 +50,8 @@ const downloads = new OpenDownloadService({
     const recipient = await terminals.downloadRecipient(sourceId, windowId);
     const socket = recipient?.socket;
     const sessionId = socket && socketSessions.get(socket);
-    return socket && sessionId ? { socket, sessionId, isCurrent: recipient!.isCurrent } : undefined;
+    return socket && sessionId && store.hasSession(sessionId)
+      ? { socket, sessionId, isCurrent: () => store.hasSession(sessionId) && recipient!.isCurrent() } : undefined;
   },
 });
 const windowContent = new WindowContentService({

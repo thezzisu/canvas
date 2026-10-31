@@ -86,8 +86,40 @@ async function fixture(t: TestContext, probe = false, quietProbe = false) {
     await waitFor(() => size(client)?.cols === cols && size(client)?.rows === rows, "client viewport did not reach requested size");
     assert.equal(await shellResult(client, "stty size"), `${rows} ${cols - 1}`, "native pane does not fill its viewport except its scrollbar column");
   };
-  return { root, bytes, manager, source, target, shellResult, assertSize, ready, text };
+  const reportAgent = (paneId: string, state: 'working' | 'idle' | 'blocked') => execFileSync(binary,
+    ['--session', session, 'pane', 'report-agent', paneId, '--source', 'canvas-test', '--agent', 'pi', '--state', state],
+    { env, stdio: 'ignore', timeout: 5000 });
+  return { root, bytes, manager, source, target, shellResult, assertSize, ready, text, reportAgent };
 }
+
+test('native agent metadata reaches both viewers and late joiners without resource polling or a second attachment', async t => {
+  const f = await fixture(t); if (!f) return;
+  const first = new Client(), second = new Client(), late = new Client();
+  const metadata = (client: Client) => messages(client).filter(message => message.type === 'metadata').at(-1)?.window;
+  await f.manager.connect(f.source, f.target, first.socket);
+  await f.manager.connect(f.source, f.target, second.socket);
+  await waitFor(() => !!metadata(first)?.panes.length && !!metadata(second), 'initial native metadata was not replayed');
+  second.command({ type: 'focus' });
+  second.command({ type: 'input', data: '\x1b[O' });
+  const paneId = metadata(first).panes[0].id;
+  f.reportAgent(paneId, 'working');
+  await waitFor(() => metadata(first)?.status === 'working' && metadata(second)?.status === 'working', 'working metadata was not pushed');
+  f.reportAgent(paneId, 'idle');
+  await waitFor(() => metadata(first)?.status === 'done' && metadata(second)?.status === 'done', 'unseen completion was not pushed');
+  second.command({ type: 'focus' });
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(metadata(first).status, 'done', 'controller ownership incorrectly acknowledged native work');
+  const started = performance.now();
+  second.command({ type: 'input', data: '\x1b[I' });
+  await waitFor(() => metadata(first)?.status === 'idle' && metadata(second)?.status === 'idle', 'native focus acknowledgement was not pushed');
+  t.diagnostic(`Native done-to-idle metadata reached both viewers in ${Math.round(performance.now() - started)}ms without resource polling`);
+  await f.manager.connect(f.source, f.target, late.socket);
+  assert.deepEqual(metadata(late), metadata(second));
+  assert.equal(f.manager.entries.size, 1, 'metadata opened another native attachment');
+  second.command({ type: 'input', data: "printf '\\033]0;Live title\\007'\r" });
+  await waitFor(() => metadata(first)?.panes[0].terminalTitle === 'Live title', 'native title was not pushed');
+  assert.equal(metadata(second).panes[0].terminalTitle, 'Live title');
+});
 
 test("a transport closing during queued browser join rejects the connection", async () => {
   const manager = new TerminalManager(), client = new Client();

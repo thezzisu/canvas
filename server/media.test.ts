@@ -1,10 +1,13 @@
 import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { Readable } from 'node:stream'
+import type { ReadStream } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { MediaTickets } from './media.ts'
+import { AssetStore } from './assets.ts'
+import { randomUUID } from 'node:crypto'
 import { createApp } from './app.ts'
 import { Store } from './state.ts'
 import type { TerminalManager } from './terminals.ts'
@@ -87,4 +90,66 @@ test('media tickets expire and active formats stay sandboxed', async () => {
   assert.equal(await tickets.open(id, 'GET'), undefined)
   active = false
   assert.equal(await tickets.create('/api/files/image', 'owner'), undefined)
+})
+
+test('file ticket ranges seek directly while HEAD and invalid ranges read no file bytes', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'canvas-seek-')), store = new Store(join(directory, 'state.db'))
+  const assets = new AssetStore(directory, store)
+  store.addSession('owner')
+  t.after(async () => { await assets.close(); store.close(); await rm(directory, { recursive: true, force: true }) })
+  const sourceId = randomUUID(), windowId = 'window'
+  const canvas = store.put('canvas', { id: randomUUID(), name: 'Seek fixture', nodes: [{
+    type: 'terminal', id: 'anchor', sourceId, spaceId: 'space', windowId, x: 0, y: 0, width: 480, height: 300,
+  }] })
+  const bytes = Buffer.alloc(2 * 1024 * 1024 + 17, 0x5a), upload = await assets.begin({ filename: 'large.bin', size: bytes.length })
+  await upload.write(bytes)
+  const asset = await upload.complete({ canvasId: canvas.id, anchorId: 'anchor', sourceId, windowId })
+  const reads: Array<{ range?: { start: number; end: number }; stream: ReadStream }> = []
+  const read = assets.read.bind(assets)
+  assets.read = async (id, range) => { const result = await read(id, range); if (result) reads.push({ range, stream: result.body as ReadStream }); return result }
+  const app = createApp(store, { username: 'fixture', passwordHash: 'unused' }, {} as TerminalManager, { assets })
+  const issued = await app.request('http://fixture/api/media-tickets', { method: 'POST', headers: { Authorization: 'Bearer owner', 'Content-Type': 'application/json' }, body: JSON.stringify({ path: `/api/files/${asset.id}` }) })
+  assert.equal(issued.status, 200)
+  const { url } = await issued.json()
+  assert.equal(reads[0]!.stream.bytesRead, 0, 'ticket issuance only validates metadata')
+  for (const [range, start, end] of [['bytes=-11', bytes.length - 11, bytes.length - 1], ['bytes=1700000-1700031', 1700000, 1700031]] as const) {
+    const mark = reads.length
+    const response = await app.request(`http://fixture${url}`, { headers: { Range: range } })
+    assert.equal(response.status, 206)
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes.subarray(start, end + 1))
+    assert.equal(reads[mark]!.stream.bytesRead, 0, 'full-file validation stream is never consumed')
+    assert.deepEqual(reads[mark + 1]!.range, { start, end })
+    assert.equal(reads[mark + 1]!.stream.bytesRead, end - start + 1, 'only requested disk bytes are read')
+  }
+  for (const [method, range, status] of [['HEAD', undefined, 200], ['HEAD', 'bytes=-11', 206], ['GET', 'bytes=9999999-', 416]] as const) {
+    const mark = reads.length
+    const response = await app.request(`http://fixture${url}`, { method, headers: range ? { Range: range } : undefined })
+    assert.equal(response.status, status); assert.equal(await response.text(), '')
+    assert.equal(reads.length, mark + 1); assert.equal(reads[mark]!.stream.bytesRead, 0)
+  }
+  const cancelled = await app.request(`http://fixture${url}`, { headers: { Range: 'bytes=1700000-' } })
+  const stream = reads.at(-1)!.stream
+  await cancelled.body!.cancel()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(stream.destroyed, true, 'cancellation closes the selected file stream')
+  assert(stream.bytesRead < bytes.length - 1700000, 'cancellation does not read the whole remaining file')
+  store.removeSession('owner')
+  const mark = reads.length
+  assert.equal((await app.request(`http://fixture${url}`, { headers: { Range: 'bytes=-11' } })).status, 404)
+  assert.equal(reads.length, mark, 'revocation prevents reopening the disk file')
+})
+
+test('range open drops its late stream when session or ticket expires while seeking', async () => {
+  for (const revoke of ['session', 'ticket'] as const) {
+    let active = true, now = 1000, settle!: (stream: Readable) => void
+    const tickets = new MediaTickets(() => active, async () => ({ body: Readable.from(['fixture']), headers: { 'Content-Length': '7' },
+      readRange: () => new Promise(resolve => { settle = resolve }) }), new Set(), () => now)
+    const ticket = (await tickets.create('/api/files/fixture', 'owner'))!, id = ticket.url.split('/').at(-1)!
+    const pending = tickets.open(id, 'GET', 'bytes=-2')
+    await Promise.resolve(); await Promise.resolve()
+    if (revoke === 'session') active = false
+    else now = ticket.expiresAt
+    const stream = Readable.from(['re']); settle(stream)
+    assert.equal(await pending, undefined); assert.equal(stream.destroyed, true)
+  }
 })

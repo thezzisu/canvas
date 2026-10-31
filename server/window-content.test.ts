@@ -219,7 +219,7 @@ test('HTTP scans authenticate, verify regular file metadata and do not read byte
   const response = await f.call(`/api/content-scans/${scan.id}/items/${file.id}/open`)
   assert.equal(response.status, 200)
   const opened = await response.json() as WindowContentOpen
-  assert.equal(opened.temporary, true); assert.equal(opened.preview, 'text'); assert.equal(f.reads(), 1)
+  assert.equal(opened.temporary, true); assert.equal('preview' in opened, false); assert.equal(f.reads(), 1)
   const download = await f.app.request(`http://canvas.test${opened.url}`, { headers: { Authorization: 'Bearer first-session' } })
   assert.equal(await download.text(), 'original\n')
   assert.equal((await f.app.request(`http://canvas.test${opened.url}`, { headers: { Authorization: 'Bearer other-session' } })).status, 404)

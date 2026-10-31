@@ -98,6 +98,7 @@ export default {
   "createCanvas": "创建画布",
   "automaticName": "自动命名",
   "targetCanvas": "目标画布",
+  "noOtherCanvases": "暂无其他画布",
   "newMyCanvas": "新建「我的画布」",
   "searchWindows": "搜索窗口",
   "searchPlaceholder": "搜索连接、Space 或窗口…",

@@ -98,6 +98,7 @@ export default {
   "createCanvas": "Create canvas",
   "automaticName": "Automatic name",
   "targetCanvas": "Target canvas",
+  "noOtherCanvases": "No other canvases",
   "newMyCanvas": "Create “My canvas”",
   "searchWindows": "Search windows",
   "searchPlaceholder": "Search connections, spaces or windows…",

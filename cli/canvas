@@ -29,6 +29,12 @@ def terminal_identity():
     raise CanvasError("run this command inside a connected herdr pane")
 
 
+def routing_error(message):
+    native_socket, pane = terminal_identity()
+    return CanvasError(message + "\n  HERDR_SOCKET_PATH=" + json.dumps(native_socket)
+                       + " HERDR_PANE_ID=" + json.dumps(pane))
+
+
 def registry_entries(native_socket):
     directory = os.environ.get("CANVAS_BRIDGE_REGISTRY_DIR") or os.path.expanduser(
         "~/.local/state/canvas/bridges"
@@ -136,17 +142,20 @@ class DownloadProgress:
 def rejected_response(result, started):
     # Do not echo server text: it could contain terminal controls or a reflected
     # request, including the private bridge credential.
+    reason = result.get("reason")
+    if reason == "not-attached":
+        return routing_error("no browser ready to receive from this pane")
+    if reason == "pane-unavailable":
+        return routing_error("herdr pane is unavailable")
     messages = {
-        "not-attached": "no browser attached to this window",
         "cancelled": "copy cancelled",
         "not-started": "copy did not start",
         "timed-out": "copy timed out",
         "disconnected": "copy connection closed",
         "invalid-transfer": "file transfer failed",
     }
-    reason = result.get("reason")
     return CanvasError(messages.get(reason if isinstance(reason, str) else None,
-        "file transfer failed" if started else "no browser attached to this window"))
+        "file transfer failed" if started else "open request rejected"))
 
 
 def transfer_file(connection, file, size, progress=None, start_timeout=70, idle_timeout=65):
@@ -272,7 +281,7 @@ def open_directory(connection, header, timeout=15):
             connection.settimeout(remaining)
             chunk = connection.recv(1)
             if not chunk:
-                raise CanvasError("open request timed out")
+                raise CanvasError("open connection closed")
             if chunk == b"\n":
                 try:
                     result = json.loads(line)
@@ -311,7 +320,7 @@ def open_url(value):
     native_socket, pane = terminal_identity()
     entries = registry_entries(native_socket)
     if not entries:
-        raise CanvasError("no browser attached to this window")
+        raise routing_error("no Canvas bridge for this herdr socket")
     entry = entries[0]
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(30)
@@ -371,7 +380,7 @@ def open_file(path):
         native_socket, pane = terminal_identity()
         entries = registry_entries(native_socket)
         if not entries:
-            raise CanvasError("no browser attached to this window")
+            raise routing_error("no Canvas bridge for this herdr socket")
         entry = entries[0]
         # Registry discovery has already rejected ambiguous destinations.
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
@@ -429,7 +438,9 @@ def main():
                 return 1
     parser = argparse.ArgumentParser(prog="canvas", description="Open a file, folder or web address in Canvas.")
     commands = parser.add_subparsers(dest="command", required=True)
-    command = commands.add_parser("open", help="open a file, folder or web address")
+    command = commands.add_parser("open", help="open a file, folder or web address", epilog=
+        "Routing uses HERDR_SOCKET_PATH and HERDR_PANE_ID from this process. "
+        "A daemon must receive the originating pane's values for each invocation.")
     command.add_argument("path", help="file, folder or HTTP(S) address")
     arguments = parser.parse_args()
     try:

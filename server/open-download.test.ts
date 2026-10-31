@@ -1,6 +1,7 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import type { ReadStream } from "node:fs";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
@@ -19,6 +20,8 @@ import { OpenDownloadService, type OpenDownloadOptions } from "./open-download.t
 import { vscodeDirectoryUri } from "./editor-links.ts";
 
 const helper = fileURLToPath(new URL("../cli/canvas", import.meta.url));
+const routingError = (nativeSocket: string, message: string, pane = "pane") =>
+  `canvas: ${message}\n  HERDR_SOCKET_PATH=${JSON.stringify(nativeSocket)} HERDR_PANE_ID=${JSON.stringify(pane)}\n`;
 const source: Source = { id: randomUUID(), name: "Open", transport: "local" };
 const resources = {
   id: source.id, name: source.name, status: "online" as const,
@@ -40,6 +43,7 @@ class FakeWebSocket extends EventEmitter {
 
 type FixtureOptions = Partial<Pick<OpenDownloadOptions, "contextTimeoutMs" | "progressTimeoutMs">> & {
   recipientAvailable?: boolean;
+  recipientWindow?: string;
   autoContext?: boolean;
   customCanvas?: boolean;
   uploadFailure?: "create" | "write" | "complete";
@@ -61,7 +65,7 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
     id: "anchor", type: "terminal", sourceId: source.id, spaceId: "space", windowId: "window", x: 40, y: 50, width: 480, height: 302,
   }] });
   store.addSession("authenticated-session"); store.addSession("other-session");
-  const observations = { uploadedBytes: 0, aborted: 0, finalized: 0, bridgeStarts: 0, bridgeStops: 0, sourceCloses: 0 };
+  const observations = { uploadedBytes: 0, aborted: 0, finalized: 0, bridgeStarts: 0, bridgeStops: 0, sourceCloses: 0, recipientWindows: [] as string[] };
   const service = new OpenDownloadService({
     openUrl: (_source, url, session) => { assert.equal(session, "authenticated-session"); return { url, forwarded: false }; },
     registryDirectory: registry,
@@ -89,15 +93,18 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
         abort: async () => { await upload.abort(); observations.aborted++; },
       };
     },
-    readTemporary: id => assets.readTemporary(id),
+    readTemporary: (id, range) => assets.readTemporary(id, range),
     prepare: async (_source, localSocket) => {
       observations.bridgeStarts++;
       return { nativeSocket, remoteSocket: localSocket, cleanup: async () => { observations.bridgeStops++; } };
     },
     resources: async () => resourceState,
-    recipient: async () => options.recipientAvailable !== false ? {
-      socket: receiver as never, sessionId: "authenticated-session", isCurrent: () => receiver.readyState === 1,
-    } : undefined,
+    recipient: async (_sourceId, windowId) => {
+      observations.recipientWindows.push(windowId);
+      return options.recipientAvailable !== false && (!options.recipientWindow || options.recipientWindow === windowId) ? {
+        socket: receiver as never, sessionId: "authenticated-session", isCurrent: () => receiver.readyState === 1,
+      } : undefined;
+    },
   });
   receiver.onMessage = message => {
     if (message.type === "open-url" && options.urlAck !== false)
@@ -124,10 +131,10 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
     store.close();
     await rm(root, { recursive: true, force: true });
   });
-  const run = (path: string) => new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
+  const run = (path: string, identity: { HERDR_SOCKET_PATH?: string; HERDR_PANE_ID?: string } = {}) => new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
     const child = spawn("python3", [helper, "open", "--", path], { cwd: root, env: {
       PATH: process.env.PATH, LANG: "C.UTF-8", HERDR_SOCKET_PATH: nativeSocket,
-      HERDR_PANE_ID: "pane", CANVAS_BRIDGE_REGISTRY_DIR: registry,
+      HERDR_PANE_ID: "pane", CANVAS_BRIDGE_REGISTRY_DIR: registry, ...identity,
     } });
     let stderr = ""; child.stderr.on("data", chunk => stderr += chunk);
     child.once("error", reject); child.once("close", code => resolve({ code, stderr }));
@@ -170,8 +177,16 @@ test("CLI URL receipt binds to the original browser, session and message kind", 
 
 test("CLI URL open fails without an attached browser or with URL credentials", async t => {
   const f = await fixture(t, { recipientAvailable: false });
-  assert.deepEqual(await f.run("http://localhost:5173/"), { code: 1, stderr: "canvas: no browser attached to this window\n" });
+  assert.deepEqual(await f.run("http://localhost:5173/"), { code: 1, stderr: routingError(f.nativeSocket, "no browser ready to receive from this pane") });
   assert.deepEqual(await f.run("https://user:DUMMY_PASSWORD@example.test/"), { code: 1, stderr: "canvas: invalid web address\n" });
+});
+
+test("unacknowledged URL receipt exits within the context deadline", async t => {
+  const f = await fixture(t, { urlAck: false, contextTimeoutMs: 60 });
+  const started = Date.now();
+  assert.deepEqual(await f.run("https://example.test/scoped"), { code: 1, stderr: "canvas: browser did not receive this web address\n" });
+  assert(Date.now() - started < 2000);
+  assert.equal(f.observations.uploadedBytes, 0);
 });
 
 async function sender(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, size: number) {
@@ -229,6 +244,28 @@ test("overview copy succeeds before any HTTP request and stages exact retryable 
   assert.equal(f.service.prepare(String(notice.id), "other-session"), false);
 });
 
+test("staged download tickets seek to suffix bytes without scanning the temporary file", async t => {
+  const f = await fixture(t), content = randomBytes(2 * 1024 * 1024 + 19);
+  await copyFile(f, "seek.bin", content);
+  const notice = f.receiver.messages.find(message => message.type === "download")!;
+  const streams: Array<{ range?: { start: number; end: number }; body: ReadStream }> = [];
+  const read = f.assets.readTemporary.bind(f.assets);
+  f.assets.readTemporary = async (id, range) => { const result = await read(id, range); if (result) streams.push({ range, body: result.body as ReadStream }); return result; };
+  const headers = { Authorization: "Bearer authenticated-session", "Content-Type": "application/json" };
+  const response = await f.app.request("http://canvas.test/api/media-tickets", { method: "POST", headers,
+    body: JSON.stringify({ path: notice.url }) });
+  assert.equal(response.status, 200);
+  const ticket = await response.json();
+  const partial = await f.app.request(`http://canvas.test${ticket.url}`, { headers: { Range: "bytes=-19" } });
+  assert.equal(partial.status, 206);
+  assert.deepEqual(Buffer.from(await partial.arrayBuffer()), content.subarray(-19));
+  assert(streams.filter(item => !item.range).every(item => item.body.bytesRead === 0));
+  assert.deepEqual(streams.at(-1)!.range, { start: content.length - 19, end: content.length - 1 });
+  assert.equal(streams.at(-1)!.body.bytesRead, 19);
+  await f.service.closeAll();
+  assert.equal((await f.app.request(`http://canvas.test${ticket.url}`, { headers: { Range: "bytes=-19" } })).status, 404);
+});
+
 test("overview completion exposes sniffed preview metadata and owner-only inline bytes", async t => {
   const samples = [
     { filename: "photo.png", content: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), preview: "image", mime: "image/png" },
@@ -239,7 +276,7 @@ test("overview completion exposes sniffed preview metadata and owner-only inline
     const f = await fixture(t);
     await copyFile(f, sample.filename, sample.content);
     const notice = f.receiver.messages.find(message => message.type === "download")!;
-    assert.equal(notice.preview, sample.preview);
+    assert.equal('preview' in notice, false);
     assert.equal(notice.mime, sample.mime);
     assert.equal(f.observations.finalized, 1,
       "CLI completes without a preview acknowledgement");
@@ -265,7 +302,7 @@ test("overview completion exposes sniffed preview metadata and owner-only inline
   });
 });
 
-test("overview inline mode never promotes opaque or active files to browser previews", async t => {
+test("overview previews markup as inert text or an image and keeps binary downloads opaque", async t => {
   for (const sample of [
     { filename: "binary.txt", content: Buffer.from([0, 255, 127, 1]) },
     { filename: "page.html", content: Buffer.from("<!doctype html><script>fixture</script>") },
@@ -275,10 +312,10 @@ test("overview inline mode never promotes opaque or active files to browser prev
     const f = await fixture(t);
     await copyFile(f, sample.filename, sample.content);
     const notice = f.receiver.messages.find(message => message.type === "download")!;
-    assert.equal(notice.preview, "file");
+    assert.equal('preview' in notice, false);
     const response = await f.app.request(`http://canvas.test${notice.url}?preview=1`, { headers: { Authorization: "Bearer authenticated-session" } });
-    assert.match(response.headers.get("content-disposition")!, /^attachment;/u);
-    assert.equal(response.headers.get("content-type"), "application/octet-stream");
+    assert.match(response.headers.get("content-disposition")!, /^inline;/u);
+    assert.match(response.headers.get("content-security-policy")!, /sandbox/u);
     assert.deepEqual(Buffer.from(await response.arrayBuffer()), sample.content);
   });
 });
@@ -324,7 +361,7 @@ test("unacknowledged directories time out and a missing browser fails immediatel
   const missing = await fixture(t, { recipientAvailable: false });
   const rejected = await missing.run(missing.root);
   assert.equal(rejected.code, 1);
-  assert.equal(rejected.stderr, "canvas: no browser attached to this window\n");
+  assert.equal(rejected.stderr, routingError(missing.nativeSocket, "no browser ready to receive from this pane"));
   assert.deepEqual(missing.receiver.messages, []);
 });
 
@@ -422,7 +459,7 @@ test("a missing browser context fails with not-attached without sending file dat
   await writeFile(join(f.root, "copy.txt"), "private data");
   const began = Date.now(), result = await f.run("copy.txt");
   assert.equal(result.code, 1);
-  assert.equal(result.stderr, "canvas: no browser attached to this window\n");
+  assert.equal(result.stderr, routingError(f.nativeSocket, "no browser ready to receive from this pane"));
   assert(Date.now() - began < 2000);
   assert.equal(f.observations.uploadedBytes, 0);
 });
@@ -432,9 +469,43 @@ test("no controlling browser fails immediately without a context round trip", as
   await writeFile(join(f.root, "copy.txt"), "private data");
   const began = Date.now(), result = await f.run("copy.txt");
   assert.equal(result.code, 1);
-  assert.equal(result.stderr, "canvas: no browser attached to this window\n");
+  assert.equal(result.stderr, routingError(f.nativeSocket, "no browser ready to receive from this pane"));
   assert(Date.now() - began < 2000);
   assert.deepEqual(f.receiver.messages, []);
+});
+
+test("daemon callers route only by their explicit socket and pane, never another live window", async t => {
+  const f = await fixture(t, { recipientWindow: "target-window" });
+  const releaseViewer = f.service.retainSource(source.id);
+  t.after(releaseViewer);
+  const original = resources.spaces[0]!.windows[0]!;
+  f.setResources({ ...resources, spaces: [{ ...resources.spaces[0]!, windows: [
+    { ...original, id: "old-window", panes: [{ ...original.panes[0]!, id: "old-pane", active: false }] },
+    { ...original, id: "target-window", panes: [{ ...original.panes[0]!, id: "target-pane", active: true }] },
+  ] }] });
+  await writeFile(join(f.root, "report.txt"), "scoped fixture");
+
+  const paths = ["report.txt", ".", "https://example.test/scoped"];
+  for (const path of paths) {
+    const stale = await f.run(path, { HERDR_PANE_ID: "old-pane" });
+    assert.deepEqual(stale, { code: 1, stderr: routingError(f.nativeSocket, "no browser ready to receive from this pane", "old-pane") });
+    const missing = await f.run(path, { HERDR_PANE_ID: "removed-pane" });
+    assert.deepEqual(missing, { code: 1, stderr: routingError(f.nativeSocket, "herdr pane is unavailable", "removed-pane") });
+    const otherSocket = join(f.root, "other-herdr.sock");
+    const other = await f.run(path, { HERDR_SOCKET_PATH: otherSocket, HERDR_PANE_ID: "target-pane" });
+    assert.deepEqual(other, { code: 1, stderr: routingError(otherSocket, "no Canvas bridge for this herdr socket", "target-pane") });
+  }
+  assert.deepEqual(f.observations.recipientWindows, ["old-window", "old-window", "old-window"]);
+  assert.equal(f.observations.uploadedBytes, 0); assert.deepEqual(f.receiver.messages, []);
+
+  for (const path of paths) assert.deepEqual(await f.run(path, { HERDR_SOCKET_PATH: f.nativeSocket, HERDR_PANE_ID: "target-pane" }), { code: 0, stderr: "" });
+  assert.deepEqual(f.observations.recipientWindows, ["old-window", "old-window", "old-window", "target-window", "target-window", "target-window"]);
+  assert.equal(f.observations.uploadedBytes, Buffer.byteLength("scoped fixture"));
+  assert.equal(f.observations.finalized, 1);
+  const notices = f.receiver.messages as Array<Record<string, unknown>>;
+  assert.equal(notices.filter(message => message.type === "download").length, 1);
+  assert.equal(notices.filter(message => message.type === "open-directory").length, 1);
+  assert.equal(notices.filter(message => message.type === "open-url").length, 1);
 });
 
 test("copy inactivity times out and removes partial staging", async t => {
@@ -584,7 +655,7 @@ test("two independent Canvas backends on the same native socket fail closed", as
   const f = await fixture(t);
   const other = new OpenDownloadService({
     registryDirectory: f.registry, socketDirectory: f.sockets,
-    createUpload: metadata => f.assets.begin(metadata), readTemporary: id => f.assets.readTemporary(id),
+    createUpload: metadata => f.assets.begin(metadata), readTemporary: (id, range) => f.assets.readTemporary(id, range),
     prepare: async (_source, localSocket) => ({ nativeSocket: f.nativeSocket, remoteSocket: localSocket, cleanup: async () => {} }),
     resources: async () => resources,
     recipient: async () => ({ socket: f.receiver as never, sessionId: "authenticated-session", isCurrent: () => f.receiver.readyState === 1 }),
@@ -592,8 +663,11 @@ test("two independent Canvas backends on the same native socket fail closed", as
   t.after(() => other.closeAll());
   await other.ensureSource({ ...source, id: "second-backend" });
   await writeFile(join(f.root, "ambiguous"), "must not be duplicated");
-  const result = await f.run("ambiguous");
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /multiple Canvas connections/u);
+  for (const path of ["ambiguous", ".", "https://example.test/scoped"]) {
+    const result = await f.run(path);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /multiple Canvas connections/u);
+  }
+  assert.equal(f.observations.uploadedBytes, 0);
   assert.deepEqual(f.receiver.messages, []);
 });

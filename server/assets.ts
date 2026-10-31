@@ -3,39 +3,8 @@ import { constants } from "node:fs";
 import { lstat, mkdir, open, readdir, rename, rm, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { getMimeType } from "hono/utils/mime";
 import type { Store, FileAsset, FileNodeContext } from "./state.ts";
-
-const CHUNK_LIMIT = 8 * 1024;
-
-export type FilePreview = FileAsset["preview"];
-
-export function sniffFile(bytes: Uint8Array, complete = true): { mime: string; preview: FilePreview } {
-  const value = Buffer.from(bytes);
-  if (value.length >= 8 && value.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
-    return { mime: "image/png", preview: "image" };
-  if (value.length >= 3 && value[0] === 0xff && value[1] === 0xd8 && value[2] === 0xff)
-    return { mime: "image/jpeg", preview: "image" };
-  if (value.length >= 6 && ["GIF87a", "GIF89a"].includes(value.subarray(0, 6).toString("ascii")))
-    return { mime: "image/gif", preview: "image" };
-  if (value.length >= 12 && value.toString("ascii", 0, 4) === "RIFF" && value.toString("ascii", 8, 12) === "WEBP")
-    return { mime: "image/webp", preview: "image" };
-  if (value.length >= 12 && value.toString("ascii", 4, 8) === "ftyp" &&
-      ["avif", "avis"].includes(value.toString("ascii", 8, 12)))
-    return { mime: "image/avif", preview: "image" };
-  if (value.length >= 5 && value.toString("ascii", 0, 5) === "%PDF-")
-    return { mime: "application/pdf", preview: "pdf" };
-  try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(value, { stream: !complete });
-    const documentStart = text.replace(/^\uFEFF/u, "").replace(/^(?:\s*<!--[\s\S]*?-->\s*)+/u, "");
-    if (/^\s*(?:<\?xml\b|<!doctype\s+html\b|<html\b|<head\b|<body\b|<script\b|<svg\b)/iu.test(documentStart))
-      return { mime: "application/octet-stream", preview: "file" };
-    if (![...text].some(char => {
-      const code = char.codePointAt(0)!;
-      return code === 0 || (code < 0x20 && ![9, 10, 12, 13].includes(code)) || (code >= 0x7f && code <= 0x9f);
-    })) return { mime: "text/plain; charset=utf-8", preview: "text" };
-  } catch { /* Unknown binary content stays opaque. */ }
-  return { mime: "application/octet-stream", preview: "file" };
-}
 
 function safeFilename(value: string): string {
   if (!value || Buffer.byteLength(value, "utf8") > 255 || Buffer.from(value).toString() !== value ||
@@ -92,7 +61,6 @@ export class AssetStore {
     const partialPath = join(this.temporary, `${randomUUID()}.part`);
     const file = await open(partialPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0), 0o600);
     let written = 0;
-    let prefix = Buffer.alloc(0);
     let active = true;
     const abort = async () => {
       if (!active) return;
@@ -105,7 +73,6 @@ export class AssetStore {
         if (!active) throw new Error("Upload is closed");
         const chunk = Buffer.from(inputChunk);
         if (written + chunk.length > input.size) throw new Error("File transfer exceeded declared length");
-        if (prefix.length < CHUNK_LIMIT) prefix = Buffer.concat([prefix, chunk.subarray(0, CHUNK_LIMIT - prefix.length)]);
         await writeAll(file, chunk, written);
         written += chunk.length;
       },
@@ -122,11 +89,8 @@ export class AssetStore {
           await file.close();
           signal?.throwIfAborted();
           if (!active) throw new Error("Upload is closed");
-          const detected = /\.(?:html?|xhtml|svg|xml|js|mjs|cjs)$/iu.test(filename)
-            ? { mime: "application/octet-stream", preview: "file" as const }
-            : sniffFile(prefix, written <= prefix.length);
           const asset: FileAsset = {
-            id, filename, size: written, mime: detected.mime, preview: detected.preview,
+            id, filename, size: written, mime: getMimeType(filename) || "application/octet-stream",
             createdAt: Date.now(),
           };
           await rename(partialPath, path);
@@ -156,15 +120,15 @@ export class AssetStore {
     };
   }
 
-  async read(id: string): Promise<{ body: Readable; asset: FileAsset } | undefined> {
+  async read(id: string, range?: { start: number; end: number }): Promise<{ body: Readable; asset: FileAsset } | undefined> {
     if (this.closed) return undefined;
     await this.initialize();
     const asset = this.store.fileAsset(id);
     if (!asset) return undefined;
-    return await this.openAsset(join(this.directory, id), asset);
+    return await this.openAsset(join(this.directory, id), asset, range);
   }
 
-  async readTemporary(id: string): Promise<{ body: Readable; asset: FileAsset } | undefined> {
+  async readTemporary(id: string, range?: { start: number; end: number }): Promise<{ body: Readable; asset: FileAsset } | undefined> {
     if (this.closed) return undefined;
     await this.initialize();
     const staged = this.stagedFiles.get(id);
@@ -173,7 +137,7 @@ export class AssetStore {
       await this.discardTemporary(id);
       return undefined;
     }
-    return await this.openAsset(join(this.staged, id), staged.asset);
+    return await this.openAsset(join(this.staged, id), staged.asset, range);
   }
 
   async discardTemporary(id: string): Promise<void> {
@@ -184,7 +148,9 @@ export class AssetStore {
     await rm(join(this.staged, id), { force: true });
   }
 
-  private async openAsset(path: string, asset: FileAsset): Promise<{ body: Readable; asset: FileAsset } | undefined> {
+  private async openAsset(path: string, asset: FileAsset, range?: { start: number; end: number }): Promise<{ body: Readable; asset: FileAsset } | undefined> {
+    if (range && (!Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end)
+      || range.start < 0 || range.end < range.start || range.end >= asset.size)) return undefined;
     let handle: FileHandle | undefined;
     try {
       handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
@@ -193,7 +159,7 @@ export class AssetStore {
         await handle.close();
         return undefined;
       }
-      return { body: handle.createReadStream(), asset };
+      return { body: handle.createReadStream(range), asset };
     } catch { await handle?.close().catch(() => {}); return undefined; }
   }
 

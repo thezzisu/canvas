@@ -4,10 +4,13 @@ import { HerdrInputRouter } from './input.ts'
 import { HerdrScreen, applySurfacePatch, validateSurface, type ScreenSelection } from './screen.ts'
 import { FrameReader, encodeClientMessage, type ClientMessage, type ClientShellSnapshot, type PaneSurfaceFrame, type ServerMessage } from './wire.ts'
 import { readWindowContent, type NativeContentPane } from './content.ts'
+import { windowMetadata } from './metadata.ts'
+import type { WindowMetadata } from '../../shared/window-metadata.ts'
 
 export interface HerdrClientTransport {
   onData(listener: (data: string) => void): { dispose(): void }
   onPaneFocus(listener: (paneId: string | undefined) => void): { dispose(): void }
+  onMetadata(listener: (metadata: WindowMetadata) => void): { dispose(): void }
   onExit(listener: (event: { exitCode: number; signal?: number }) => void): { dispose(): void }
   content(): Promise<NativeContentPane[] | undefined>
   write(data: string | Buffer): void
@@ -49,6 +52,9 @@ class HerdrClient implements HerdrClientTransport {
   private readonly screen = new HerdrScreen()
   private readonly dataListeners = new Set<(data: string) => void>()
   private readonly paneFocusListeners = new Set<(paneId: string | undefined) => void>()
+  private readonly metadataListeners = new Set<(metadata: WindowMetadata) => void>()
+  private metadata?: WindowMetadata
+  private metadataSignature = ''
   private focusedPaneId?: string
   private readonly exitListeners = new Set<(event: Exit) => void>()
   private readonly requests = new Map<string, Request>()
@@ -190,6 +196,11 @@ class HerdrClient implements HerdrClientTransport {
       if (this.snapshot && snapshot.revision < this.snapshot.revision) return
       this.snapshot = snapshot
       if (!snapshot.tabs.some(tab => tab.tab_id === this.options.tabId)) throw new Error('Herdr tab no longer exists')
+      const metadata = windowMetadata(snapshot, this.options.tabId), signature = JSON.stringify(metadata)
+      if (signature !== this.metadataSignature) {
+        this.metadata = metadata; this.metadataSignature = signature
+        for (const listener of this.metadataListeners) listener(metadata)
+      }
       if (!this.focusRequested && (!this.focusReady || snapshot.focused_tab_id !== this.options.tabId)) {
         this.focusRequested = true
         this.focusReady = false
@@ -291,6 +302,12 @@ class HerdrClient implements HerdrClientTransport {
     this.paneFocusListeners.add(listener)
     queueMicrotask(() => { if (!this.closed && this.paneFocusListeners.has(listener)) listener(this.focusedPaneId) })
     return { dispose: () => { this.paneFocusListeners.delete(listener) } }
+  }
+  onMetadata(listener: (metadata: WindowMetadata) => void) {
+    this.metadataListeners.add(listener)
+    const current = this.metadata
+    queueMicrotask(() => { if (!this.closed && current && this.metadata === current && this.metadataListeners.has(listener)) listener(current) })
+    return { dispose: () => { this.metadataListeners.delete(listener) } }
   }
   onExit(listener: (event: Exit) => void) {
     this.exitListeners.add(listener)

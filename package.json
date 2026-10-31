@@ -1,6 +1,6 @@
 {
   "name": "@thezzisu/canvas",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -42,6 +42,7 @@
     "@vueuse/core": "^10.11.1",
     "@xterm/xterm": "^6.0.0",
     "comark": "^0.8.1",
+    "mime": "^4.1.2",
     "prettier": "^3.9.10",
     "qr-scanner": "^1.4.2",
     "qrcode": "^1.5.4",
@@ -58,8 +59,7 @@
   "files": [
     "dist",
     "LICENSE",
-    "README.md",
-    "THIRD_PARTY_NOTICES"
+    "README.md"
   ],
   "description": "A browser workspace for local and SSH-connected herdr windows",
   "license": "Apache-2.0",

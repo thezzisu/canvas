@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHerdrClient } from './client.ts'
 import { Writer } from './wire.ts'
+import type { WindowMetadata } from '../../shared/window-metadata.ts'
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 async function until(check: () => boolean | Promise<boolean>) { for (let i = 0; i < 100; i++) { if (await check()) return; await delay(5) } assert.fail('fixture state did not settle') }
@@ -238,4 +239,34 @@ test('a delayed independent selection read never holds the endpoint keyboard lan
   await delay(10)
   // Typing retires the old selection; a delayed read cannot clobber clipboard.
   assert(!output.includes('\x1b]52;c;'))
+})
+
+test('native metadata changes arrive independently of frames, deduplicate and replay to late listeners', async t => {
+  const f = await fixture(t), client = await f.connect()
+  t.after(() => client.kill())
+  const updates: WindowMetadata[] = []
+  const subscription = client.onMetadata(metadata => updates.push(metadata))
+  await until(() => updates.length === 1)
+  const snapshot = (revision: number, status: string, title = 'Task') => f.control('shell.snapshot.v1', {
+    boot_id: 'boot', revision, focused_workspace_id: 'space', focused_tab_id: 'target', focused_pane_id: 'pane',
+    tabs: [{ tab_id: 'target', workspace_id: 'space', focused: true, label: 'Tab' }],
+    panes: [{ pane_id: 'pane', tab_id: 'target', workspace_id: 'space', focused: true, right_click_passthrough: false }],
+    agents: [{ pane_id: 'pane', agent_status: status, agent: 'codex', terminal_title_stripped: title }],
+  })
+  snapshot(2, 'done')
+  await until(() => updates.at(-1)?.status === 'done')
+  const count = updates.length
+  snapshot(3, 'done'); snapshot(1, 'working')
+  await delay(20)
+  assert.equal(updates.length, count, 'duplicate and stale snapshots changed metadata')
+  snapshot(4, 'idle', 'Ready')
+  await until(() => updates.at(-1)?.status === 'idle')
+  assert.equal(updates.at(-1)?.panes[0]?.terminalTitle, 'Ready')
+  const late: WindowMetadata[] = []
+  client.onMetadata(metadata => late.push(metadata))
+  await until(() => late.length === 1)
+  assert.deepEqual(late[0], updates.at(-1))
+  subscription.dispose(); snapshot(5, 'blocked')
+  await until(() => late.at(-1)?.status === 'attention')
+  assert.equal(updates.at(-1)?.status, 'idle')
 })

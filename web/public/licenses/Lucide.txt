@@ -1,17 +1,3 @@
-Canvas third-party notices
-
-The compiled frontend includes its full dependency notices at
-dist/web/THIRD_PARTY_NOTICES. The build derives that file from modules actually
-included in the frontend, retaining their original copyright and license texts.
-Installed Node.js dependencies carry their own license files.
-
-Bundled fonts retain their original SIL Open Font License texts in
-dist/web/fonts/licenses/ and provenance in dist/web/fonts/README.md.
-
-Lucide icons
-Source: https://github.com/lucide-icons/lucide
-The Nuxt UI icon bundle includes Lucide icons under the following terms.
-
 ISC License
 
 Copyright (c) 2026 Lucide Icons and Contributors

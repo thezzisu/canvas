@@ -1,6 +1,7 @@
 import { computed, shallowRef } from 'vue'
 import { apiFetch, apiUrl } from './api'
 import { downloadMedia } from './media'
+import { filePreview, type FilePreview } from './file-preview'
 
 export interface DownloadContext { canvasId?: string; anchorId?: string }
 export interface DownloadResource { sourceId: string; windowId: string }
@@ -8,7 +9,8 @@ export interface DownloadPreview {
   id: string
   filename: string
   size: number
-  preview: 'image' | 'pdf' | 'text'
+  mime?: string
+  preview: Exclude<FilePreview, 'file'>
   url: string
 }
 
@@ -18,9 +20,10 @@ export const downloadPreviewCount = computed(() => previews.value.length)
 export function dismissDownloadPreview() { previews.value = previews.value.slice(1) }
 
 /** Present an already-staged file in the browser that requested it. */
-export async function presentDownload(file: Omit<DownloadPreview, 'preview'> & { preview: DownloadPreview['preview'] | 'file' }, download = false) {
-  if (!download && file.preview !== 'file') {
-    previews.value = [...previews.value, { ...file, preview: file.preview }]
+export async function presentDownload(file: Omit<DownloadPreview, 'preview'>, download = false) {
+  const preview = filePreview(file)
+  if (!download && preview !== 'file') {
+    previews.value = [...previews.value, { ...file, preview }]
     return
   }
   await downloadMedia(file.url, file.filename)
@@ -79,13 +82,12 @@ export function receiveDownload(socket: WebSocket, message: Record<string, unkno
   try { url = apiUrl(message.url) } catch { return true }
   if (url.href !== apiUrl(path).href || url.search) return true
   if (!firstMessage(socket, message.type, message.id)) return true
-  if ((message.preview === 'image' || message.preview === 'pdf' || message.preview === 'text')
-      && Number.isSafeInteger(message.size) && (message.size as number) >= 0) {
+  if (Number.isSafeInteger(message.size) && (message.size as number) >= 0) {
     void presentDownload({ id: message.id, filename: message.filename,
-      size: message.size as number, preview: message.preview, url: path }).catch(reportDownloadError)
+      size: message.size as number, mime: typeof message.mime === 'string' ? message.mime : undefined, url: path }).catch(reportDownloadError)
     return true
   }
-  void presentDownload({ id: message.id, filename: message.filename, size: 0, preview: 'file', url: url.href }).catch(reportDownloadError)
+  void downloadMedia(url.href, message.filename).catch(reportDownloadError)
   return true
 }
 

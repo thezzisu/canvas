@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// Includes Lucide-derived paths: https://lucide.dev; see ../../public/licenses/Lucide.txt.
 defineProps<{ name: string; size?: number }>()
 const paths: Record<string, string> = {
   menu: 'M4 6h16 M4 12h16 M4 18h16',

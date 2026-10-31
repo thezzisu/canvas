@@ -82,6 +82,7 @@ export interface DownloadResponse {
   body: Readable;
   headers: Record<string, string>;
   previewHeaders?: Record<string, string>;
+  readRange?(start: number, end: number): Promise<Readable | undefined>;
 }
 export function createApp(
   store: Store,
@@ -101,7 +102,34 @@ export function createApp(
 ) {
   const app = new Hono();
   const origins = options.allowedOrigins || new Set<string>();
+  async function loadFile(id: string, download: boolean): Promise<DownloadResponse | undefined> {
+    const file = await options.assets?.read(id);
+    if (!file) return;
+    const { asset, body } = file;
+    const mode = download ? "attachment" : "inline";
+    const fallback = asset.filename.replace(/[^\x20-\x7e]|["\\]/gu, "_");
+    const encoded = encodeURIComponent(asset.filename).replace(/[!'()*]/gu, char =>
+      `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+    return { body, headers: {
+      "Content-Type": asset.mime,
+      "Content-Length": String(asset.size),
+      "Content-Disposition": `${mode}; filename="${fallback}"; filename*=UTF-8''${encoded}`,
+      "X-Content-Type-Options": "nosniff",
+      "Cross-Origin-Resource-Policy": "same-origin",
+      // Chromium's isolated PDF viewer requires a response without sandbox.
+      "Content-Security-Policy": asset.mime === "application/pdf"
+        ? "default-src 'none'; frame-ancestors 'self'"
+        : "default-src 'none'; sandbox; frame-ancestors 'self'",
+      "Referrer-Policy": "no-referrer",
+      "Cache-Control": "private, no-store",
+    }, readRange: async (start, end) => (await options.assets?.read(id, { start, end }))?.body };
+  }
   const media = new MediaTickets(token => store.hasSession(token), async (path, session, download) => {
+    if (path.startsWith('/api/files/')) return loadFile(path.slice('/api/files/'.length), download);
+    if (path.startsWith('/api/downloads/')) {
+      const file = await options.openDownload?.(path.slice('/api/downloads/'.length), session);
+      return file && { ...file, headers: download ? file.headers : file.previewHeaders ?? file.headers };
+    }
     const response = await app.request(`http://canvas.internal${path}${download ? '?download=1' : '?preview=1'}`, {
       headers: { Authorization: `Bearer ${session}` },
     });
@@ -213,27 +241,9 @@ export function createApp(
     return opened ? c.json(opened) : c.json({ error: "Scan expired; scan this window again" }, 404);
   });
   app.on(["GET", "HEAD"], "/api/files/:id", async (c) => {
-    const file = await options.assets?.read(c.req.param("id"));
+    const file = await loadFile(c.req.param("id"), c.req.query("download") === "1");
     if (!file) return c.json({ error: "File not found" }, 404);
-    const { asset, body } = file;
-    const mode = c.req.query("download") === "1" || asset.preview === "file" ? "attachment" : "inline";
-    const fallback = asset.filename.replace(/[^\x20-\x7e]|["\\]/gu, "_");
-    const encoded = encodeURIComponent(asset.filename).replace(/[!'()*]/gu, char =>
-      `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
-    const headers = {
-      "Content-Type": asset.mime,
-      "Content-Length": String(asset.size),
-      "Content-Disposition": `${mode}; filename="${fallback}"; filename*=UTF-8''${encoded}`,
-      "X-Content-Type-Options": "nosniff",
-      "Cross-Origin-Resource-Policy": "same-origin",
-      // Sandboxing disables Chromium's native PDF viewer and triggers a download.
-      // PDFs run in the browser's isolated viewer; all other previews stay sandboxed.
-      "Content-Security-Policy": asset.preview === "pdf"
-        ? "default-src 'none'; frame-ancestors 'self'"
-        : "default-src 'none'; sandbox; frame-ancestors 'self'",
-      "Referrer-Policy": "no-referrer",
-      "Cache-Control": "private, no-store",
-    };
+    const { body, headers } = file;
     if (c.req.method === "HEAD") { body.destroy(); return c.newResponse(null, 200, headers); }
     return c.newResponse(Readable.toWeb(body) as ReadableStream, 200, headers);
   });
@@ -481,6 +491,19 @@ export function createApp(
     canvas.nodes.push(note);
     return c.json(store.canvasView(store.put("canvas", canvasSchema.parse(canvas))), 201);
   });
+  app.post("/api/canvases/:id/references", async (c) => {
+    const id = c.req.param("id");
+    const input = z.object({ sourceCanvasId: z.string(), nodeId: nodeLayoutSchema.shape.id,
+      x: nodeLayoutSchema.shape.x.default(80), y: nodeLayoutSchema.shape.y.default(80),
+    }).strict().parse(await c.req.json());
+    if (id === "overview" || input.sourceCanvasId === "overview") return c.json({ error: "Overview is read-only" }, 403);
+    const sourceCanvas = store.get<Canvas>("canvas", input.sourceCanvasId);
+    if (!sourceCanvas || !store.get<Canvas>("canvas", id)) return c.json({ error: "Canvas not found" }, 404);
+    const node = sourceCanvas.nodes.find(item => item.id === input.nodeId);
+    if (!node || node.type === "terminal") return c.json({ error: "Shareable card not found" }, 404);
+    const result = store.addNodeReference(input.sourceCanvasId, input.nodeId, id, { x: input.x, y: input.y });
+    return c.json(store.canvasView(result.canvas), result.added ? 201 : 200);
+  });
   app.patch("/api/canvases/:id/notes/:node", async (c) => {
     const id = c.req.param("id"), nodeId = c.req.param("node");
     if (id === "overview") return c.json({ error: "Overview is read-only" }, 403);
@@ -489,8 +512,7 @@ export function createApp(
     if (!canvas) return c.json({ error: "Canvas not found" }, 404);
     const node = canvas.nodes.find((item) => item.id === nodeId);
     if (!node || node.type !== "note") return c.json({ error: "Note not found" }, 404);
-    Object.assign(node, patch);
-    return c.json(store.canvasView(store.put("canvas", canvasSchema.parse(canvas))));
+    return c.json(store.canvasView(store.updateNote(id, nodeId, patch)));
   });
   app.patch("/api/canvases/:id/layout", async (c) => {
     const id = c.req.param("id");

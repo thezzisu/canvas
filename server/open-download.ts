@@ -44,7 +44,7 @@ export interface OpenDownloadOptions {
   contextTimeoutMs?: number;
   progressTimeoutMs?: number;
   createUpload(metadata: { filename: string; size: number }): Promise<Upload>;
-  readTemporary(id: string): Promise<{ body: Readable; asset: FileAsset } | undefined>;
+  readTemporary(id: string, range?: { start: number; end: number }): Promise<{ body: Readable; asset: FileAsset } | undefined>;
   directoryUri?(source: Source, path: string): Promise<string>;
   openUrl?(source: Source, url: string, sessionId: string): Promise<OpenedUrl> | OpenedUrl;
   prepare(source: Source, localSocket: string): Promise<PreparedOpenBridge>;
@@ -313,7 +313,7 @@ export class OpenDownloadService {
     catch { socket.end(rejected); return; }
     const matches = resources.spaces.flatMap(space => space.windows)
       .filter(window => window.panes.some(pane => pane.id === header.paneId));
-    if (matches.length !== 1) { socket.end(rejected); return; }
+    if (matches.length !== 1) { socket.end(jsonLine({ ok: false, reason: "pane-unavailable" })); return; }
     const windowId = matches[0]!.id;
     const recipient = await this.options.recipient(source.id, windowId).catch(() => undefined);
     if (socket.destroyed) return;
@@ -491,7 +491,7 @@ export class OpenDownloadService {
           if (asset.temporary && ticket.recipient.readyState === 1) {
             try { ticket.recipient.send(JSON.stringify({ type: "download", id: ticket.id,
               url: `/api/downloads/${ticket.id}`, filename: ticket.filename, size: ticket.size,
-              preview: asset.preview, mime: asset.mime })); } catch {}
+              mime: asset.mime })); } catch {}
           }
           callback();
         };
@@ -518,7 +518,7 @@ export class OpenDownloadService {
     return id;
   }
 
-  async open(ticketId: string, sessionId: string): Promise<{ body: Readable; headers: Record<string, string>; previewHeaders?: Record<string, string> } | undefined> {
+  async open(ticketId: string, sessionId: string): Promise<{ body: Readable; headers: Record<string, string>; previewHeaders?: Record<string, string>; readRange(start: number, end: number): Promise<Readable | undefined> } | undefined> {
     const staged = this.staged.get(ticketId);
     if (!staged || staged.sessionId !== sessionId) return;
     const file = await this.options.readTemporary(staged.assetId);
@@ -531,15 +531,18 @@ export class OpenDownloadService {
     };
     // Inline content is classified from staged bytes, never from a helper URL
     // or an untrusted filename alone. The ticket stays bound to its owner.
-    const previewHeaders = file.asset.preview === "file" ? undefined : {
+    const previewHeaders = {
       ...headers,
       "Content-Type": file.asset.mime,
       "Content-Disposition": contentDisposition(file.asset.filename, "inline"),
-      "Content-Security-Policy": file.asset.preview === "pdf"
+      "Content-Security-Policy": file.asset.mime === "application/pdf"
         ? "default-src 'none'; frame-ancestors 'self'"
         : "default-src 'none'; sandbox; frame-ancestors 'self'",
     };
-    return { body: file.body, headers, previewHeaders };
+    return { body: file.body, headers, previewHeaders, readRange: async (start, end) => {
+      if (this.staged.get(ticketId) !== staged || staged.sessionId !== sessionId) return;
+      return (await this.options.readTemporary(staged.assetId, { start, end }))?.body;
+    } };
   }
 
   async closeSource(sourceId: string): Promise<void> {

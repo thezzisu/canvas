@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { AssetStore, sniffFile } from "./assets.ts";
+import { AssetStore } from "./assets.ts";
 import { createApp } from "./app.ts";
 import { Store, type Canvas } from "./state.ts";
 import type { TerminalManager } from "./terminals.ts";
@@ -61,8 +61,8 @@ test("file assets stream to private storage and publish metadata with a canvas c
   const { temporary, ...asset } = await upload.complete(f.context());
   assert.equal(temporary, false);
   assert(asset);
-  assert.deepEqual({ mime: asset.mime, preview: asset.preview, size: asset.size }, {
-    mime: "image/png", preview: "image", size: content.length,
+  assert.deepEqual({ mime: asset.mime, size: asset.size }, {
+    mime: "image/png", size: content.length,
   });
   const view = f.store.canvasView(f.store.get<Canvas>("canvas", f.canvas.id)!);
   const node = view.nodes.find(node => node.type === "file");
@@ -89,13 +89,33 @@ test("file assets stream to private storage and publish metadata with a canvas c
   reopened.close();
 });
 
-test("MIME sniffing permits safe previews and leaves HTML, SVG and unknown binary opaque", () => {
-  assert.deepEqual(sniffFile(Buffer.from("%PDF-1.7")), { mime: "application/pdf", preview: "pdf" });
-  assert.deepEqual(sniffFile(Buffer.from("\u0000<svg onload=alert(1) />")), { mime: "application/octet-stream", preview: "file" });
-  assert.deepEqual(sniffFile(Buffer.from("<!doctype html><script>bad()</script>")), { mime: "application/octet-stream", preview: "file" });
-  assert.deepEqual(sniffFile(Buffer.from("<!-- generated -->\n<html><script>bad()</script>")), { mime: "application/octet-stream", preview: "file" });
-  assert.deepEqual(sniffFile(Buffer.from([0, 255, 1, 2])), { mime: "application/octet-stream", preview: "file" });
-  assert.deepEqual(sniffFile(Buffer.from("plain text\n")), { mime: "text/plain; charset=utf-8", preview: "text" });
+test("stored files expose transport metadata without a rendering decision", async t => {
+  const f = await fixture(t), bytes = Buffer.from([0, 1, 2, 3]);
+  for (const [filename, mime] of [['recording.mp4', 'video/mp4'], ['unknown.data', 'application/octet-stream']]) {
+    const upload = await f.begin(filename!, bytes.length);
+    await upload.write(bytes);
+    const asset = await upload.complete(f.context());
+    assert.equal(asset.mime, mime);
+    assert.equal('preview' in asset, false);
+    const response = await f.request(`/api/files/${asset.id}`);
+    assert.equal(response.headers.get('content-type'), mime);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
+  }
+});
+
+test("removing obsolete rendering metadata preserves existing files and canvas references", async t => {
+  const f = await fixture(t), bytes = Buffer.from([0, 1, 2, 3]);
+  const upload = await f.begin('recording.mp4', bytes.length);
+  await upload.write(bytes);
+  const asset = await upload.complete(f.context());
+  f.store.db.exec("ALTER TABLE canvas_files ADD COLUMN preview TEXT NOT NULL DEFAULT 'file'");
+  const reopened = new Store(join(f.dir, 'canvas.db'));
+  try {
+    assert(!reopened.db.prepare('PRAGMA table_info(canvas_files)').all().some(column => column.name === 'preview'));
+    assert.equal(reopened.fileAsset(asset.id)?.filename, 'recording.mp4');
+    assert(reopened.canvasView(reopened.get<Canvas>('canvas', f.canvas.id)!).nodes.some(node => node.type === 'file' && node.assetId === asset.id));
+    assert.deepEqual(await readFile(join(f.dir, 'files', asset.id)), bytes);
+  } finally { reopened.close(); }
 });
 
 test("authenticated file routes stream previews safely and support explicit attachment", async t => {
@@ -283,7 +303,7 @@ test("closing asset storage removes staged uploads without deleting persistent a
   assert.equal(await readFile(join(f.dir, "files", permanent.id), "utf8"), "kept");
 });
 
-test("JavaScript and HTML extensions remain attachments even when their bytes are plain text", async t => {
+test("Hono content types retain sandbox and nosniff headers for markup and code", async t => {
   const f = await fixture(t);
   for (const extension of ["html", "svg", "js", "mjs", "cjs"]) {
     const upload = await f.begin(`sample.${extension}`, 3);
@@ -291,10 +311,11 @@ test("JavaScript and HTML extensions remain attachments even when their bytes ar
     const { temporary, ...asset } = await upload.complete(f.context());
     assert.equal(temporary, false);
     assert(asset);
-    assert.equal(asset.preview, "file");
-    assert.equal(asset.mime, "application/octet-stream");
+    assert.equal('preview' in asset, false);
     const response = await f.request(`/api/files/${asset.id}`);
-    assert.match(response.headers.get("content-disposition")!, /^attachment;/u);
+    assert.match(response.headers.get("content-disposition")!, /^inline;/u);
+    assert.match(response.headers.get("content-security-policy")!, /sandbox/);
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
     assert.equal(await response.text(), "abc");
   }
 });

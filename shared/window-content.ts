@@ -21,7 +21,6 @@ export interface WindowContentOpen {
   filename: string
   size: number
   mime: string
-  preview: 'image' | 'pdf' | 'text' | 'file'
   url: string
   temporary: boolean
 }
