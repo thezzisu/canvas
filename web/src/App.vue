@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, shallowRef, watch } from 'vue'
 import { VueFlow, useVueFlow, type Node, type NodeChange, type NodePositionChange, type NodeMouseEvent } from '@vue-flow/core'
-import { useActiveElement, useStorage, useTitle, watchDebounced } from '@vueuse/core'
+import { useStorage, useTitle, watchDebounced } from '@vueuse/core'
 import { MiniMap } from '@vue-flow/minimap'
 import UApp from '@nuxt/ui/components/App.vue'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
@@ -22,6 +22,7 @@ import { createPendingEdits, type NoteEdit } from './pending-edits'
 import { cameraFromViewport, recallFreeCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type CanvasLocation } from './canvas-location'
 import { useCanvasLocation } from './use-canvas-location'
 import { usePointerDismiss } from './pointer-dismiss'
+import { useDocumentFocus } from './document-focus'
 import { subscribeState } from './state-events'
 import { retainBackgrounds, useBackgroundUrl } from './backgrounds'
 import { pruneFileViews } from './file-view'
@@ -322,7 +323,7 @@ const overviewDismiss = usePointerDismiss(overviewMenuOpen, overviewTrigger)
 const overviewFiltered = computed(() => overviewSelected.value.length !== overviewStatuses.length)
 const overviewFocused = computed(() => overviewSelected.value.length === overviewFocusStatuses.length && overviewFocusStatuses.every(status => overviewSelected.value.includes(status)))
 const overviewChanged = computed(() => overviewFiltered.value || overviewOrder.value !== 'native')
-const activeElement = useActiveElement({ triggerOnRemoval: true })
+const { activeElement } = useDocumentFocus()
 const overviewInteraction = computed<OverviewInteraction | undefined>(() => {
   if (!isOverview.value) return
   if (pendingCreatedWindow.value) return pendingCreatedWindow.value

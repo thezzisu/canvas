@@ -5,6 +5,7 @@ import { initializeViewportPolicy } from './developer-mode'
 import { initializePwa } from './pwa'
 import { i18n, watchDocumentLocale } from './i18n'
 import { clearCopiedFile } from './file-clipboard'
+import { initializeStatusPulse } from './status-pulse'
 import './ui.css'
 import 'virtual:canvas-fonts.css'
 import '@vue-flow/core/dist/style.css'
@@ -18,6 +19,7 @@ import './card-presentation.css'
 document.documentElement.classList.add('dark')
 initializeViewportPolicy()
 initializePwa()
+initializeStatusPulse()
 watchDocumentLocale()
 document.addEventListener('copy', clearCopiedFile)
 createApp(App).use(i18n).use(ui).mount('#app')

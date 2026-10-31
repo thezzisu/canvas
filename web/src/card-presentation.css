@@ -1,7 +1,6 @@
-@property --status-phase { syntax: '<number>'; inherits: true; initial-value: 0; }
-:root { --status-phase: 1; }
+@property --status-phase { syntax: '<number>'; inherits: false; initial-value: 1; }
 @media(prefers-reduced-motion:no-preference) {
-  :root:has([data-status-pulse=true],.minimap-pulse,.connection-dot.connecting,.terminal-status-trigger.connecting) { animation: status-breathe 2.4s ease-in-out infinite; }
+  .terminal-card[data-status-pulse=true],.minimap-pulse,.program-dot[data-status-pulse=true],.connection-dot.connecting,.terminal-status-trigger.connecting>i { animation: status-breathe 2.4s ease-in-out infinite; }
 }
 @keyframes status-breathe { 0%,100% { --status-phase: 0; } 50% { --status-phase: 1; } }
 

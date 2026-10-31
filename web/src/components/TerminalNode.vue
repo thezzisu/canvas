@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useActiveElement, useWindowFocus } from '@vueuse/core'
 import type { NodeProps } from '@vue-flow/core'
 import UButton from '@nuxt/ui/components/Button.vue'
 import { NodeResizer } from '@vue-flow/node-resizer'
@@ -17,6 +16,7 @@ import { mountTerminal, type TerminalStatus } from '../terminals'
 import { emptyModifiers, type TerminalModifiers } from '../terminal-input'
 import { terminalInsets } from '../terminal-geometry'
 import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
+import { useDocumentFocus } from '../document-focus'
 import type { TerminalData } from '../types'
 const { t } = useI18n()
 const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>>()
@@ -35,8 +35,7 @@ const maximizedElsewhere = computed(() => !!status.value.presentation?.maximized
 const noteDropAvailable = computed(() => keepTerminal.value && !mobilePreview.value && !maximizedElsewhere.value && status.value.status === 'connected')
 const noteDropLabel = computed(() => mobilePreview.value ? t('panels.note.openToPaste') : maximizedElsewhere.value ? t('terminal.maximized')
   : status.value.status !== 'connected' || !keepTerminal.value ? t('terminal.upload.disconnected') : t('panels.note.paste'))
-const activeElement = useActiveElement({ triggerOnRemoval: true })
-const windowFocused = useWindowFocus()
+const { activeElement, windowFocused } = useDocumentFocus()
 const inputFocused = computed(() => windowFocused.value && !mobilePreview.value && !maximizedElsewhere.value &&
   keepTerminal.value && status.value.status === 'connected' && !status.value.readOnly &&
   !!activeElement.value?.matches('.xterm-helper-textarea, .terminal-mobile-input') && !!host.value?.contains(activeElement.value))
