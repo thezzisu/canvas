@@ -97,6 +97,8 @@ export interface TerminalData {
   onGeometry: (sourceId: string, windowId: string, ratio: number, insetX: number, insetY: number) => void
 }
 export interface NoteData extends NoteCanvasNode {
+  mobile?: boolean
+  focus?: boolean
   onResize: (id: string, width: number, height: number, x?: number, y?: number) => void
   onLayoutStart: () => void
   onChange: (id: string, patch: NotePatch) => void
@@ -104,7 +106,10 @@ export interface NoteData extends NoteCanvasNode {
   onAction: (action: string, id: string) => void
 }
 export interface FileData extends FileCanvasNode {
+  mobile?: boolean
+  focus?: boolean
   onResize: TerminalData['onResize']
   onLayoutStart: () => void
   onRemove: (id: string) => void
+  onAction?: (action: string, id: string) => void
 }

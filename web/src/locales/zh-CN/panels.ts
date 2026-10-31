@@ -13,7 +13,7 @@ export default {
   },
   directory: { title: '在本地继续', openVSCode: '在 VS Code 打开' },
   preview: {
-    mode: '文本预览模式', source: '源码', rendered: '渲染', wrap: '自动换行',
+    source: '显示源码', rendered: '渲染 Markdown', wrap: '自动换行',
     close: '关闭预览', remaining: '还有 {count} 个文件待预览', fullscreen: '全屏预览', exitFullscreen: '退出全屏预览',
     unavailable: '无法预览此文件', pdfUnavailable: '浏览器不支持 PDF 预览', truncated: '已显示前 1 MiB',
   },

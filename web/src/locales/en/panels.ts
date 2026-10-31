@@ -13,7 +13,7 @@ export default {
   },
   directory: { title: 'Continue locally', openVSCode: 'Open in VS Code' },
   preview: {
-    mode: 'Text preview mode', source: 'Source', rendered: 'Rendered', wrap: 'Wrap',
+    source: 'Show source', rendered: 'Render Markdown', wrap: 'Wrap text',
     close: 'Close preview', remaining: '{count} more file to preview | {count} more files to preview', fullscreen: 'Fullscreen preview', exitFullscreen: 'Exit fullscreen preview',
     unavailable: 'Unable to preview this file', pdfUnavailable: 'This browser cannot preview PDFs', truncated: 'Showing the first 1 MiB',
   },
