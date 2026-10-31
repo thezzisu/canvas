@@ -801,7 +801,7 @@ async function logout() {
   const context = apiContext()
   await exitFullscreen()
   requireCurrentApi(context)
-  await write('/api/logout', 'POST'); unauthorized()
+  await write('/api/logout', 'POST'); clearAuthentication()
 }
 function clearInstanceRuntime() {
   stopStateEvents(); resetApiRequests(); clearTerminals(); hideMobileKeyboard(); void exitFullscreen()
@@ -825,6 +825,7 @@ function visibilityChanged() {
   pageVisible.value = !document.hidden
   if (!document.hidden) { resourcesFresh.value = false; void refreshResources(true) }
 }
+function clearAuthentication() { setSessionToken(''); clearInstanceRuntime(); checkingInstance.value = false; void exitFullscreen() }
 async function unauthorized() {
   const context = apiContext()
   if (!context.token || authorizationCheck) return authorizationCheck
@@ -832,18 +833,16 @@ async function unauthorized() {
     try {
       const headers = new Headers({ Authorization: `Bearer ${context.token}` })
       const response = await fetch(apiUrl('/api/session', context), {
-        headers, credentials: 'omit', cache: 'no-store', signal: AbortSignal.timeout(10_000),
+        headers, credentials: 'omit', cache: 'no-store', signal: AbortSignal.any([context.signal, AbortSignal.timeout(10_000)]),
       })
       if (!isCurrentApi(context)) return
       if (response.status === 401) {
-        setSessionToken(''); clearInstanceRuntime(); checkingInstance.value = false; void exitFullscreen()
+        clearAuthentication()
         return
       }
       if (!response.ok) return
       const session: unknown = await response.json()
-      if (isCanvasSession(session) && session.authenticated === false) {
-        setSessionToken(''); clearInstanceRuntime(); checkingInstance.value = false; void exitFullscreen()
-      }
+      if (isCurrentApi(context) && isCanvasSession(session) && session.authenticated === false) clearAuthentication()
     } catch { /* A transient transport failure must not sign out a valid session. */ }
     finally { authorizationCheck = undefined }
   })()
