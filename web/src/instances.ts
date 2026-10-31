@@ -16,7 +16,7 @@ function identity() {
 }
 export const sameOriginBase = normalizeApiBase(new URL(import.meta.env.BASE_URL, location.href).href)
 const builtinServer = import.meta.env.VITE_CANVAS_BUILTIN_SERVER !== 'false'
-const sameOriginInstance = builtinServer ? { id: identity(), name: new URL(sameOriginBase).host, base: sameOriginBase } : undefined
+const sameOriginInstance: CanvasInstance | undefined = builtinServer ? { id: identity(), name: new URL(sameOriginBase).host, base: sameOriginBase, builtin: true } : undefined
 const savedInstances = useStorage<CanvasInstance[]>('canvas:instances', [])
 export const activeInstanceId = useStorage('canvas:active-instance', instanceConfiguration(savedInstances.value, '', sameOriginInstance).active.id, localStorage, { listenToStorageChanges: false })
 const configuration = computed(() => instanceConfiguration(savedInstances.value, activeInstanceId.value, sameOriginInstance))
@@ -29,11 +29,7 @@ export function selectInstance(id: string) {
   if (instances.value.some(instance => instance.id === id)) activeInstanceId.value = id
 }
 export function rememberInstance() {
-  const current = activeInstance.value
-  if (!current.base) return
-  const instance: CanvasInstance = sameOriginInstance && current.base === sameOriginBase ? { ...current, name: sameOriginInstance.name, builtin: true } : current
-  instances.value = instances.value.some(value => value.id === instance.id)
-    ? instances.value.map(value => value.id === instance.id ? instance : value) : [...instances.value, instance]
+  if (hasActiveInstance.value) savedInstances.value = instances.value
 }
 export function importInstance(value: { base: string; name?: string }): CanvasInstance {
   const base = normalizeApiBase(value.base)
@@ -46,8 +42,8 @@ export function saveInstance(value: { id?: string; name: string; base: string })
   if (!name) throw new Error('instances.nameRequired')
   if (instances.value.some(instance => instance.id !== value.id && instance.base === base)) throw new Error('instances.duplicate')
   const previous = instances.value.find(instance => instance.id === value.id)
-  if (previous?.builtin) throw new Error('instances.readOnly')
-  const result = { id: previous?.id || identity(), name, base }
+  if (previous?.builtin && previous.base !== base) throw new Error('instances.readOnly')
+  const result: CanvasInstance = { ...previous, id: previous?.id || identity(), name, base }
   if (previous && previous.base !== base) { removeSessionToken(previous.id); clearInstanceFileViews(previous.id); forgetInstanceBuild(previous.id) }
   instances.value = previous ? instances.value.map(instance => instance.id === result.id ? result : instance) : [...instances.value, result]
   selectInstance(result.id)

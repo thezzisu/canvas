@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { NodeProps } from '@vue-flow/core'
 import { NodeResizeControl } from '@vue-flow/node-resizer'
 import UDropdownMenu from '@nuxt/ui/components/DropdownMenu.vue'
@@ -11,6 +11,7 @@ import { noteColor } from '../status'
 import { copyText } from '../clipboard'
 import { writeNoteTransfer } from '../note-transfer'
 import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
+import { usePointerDismiss } from '../pointer-dismiss'
 
 const { t } = useI18n()
 
@@ -25,6 +26,8 @@ const menu = computed(() => [
   { label: t('common.settings'), onSelect: () => props.data.onAction('settings', props.id) },
 ])
 const menuContent = { align: 'end' as const, onCloseAutoFocus: (event: Event) => event.preventDefault() }
+const menuOpen = ref(false), menuTrigger = ref<HTMLButtonElement>()
+usePointerDismiss(menuOpen, menuTrigger)
 const colors = ['yellow', 'blue', 'green', 'pink', 'neutral'] as const
 const title = ref(props.data.title)
 const content = ref(props.data.content)
@@ -32,6 +35,7 @@ const editingTitle = ref(false)
 const titleInput = ref<HTMLInputElement>()
 const colorOpen = ref(false)
 const colorPicker = ref<HTMLElement>()
+usePointerDismiss(colorOpen, colorPicker)
 const copied = ref<'' | 'copied' | 'failed'>('')
 let copyTimer: ReturnType<typeof setTimeout> | undefined
 const color = computed(() => colors.includes(props.data.color) ? props.data.color : 'yellow')
@@ -45,7 +49,6 @@ function finishTitle() { editingTitle.value = false; flush() }
 async function rename() { editingTitle.value = true; await nextTick(); titleInput.value?.focus(); titleInput.value?.select() }
 function toggleMinimize() { emitChange({ minimized: !props.data.minimized }); flush() }
 function setColor(value: typeof colors[number]) { emitChange({ color: value }); colorOpen.value = false; flush() }
-function outsideColor(event: PointerEvent) { if (!colorPicker.value?.contains(event.target as HTMLElement)) colorOpen.value = false }
 function copyResult(value: 'copied' | 'failed') {
   clearTimeout(copyTimer); copied.value = value
   copyTimer = setTimeout(() => { copied.value = '' }, 2200)
@@ -57,8 +60,7 @@ function dragNote(event: DragEvent) {
   if (!writeNoteTransfer(event.dataTransfer, content.value)) event.preventDefault()
   event.stopPropagation()
 }
-onMounted(() => document.addEventListener('pointerdown', outsideColor))
-onBeforeUnmount(() => { clearTimeout(copyTimer); document.removeEventListener('pointerdown', outsideColor) })
+onBeforeUnmount(() => clearTimeout(copyTimer))
 </script>
 
 <template>
@@ -78,8 +80,8 @@ onBeforeUnmount(() => { clearTimeout(copyTimer); document.removeEventListener('p
       <div class="note-actions nodrag" :class="{ 'cutout-actions': data.focus }">
         <button v-if="!data.focus || !compact" type="button" class="note-copy" :class="{ 'note-copy-failed': copied === 'failed' }" :disabled="!content" :draggable="!!content" :title="copied ? t(`terminal.clipboard.${copied}`) : t('panels.note.copyOrDrag')" :aria-label="t('panels.note.copy')" @pointerdown.stop @click.stop="copyNote" @dragstart="dragNote"><Icon :name="copied === 'copied' ? 'check' : 'copy'" :size="13" /></button>
         <template v-if="data.focus">
-          <UDropdownMenu :items="menu" :portal="false" :content="menuContent" :ui="{ content: 'card-action-menu' }">
-            <button type="button" class="note-more" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></button>
+          <UDropdownMenu v-model:open="menuOpen" :items="menu" :portal="false" :content="menuContent" :ui="{ content: 'card-action-menu' }">
+            <button ref="menuTrigger" type="button" class="note-more" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></button>
           </UDropdownMenu>
           <button type="button" :title="t('common.returnToCanvas')" :aria-label="t('common.returnToCanvas')" @click.stop="data.onAction('unfocus', id)"><Icon name="collapse" :size="17" /></button>
         </template>

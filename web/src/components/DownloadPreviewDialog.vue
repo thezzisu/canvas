@@ -18,6 +18,7 @@ import { useMobileViewport } from '../viewport'
 import { cutoutActiveKey, cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
 import { isMarkdownFile } from '../markdown'
 import { useMobileLayout } from '../mobile-layout'
+import { usePointerDismiss } from '../pointer-dismiss'
 
 const { t, n } = useI18n()
 
@@ -30,6 +31,8 @@ const error = ref<string | Error>('')
 const truncated = ref(false)
 const expanded = ref(false)
 const rendered = ref(true), wrap = ref(false)
+const menuOpen = ref(false), menuTrigger = ref<InstanceType<typeof UButton>>()
+const menuDismiss = usePointerDismiss(menuOpen, menuTrigger)
 const header = ref<HTMLElement>()
 const cutoutActive = inject(cutoutActiveKey, ref(false))
 const mobile = useMobileLayout()
@@ -115,8 +118,8 @@ onBeforeUnmount(() => request?.abort())
         <div class="download-preview-actions" :class="{ 'cutout-actions': mobileHeader && expanded }">
           <TextPreviewActions v-if="downloadPreview.preview === 'text' && !loading && !error && (!mobileHeader || markdown && !compact)" :filename="downloadPreview.filename" v-model:rendered="rendered" v-model:wrap="wrap" :hide-wrap="mobileHeader" />
           <UButton v-if="!mobileHeader || !markdown && !compact" type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-download" :aria-label="t('panels.file.download')" :title="t('panels.file.download')" @click="download"><Icon name="download" :size="16" /></UButton>
-          <UDropdownMenu v-if="mobileHeader" :items="menu" :portal="portal || false" :content="{ align: 'end' }" :ui="{ content: 'card-action-menu download-preview-menu' }">
-            <UButton type="button" color="neutral" variant="ghost" class="download-preview-button" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></UButton>
+          <UDropdownMenu v-if="mobileHeader" v-model:open="menuOpen" :items="menu" :portal="portal || false" :content="{ align: 'end', ...menuDismiss }" :ui="{ content: 'card-action-menu download-preview-menu' }">
+            <UButton ref="menuTrigger" type="button" color="neutral" variant="ghost" class="download-preview-button" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></UButton>
           </UDropdownMenu>
           <UButton v-else type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-expand" :aria-label="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :title="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :aria-pressed="expanded" @click="expanded = !expanded"><Icon :name="expanded ? 'collapse' : 'expand'" :size="16" /></UButton>
           <UButton type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-close" :aria-label="t(mobileHeader && expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.close')" :title="t(mobileHeader && expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.close')" @click="mobileHeader && expanded ? expanded = false : dismissDownloadPreview()"><Icon :name="mobileHeader && expanded ? 'collapse' : 'close'" :size="17" /></UButton>

@@ -12,10 +12,13 @@ import { instanceBuild, observeInstanceBuild } from '../instance-builds'
 import { buildLabel } from '../../../shared/build-info'
 import { useInstanceProbe } from '../instance-probe'
 import { normalizeApiBase } from '../instance-url'
+import { usePointerDismiss } from '../pointer-dismiss'
 
 const props = defineProps<{ portal?: HTMLElement; beforeChange?: () => Promise<boolean>; disabled?: boolean }>()
 const { t } = useI18n()
 const open = ref(false), working = ref(false), error = ref('')
+const menuOpen = ref(false), menuTrigger = ref<HTMLButtonElement>()
+const menuDismiss = usePointerDismiss(menuOpen, menuTrigger)
 const draft = reactive({ id: '', name: '', base: '' })
 const draftBuild = computed(() => draft.id ? instanceBuild(draft) : undefined)
 const original = computed(() => instances.value.find(instance => instance.id === draft.id))
@@ -33,7 +36,6 @@ async function change(action: () => void) {
   finally { working.value = false }
 }
 function edit(add = false) {
-  if (!add && activeInstance.value.builtin) return
   Object.assign(draft, add ? { id: '', name: '', base: '' } : activeInstance.value)
   error.value = ''; open.value = true
 }
@@ -53,19 +55,19 @@ const items = computed<DropdownMenuItem[][]>(() => [
   instances.value.map(instance => ({ label: instance.name, type: 'checkbox' as const, server: instanceBuild(instance),
     checked: instance.id === activeInstance.value.id, onSelect: (): void => { void change(() => selectInstance(instance.id)) } })),
   [{ label: t('instances.add'), onSelect: () => edit(true) },
-    { label: t('instances.edit'), disabled: !!activeInstance.value.builtin, onSelect: () => edit() },
+    { label: t('instances.edit'), onSelect: () => edit() },
     { label: t('instances.remove'), disabled: !!activeInstance.value.builtin,
       onSelect: (): void => { void change(() => removeInstance(activeInstance.value.id)) } }],
 ])
 </script>
 
 <template>
-  <UDropdownMenu :items="items" :portal="portal || false" :content="{ side: 'top', align: 'start', sideOffset: 6 }"
+  <UDropdownMenu v-model:open="menuOpen" :items="items" :portal="portal || false" :content="{ side: 'top', align: 'start', sideOffset: 6, ...menuDismiss }"
     :ui="{ content: 'instance-menu' }">
     <template #item-label="{ item }">
       <span class="instance-menu-label"><span>{{ item.label }}</span><small v-if="item.server" class="instance-version" :class="{ stale: !item.server.fresh }" :title="`${t('instances.serverVersion')}: ${item.server.build.version}${item.server.build.revision ? ` · ${item.server.build.revision}` : ''}${!item.server.fresh ? ` · ${t('instances.lastSeen')}` : ''}`">{{ buildLabel(item.server.build) }}<span v-if="!item.server.fresh"> · {{ t('instances.lastSeen') }}</span></small></span>
     </template>
-    <button type="button" class="instance-trigger" :disabled="disabled || working" :aria-busy="working" :title="activeInstance.base" :aria-label="`${t('instances.instance')}: ${activeInstance.name}`">
+    <button ref="menuTrigger" type="button" class="instance-trigger" :disabled="disabled || working" :aria-busy="working" :title="activeInstance.base" :aria-label="`${t('instances.instance')}: ${activeInstance.name}`">
       <Icon name="server" :size="15" /><span>{{ activeInstance.name }}</span><Icon name="down" :size="12" />
     </button>
   </UDropdownMenu>
@@ -74,7 +76,7 @@ const items = computed<DropdownMenuItem[][]>(() => [
     <template #body>
       <form id="instance-form" @submit.prevent="submit">
         <UFormField :label="t('instances.name')" name="name" required><UInput v-model="draft.name" autofocus maxlength="80" class="w-full" :disabled="working" /></UFormField>
-        <UFormField :label="t('instances.address')" name="address" required><UInput v-model="draft.base" type="url" placeholder="https://canvas.example/" autocomplete="url" class="w-full" :disabled="working" /></UFormField>
+        <UFormField :label="t('instances.address')" name="address" required><UInput v-model="draft.base" type="url" placeholder="https://canvas.example/" autocomplete="url" class="w-full" :readonly="!!original?.builtin" :disabled="working" /></UFormField>
         <dl v-if="draftBuild" class="instance-build-detail"><dt>{{ t('instances.serverVersion') }}</dt><dd>{{ buildLabel(draftBuild.build) }}<small v-if="!draftBuild.fresh">{{ t('instances.lastSeen') }}</small></dd><template v-if="draftBuild.build.revision"><dt>{{ t('instances.revision') }}</dt><dd class="instance-revision">{{ draftBuild.build.revision }}</dd></template></dl>
         <p v-if="error" role="alert" class="instance-error">{{ t(error) }}</p>
       </form>

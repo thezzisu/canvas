@@ -21,6 +21,7 @@ import { createLayoutSaves, type LayoutPatch } from './layout-saves'
 import { createPendingEdits, type NoteEdit } from './pending-edits'
 import { cameraFromViewport, recallFreeCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type CanvasLocation } from './canvas-location'
 import { useCanvasLocation } from './use-canvas-location'
+import { usePointerDismiss } from './pointer-dismiss'
 import { subscribeState } from './state-events'
 import { retainBackgrounds, useBackgroundUrl } from './backgrounds'
 import { pruneFileViews } from './file-view'
@@ -140,11 +141,11 @@ const accountDialog = ref(false)
 const settings = ref<GlobalSettings | null>(null)
 const contentFontStyle = ref<Record<string, string>>({})
 const appliedContentFont = ref('')
-const fontLoading = ref(false)
 let fontSignature = ''
 let fontRevision = 0
 const canvasMenu = ref(false)
 const canvasMenuElement = ref<HTMLElement>()
+usePointerDismiss(canvasMenu, canvasMenuElement)
 const canvasDraft = reactive({ id: '', name: '' })
 const dialogError = ref('')
 const actionDialog = ref<{ title: string; description: string; label?: string; optional?: boolean; value: string; danger?: boolean; button: string; submit: (value: string) => Promise<void> } | null>(null)
@@ -316,6 +317,8 @@ const overviewCreation = computed(() => overviewSelected.value.includes('unknown
 const showMinimap = useStorage('canvas:view:minimap', true)
 const showNavigation = useStorage('canvas:view:navigation', true)
 const overviewMenuOpen = ref(false)
+const overviewTrigger = ref<HTMLElement>()
+const overviewDismiss = usePointerDismiss(overviewMenuOpen, overviewTrigger)
 const overviewFiltered = computed(() => overviewSelected.value.length !== overviewStatuses.length)
 const overviewFocused = computed(() => overviewSelected.value.length === overviewFocusStatuses.length && overviewFocusStatuses.every(status => overviewSelected.value.includes(status)))
 const overviewChanged = computed(() => overviewFiltered.value || overviewOrder.value !== 'native')
@@ -342,6 +345,7 @@ const overviewMenu = computed<DropdownMenuItem[][]>(() => [
   ],
   [{ label: t('app.reset'), disabled: !overviewChanged.value, onSelect: resetOverview }],
 ])
+const onlineCount = computed(() => resources.value.filter(source => !source.error && !['offline', 'error', 'disconnected'].includes(source.status)).length)
 const currentName = computed(() => isOverview.value ? t('app.overview') : currentCanvas.value?.name || t('app.canvas'))
 useTitle(computed(() => authenticated.value && !unknownInstance.value ? `${currentName.value} - Canvas` : 'Canvas'))
 const allWindows = computed(() => resources.value.flatMap(source => source.spaces.flatMap(space => space.windows.map(window => ({ source, space, window, key: `${source.id}/${space.id}/${window.id}` })))))
@@ -537,7 +541,6 @@ function applySettings(value: GlobalSettings) {
   fontSignature = signature
   const revision = ++fontRevision
   const config = { ...value.contentFont, stack: value.contentFont.stack.map(entry => ({ ...entry })) }
-  fontLoading.value = true
   const apply = () => {
     if (revision !== fontRevision) return
     const presentation = buildFontPresentation(config)
@@ -551,7 +554,7 @@ function applySettings(value: GlobalSettings) {
       apply()
     } catch (reason) {
       if (revision === fontRevision) { fontSignature = ''; showError(reason) }
-    } finally { if (revision === fontRevision) fontLoading.value = false }
+    }
   })()
 }
 function applySharedState(state: SharedState) {
@@ -851,7 +854,7 @@ function clearInstanceRuntime() {
   sourceDialogRevision++; canvasDialogRevision++; addDialogRevision++; pendingKeyboard = undefined
   addDialog.value = false; windowMenu.value = null; backgroundCanvas.value = null; settingsDialog.value = false; accountDialog.value = false
   sidebarOpen.value = false; overviewMenuOpen.value = false; canvasMenu.value = false
-  settings.value = null; fontRevision++; fontSignature = ''; fontLoading.value = false; latestState = undefined
+  settings.value = null; fontRevision++; fontSignature = ''; latestState = undefined
   sources.value = []; resources.value = []; canvases.value = []; nodes.value = []; windowSizes.value = {}
   resourcesFresh.value = false; resourcesLoaded.value = false
   overviewBackground.value = null; windowGeometry.clear(); resourceSignature = ''; resourceLayoutSignature = ''; resourceRequest = undefined
@@ -962,7 +965,6 @@ function closeBackgroundDialog() {
   backgroundCanvas.value = null
   void nextTick(() => canvasMenuElement.value?.querySelector<HTMLButtonElement>('.canvas-menu-trigger')?.focus())
 }
-function outsideCanvasMenu(event: PointerEvent) { if (!canvasMenuElement.value?.contains(event.target as HTMLElement)) canvasMenu.value = false }
 async function toggleCanvasMenu() {
   canvasMenu.value = !canvasMenu.value
   if (canvasMenu.value) { await nextTick(); canvasMenuElement.value?.querySelector<HTMLButtonElement>('.canvas-menu button')?.focus() }
@@ -1393,11 +1395,6 @@ function keydown(event: KeyboardEvent) {
     else sourcePanel.value = false
   }
 }
-function outsideOverviewMenu(event: PointerEvent) {
-  if (!overviewMenuOpen.value) return
-  const target = event.target instanceof Element ? event.target : undefined
-  if (!target?.closest('.overview-display-menu, .overview-display-trigger')) overviewMenuOpen.value = false
-}
 function beforeUnload(event: BeforeUnloadEvent) {
   if (!pendingNotes.size && !savingNotes.size && !pendingLayouts.size && !layoutSaves.saving) return
   checkpointEdits()
@@ -1457,8 +1454,6 @@ onMounted(async () => {
   window.addEventListener('keydown', keydown)
   window.addEventListener('resize', windowResize)
   window.addEventListener('beforeunload', beforeUnload)
-  document.addEventListener('pointerdown', outsideCanvasMenu)
-  document.addEventListener('pointerdown', outsideOverviewMenu, true)
   navigation.read()
   instanceBooted = true
   if (unknownInstance.value || invalidInstanceLink) ready.value = true
@@ -1466,7 +1461,7 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', visibilityChanged)
   refreshTimer = setInterval(() => { if (!document.hidden) void refreshResources(true) }, 2000)
 })
-onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload); document.removeEventListener('pointerdown', outsideCanvasMenu); document.removeEventListener('pointerdown', outsideOverviewMenu, true) })
+onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload) })
 </script>
 
 <template>
@@ -1503,14 +1498,21 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
       <div class="sidebar-divider" />
       <div class="nav-section-label"><span>{{ t('app.connections') }}</span><button class="icon-button" :title="t('app.addConnection')" :aria-label="t('app.addConnection')" @click="openSource()"><Icon name="plus" :size="16" /></button></div>
       <div class="source-nav"><button v-for="source in sources" :key="source.id" class="source-nav-item" :title="`${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}${resources.find(item => item.id === source.id)?.serverVersion ? ` · herdr ${resources.find(item => item.id === source.id)!.serverVersion}` : ''}`" @click="sourcePanel = true; expandedSource = source.id"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}</span><span class="source-nav-status"><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : 'connected'" /></span></button><button v-if="!sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="15" />{{ t('app.addConnection') }}</button></div>
-      <div class="sidebar-footer"><button class="sidebar-account" :title="username" :aria-label="`${t('account.title')}: ${username}`" @click="accountDialog = true"><Icon name="user" :size="17" /><span>{{ username }}</span></button><button class="icon-button sidebar-settings" :title="t('common.settings')" :aria-label="t('common.settings')" :aria-busy="fontLoading" :disabled="!settings" @click="openSettings"><span v-if="fontLoading" class="spinner" /><svg v-else width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.5 3-.6 2.3-2 .9-2.1-.7-2.5 4.3 1.7 1.6v2.3L2.3 15l2.5 4.3 2.1-.7 2 .9.6 2.3h5l.6-2.3 2-.9 2.1.7 2.5-4.3-1.7-1.6v-2.3l1.7-1.6-2.5-4.3-2.1.7-2-.9-.6-2.3z" /><circle cx="12" cy="12" r="3" /></svg></button><button class="icon-button" :title="t('app.signOut')" :aria-label="t('app.signOut')" @click="logout"><Icon name="logout" :size="17" /></button></div>
+      <div class="sidebar-footer">
+        <button class="sidebar-account" :title="username" :aria-label="`${t('account.title')}: ${username}`" @click="accountDialog = true">
+          <span class="avatar" aria-hidden="true">{{ username.slice(0, 1).toUpperCase() || 'C' }}</span>
+          <span>{{ username }}<small>{{ t('app.onlineCount', onlineCount) }}</small></span>
+        </button>
+        <button class="icon-button sidebar-settings" :title="t('common.settings')" :aria-label="t('common.settings')" :disabled="!settings" @click="openSettings"><Icon name="settings" :size="17" /></button>
+        <button class="icon-button" :title="t('app.signOut')" :aria-label="t('app.signOut')" @click="logout"><Icon name="logout" :size="17" /></button>
+      </div>
     </aside>
     <main class="workspace" :inert="!!focusedCard || undefined" :aria-hidden="!!focusedCard || undefined">
       <header class="workspace-header">
         <div class="header-context"><button v-if="mobile" class="icon-button mobile-menu-trigger" :aria-label="t('app.openCanvasList')" aria-controls="canvas-sidebar" :aria-expanded="sidebarOpen" @click="sidebarOpen = !sidebarOpen"><Icon name="menu" :size="21" /></button><div class="breadcrumb"><h1 :title="currentName">{{ currentName }}</h1></div><span class="header-counts">{{ canvasCounts }}</span><button class="icon-button refresh-button" :title="refreshedAt ? t('app.refreshUpdated', { time: refreshedTime }) : t('app.refresh')" :aria-label="t('app.refresh')" :disabled="loading" @click="refreshResources()"><Icon name="refresh" :size="14" :class="{ spinning: loading }" /></button></div>
         <div class="header-actions">
-          <UDropdownMenu v-if="isOverview" v-model:open="overviewMenuOpen" :items="overviewMenu" :portal="appElement || false" :content="{ align: 'end' }" :ui="{ content: 'overview-display-menu', item: 'overview-display-item', label: 'overview-display-label' }">
-            <button class="icon-button overview-display-trigger" :class="{ active: overviewChanged }" :title="t('app.filterSort')" :aria-label="t('app.overviewFilterSort')"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg><i v-if="overviewChanged" /></button>
+          <UDropdownMenu v-if="isOverview" v-model:open="overviewMenuOpen" :items="overviewMenu" :portal="appElement || false" :content="{ align: 'end', ...overviewDismiss }" :ui="{ content: 'overview-display-menu', item: 'overview-display-item', label: 'overview-display-label' }">
+            <button ref="overviewTrigger" class="icon-button overview-display-trigger" :class="{ active: overviewChanged }" :title="t('app.filterSort')" :aria-label="t('app.overviewFilterSort')"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg><i v-if="overviewChanged" /></button>
             <template #item-leading="{ item }"><span class="overview-display-leading" aria-hidden="true"><i v-if="item.status" class="program-dot" :style="{ '--program-color': statusColor(item.status) }" /></span></template>
           </UDropdownMenu>
           <button v-if="!isOverview" class="button subtle" :title="t('app.addNote')" :aria-label="t('app.addNote')" :disabled="busy" @click="addNote"><Icon name="note" :size="14" />{{ t('app.note') }}</button>

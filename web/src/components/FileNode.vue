@@ -19,6 +19,7 @@ import { copyCanvasFile, fileReference } from '../file-transfer'
 import { writeFileReference } from '../file-reference'
 import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
 import { useFileView } from '../file-view'
+import { usePointerDismiss } from '../pointer-dismiss'
 
 const { t, n } = useI18n()
 
@@ -28,6 +29,8 @@ const header = ref<HTMLElement>()
 const compact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined))
 const markdown = computed(() => props.data.asset.preview === 'text' && isMarkdownFile(props.data.asset.filename))
 const { rendered, wrap, reading, remember } = useFileView(props.data.instanceId, props.data.canvasId, props.id, markdown.value, props.data.canPersistView)
+const menuOpen = ref(false), menuTrigger = ref<HTMLButtonElement>()
+const menuDismiss = usePointerDismiss(menuOpen, menuTrigger)
 const menu = computed<DropdownMenuItem[]>(() => [
   ...(markdown.value && compact.value ? [{ label: t('panels.preview.source'), type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
   ...(props.data.asset.preview === 'text' && (!markdown.value || !rendered.value) ? [{ label: t('panels.preview.wrap'), type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } }] : []),
@@ -108,8 +111,8 @@ const size = computed(() => {
       <span class="sr-only" role="status">{{ copyFeedback ? t(copyFeedback) : '' }}</span>
       <button v-if="!data.focus || !markdown && !compact" type="button" class="file-action nodrag" @click.stop="download" :title="t('panels.file.download')" :aria-label="t('panels.file.download')" @pointerdown.stop><Icon name="download" :size="14" /></button>
       <template v-if="data.focus">
-        <UDropdownMenu :items="menu" :portal="false" :content="{ align: 'end' }" :ui="{ content: 'card-action-menu' }">
-          <button type="button" class="file-action file-more nodrag" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></button>
+        <UDropdownMenu v-model:open="menuOpen" :items="menu" :portal="false" :content="{ align: 'end', ...menuDismiss }" :ui="{ content: 'card-action-menu' }">
+          <button ref="menuTrigger" type="button" class="file-action file-more nodrag" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></button>
         </UDropdownMenu>
         <button type="button" class="file-action nodrag" :title="t('common.returnToCanvas')" :aria-label="t('common.returnToCanvas')" @click.stop="data.onAction?.('unfocus', id)"><Icon name="collapse" :size="17" /></button>
       </template>

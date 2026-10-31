@@ -3,7 +3,7 @@ export default {
   name: 'Name', address: 'Server URL', nameRequired: 'Enter a name.', duplicate: 'This server is already in your list.',
   invalidUrl: 'Enter an HTTP or HTTPS server URL without a query or fragment.',
   connect: 'Connect', unavailable: 'Unable to reach this instance.', retry: 'Retry',
-  readOnly: 'The default instance cannot be changed.',
+  readOnly: 'The default instance’s server URL cannot be changed.',
   serverVersion: 'Canvas Server', revision: 'Revision', lastSeen: 'Last seen',
   probing: 'Checking…', probeFailed: 'Unavailable',
 }

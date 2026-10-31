@@ -24,7 +24,6 @@
 .mobile-layout .canvas-nav-item .canvas-nav-status { display: flex; }
 .sidebar-instance { padding: 0 8px 8px; }
 .sidebar-instance>.instance-trigger { min-height: 30px; padding: 4px 0; }
-.sidebar-footer { justify-content: flex-end; }
 @media(max-width:620px) {
   .sidebar-instance { padding: 0 0 6px; }
   .sidebar-instance>.instance-trigger { justify-content: center; }
