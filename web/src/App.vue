@@ -1233,6 +1233,7 @@ function resizeNode(id: string, width: number, height: number, x?: number, y?: n
 }
 function keydown(event: KeyboardEvent) {
   if (event.defaultPrevented) return
+  if (event.key === 'Escape' && event.composedPath().some(target => target instanceof Element && target.getAttribute('role') === 'menu')) return
   if (directoryRequest.value || urlRequest.value) return
   if (downloadPreview.value) return
   if (backgroundCanvas.value) return
