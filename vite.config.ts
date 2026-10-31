@@ -16,7 +16,7 @@ export default defineConfig({
     icon: { clientBundle: { icons: ['lucide:x', 'lucide:chevron-down', 'lucide:check', 'lucide:copy', 'lucide:copy-check', 'lucide:qr-code', 'lucide:arrow-left', 'lucide:scan-qr-code', 'lucide:image', 'lucide:camera', 'lucide:camera-off'] } },
     ui: { colors: { primary: 'amber', neutral: 'zinc' } },
   })],
-  build: { outDir: '../dist/web', emptyOutDir: true, license: true },
+  build: { outDir: '../dist/web', emptyOutDir: true, rolldownOptions: { output: { comments: { legal: true } } } },
   server: {
     host: '127.0.0.1',
     proxy: {

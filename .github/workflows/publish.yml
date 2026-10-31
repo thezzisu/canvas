@@ -80,15 +80,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node scripts/pack.mjs > "$RUNNER_TEMP/npm-pack.json"
+          npm pack --ignore-scripts --json > "$RUNNER_TEMP/npm-pack.json"
           node --input-type=module <<'NODE'
           import { readFileSync, existsSync } from 'node:fs'
           import { createHash } from 'node:crypto'
-          import { isLicenseFile } from './scripts/pack.mjs'
+          import { execFileSync } from 'node:child_process'
           const [pack] = JSON.parse(readFileSync(process.env.RUNNER_TEMP + '/npm-pack.json', 'utf8'))
           const files = new Set(pack.files.map(file => file.path))
-          const licenses = [...files].filter(isLicenseFile)
+          const licenses = [...files].filter(path => /(?:^|\/)(?:licenses?|licences?)\//i.test(path) || /(?:^|\/)(?:license|licence|copying|copyright|notice|(?:[^/]*[-_])?ofl)(?:\.(?:md|txt))?$/i.test(path))
           if (licenses.length !== 1 || licenses[0] !== 'LICENSE') throw new Error('Release must contain exactly one top-level LICENSE')
+          if (!execFileSync('tar', ['-xOf', pack.filename, 'package/LICENSE']).equals(readFileSync('LICENSE'))) throw new Error('Release LICENSE must match the original project LICENSE exactly')
           for (const path of ['dist/cli/main.js', 'dist/web/index.html']) {
             if (!files.has(path)) throw new Error(`Release archive is missing ${path}`)
           }
