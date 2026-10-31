@@ -100,3 +100,47 @@ jobs:
           set -euo pipefail
           archive="$(node --input-type=module -e "import { readFileSync } from 'node:fs'; console.log(JSON.parse(readFileSync(process.env.RUNNER_TEMP + '/npm-pack.json', 'utf8'))[0].filename)")"
           npm publish "$archive" --provenance --access public --tag latest
+
+      - name: Verify public registry availability
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          import { createHash } from 'node:crypto'
+          import { setTimeout as delay } from 'node:timers/promises'
+          const [pack] = JSON.parse(readFileSync(process.env.RUNNER_TEMP + '/npm-pack.json', 'utf8'))
+          const registry = 'https://registry.npmjs.org'
+          const tarball = `${registry}/${pack.name}/-/${pack.name.split('/').at(-1)}-${pack.version}.tgz`
+          const deadline = Date.now() + 10 * 60_000
+          async function request(url) {
+            const response = await fetch(url, { signal: AbortSignal.timeout(Math.max(1, Math.min(60_000, deadline - Date.now()))) })
+            if (response.ok) return response
+            await response.body?.cancel()
+            if (response.status === 404) return null
+            throw new Error(`Registry verification failed: HTTP ${response.status} at ${url}`)
+          }
+          let verified = false
+          while (Date.now() < deadline) {
+            const response = await request(`${registry}/${encodeURIComponent(pack.name)}`)
+            const metadata = response && await response.json()
+            const published = metadata?.versions?.[pack.version]
+            if (published && published.dist?.integrity !== pack.integrity) {
+              throw new Error(`Registry integrity differs from the packed ${pack.name}@${pack.version}`)
+            }
+            if (published && metadata['dist-tags']?.latest === pack.version) {
+              if (published.dist.tarball !== tarball) throw new Error('Registry returned an unexpected tarball URL')
+              const archive = await request(tarball)
+              if (archive) {
+                const hash = createHash('sha512')
+                for await (const chunk of archive.body) hash.update(chunk)
+                if (`sha512-${hash.digest('base64')}` !== pack.integrity) throw new Error('Published tarball differs from the packed archive')
+                console.log(`Verified ${pack.name}@${pack.version}: latest, registry integrity and public tarball match`)
+                verified = true
+                break
+              }
+            }
+            console.log(`Waiting for public registry propagation: ${pack.name}@${pack.version}`)
+            await delay(Math.max(0, Math.min(20_000, deadline - Date.now())))
+          }
+          if (!verified) throw new Error('Public registry did not expose the verified release within 10 minutes; do not republish the same version')
+          NODE
