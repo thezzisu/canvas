@@ -25,5 +25,5 @@ const markdown = computed(() => isMarkdownFile(props.filename))
 <style scoped>
 .text-preview-actions{display:flex;flex:none;align-items:center;gap:0}
 .text-preview-action{display:flex;flex:none;align-items:center;justify-content:center;width:var(--header-action-size,23px);min-width:var(--header-action-size,23px);height:var(--header-action-size,23px);padding:0;border-radius:5px;color:#93a1b4}
-.text-preview-action:hover,.text-preview-action[aria-pressed=true]{color:#d4dfec}
+.text-preview-action:hover{color:#d4dfec}
 </style>

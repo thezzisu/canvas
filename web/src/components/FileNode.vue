@@ -18,6 +18,7 @@ import { apiFetch } from '../api'
 import { copyCanvasFile, fileReference } from '../file-transfer'
 import { writeFileReference } from '../file-reference'
 import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
+import { useFileView } from '../file-view'
 
 const { t, n } = useI18n()
 
@@ -26,8 +27,7 @@ const mobilePreview = computed(() => !!props.data.mobile && !props.data.focus)
 const header = ref<HTMLElement>()
 const compact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined))
 const markdown = computed(() => props.data.asset.preview === 'text' && isMarkdownFile(props.data.asset.filename))
-const rendered = ref(isMarkdownFile(props.data.asset.filename)), wrap = ref(false)
-watch(() => props.data.asset.filename, value => { rendered.value = isMarkdownFile(value); wrap.value = false })
+const { rendered, wrap, reading, remember } = useFileView(props.data.instanceId, props.data.canvasId, props.id, markdown.value, props.data.canPersistView)
 const menu = computed<DropdownMenuItem[]>(() => [
   ...(markdown.value && compact.value ? [{ label: t('panels.preview.source'), type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
   ...(props.data.asset.preview === 'text' && (!markdown.value || !rendered.value) ? [{ label: t('panels.preview.wrap'), type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } }] : []),
@@ -125,7 +125,7 @@ const size = computed(() => {
       <div v-else-if="data.asset.preview === 'text'" class="file-text-body nowheel" @wheel.stop>
         <div v-if="textLoading" class="file-text-status" role="status"><span class="spinner" /> {{ t('common.loading') }}</div>
         <div v-else-if="textError" class="file-text-status" role="alert"><span>{{ textError instanceof Error ? textError.message : t(textError) }}</span><button type="button" @click="loadText">{{ t('common.retry') }}</button></div>
-        <TextPreview v-else :text="text" :filename="data.asset.filename" :rendered="rendered" :wrap="wrap" />
+        <TextPreview v-else :text="text" :filename="data.asset.filename" :rendered="rendered" :wrap="wrap" :reading="reading" :read-only="mobilePreview" @reading="remember" />
         <div v-if="truncated" class="file-text-truncated"><span>{{ t('panels.preview.truncated') }}</span><button type="button" @click="download">{{ t('panels.file.downloadOriginal') }}</button></div>
       </div>
       <iframe v-else-if="data.asset.preview === 'pdf' && pdfPreview && url" class="file-preview nowheel" :src="url" :title="data.asset.filename" loading="lazy" referrerpolicy="no-referrer" />

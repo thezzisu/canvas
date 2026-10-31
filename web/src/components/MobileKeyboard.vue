@@ -275,7 +275,7 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
 .mobile-keyboard button{min-height:44px;min-width:44px;padding:0 6px;border:1px solid #3a4350;border-bottom-color:#48515e;border-radius:5px;background:#2b323d;box-shadow:inset 0 1px 0 #ffffff05,0 1px 1px #0003;color:#cbd2dd;font-size:12px;line-height:1;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;white-space:nowrap;-webkit-tap-highlight-color:transparent}
 .mobile-key-row>button{min-width:0;min-height:40px;padding:0;height:44px}
 .mobile-keyboard button:active{background:#414955;border-color:#637082;box-shadow:inset 0 1px 2px #0003}
-.mobile-keyboard button[aria-pressed=true],.mobile-keyboard button.active{background:#493b31;border-color:#977254;color:#f2c5a2;box-shadow:inset 0 1px 0 #e9b18812}
+.mobile-keyboard button[aria-pressed=true],.mobile-keyboard button.active{background:var(--toggle-bg);border-color:#977254;color:var(--toggle-fg);box-shadow:inset 0 1px 0 #e9b18812}
 .mobile-keyboard button:focus-visible{outline:2px solid #d9ab87;outline-offset:-3px}
 .mobile-keyboard button:disabled{opacity:.4;cursor:default}
 .mobile-keyboard .arrow-key{font-size:21px;font-family:system-ui,sans-serif}
@@ -291,11 +291,12 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
 .mobile-key-bottom button{padding:0;font-size:clamp(8px,2.4cqw,11px);letter-spacing:-.25px}
 .mobile-key-bottom .symbol-key{font-size:clamp(12px,3.6cqw,18px);font-family:system-ui,sans-serif;letter-spacing:0}
 .mobile-key-deck .shift-key,.mobile-key-deck .backspace-key,.mobile-key-deck .enter-key{font-size:clamp(14px,4cqw,20px);background:#252c36}
-.mobile-key-deck .shift-key[aria-pressed=true]{background:#493b31}
+.mobile-key-deck .shift-key[aria-pressed=true]{background:var(--toggle-bg)}
 .mobile-key-actions{flex:0 0 auto;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;padding:6px;border-top:1px solid #3c4552;background:#191e25}
 .mobile-key-actions button{min-width:0;min-height:44px;padding:0;background:#252d37;border-color:#35414f;color:#b7c3d2}
-.mobile-key-actions button[aria-pressed=true]{background:#3d342e;border-color:#886b54;color:#e8bc9a}
+.mobile-key-actions button[aria-pressed=true]{background:var(--toggle-bg);border-color:#886b54;color:var(--toggle-fg)}
 .mobile-key-actions button:active{background:#3b4654}
+.mobile-keyboard button:is([aria-pressed=true],.active):active:not(:disabled){background:var(--toggle-pressed)}
 .mobile-file-input{display:none}
 .mobile-text-backdrop{--text-safe-top:var(--mobile-safe-top,env(safe-area-inset-top,0px));--text-safe-bottom:var(--mobile-safe-bottom,env(safe-area-inset-bottom,0px));box-sizing:border-box;position:fixed;left:var(--mobile-left,0);top:var(--mobile-top,0);width:var(--mobile-width,100%);height:var(--mobile-height,100dvh);z-index:90;display:flex;align-items:center;justify-content:center;padding:calc(12px + var(--text-safe-top)) calc(12px + env(safe-area-inset-right,0px)) calc(12px + var(--text-safe-bottom)) calc(12px + env(safe-area-inset-left,0px));background:#070a10b0}
 .mobile-text-sheet{width:min(600px,100%);max-height:100%;min-height:0;height:min(520px,80%);display:flex;flex-direction:column;overflow:auto;overscroll-behavior:contain;border:1px solid #48515f;border-radius:9px;background:#20252d;box-shadow:0 16px 50px #0008}
@@ -305,6 +306,6 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
 .mobile-text-sheet footer{display:flex;align-items:center;justify-content:flex-end;gap:5px;flex:0 0 52px;padding:2px 8px;border-top:1px solid #353e4b}
 .mobile-text-sheet footer>span{margin-right:auto;color:#a0b6a9;font-size:11px}
 .mobile-text-sheet footer button{background:#333c49;color:#d4dfed;font-size:12px}
-@media(hover:hover){.mobile-keyboard button:hover:not(:disabled):not([aria-pressed=true]):not(.active){background:#37414e;border-color:#526071}}
+@media(hover:hover){.mobile-keyboard button:hover:not(:disabled):not([aria-pressed=true]):not(.active){background:#37414e;border-color:#526071}.mobile-keyboard button:is([aria-pressed=true],.active):hover:not(:active):not(:disabled){background:var(--toggle-hover)}}
 @media(max-height:400px){.mobile-text-backdrop{padding:calc(5px + var(--text-safe-top)) calc(5px + env(safe-area-inset-right,0px)) calc(5px + var(--text-safe-bottom)) calc(5px + env(safe-area-inset-left,0px))}.mobile-text-sheet{height:100%;}.mobile-text-sheet header{flex-basis:44px}.mobile-text-sheet footer{flex-basis:44px}}
 </style>

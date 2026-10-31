@@ -106,6 +106,9 @@ export interface NoteData extends NoteCanvasNode {
   onAction: (action: string, id: string) => void
 }
 export interface FileData extends FileCanvasNode {
+  instanceId: string
+  canvasId: string
+  canPersistView: () => boolean
   mobile?: boolean
   focus?: boolean
   onResize: TerminalData['onResize']

@@ -25,6 +25,7 @@ Canvas uses one shared account.
 The instance selector connects this frontend to multiple Canvas servers. Each
 instance has its own API base URL and login; switching disconnects the previous
 instance. Login sessions persist in this browser until sign-out or expiry.
+New tabs remember the last selected instance; open tabs keep their own selection.
 
 ## Connections
 
@@ -118,6 +119,7 @@ screen for links and existing files, with OSC 8 targets taking precedence.
 | `CANVAS_HOST` | `127.0.0.1` | Listen address or comma-separated addresses |
 | `CANVAS_PORT` | `3010` | Listen port |
 | `CANVAS_ALLOWED_ORIGINS` | Same origin | Comma-separated frontend origins allowed to access this server |
+| `VITE_CANVAS_BUILTIN_SERVER` | `true` | Build with `false` for a standalone frontend that requires an explicit server URL |
 | `CANVAS_PUBLIC_SSH_HOST` | Listen address or hostname | Advertised VS Code SSH host for local connections |
 | `CANVAS_PUBLIC_SSH_PORT` | `22` | Advertised VS Code SSH port for local connections |
 
@@ -130,7 +132,7 @@ expiring scoped URLs. Account access grants terminal access to connected machine
 The frontend can be hosted independently on Cloudflare Pages:
 
 ```sh
-npm run build:web
+VITE_CANVAS_BUILTIN_SERVER=false npm run build:web
 npx wrangler login
 npm run deploy:web
 ```
@@ -138,8 +140,8 @@ npm run deploy:web
 Enter the backend URL on the sign-in page, or open a link such as
 `https://frontend.example/?server=https%3A%2F%2Fbackend.example%2Fcanvas%2F&name=Personal`.
 The link selects the server and removes these setup parameters from the address.
-Existing servers are reused; credentials are never imported from a URL. When
-frontend and backend share an origin, Canvas discovers the backend automatically.
+Existing servers are reused; credentials are never imported from a URL. The
+default build discovers a same-origin backend automatically.
 
 Canvas supports browser installation over HTTPS (or localhost). Install from the
 browser menu or Settings when available. Updates wait for your explicit reload;

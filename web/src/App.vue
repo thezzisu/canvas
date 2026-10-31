@@ -10,7 +10,7 @@ import { uiLocale } from './i18n'
 import LanguageSelect from './components/LanguageSelect.vue'
 import InstancePicker from './components/InstancePicker.vue'
 import InstanceSetup from './components/InstanceSetup.vue'
-import { activeInstance, activeInstanceId, instances, invalidInstanceLink, rememberInstance, selectInstance } from './instances'
+import { activeInstance, activeInstanceId, hasActiveInstance, instances, invalidInstanceLink, rememberInstance, selectInstance } from './instances'
 import { isCanvasSession } from './instance-url'
 import CanvasNavItem from './components/CanvasNavItem.vue'
 import { canvasIndicators, needsAttention, windowVisualState } from './canvas-status'
@@ -18,6 +18,7 @@ import { cameraFromViewport, recallFreeCanvasLocation, rememberCanvasLocation, r
 import { useCanvasLocation } from './use-canvas-location'
 import { subscribeState } from './state-events'
 import { retainBackgrounds, useBackgroundUrl } from './backgrounds'
+import { pruneFileViews } from './file-view'
 import Icon from './components/Icon.vue'
 import TerminalNode from './components/TerminalNode.vue'
 import NoteNode from './components/NoteNode.vue'
@@ -392,7 +393,10 @@ function noteData(node: NoteCanvasNode, focus = false): NoteData {
     onAction: (action, id) => { if (action === 'remove') removeNote(id); else cardAction(action, id) } }
 }
 function fileData(node: FileCanvasNode, focus = false): FileData {
-  return { ...node, mobile: mobile.value, focus, onResize: resizeNode, onLayoutStart: layoutStarted, onRemove: removeFile, onAction: cardAction }
+  const { id: instanceId, base } = activeInstance.value, canvasId = activeId.value
+  return { ...node, instanceId, canvasId, mobile: mobile.value, focus, onResize: resizeNode, onLayoutStart: layoutStarted, onRemove: removeFile, onAction: cardAction,
+    canPersistView: () => activeInstance.value.id === instanceId && activeInstance.value.base === base &&
+      !!canvases.value.find(canvas => canvas.id === canvasId)?.nodes.some(candidate => candidate.id === node.id && candidate.type === 'file') }
 }
 function flowNode(node: CanvasNode): Node {
   if (isTerminalNode(node)) return terminalFlowNode(node)
@@ -505,6 +509,7 @@ function applySettings(value: GlobalSettings) {
 function applySharedState(state: SharedState) {
   if (latestState?.instanceId === state.instanceId && state.revision < latestState.revision) return
   latestState = state
+  pruneFileViews(activeInstance.value.id, state.canvases)
   retainBackgrounds([state.overviewBackground, ...state.canvases.map(canvas => canvas.background)].flatMap(background => background ? [background.url] : []))
   applySettings(state.settings)
   const sourceChanged = JSON.stringify(sources.value) !== JSON.stringify(state.sources)
@@ -807,6 +812,7 @@ function unauthorized() { setSessionToken(''); clearInstanceRuntime(); checkingI
 async function activateInstance() {
   const activation = ++instanceActivation
   clearInstanceRuntime(); ready.value = true; checkingInstance.value = true; instanceUnavailable.value = false; instanceSetupMessage.value = ''
+  if (!hasActiveInstance.value) { checkingInstance.value = false; instanceUnavailable.value = true; return }
   const context = apiContext()
   try {
     const session = await api<{ authenticated: boolean; username?: string }>('/api/session', { signal: AbortSignal.timeout(15_000) }, context)
@@ -1334,7 +1340,8 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
     <main class="login-content">
       <div class="brand login-brand"><span class="brand-symbol"><Icon name="canvas" :size="27" /></span><span class="brand-name">canvas</span><LanguageSelect class="login-language" /></div>
       <InstancePicker v-if="instances.length" :disabled="busy" />
-      <div v-if="unknownInstance" class="login-form"><p class="form-error" role="status">{{ t('canvasUi.unknownInstance') }}</p><button class="button primary login-button" @click="navigation.visit(activeInstance.id, 'overview'); activateInstance()">{{ t('canvasUi.openInstance') }}</button></div>
+      <InstanceSetup v-if="!hasActiveInstance" :message="instanceSetupMessage ? t(instanceSetupMessage) : ''" @connect="connectInstance" />
+      <div v-else-if="unknownInstance" class="login-form"><p class="form-error" role="status">{{ t('canvasUi.unknownInstance') }}</p><button class="button primary login-button" @click="navigation.visit(activeInstance.id, 'overview'); activateInstance()">{{ t('canvasUi.openInstance') }}</button></div>
       <div v-else-if="checkingInstance" class="instance-checking" role="status"><span class="spinner" />{{ t('common.loading') }}</div>
       <InstanceSetup v-else-if="instanceUnavailable" :message="instanceSetupMessage ? t(instanceSetupMessage) : ''" @connect="connectInstance" />
       <form v-else class="login-form" @submit.prevent="login">
