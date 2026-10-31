@@ -1232,6 +1232,7 @@ function resizeNode(id: string, width: number, height: number, x?: number, y?: n
   rebuildNodes()
 }
 function keydown(event: KeyboardEvent) {
+  if (event.defaultPrevented) return
   if (directoryRequest.value || urlRequest.value) return
   if (downloadPreview.value) return
   if (backgroundCanvas.value) return
