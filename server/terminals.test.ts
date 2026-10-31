@@ -40,7 +40,8 @@ async function fixture(t: TestContext, probe = false, quietProbe = false) {
   if (!binary) { t.skip("Set CANVAS_TEST_HERDR_SERVER_BINARY to an unmodified upstream server"); return; }
   const root = mkdtempSync(join(tmpdir(), "cv-terminal-"));
   const config = join(root, "config"), state = join(root, "state"), bytes = join(root, "input.bin");
-  let shell = "/bin/sh";
+  const prompt = "CANVAS_TEST_SHELL>";
+  let shell = process.env.CANVAS_TEST_SHELL || "/bin/sh";
   if (probe) {
     shell = join(root, "receiver");
     writeFileSync(shell, `#!/usr/bin/python3\nimport os,tty\ntty.setraw(0)\nprint('\\x1b[?1003h${quietProbe ? "\\x1b[?2004h" : ""}READY',flush=True)\nwith open(${JSON.stringify(bytes)},'ab',buffering=0) as output:\n while True:\n  data=os.read(0,4096)\n  if not data: break\n  output.write(data)\n${quietProbe ? "" : "  print('HEX:'+data.hex(),flush=True)\n"}`, { mode: 0o700 });
@@ -50,7 +51,7 @@ async function fixture(t: TestContext, probe = false, quietProbe = false) {
     writeFileSync(join(config, flavor, "config.toml"), `onboarding = false\n[terminal]\ndefault_shell = ${JSON.stringify(shell)}\nshell_mode = "non_login"\n`);
   }
   const env = { PATH: process.env.PATH!, HOME: root, USER: process.env.USER || "fixture", SHELL: shell,
-    TERM: "xterm-256color", LANG: "C.UTF-8", XDG_CONFIG_HOME: config, XDG_STATE_HOME: state };
+    PS1: `${prompt} `, TERM: "xterm-256color", LANG: "C.UTF-8", XDG_CONFIG_HOME: config, XDG_STATE_HOME: state };
   const session = "terminal-test";
   const source: Source = { id: root, name: "Fixture", transport: "local", herdrSession: session,
     herdrSocket: join(config, "herdr/sessions", session, "herdr.sock") };
@@ -73,7 +74,7 @@ async function fixture(t: TestContext, probe = false, quietProbe = false) {
     return terminal ? Array.from({ length: terminal.emulator.buffer.active.length },
       (_, row) => terminal.emulator.buffer.active.getLine(row)?.translateToString(true) || "").join("\n") : "";
   };
-  const ready = () => waitFor(async () => (await text()).includes(probe ? "READY" : "sh-"), "native pane was not ready");
+  const ready = () => waitFor(async () => (await text()).includes(probe ? "READY" : prompt), "native pane was not ready");
   let sequence = 0;
   const shellResult = async (client: Client, command: string) => {
     const path = join(root, `result-${sequence++}`);

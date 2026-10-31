@@ -33,6 +33,8 @@ test("native herdr transport works with an unmodified server: split rendering, k
     return;
   }
   const root = mkdtempSync(join(tmpdir(), "canvas-herdr-test-"));
+  const shell = process.env.CANVAS_TEST_SHELL || "/bin/sh";
+  const prompt = "CANVAS_TEST_SHELL>";
   const before = {
     config: process.env.XDG_CONFIG_HOME,
     state: process.env.XDG_STATE_HOME,
@@ -43,14 +45,15 @@ test("native herdr transport works with an unmodified server: split rendering, k
     mkdirSync(join(root, "config", flavor), { recursive: true });
     writeFileSync(
       join(root, "config", flavor, "config.toml"),
-      'onboarding = false\n[terminal]\ndefault_shell = "/bin/sh"\nshell_mode = "non_login"\n',
+      `onboarding = false\n[terminal]\ndefault_shell = ${JSON.stringify(shell)}\nshell_mode = "non_login"\n`,
     );
   }
   const env: Record<string, string> = {
     PATH: process.env.PATH!,
     HOME: root,
     USER: process.env.USER ?? "test",
-    SHELL: "/bin/sh",
+    SHELL: shell,
+    PS1: `${prompt} `,
     TERM: "xterm-256color",
     LANG: "C.UTF-8",
     XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
@@ -219,7 +222,7 @@ test("native herdr transport works with an unmodified server: split rendering, k
       screen.write(chunk);
     });
     await waitFor(
-      () => screenText().includes("sh-"),
+      () => screenText().includes(prompt),
       "native herdr client produced no shell frame",
     );
     await assertSplitGeometry(90, 25);
@@ -308,7 +311,7 @@ test("native herdr transport works with an unmodified server: split rendering, k
     secondTerminal = await secondCommand.connect(90, 25);
     secondTerminal.onData((chunk) => secondScreen.write(chunk));
     await waitFor(
-      () => secondText().includes("sh-"),
+      () => secondText().includes(prompt),
       "second native tab produced no shell frame",
     );
     secondTerminal.write("printf 'SECOND_TAB_%s\\n' ONLY\r");
