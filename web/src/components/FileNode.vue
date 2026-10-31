@@ -3,7 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { NodeProps } from '@vue-flow/core'
 import { NodeResizeControl } from '@vue-flow/node-resizer'
-import UDropdownMenu from '@nuxt/ui/components/DropdownMenu.vue'
+import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import type { FileData } from '../types'
 import Icon from './Icon.vue'
 import CardPreview from './CardPreview.vue'
@@ -17,15 +17,20 @@ import { reportDownloadError } from '../downloads'
 import { apiFetch } from '../api'
 import { copyCanvasFile, fileReference } from '../file-transfer'
 import { writeFileReference } from '../file-reference'
-import { cutoutPosition, cutoutWidth } from '../display-cutout'
+import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
 
 const { t, n } = useI18n()
 
 const props = withDefaults(defineProps<Pick<NodeProps<FileData>, 'id' | 'data'> & { selected?: boolean }>(), { selected: false })
 const mobilePreview = computed(() => !!props.data.mobile && !props.data.focus)
+const header = ref<HTMLElement>()
+const compact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined))
+const markdown = computed(() => props.data.asset.preview === 'text' && isMarkdownFile(props.data.asset.filename))
 const rendered = ref(isMarkdownFile(props.data.asset.filename)), wrap = ref(false)
 watch(() => props.data.asset.filename, value => { rendered.value = isMarkdownFile(value); wrap.value = false })
-const menu = computed(() => [
+const menu = computed<DropdownMenuItem[]>(() => [
+  ...(markdown.value && compact.value ? [{ label: t('panels.preview.source'), type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
+  ...(props.data.asset.preview === 'text' && (!markdown.value || !rendered.value) ? [{ label: t('panels.preview.wrap'), type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } }] : []),
   { label: t('panels.file.download'), onSelect: download },
   { label: t('fileTransfer.copy'), onSelect: copyFile },
   { label: t('panels.file.remove'), onSelect: () => props.data.onRemove(props.id) },
@@ -93,15 +98,15 @@ const size = computed(() => {
     <NodeResizeControl v-for="position in (['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const)" :key="position" :node-id="id" :position="position" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
   </template>
   <article class="file-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus }" :data-asset-id="data.assetId" :data-preview-kind="data.asset.preview">
-    <header class="file-header drag-handle" :class="{ 'cutout-header': data.focus }" :data-cutout-position="data.focus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus ? { '--cutout-width': `${cutoutWidth}px` } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
+    <header ref="header" class="file-header drag-handle" :class="{ 'cutout-header': data.focus }" :data-cutout-position="data.focus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus ? { '--cutout-width': `${cutoutWidth}px` } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
       <span class="file-icon" :class="{ 'cutout-status': data.focus }"><Icon name="file" :size="13" /></span>
       <span class="file-title" :class="{ 'cutout-title': data.focus }" :title="data.asset.filename">{{ data.asset.filename }}</span>
       <span v-if="!data.focus" class="file-size">{{ size }}</span>
       <div class="file-actions" :class="{ 'cutout-actions': data.focus }">
-      <TextPreviewActions v-if="data.asset.preview === 'text'" v-model:rendered="rendered" v-model:wrap="wrap" :filename="data.asset.filename" />
+      <TextPreviewActions v-if="data.asset.preview === 'text' && (!data.focus || markdown && !compact)" v-model:rendered="rendered" v-model:wrap="wrap" :filename="data.asset.filename" :hide-wrap="data.focus" />
       <button v-if="!data.focus" type="button" class="file-action file-copy nodrag" draggable="true" :title="t(copyFeedback || 'fileTransfer.copyOrDrag')" :aria-label="t('fileTransfer.copy')" @pointerdown.stop @click.stop="copyFile" @dragstart="dragFile"><Icon :name="copyFeedback === 'fileTransfer.copied' ? 'check' : 'copy'" :size="14" /></button>
       <span class="sr-only" role="status">{{ copyFeedback ? t(copyFeedback) : '' }}</span>
-      <button v-if="!data.focus" type="button" class="file-action nodrag" @click.stop="download" :title="t('panels.file.download')" :aria-label="t('panels.file.download')" @pointerdown.stop><Icon name="download" :size="14" /></button>
+      <button v-if="!data.focus || !markdown && !compact" type="button" class="file-action nodrag" @click.stop="download" :title="t('panels.file.download')" :aria-label="t('panels.file.download')" @pointerdown.stop><Icon name="download" :size="14" /></button>
       <template v-if="data.focus">
         <UDropdownMenu :items="menu" :portal="false" :content="{ align: 'end' }" :ui="{ content: 'card-action-menu' }">
           <button type="button" class="file-action file-more nodrag" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></button>
@@ -135,7 +140,7 @@ const size = computed(() => {
 .file-header { display: flex; align-items: center; gap: 7px; height: 30px; flex: 0 0 30px; padding: 0 7px 0 10px; color: #a9b0be; cursor: grab; border-bottom: 1px solid #343740; }
 .file-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: #e0e3ea; }
 .file-size { font-size: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.file-icon,.file-actions{display:flex;align-items:center;flex:none}.file-actions{gap:3px}
+.file-icon,.file-actions{display:flex;align-items:center;flex:none}.file-actions{gap:0}
 .file-action { display: inline-flex; justify-content: center; align-items: center; flex: 0 0 23px; width: 23px; height: 23px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #a9b0be; cursor: pointer; }
 .file-action:hover { color: #fff; background: #ffffff12; }
 .file-copy{cursor:grab}.file-copy:active{cursor:grabbing}
@@ -153,11 +158,11 @@ const size = computed(() => {
 .file-download span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .card-focused .file-header{height:calc(44px + var(--mobile-safe-top,0px));flex-basis:calc(44px + var(--mobile-safe-top,0px));padding:var(--mobile-safe-top,0px) 0 0;gap:0;cursor:default}
 .card-focused .file-title{font-size:13px;margin-inline:6px}
-.card-focused .file-icon{width:32px;height:44px;justify-content:center}
+.card-focused .file-icon{width:44px;height:44px;justify-content:center}
 .card-focused .file-actions{gap:0}
 .card-focused :deep(.text-preview-actions){gap:0}
 .card-focused .file-action{width:44px;height:44px;flex-basis:44px}
-.card-focused :deep(.text-preview-action){width:36px;height:44px}
+.card-focused{--header-action-size:44px}
 .canvas-fullscreen .card-focused .file-header{height:44px;flex-basis:44px;padding-top:0}
-@container(max-width:360px){.card-focused .file-action{width:36px;flex-basis:36px}.card-focused :deep(.text-preview-action){width:32px}}
+
 </style>

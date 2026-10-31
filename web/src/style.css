@@ -175,8 +175,8 @@
 .card-focused .note-content{border-radius:0;padding-bottom:max(12px,var(--mobile-safe-bottom,0px));overscroll-behavior:contain}
 .card-action-menu{z-index:60;display:block;min-width:160px;padding:4px;border:1px solid #414854;border-radius:7px;background:#242930;box-shadow:0 8px 24px #0005}
 .card-action-menu [role=group]{display:flex;flex-direction:column}
-.card-focused .card-action-menu [role=menuitem]{display:flex;justify-content:flex-start;width:100%;height:auto;min-height:40px;padding:8px 10px;font-size:12px;border-radius:4px;color:#cbd2dd}
-.card-action-menu [role=menuitem][data-highlighted]{background:#ffffff09}
+.card-action-menu :is([role=menuitem],[role=menuitemcheckbox]){display:flex;justify-content:flex-start;width:100%;height:auto;min-height:44px;padding:8px 10px;font-size:12px;border-radius:4px;color:#cbd2dd}
+.card-action-menu :is([role=menuitem],[role=menuitemcheckbox])[data-highlighted]{background:#ffffff09}
 .mobile-layout .toast{position:absolute;bottom:max(12px,env(safe-area-inset-bottom));max-width:calc(100% - 24px);font-size:12px}
 .mobile-layout.canvas-fullscreen>.sidebar{display:none}
 
@@ -189,14 +189,14 @@
 
 .cutout-header{display:flex;align-items:center;gap:0;padding-inline:0}
 .cutout-title{display:block;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cutout-actions{display:flex;flex-shrink:0;margin-left:auto}
-:is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header,.canvas-fullscreen.has-display-cutout .card-focused .cutout-header){--cutout-controls:220px;--cutout-space:clamp(0px,var(--cutout-width,0px),max(0px,calc(100cqw - var(--cutout-controls))))}
-:is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header,.canvas-fullscreen.has-display-cutout .card-focused .cutout-header)[data-cutout-position=left]{padding-left:var(--cutout-space)}
-:is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header,.canvas-fullscreen.has-display-cutout .card-focused .cutout-header)[data-cutout-position=right]{padding-right:var(--cutout-space)}
-:is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header,.canvas-fullscreen.has-display-cutout .card-focused .cutout-header)[data-cutout-position=center]{--cutout-controls:264px;display:grid;grid-template-columns:minmax(0,1fr) var(--cutout-space) minmax(0,1fr);gap:0}
-:is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header,.canvas-fullscreen.has-display-cutout .card-focused .cutout-header)[data-cutout-position=center]>.cutout-status{grid-area:1/1;justify-self:start}
-:is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header,.canvas-fullscreen.has-display-cutout .card-focused .cutout-header)[data-cutout-position=center]>.cutout-title{grid-area:1/1;margin-left:44px}
-:is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header,.canvas-fullscreen.has-display-cutout .card-focused .cutout-header)[data-cutout-position=center]>.cutout-actions{grid-area:1/3;justify-self:end;margin-left:0}
+.cutout-actions{display:flex;flex-shrink:0;gap:0;margin-left:auto}
+:is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header,.canvas-fullscreen.has-display-cutout .card-focused .cutout-header,.canvas-fullscreen.has-display-cutout .download-preview-mobile .cutout-header){--cutout-controls:176px;--cutout-space:clamp(0px,var(--cutout-width,0px),max(0px,calc(100cqw - var(--cutout-controls))))}
+:is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header,.canvas-fullscreen.has-display-cutout .card-focused .cutout-header,.canvas-fullscreen.has-display-cutout .download-preview-mobile .cutout-header)[data-cutout-position=left]{padding-left:var(--cutout-space)}
+:is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header,.canvas-fullscreen.has-display-cutout .card-focused .cutout-header,.canvas-fullscreen.has-display-cutout .download-preview-mobile .cutout-header)[data-cutout-position=right]{padding-right:var(--cutout-space)}
+:is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header,.canvas-fullscreen.has-display-cutout .card-focused .cutout-header,.canvas-fullscreen.has-display-cutout .download-preview-mobile .cutout-header)[data-cutout-position=center]{--cutout-controls:176px;display:grid;grid-template-columns:minmax(0,1fr) var(--cutout-space) minmax(0,1fr);gap:0}
+:is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header,.canvas-fullscreen.has-display-cutout .card-focused .cutout-header,.canvas-fullscreen.has-display-cutout .download-preview-mobile .cutout-header)[data-cutout-position=center]>.cutout-status{grid-area:1/1;justify-self:start}
+:is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header,.canvas-fullscreen.has-display-cutout .card-focused .cutout-header,.canvas-fullscreen.has-display-cutout .download-preview-mobile .cutout-header)[data-cutout-position=center]>.cutout-title{grid-area:1/1;margin-left:44px}
+:is(.cutout-preview,.canvas-fullscreen.has-display-cutout .terminal-mobile.focused .cutout-header,.canvas-fullscreen.has-display-cutout .card-focused .cutout-header,.canvas-fullscreen.has-display-cutout .download-preview-mobile .cutout-header)[data-cutout-position=center]>.cutout-actions{grid-area:1/3;justify-self:end;margin-left:0}
 
 .vue-flow__minimap-mask,.vue-flow__minimap-node.minimap-decoration{pointer-events:none}
 .vue-flow__minimap-node.minimap-window{cursor:pointer;pointer-events:all}
@@ -205,6 +205,3 @@
 
 .mobile-card-preview :is(.note-actions,.file-actions){display:none}
 .card-focused{container-type:inline-size}
-.canvas-fullscreen.has-display-cutout .file-card.card-focused .cutout-header{--cutout-controls:320px}
-.canvas-fullscreen.has-display-cutout .file-card.card-focused .cutout-header[data-cutout-position=center]>.cutout-title{margin-left:32px}
-@container(max-width:360px){.canvas-fullscreen.has-display-cutout .file-card.card-focused .cutout-header{--cutout-controls:272px}}

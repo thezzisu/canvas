@@ -204,10 +204,10 @@ function focusTerminal(session: Session, keyboard?: boolean) {
   if (session.mobile) session.keyboard?.focus(keyboard)
   else session.term.focus()
 }
-export function focusWindow(sourceId: string, spaceId: string, windowId: string): boolean {
+export function focusWindow(sourceId: string, spaceId: string, windowId: string, keyboard?: boolean): boolean {
   const session = sessions.get(key(sourceId, spaceId, windowId))
   if (!session?.host?.isConnected || !interactive(session)) return false
-  focusTerminal(session)
+  focusTerminal(session, keyboard)
   return session.term.element?.contains(document.activeElement) === true
 }
 function schedulePresentation(session: Session) {

@@ -3,6 +3,8 @@ import { useI18n } from 'vue-i18n'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import UModal from '@nuxt/ui/components/Modal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
+import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
+import { DialogTitle } from 'reka-ui'
 import Icon from './Icon.vue'
 import ImagePreview from './ImagePreview.vue'
 import TextPreview from './TextPreview.vue'
@@ -13,6 +15,9 @@ import { downloadMedia, useMediaUrl } from '../media'
 import { reportDownloadError } from '../downloads'
 import { apiFetch } from '../api'
 import { useMobileViewport } from '../viewport'
+import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
+import { isMarkdownFile } from '../markdown'
+import { useMobileLayout } from '../mobile-layout'
 
 const { t, n } = useI18n()
 
@@ -25,8 +30,21 @@ const error = ref<string | Error>('')
 const truncated = ref(false)
 const expanded = ref(false)
 const rendered = ref(true), wrap = ref(false)
+const header = ref<HTMLElement>()
+const compact = useCompactHeader(header)
+const mobile = useMobileLayout()
+const markdown = computed(() => downloadPreview.value?.preview === 'text' && isMarkdownFile(downloadPreview.value.filename))
 const imageSize = ref<{ width: number; height: number }>()
 const { viewport } = useMobileViewport(ref(true))
+const mobileHeader = computed(() => mobile.value || viewport.value.width <= 600)
+function download() { const preview = downloadPreview.value; if (preview) void downloadMedia(preview.url, preview.filename).catch(reportDownloadError) }
+const menu = computed<DropdownMenuItem[]>(() => [
+  ...(markdown.value && compact.value ? [{ label: t('panels.preview.source'), type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
+  ...(downloadPreview.value?.preview === 'text' && (!markdown.value || !rendered.value) ? [{ label: t('panels.preview.wrap'), type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } }] : []),
+  { label: t('panels.file.download'), onSelect: download },
+  { label: t(expanded.value ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen'), onSelect: () => { expanded.value = !expanded.value } },
+  ...(expanded.value ? [{ label: t('panels.preview.close'), onSelect: dismissDownloadPreview }] : []),
+])
 const modalStyle = computed(() => {
   const visible = viewport.value, narrow = visible.width <= 600
   let width = Math.min(1000, visible.width - (narrow ? 12 : 32))
@@ -87,14 +105,22 @@ onBeforeUnmount(() => request?.abort())
 
 <template>
   <UModal v-if="downloadPreview" :key="downloadPreview.id" :open="true" :title="downloadPreview.filename" :portal="portal || false" :fullscreen="expanded" :transition="false"
-    :close="{ 'aria-label': t('panels.preview.close'), title: t('panels.preview.close') }" :content="modalContent"
-    :ui="{ content: `download-preview-modal${expanded ? ' download-preview-fullscreen' : ''}`, overlay: 'download-preview-overlay', header: 'download-preview-header', wrapper: 'download-preview-title-wrap', title: 'download-preview-title', body: 'download-preview-body', close: 'download-preview-close' }"
+    :close="false" :content="modalContent"
+    :ui="{ content: `download-preview-modal${expanded ? ' download-preview-fullscreen' : ''}${mobileHeader ? ' download-preview-mobile' : ''}`, overlay: 'download-preview-overlay', header: 'download-preview-header-slot', body: 'download-preview-body' }"
     @update:open="openChanged">
-    <template #actions>
-      <span v-if="downloadPreviewCount > 1" class="download-preview-count" :aria-label="t('panels.preview.remaining', downloadPreviewCount - 1)">+{{ n(downloadPreviewCount - 1) }}</span>
-      <TextPreviewActions v-if="downloadPreview.preview === 'text' && !loading && !error" :filename="downloadPreview.filename" v-model:rendered="rendered" v-model:wrap="wrap" />
-      <UButton type="button" color="neutral" variant="ghost" size="sm" class="download-preview-download" :aria-label="t('panels.file.download')" :title="t('panels.file.download')" @pointerdown.stop @click.stop="downloadMedia(downloadPreview.url, downloadPreview.filename).catch(reportDownloadError)"><Icon name="download" :size="15" /><span>{{ t('common.download') }}</span></UButton>
-      <UButton color="neutral" variant="ghost" size="sm" class="download-preview-expand" :aria-label="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :title="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :aria-pressed="expanded" @pointerdown.stop @click.stop="expanded = !expanded"><Icon :name="expanded ? 'collapse' : 'expand'" :size="16" /></UButton>
+    <template #header>
+      <header ref="header" class="download-preview-header" :class="{ 'cutout-header': mobileHeader && expanded }" :data-cutout-position="mobileHeader && expanded && cutoutWidth > 0 ? cutoutPosition : undefined" :style="{ '--cutout-width': `${cutoutWidth}px` }">
+        <DialogTitle class="download-preview-title" :class="{ 'cutout-title': mobileHeader && expanded }">{{ downloadPreview.filename }}<span v-if="downloadPreviewCount > 1" class="download-preview-count" :aria-label="t('panels.preview.remaining', downloadPreviewCount - 1)"> +{{ n(downloadPreviewCount - 1) }}</span></DialogTitle>
+        <div class="download-preview-actions" :class="{ 'cutout-actions': mobileHeader && expanded }">
+          <TextPreviewActions v-if="downloadPreview.preview === 'text' && !loading && !error && (!mobileHeader || markdown && !compact)" :filename="downloadPreview.filename" v-model:rendered="rendered" v-model:wrap="wrap" :hide-wrap="mobileHeader" />
+          <UButton v-if="!mobileHeader || !markdown && !compact" type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-download" :aria-label="t('panels.file.download')" :title="t('panels.file.download')" @click="download"><Icon name="download" :size="16" /></UButton>
+          <UDropdownMenu v-if="mobileHeader" :items="menu" :portal="portal || false" :content="{ align: 'end' }" :ui="{ content: 'card-action-menu download-preview-menu' }">
+            <UButton type="button" color="neutral" variant="ghost" class="download-preview-button" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></UButton>
+          </UDropdownMenu>
+          <UButton v-else type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-expand" :aria-label="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :title="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :aria-pressed="expanded" @click="expanded = !expanded"><Icon :name="expanded ? 'collapse' : 'expand'" :size="16" /></UButton>
+          <UButton type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-close" :aria-label="t(mobileHeader && expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.close')" :title="t(mobileHeader && expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.close')" @click="mobileHeader && expanded ? expanded = false : dismissDownloadPreview()"><Icon :name="mobileHeader && expanded ? 'collapse' : 'close'" :size="17" /></UButton>
+        </div>
+      </header>
     </template>
     <template #body>
       <div class="download-preview-content" :data-download-id="downloadPreview.id" :data-preview-kind="downloadPreview.preview">
@@ -119,13 +145,19 @@ onBeforeUnmount(() => request?.abort())
 .download-preview-overlay{z-index:84}
 .download-preview-modal{--preview-safe-top:var(--mobile-safe-top,env(safe-area-inset-top,0px));--preview-safe-bottom:var(--mobile-safe-bottom,env(safe-area-inset-bottom,0px));--preview-frame-width:var(--mobile-width,var(--preview-viewport-width));--preview-frame-height:var(--mobile-height,var(--preview-viewport-height));z-index:85;display:grid;grid-template-rows:auto minmax(0,1fr);gap:0;position:fixed;left:calc(var(--mobile-left,var(--preview-left)) + (var(--preview-frame-width) + env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px))/2);top:calc(var(--mobile-top,var(--preview-top)) + (var(--preview-frame-height) + var(--preview-safe-top) - var(--preview-safe-bottom))/2);translate:-50% -50%;width:min(var(--preview-width),calc(var(--preview-frame-width) - 12px - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px)));max-width:none;height:min(var(--preview-height),calc(var(--preview-frame-height) - 24px - var(--preview-safe-top) - var(--preview-safe-bottom)));max-height:none;overflow:auto;overscroll-behavior:contain;background:#191d23;border:1px solid #3b424c;box-shadow:0 16px 60px #0005}
 .download-preview-modal.download-preview-fullscreen{box-sizing:border-box;left:var(--mobile-left,var(--preview-left));top:var(--mobile-top,var(--preview-top));right:auto;bottom:auto;translate:none;width:var(--preview-frame-width);height:var(--preview-frame-height);max-width:none;max-height:none;border:0;border-radius:0;padding:var(--preview-safe-top) env(safe-area-inset-right,0px) var(--preview-safe-bottom) env(safe-area-inset-left,0px)}
-.download-preview-header{height:44px;min-height:44px;flex:0 0 44px;padding:0 8px 0 13px;gap:6px;border-bottom:1px solid #343a43}
-.download-preview-title-wrap{flex:1;min-width:0}
-.download-preview-title{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#d6dce5}
-.download-preview-count{flex:none;font-size:10px;color:#8290a1;font-variant-numeric:tabular-nums}
-.download-preview-download{flex:none;gap:5px;font-size:11px;color:#bec9d8;text-decoration:none}
-.download-preview-close,.download-preview-expand{position:static;flex:none;display:flex;align-items:center;justify-content:center;width:28px;min-width:28px;height:30px;padding:0;color:#93a1b4;border-radius:5px}
-.download-preview-expand:hover,.download-preview-close:hover{background:#ffffff08;color:#d4dfec}
+.download-preview-header-slot{display:contents}
+.download-preview-header{--header-action-size:28px;display:flex;align-items:center;height:44px;min-height:44px;padding:0 8px 0 12px;gap:0;border-bottom:1px solid #343a43}
+.download-preview-title{display:block;flex:1;min-width:0;font-size:13px;font-weight:500;letter-spacing:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#d6dce5}
+.download-preview-count{font-size:10px;color:#8290a1;font-variant-numeric:tabular-nums}
+.download-preview-actions{display:flex;flex:none;gap:0;align-items:center}
+.download-preview-button{position:static;flex:none;display:flex;align-items:center;justify-content:center;width:var(--header-action-size);min-width:var(--header-action-size);height:var(--header-action-size);padding:0;color:#93a1b4;border-radius:5px}
+.download-preview-button:hover{background:#ffffff08;color:#d4dfec}
+.download-preview-menu{z-index:90}
+.download-preview-mobile .download-preview-header{--header-action-size:44px;padding:0}
+.download-preview-mobile .download-preview-title{padding-left:12px}
+.download-preview-modal{container-type:inline-size}
+.canvas-fullscreen.has-display-cutout .download-preview-fullscreen.download-preview-mobile{padding-top:0}
+.canvas-fullscreen.has-display-cutout .download-preview-mobile .cutout-header[data-cutout-position=center]>.cutout-title{margin-left:0}
 .download-preview-body{display:flex;min-width:0;min-height:0;padding:0;overflow:hidden}
 .download-preview-content{position:relative;display:flex;flex:1;flex-direction:column;width:100%;min-width:0;min-height:0;background:#11161c}
 .download-preview-status{display:flex;align-items:center;justify-content:center;gap:8px;position:absolute;inset:0;padding:16px;color:#8d9aaa;font-size:12px;text-align:center;z-index:1}
@@ -133,5 +165,5 @@ onBeforeUnmount(() => request?.abort())
 .download-preview-pdf{display:block;flex:1;width:100%;height:100%;border:0;background:#fff;color-scheme:light}
 .download-preview-text:focus-visible{box-shadow:inset 0 0 0 1px #b18a6d}
 .download-preview-truncated{padding:7px 12px;border-top:1px solid #303947;flex:none;font-size:10px;color:#8190a3}
-@media(max-width:600px){.download-preview-header{padding:0 3px 0 10px;gap:2px}.download-preview-download>span{display:none}.download-preview-download,.download-preview-close,.download-preview-expand,.download-preview-header .text-preview-action{width:36px;min-width:36px;height:42px;padding:0}.download-preview-count{max-width:32px;overflow:hidden;text-overflow:ellipsis}.download-preview-header .text-preview-actions{gap:0}}
+
 </style>

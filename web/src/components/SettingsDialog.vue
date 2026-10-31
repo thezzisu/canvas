@@ -29,7 +29,7 @@ const viewportSelectUi = { content: 'settings-select-menu', item: 'settings-sele
 const cutoutPositions = computed<Array<{ value: CutoutPosition; label: string }>>(() => [
   { value: 'left', label: t('settings.left') }, { value: 'center', label: t('settings.center') }, { value: 'right', label: t('settings.right') },
 ])
-const cutoutMaximum = computed(() => Math.max(0, Math.min(240, Math.min(window.screen.width, window.screen.height) - (cutoutPosition.value === 'center' ? 264 : 220))))
+const cutoutMaximum = computed(() => Math.max(0, Math.min(240, Math.min(window.screen.width, window.screen.height) - 176)))
 const displayedCutoutWidth = computed({
   get: () => Math.max(0, Math.min(cutoutWidth.value, cutoutMaximum.value)),
   set: (width: number) => { cutoutWidth.value = width },

@@ -1,9 +1,22 @@
-import { useStorage } from '@vueuse/core'
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { useElementSize, useFullscreen, useStorage } from '@vueuse/core'
+import { onBeforeUnmount, onMounted, ref, watchEffect, type Ref } from 'vue'
+import { compactHeader } from './header-capacity'
 
 export type CutoutPosition = 'left' | 'center' | 'right'
 export const cutoutPosition = useStorage<CutoutPosition>('canvas:display:cutout-position', 'center')
 export const cutoutWidth = useStorage('canvas:display:cutout-width', 0)
+
+export function useCompactHeader(header: Ref<HTMLElement | undefined>) {
+  const { width } = useElementSize(header, { width: 0, height: 44 }, { box: 'border-box' })
+  const { isFullscreen } = useFullscreen()
+  const compact = ref(true)
+  watchEffect(() => {
+    void isFullscreen.value
+    const avoided = header.value?.matches('.cutout-preview') || header.value?.dataset.cutoutPosition && header.value.closest('.canvas-fullscreen.has-display-cutout')
+    compact.value = compactHeader(width.value, avoided ? cutoutWidth.value : 0, cutoutPosition.value)
+  }, { flush: 'post' })
+  return compact
+}
 
 /** Observe the safe area reported by CSS without guessing the device model. */
 export function useDisplayCutout() {
