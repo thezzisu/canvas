@@ -1,4 +1,4 @@
-export interface CanvasInstance { id: string; name: string; base: string; builtin?: true }
+export interface CanvasInstance { id: string; name: string; base: string; username?: string; builtin?: true }
 const unconfigured: CanvasInstance = { id: '', name: '', base: '' }
 
 /** A standalone frontend has no implicit endpoint, including persisted built-in entries. */

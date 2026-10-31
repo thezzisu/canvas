@@ -105,6 +105,10 @@ server URL. The default package discovers its same-origin server. HTTPS enables
 PWA installation; updates wait for an explicit reload. The app shell and icons
 are precached; public fonts are cached when used.
 
+Share an instance from the account dialog's QR button. Scan it on the connection
+screen with a camera (HTTPS) or an image to fill the server and username, then
+enter your password to sign in.
+
 ## Development
 
 ```sh

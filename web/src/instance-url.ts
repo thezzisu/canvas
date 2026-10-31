@@ -6,17 +6,32 @@ export function normalizeApiBase(value: string): string {
   return url.href
 }
 
+export interface InstanceLink { base: string; name: string; username?: string }
+
+/** Share connection details, never the current page's session or navigation state. */
+export function formatInstanceLink(frontendHref: string, server: InstanceLink): string {
+  const url = new URL(normalizeApiBase(frontendHref.split(/[?#]/, 1)[0]!))
+  url.searchParams.set('server', normalizeApiBase(server.base))
+  url.searchParams.set('name', server.name)
+  if (server.username) url.searchParams.set('username', server.username)
+  return url.href
+}
+
 /** Import only connection details; query parameters never supply a session. */
-export function parseInstanceLink(href: string): { url: URL; server?: { base: string; name: string }; invalid: boolean } | undefined {
+export function parseInstanceLink(href: string): { url: URL; server?: InstanceLink; invalid: boolean } | undefined {
   const url = new URL(href)
-  if (!url.searchParams.has('server') && !url.searchParams.has('name')) return
-  const servers = url.searchParams.getAll('server'), name = url.searchParams.get('name') || ''
-  url.searchParams.delete('server'); url.searchParams.delete('name')
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return { url, invalid: true }
+  if (!['server', 'name', 'username'].some(key => url.searchParams.has(key))) return
+  const servers = url.searchParams.getAll('server'), names = url.searchParams.getAll('name'), usernames = url.searchParams.getAll('username')
+  url.searchParams.delete('server'); url.searchParams.delete('name'); url.searchParams.delete('username')
   if (!servers.length) return { url, invalid: false }
   try {
-    if (servers.length !== 1) throw new Error('Ambiguous server')
+    if (servers.length !== 1 || names.length > 1 || usernames.length > 1) throw new Error('Ambiguous connection')
     const base = normalizeApiBase(servers[0]!)
-    return { url, server: { base, name: name.trim().replace(/\s+/g, ' ').slice(0, 80) || new URL(base).host }, invalid: false }
+    const username = usernames[0]?.trim()
+    if (username && (username.length > 200 || /[\u0000-\u001f\u007f]/.test(username))) throw new Error('Invalid username')
+    return { url, server: { base, name: (names[0] || '').trim().replace(/\s+/g, ' ').slice(0, 80) || new URL(base).host,
+      ...(username ? { username } : {}) }, invalid: false }
   } catch { return { url, invalid: true } }
 }
 

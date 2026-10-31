@@ -11,7 +11,7 @@ import { uiLocale } from './i18n'
 import LanguageSelect from './components/LanguageSelect.vue'
 import InstancePicker from './components/InstancePicker.vue'
 import InstanceSetup from './components/InstanceSetup.vue'
-import { activeInstance, activeInstanceId, hasActiveInstance, instances, invalidInstanceLink, rememberInstance, selectInstance } from './instances'
+import { activeInstance, activeInstanceId, hasActiveInstance, instances, invalidInstanceLink, rememberInstance, rememberInstanceUsername, selectInstance } from './instances'
 import { isCanvasSession } from './instance-url'
 import { instanceBuild, observeInstanceBuild, staleInstanceBuild } from './instance-builds'
 import { buildLabel } from '../../shared/build-info'
@@ -88,6 +88,7 @@ let instanceBooted = false
 useScreenWakeLock(authenticated)
 const username = ref('')
 const password = ref('')
+watch([authenticated, username], ([signedIn, name]) => { if (signedIn && name) rememberInstanceUsername(name) })
 const busy = ref(false)
 const loginFailure = shallowRef<unknown>()
 const loginError = computed(() => {
@@ -813,10 +814,10 @@ async function login() {
   const context = apiContext()
   busy.value = true; loginFailure.value = undefined
   try {
-    const session = await api<{ token: string; server: unknown }>('/api/login', { method: 'POST', body: JSON.stringify({ username: username.value, password: password.value }) }, context)
+    const session = await api<{ token: string; username: string; server: unknown }>('/api/login', { method: 'POST', body: JSON.stringify({ username: username.value, password: password.value }) }, context)
     requireCurrentApi(context)
     observeInstanceBuild(context, session.server)
-    setSessionToken(session.token); password.value = ''; authenticated.value = true
+    setSessionToken(session.token); username.value = session.username; password.value = ''; authenticated.value = true
     await load()
   } catch (reason) { if (context.id === activeInstance.value.id && !(reason instanceof Error && reason.name === 'AbortError')) loginFailure.value = reason }
   finally { if (context.id === activeInstance.value.id) busy.value = false }
@@ -863,7 +864,7 @@ function clearInstanceRuntime() {
   pendingViewport = ''; viewportRequest++; cancelCreatedReveal(); lastOverviewInteraction = undefined
   layoutGesture = ''; saveState.value = ''; activeId.value = 'overview'; graphKey.value++
   refreshedAt.value = 0; loading.value = false; error.value = ''; success.value = ''; busy.value = false
-  username.value = ''; password.value = ''; loginFailure.value = undefined
+  username.value = activeInstance.value.username || ''; password.value = ''; loginFailure.value = undefined
 }
 function visibilityChanged() {
   pageVisible.value = !document.hidden
@@ -905,7 +906,7 @@ async function activateInstance() {
     observeInstanceBuild(context, session.server)
     rememberInstance()
     if (!session.authenticated && context.token) setSessionToken('')
-    authenticated.value = session.authenticated; username.value = session.username || ''
+    authenticated.value = session.authenticated; username.value = session.username || activeInstance.value.username || ''
     if (authenticated.value) await load()
   } catch (reason) {
     if (activation === instanceActivation && isCurrentApi(context)) {
@@ -1479,8 +1480,8 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
       <InstanceSetup v-else-if="instanceUnavailable" :message="instanceSetupMessage ? t(instanceSetupMessage) : ''" @connect="connectInstance" />
       <form v-else class="login-form" @submit.prevent="login">
         <div class="login-endpoint"><p class="login-address" :title="activeInstance.base">{{ activeInstance.base }}</p><span v-if="serverBuild" class="login-version" :title="`${t('instances.serverVersion')}: ${serverBuild.build.version}${serverBuild.build.revision ? ` · ${serverBuild.build.revision}` : ''}`">{{ buildLabel(serverBuild.build) }}</span></div>
-        <label>{{ t('app.username') }}<input v-model="username" name="username" autocomplete="username" required autofocus /></label>
-        <label>{{ t('app.passwordLabel') }}<input v-model="password" name="password" type="password" autocomplete="current-password" required /></label>
+        <label>{{ t('app.username') }}<input v-model="username" name="username" autocomplete="username" required :autofocus="!username" /></label>
+        <label>{{ t('app.passwordLabel') }}<input v-model="password" name="password" type="password" autocomplete="current-password" required :autofocus="!!username" /></label>
         <p v-if="loginError" class="form-error" role="alert">{{ loginError }}</p>
         <button class="button primary login-button" :disabled="busy || checkingInstance" type="submit"><span v-if="busy || checkingInstance" class="spinner" />{{ busy ? t('app.signingIn') : t('app.signIn') }}</button>
       </form>

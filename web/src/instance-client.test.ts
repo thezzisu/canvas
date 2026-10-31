@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { instanceToken, isCanvasSession, normalizeApiBase, parseInstanceLink, resolveApiUrl } from './instance-url.ts'
+import { formatInstanceLink, instanceToken, isCanvasSession, normalizeApiBase, parseInstanceLink, resolveApiUrl } from './instance-url.ts'
 import { readStateEvents } from './state-stream.ts'
 import { removeSessionToken, sessionToken, storeSessionToken, tokenKey } from './instance-session.ts'
 
@@ -63,6 +63,31 @@ test('invalid or ambiguous server setup links cannot import credentials or redir
     assert.equal(result.url.href, 'https://frontend.example/app/?keep=1#section')
   }
   assert.equal(parseInstanceLink('https://frontend.example/?server=https://one.example/&server=https://two.example/')!.invalid, true)
+})
+
+test('shared links round-trip the instance and username without session or navigation data', () => {
+  const server = { base: 'https://backend.example/canvas/', name: '工作站 & Lab', username: '张子苏 + tester' }
+  const href = formatInstanceLink('https://frontend.example/app/?token=synthetic&password=ignored#canvas-private', server)
+  const url = new URL(href)
+  assert.equal(url.pathname, '/app/')
+  assert.equal(url.hash, '')
+  assert.deepEqual([...url.searchParams.keys()], ['server', 'name', 'username'])
+  const parsed = parseInstanceLink(href)!
+  assert.deepEqual(parsed.server, server)
+  assert.equal(parsed.invalid, false)
+  assert.equal(parsed.url.href, 'https://frontend.example/app/')
+  assert.throws(() => formatInstanceLink('https://user:DUMMY_PASSWORD@frontend.example/', server))
+})
+
+test('shared usernames are optional, bounded and unambiguous', () => {
+  const valid = 'https://frontend.example/?server=https%3A%2F%2Fbackend.example%2F'
+  assert.equal(parseInstanceLink(`${valid}&username=%20canvas%20`)!.server?.username, 'canvas')
+  assert.equal(parseInstanceLink(`${valid}&username=`)!.server?.username, undefined)
+  for (const extra of ['&username=one&username=two', '&name=one&name=two', `&username=${'a'.repeat(201)}`, '&username=line%0Abreak'])
+    assert.equal(parseInstanceLink(valid + extra)!.invalid, true)
+  for (const href of ['javascript:alert(1)', 'https://user:DUMMY_PASSWORD@frontend.example/?server=https://backend.example/'])
+    assert.equal(parseInstanceLink(href)!.invalid, true)
+  assert.equal(parseInstanceLink('https://frontend.example/?username=canvas&keep=1')!.url.href, 'https://frontend.example/?keep=1')
 })
 
 test('session discovery rejects static SPA fallbacks and malformed API responses', () => {

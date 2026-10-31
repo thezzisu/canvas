@@ -36,7 +36,8 @@ async function change(action: () => void) {
   finally { working.value = false }
 }
 function edit(add = false) {
-  Object.assign(draft, add ? { id: '', name: '', base: '' } : activeInstance.value)
+  const { id, name, base } = activeInstance.value
+  Object.assign(draft, add ? { id: '', name: '', base: '' } : { id, name, base })
   error.value = ''; open.value = true
 }
 async function submit() {

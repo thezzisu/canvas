@@ -31,20 +31,30 @@ export function selectInstance(id: string) {
 export function rememberInstance() {
   if (hasActiveInstance.value) savedInstances.value = instances.value
 }
-export function importInstance(value: { base: string; name?: string }): CanvasInstance {
+export function rememberInstanceUsername(username: string) {
+  const instance = activeInstance.value
+  if (!instance.base || instance.username === username) return
+  instances.value = instances.value.map(item => item.id === instance.id ? { ...item, username } : item)
+}
+export function importInstance(value: { base: string; name?: string; username?: string }): CanvasInstance {
   const base = normalizeApiBase(value.base)
   const existing = instances.value.find(instance => instance.base === base)
-  if (existing) { selectInstance(existing.id); return existing }
-  return saveInstance({ base, name: value.name?.trim() || new URL(base).host })
+  if (existing) {
+    if (value.username) instances.value = instances.value.map(item => item.id === existing.id ? { ...item, username: value.username } : item)
+    selectInstance(existing.id)
+    return activeInstance.value
+  }
+  return saveInstance({ base, name: value.name?.trim() || new URL(base).host, username: value.username })
 }
-export function saveInstance(value: { id?: string; name: string; base: string }): CanvasInstance {
+export function saveInstance(value: { id?: string; name: string; base: string; username?: string }): CanvasInstance {
   const base = normalizeApiBase(value.base), name = value.name.trim()
   if (!name) throw new Error('instances.nameRequired')
   if (instances.value.some(instance => instance.id !== value.id && instance.base === base)) throw new Error('instances.duplicate')
   const previous = instances.value.find(instance => instance.id === value.id)
   if (previous?.builtin && previous.base !== base) throw new Error('instances.readOnly')
   const result: CanvasInstance = { ...previous, id: previous?.id || identity(), name, base }
-  if (previous && previous.base !== base) { removeSessionToken(previous.id); clearInstanceFileViews(previous.id); forgetInstanceBuild(previous.id) }
+  if (!previous && value.username) result.username = value.username
+  if (previous && previous.base !== base) { delete result.username; removeSessionToken(previous.id); clearInstanceFileViews(previous.id); forgetInstanceBuild(previous.id) }
   instances.value = previous ? instances.value.map(instance => instance.id === result.id ? result : instance) : [...instances.value, result]
   selectInstance(result.id)
   return result
