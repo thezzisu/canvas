@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import browser from '@xterm/xterm'
 import headless from '@xterm/headless'
 import serialize from '@xterm/addon-serialize'
-import { terminalUnicodeAddon, terminalCellWidth } from '../shared/terminal-unicode.ts'
+import { terminalUnicodeAddon } from '../shared/terminal-unicode.ts'
 import { HerdrScreen } from './herdr/screen.ts'
 import type { CellData, PaneSurfaceFrame } from './herdr/wire.ts'
 
@@ -23,20 +23,6 @@ function assertClusters(terminal: Pick<headless.Terminal, 'buffer'>) {
     ['👨‍👩‍👧‍👦', 2], ['', 0], ['👩‍👩‍👧‍👧', 2], ['', 0], ['e\u0301', 1], ['中', 2], ['', 0], ['A', 1],
   ])
 }
-
-test('browser and headless buffers share official grapheme widths for ordinary ANSI output', async () => {
-  for (const Constructor of [browser.Terminal, headless.Terminal]) {
-    const terminal = new Constructor({ cols: 12, rows: 2, allowProposedApi: true })
-    terminal.loadAddon(terminalUnicodeAddon())
-    assert.equal(terminal.unicode.activeVersion, '15-graphemes')
-    await write(terminal, text)
-    assertClusters(terminal)
-    assert.equal(terminal.buffer.active.cursorX, 8)
-    terminal.dispose()
-  }
-  for (const [value, width] of [['👨‍👩‍👧‍👦', 2], ['👩‍👩‍👧‍👧', 2], ['e\u0301', 1], ['中', 2], ['🇨🇳', 2], ['1️⃣', 2], ['👍🏽', 2], [text, 8]] as const)
-    assert.equal(terminalCellWidth(value), width, value)
-})
 
 test('native semantic render and reconnect replay preserve two family emojis and combining/CJK cells', async () => {
   const source = new headless.Terminal({ cols: 12, rows: 2, allowProposedApi: true })

@@ -6,7 +6,7 @@ import Icon from './Icon.vue'
 
 const { t } = useI18n()
 const header = ref<HTMLElement>()
-const compact = useCompactHeader(header)
+const compact = useCompactHeader(header, true)
 </script>
 
 <template>

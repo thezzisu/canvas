@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, shallowRef, watch } from 'vue'
 import { VueFlow, useVueFlow, type Node, type NodeChange, type NodePositionChange, type NodeMouseEvent } from '@vue-flow/core'
 import { useActiveElement, useStorage, watchDebounced } from '@vueuse/core'
 import { MiniMap } from '@vue-flow/minimap'
@@ -46,7 +46,7 @@ import type { GlobalSettings } from '../../shared/settings'
 import { useCanvasNavigation } from './canvas-navigation'
 import { useMobileLayout } from './mobile-layout'
 import { hideMobileKeyboard } from './mobile-keyboard'
-import { useDisplayCutout } from './display-cutout'
+import { cutoutActiveKey, useDisplayCutout } from './display-cutout'
 import { developerMode } from './developer-mode'
 import { useScreenWakeLock } from './screen-wake-lock'
 import { canvasFrame, preserveCanvasCenter, useMobileViewport, type CanvasFrame } from './viewport'
@@ -315,6 +315,7 @@ const { surface: graphSurface, app: appElement, fullscreen: canvasFullscreen, re
   paging: { enabled: () => paging.value, canMove: direction => !!pageNeighbor(direction), move: movePage, recenter: fitPage },
   beforeFullscreen: () => { sourcePanel.value = false; sidebarOpen.value = false; canvasMenu.value = false },
 })
+provide(cutoutActiveKey, computed(() => canvasFullscreen.value && hasSafeTop.value))
 const currentBackground = computed(() => isOverview.value ? overviewBackground.value : currentCanvas.value?.background)
 const { url: backgroundUrl } = useBackgroundUrl(() => currentBackground.value?.url)
 const canvasCounts = computed(() => {
@@ -579,6 +580,7 @@ async function applyRequestedLocation() {
   const requested = navigation.requested.value
   if (!requested || unknownInstance.value || requested.location.instance !== activeInstance.value.id || !authenticated.value || !latestState || !resourcesLoaded.value) return
   const location = resolveCanvasLocation(requested.location, canvases.value.map(canvas => canvas.id))
+  if (focusedCardId.value) void flushNotes(activeId.value)
   focused.value = null; focusedCardId.value = ''
   if (activeId.value !== location.canvas) {
     activeId.value = location.canvas
@@ -1024,8 +1026,12 @@ function terminalAction(action: string, id: string) {
   else if (action === 'menu') windowMenu.value = { node, name: resourceFor(node).window?.name || t('app.window') }
 }
 async function closeFocus() {
+  const context = apiContext(), canvasId = activeId.value
   if (document.activeElement instanceof HTMLElement && focusViewportElement.value?.contains(document.activeElement)) document.activeElement.blur()
-  focused.value = null; graphKey.value++; await nextTick(); await restoreViewport()
+  focused.value = null; graphKey.value++
+  await nextTick()
+  if (!isCurrentApi(context) || activeId.value !== canvasId || hasFocus.value) return
+  await restoreViewport()
 }
 function cardAction(action: string, id: string) {
   if (action === 'settings') { openSettings(); return }
@@ -1035,10 +1041,12 @@ function cardAction(action: string, id: string) {
   hideMobileKeyboard(); saveViewport(); focusedCardId.value = id
 }
 async function closeCardFocus() {
+  const context = apiContext(), canvasId = activeId.value
   if (document.activeElement instanceof HTMLElement && focusViewportElement.value?.contains(document.activeElement)) document.activeElement.blur()
-  void flushNotes(activeId.value)
+  void flushNotes(canvasId)
   focusedCardId.value = ''; graphKey.value++
   await nextTick()
+  if (!isCurrentApi(context) || activeId.value !== canvasId || hasFocus.value) return
   await restoreViewport()
 }
 watch(focusedCard, card => { if (focusedCardId.value && !card) void closeCardFocus() })

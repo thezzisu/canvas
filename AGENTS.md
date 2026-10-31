@@ -6,6 +6,7 @@ Single-account terminal canvas for existing herdr windows.
 - Canvas connects directly to herdr sockets. Herdr owns pane layout and runtime.
 - While Canvas is unreleased, prioritize simple, clean implementation; do not design for backward compatibility or data migration.
 - Never attach tests to real user sessions. Use isolated sockets and synthetic data.
+- Place unit tests beside their modules; keep server integration tests in `server/`.
 - Keep application code and native tests here; private operational notes and environment E2E live in the owning operations repository.
 - Run `npm run typecheck`, `npm test`, and `npm run build` before delivery.
 - Keep credentials and runtime databases outside the checkout.

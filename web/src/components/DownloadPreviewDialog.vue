@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
 import UModal from '@nuxt/ui/components/Modal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
@@ -15,7 +15,7 @@ import { downloadMedia, useMediaUrl } from '../media'
 import { reportDownloadError } from '../downloads'
 import { apiFetch } from '../api'
 import { useMobileViewport } from '../viewport'
-import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
+import { cutoutActiveKey, cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
 import { isMarkdownFile } from '../markdown'
 import { useMobileLayout } from '../mobile-layout'
 
@@ -31,12 +31,13 @@ const truncated = ref(false)
 const expanded = ref(false)
 const rendered = ref(true), wrap = ref(false)
 const header = ref<HTMLElement>()
-const compact = useCompactHeader(header)
+const cutoutActive = inject(cutoutActiveKey, ref(false))
 const mobile = useMobileLayout()
 const markdown = computed(() => downloadPreview.value?.preview === 'text' && isMarkdownFile(downloadPreview.value.filename))
 const imageSize = ref<{ width: number; height: number }>()
 const { viewport } = useMobileViewport(ref(true))
 const mobileHeader = computed(() => mobile.value || viewport.value.width <= 600)
+const compact = useCompactHeader(header, () => cutoutActive.value && mobileHeader.value && expanded.value)
 function download() { const preview = downloadPreview.value; if (preview) void downloadMedia(preview.url, preview.filename).catch(reportDownloadError) }
 const menu = computed<DropdownMenuItem[]>(() => [
   ...(markdown.value && compact.value ? [{ label: t('panels.preview.source'), type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),

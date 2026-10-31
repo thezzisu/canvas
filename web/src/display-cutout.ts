@@ -1,23 +1,15 @@
-import { useElementSize, useEventListener, useStorage } from '@vueuse/core'
-import { onBeforeUnmount, onMounted, ref, watchEffect, type Ref } from 'vue'
+import { useElementSize, useStorage } from '@vueuse/core'
+import { computed, inject, onBeforeUnmount, onMounted, ref, toValue, type InjectionKey, type MaybeRefOrGetter, type Ref } from 'vue'
 import { compactHeader } from './header-capacity'
 
 export type CutoutPosition = 'left' | 'center' | 'right'
 export const cutoutPosition = useStorage<CutoutPosition>('canvas:display:cutout-position', 'center')
 export const cutoutWidth = useStorage('canvas:display:cutout-width', 0)
+export const cutoutActiveKey: InjectionKey<Readonly<Ref<boolean>>> = Symbol('canvas-cutout-active')
 
-export function useCompactHeader(header: Ref<HTMLElement | undefined>) {
+export function useCompactHeader(header: Readonly<Ref<HTMLElement | undefined>>, active: MaybeRefOrGetter<boolean> = inject(cutoutActiveKey, ref(false))) {
   const { width } = useElementSize(header, { width: 0, height: 44 }, { box: 'border-box' })
-  const fullscreenElement = ref(document.fullscreenElement)
-  useEventListener(document, 'fullscreenchange', () => { fullscreenElement.value = document.fullscreenElement })
-  const compact = ref(true)
-  watchEffect(() => {
-    void fullscreenElement.value
-    const gap = cutoutWidth.value, position = cutoutPosition.value
-    const avoided = header.value?.matches('.cutout-preview') || header.value?.dataset.cutoutPosition && header.value.closest('.canvas-fullscreen.has-display-cutout')
-    compact.value = compactHeader(width.value, avoided ? gap : 0, position)
-  }, { flush: 'post' })
-  return compact
+  return computed(() => compactHeader(width.value, toValue(active) ? cutoutWidth.value : 0, cutoutPosition.value))
 }
 
 /** Observe the safe area reported by CSS without guessing the device model. */
