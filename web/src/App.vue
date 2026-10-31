@@ -801,7 +801,7 @@ async function logout() {
   const context = apiContext()
   await exitFullscreen()
   requireCurrentApi(context)
-  await write('/api/logout', 'POST'); clearAuthentication()
+  await write('/api/logout', 'POST'); if (isCurrentApi(context)) clearAuthentication()
 }
 function clearInstanceRuntime() {
   stopStateEvents(); resetApiRequests(); clearTerminals(); hideMobileKeyboard(); void exitFullscreen()
