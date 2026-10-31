@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
+import UModal from '@nuxt/ui/components/Modal.vue'
 import { api, segment, write } from '../api'
 import type { Canvas } from '../types'
 import Icon from './Icon.vue'
@@ -8,9 +9,8 @@ import { useBackgroundUrl } from '../backgrounds'
 
 const { t, n } = useI18n()
 
-const props = defineProps<{ canvas: Canvas }>()
+const props = defineProps<{ canvas: Canvas; portal?: HTMLElement }>()
 const emit = defineEmits<{ close: []; saved: [canvas: Canvas] }>()
-const dialog = ref<HTMLElement>()
 const picker = ref<HTMLInputElement>()
 const chooseButton = ref<HTMLButtonElement>()
 const file = ref<File | null>(null)
@@ -20,7 +20,6 @@ const opacity = ref(props.canvas.background?.opacity ?? .35)
 const saving = ref(false)
 const inspecting = ref(false)
 const error = ref<string | Error>('')
-const originalFocus = document.activeElement as HTMLElement | null
 let selection = 0
 let disposed = false
 const { url: backgroundUrl } = useBackgroundUrl(() => props.canvas.background?.url)
@@ -69,22 +68,12 @@ async function save() {
   finally { saving.value = false }
 }
 function close() { if (!saving.value) emit('close') }
-function keydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close() }
-  if (event.key !== 'Tab') return
-  const elements = [...(dialog.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled):not([type="file"])') || [])]
-  if (!elements.length) { event.preventDefault(); return }
-  const first = elements[0], last = elements.at(-1)
-  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
-  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
-}
-onMounted(() => { void nextTick(() => chooseButton.value?.focus()) })
-onBeforeUnmount(() => { disposed = true; selection++; clearObjectUrl(); originalFocus?.focus() })
+onBeforeUnmount(() => { disposed = true; selection++; clearObjectUrl() })
 </script>
 
 <template>
-  <div class="modal-backdrop" @click.self="close" @keydown="keydown">
-    <section ref="dialog" class="modal background-modal" role="dialog" aria-modal="true" aria-labelledby="background-title" :aria-busy="saving">
+  <UModal :open="true" :title="t('panels.background.title')" :portal="portal || false" :dismissible="!saving" :transition="false" :close="false" :ui="{ content: 'app-dialog-shell', overlay: 'app-dialog-overlay' }" :content="{ onOpenAutoFocus: (event: Event) => { event.preventDefault(); chooseButton?.focus() } }" @update:open="value => { if (!value) close() }">
+    <template #content><section class="modal background-modal" :aria-busy="saving">
       <header><h2 id="background-title">{{ t('panels.background.title') }}</h2><button class="icon-button" :aria-label="t('common.close')" :disabled="saving" @click="close"><Icon name="close" /></button></header>
       <div class="background-preview" :class="{ 'has-image': preview }">
         <img v-if="preview" :src="preview" :style="{ opacity }" :alt="t('panels.background.preview')" />
@@ -95,6 +84,6 @@ onBeforeUnmount(() => { disposed = true; selection++; clearObjectUrl(); original
       <label v-if="preview" class="background-opacity"><span>{{ t('panels.background.opacity') }}<output>{{ n(opacity, { style: 'percent', maximumFractionDigits: 0 }) }}</output></span><input v-model.number="opacity" type="range" min="0" max="1" step="0.05" :aria-label="t('panels.background.opacityLabel')" :disabled="saving" /></label>
       <p v-if="error" class="form-error" role="alert">{{ error instanceof Error ? error.message : t(error) }}</p>
       <footer><button class="button subtle" :disabled="saving" @click="close">{{ t('common.cancel') }}</button><button class="button primary" :disabled="!changed || saving || inspecting" @click="save"><span v-if="saving" class="spinner" />{{ t(saving ? 'panels.background.saving' : 'common.save') }}</button></footer>
-    </section>
-  </div>
+    </section></template>
+  </UModal>
 </template>

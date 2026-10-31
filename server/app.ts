@@ -4,6 +4,7 @@ import { bodyLimit } from "hono/body-limit";
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { verifyPassword, bearerToken, allowedOrigin } from "./auth.ts";
+import { accountUsername, accountPassword, type Account } from "./account.ts";
 import { MediaTickets, mediaPath } from "./media.ts";
 import { receiveCanvasFile } from "./canvas-files.ts";
 import { buildInfo } from "./build-info.ts";
@@ -76,7 +77,7 @@ const isInboxUpload = (method: string, path: string) =>
   method === "PUT" && /^\/api\/uploads\/[A-Za-z0-9_-]+$/.test(path);
 const isCanvasFileUpload = (method: string, path: string) =>
   method === 'POST' && /^\/api\/canvases\/[^/]+\/files$/.test(path);
-export type Account = { username: string; passwordHash: string };
+export type { Account } from "./account.ts";
 export interface DownloadResponse {
   body: Readable;
   headers: Record<string, string>;
@@ -87,6 +88,7 @@ export function createApp(
   account: Account,
   terminals: TerminalManager,
   options: {
+    updateAccount?: (username: string, password?: string) => void;
     allowedOrigins?: ReadonlySet<string>;
     openDownload?: (ticket: string, sessionId: string) => Promise<DownloadResponse | undefined>;
     prepareDownload?: (ticket: string, sessionId: string, context?: DownloadContext) => boolean;
@@ -266,6 +268,22 @@ export function createApp(
     store.removeSession(bearerToken(c.req.header("authorization")));
     return c.json({ ok: true });
   });
+  app.patch('/api/account', async c => {
+    if (!options.updateAccount) return c.json({ error: 'Account settings unavailable' }, 503);
+    const input = z.object({ username: accountUsername, currentPassword: z.string().min(1).max(1024),
+      password: accountPassword.optional() }).strict().parse(await c.req.json());
+    const now = Date.now(), prior = attempts;
+    if (prior && prior.until > now && prior.count >= 10) return c.json({ error: 'Too many attempts. Try again in a minute.' }, 429);
+    if (!verifyPassword(input.currentPassword, account.passwordHash)) {
+      attempts = { count: prior && prior.until > now ? prior.count + 1 : 1, until: prior && prior.until > now ? prior.until : now + 60_000 };
+      return c.json({ error: 'Current password is incorrect', code: 'incorrect-password' }, 403);
+    }
+    options.updateAccount(input.username, input.password);
+    attempts = undefined;
+    if (input.password !== undefined) store.removeOtherSessions(bearerToken(c.req.header('authorization')));
+    store.emit('account', account.username);
+    return c.json({ username: account.username });
+  });
   const source = (id: string) => {
     const result = store.get<Source>("source", id);
     if (!result) throw new Error("Source not found");
@@ -299,6 +317,7 @@ export function createApp(
       store.off("change", publish);
       store.off("sessions", checkSession);
       store.off("close", stopped);
+      store.off('account', publishAccount);
       c.req.raw.signal.removeEventListener("abort", aborted);
       try {
         if (unauthorized)
@@ -325,6 +344,9 @@ export function createApp(
       flush();
     };
     const stopped = () => close();
+    const publishAccount = () => {
+      if (!closed && checkSession()) controller.enqueue(encoder.encode(`event: account\ndata: ${JSON.stringify({ username: account.username })}\n\n`));
+    };
     const aborted = () => close();
     const stream = new ReadableStream<Uint8Array>({
       start(value) {
@@ -332,6 +354,7 @@ export function createApp(
         store.on("change", publish);
         store.on("sessions", checkSession);
         store.on("close", stopped);
+        store.on('account', publishAccount);
         c.req.raw.signal.addEventListener("abort", aborted, { once: true });
         if (c.req.raw.signal.aborted) {
           close();

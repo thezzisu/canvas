@@ -1,6 +1,7 @@
 # Bundled content fonts
 
-These assets are served from Canvas itself. They do not require an external font
+The WOFF2 source files live in `web/src/assets/fonts/` and Vite emits them with
+content-hashed URLs. They are served from Canvas itself and do not require an external font
 service or a matching font installation on the browser's machine. The CSS names
 beginning with `Canvas` are application aliases; the font files retain their
 upstream family names.
@@ -55,8 +56,8 @@ copyright and license texts are retained in `licenses/MapleMono-OFL.txt` and
 under their stated conditions. Cascadia's reserved font name remains unchanged
 because its original distributed files are used without modification.
 
-The font catalog records native Latin advance ratios. The loader can use a
-CSS-only `size-adjust` alias to match a bundled fallback's advance to the leading
+The font catalog records native Latin advance ratios and generates `@font-face`
+rules at build time. A CSS-only `size-adjust` alias matches a bundled fallback's advance to the leading
 bundled font, preserving CJK-to-Latin 2:1 alignment without modifying either font.
 Unknown local fonts keep their native metrics. Terminal cell widths additionally
 depend on xterm and the native application's Unicode width rules.

@@ -1,12 +1,14 @@
 import { createServer } from "node:http";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { getRequestListener } from "@hono/node-server";
-import { serveStatic } from "@hono/node-server/serve-static";
+import { fileURLToPath } from 'node:url';
+import { serveCanvasStatic } from './static.ts';
 import { WebSocketServer } from "ws";
 import { Store, sourceConnectionKey, type Source } from "./state.ts";
-import { createApp, type Account } from "./app.ts";
+import { createApp } from "./app.ts";
+import { AccountStore } from "./account.ts";
 import { TerminalManager } from "./terminals.ts";
 import { allowedOrigin, parseAllowedOrigins } from "./auth.ts";
 import { authenticateWebSocket } from "./websocket-auth.ts";
@@ -26,12 +28,8 @@ import { WindowContentService } from "./window-content.ts";
 import { UrlForwardService } from "./url-forward.ts";
 const dataDir =
   process.env.CANVAS_DATA_DIR ?? join(homedir(), ".local/share/canvas");
-const accountFile = join(dataDir, "auth.json");
-if (!existsSync(accountFile))
-  throw new Error(
-    "Run npm run setup to create the single Canvas account first.",
-  );
-const account: Account = JSON.parse(readFileSync(accountFile, "utf8"));
+const accounts = new AccountStore(dataDir);
+const account = accounts.account;
 const store = new Store(join(dataDir, "canvas.db"));
 const urlForwards = new UrlForwardService(store);
 const assets = new AssetStore(dataDir, store);
@@ -62,6 +60,7 @@ const windowContent = new WindowContentService({
 });
 const allowedOrigins = parseAllowedOrigins(process.env.CANVAS_ALLOWED_ORIGINS);
 const app = createApp(store, account, terminals, {
+  updateAccount: (username, password) => accounts.update(username, password),
   allowedOrigins,
   openDownload: (ticket, session) => downloads.open(ticket, session),
   prepareDownload: (ticket, session, context) => downloads.prepare(ticket, session, context),
@@ -77,9 +76,8 @@ app.use("*", async (c, next) => {
   c.header("Referrer-Policy", "same-origin");
   return next();
 });
-const staticDir = resolve(process.env.CANVAS_STATIC_DIR ?? "dist/web");
-app.use("*", serveStatic({ root: staticDir }));
-app.get("*", serveStatic({ path: join(staticDir, "index.html") }));
+const staticDir = resolve(process.env.CANVAS_STATIC_DIR ?? fileURLToPath(new URL('../web/', import.meta.url)));
+app.use('*', serveCanvasStatic(staticDir));
 const requestListener = getRequestListener(app.fetch);
 const wss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
 let stopping = false;

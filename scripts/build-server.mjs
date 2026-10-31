@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, rm, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { readBuildInfo, serverBuildModule } from '../build-info.config.ts'
 
@@ -13,3 +13,4 @@ execFileSync(process.execPath, ['node_modules/typescript/bin/tsc', '-p', 'tsconf
 await writeFile(new URL('../dist/server/build-info.js', import.meta.url), serverBuildModule(buildInfo))
 await mkdir(new URL('../dist/cli', import.meta.url), { recursive: true })
 await copyFile(new URL('../cli/canvas', import.meta.url), new URL('../dist/cli/canvas', import.meta.url))
+await chmod(new URL('../dist/cli/main.js', import.meta.url), 0o755)

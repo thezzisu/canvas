@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+from pathlib import Path
 import select
 import socket
 import stat
@@ -385,7 +386,47 @@ def open_file(path):
             file.close()
 
 
+def installed_canvas():
+    """Identify this product without executing an unrelated same-name command."""
+    own = Path(__file__).resolve()
+    seen = set()
+    for directory in os.get_exec_path():
+        candidate = Path(directory or os.curdir) / "canvas"
+        try:
+            resolved = candidate.resolve(strict=True)
+            info = resolved.stat()
+            identity = (info.st_dev, info.st_ino)
+            if identity in seen or os.path.samefile(resolved, own):
+                continue
+            seen.add(identity)
+            if not stat.S_ISREG(info.st_mode) or not os.access(resolved, os.X_OK):
+                continue
+            # The package owns one stable bin location, including npm's symlink.
+            if resolved.name != "main.js" or resolved.parent.name != "cli" or resolved.parent.parent.name != "dist":
+                continue
+            root = resolved.parent.parent.parent
+            package = root / "package.json"
+            if package.stat().st_size > 65536:
+                continue
+            metadata = json.loads(package.read_text())
+            if metadata.get("name") != "@thezzisu/canvas" or metadata.get("bin", {}).get("canvas") != "dist/cli/main.js":
+                continue
+            if os.path.samefile(root / metadata["bin"]["canvas"], resolved):
+                return str(resolved)
+        except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
+            continue
+    return None
+
+
 def main():
+    if os.environ.get("CANVAS_HELPER_DIRECT") != "1":
+        installed = installed_canvas()
+        if installed:
+            try:
+                os.execv(installed, [installed, *sys.argv[1:]])
+            except OSError:
+                print("canvas: cannot start the installed Canvas CLI", file=sys.stderr)
+                return 1
     parser = argparse.ArgumentParser(prog="canvas", description="Open a file, folder or web address in Canvas.")
     commands = parser.add_subparsers(dest="command", required=True)
     command = commands.add_parser("open", help="open a file, folder or web address")

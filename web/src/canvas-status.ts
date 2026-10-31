@@ -5,10 +5,11 @@ export interface WindowVisualState { status: ProgramStatus; fresh: boolean; puls
 export interface CanvasIndicator { count: number; status: ProgramStatus | null; pulse: boolean }
 export const needsAttention = (status?: ProgramStatus) => status === 'attention' || status === 'done'
 
-/** A retained snapshot is useful for layout, but cannot announce current work. */
+/** Freshness gates attention animation; a background tab keeps its known status. */
 export function windowVisualState(source: SourceResource | undefined, window: WindowResource | undefined, fresh: boolean): WindowVisualState {
-  const current = fresh && !!window && source?.status === 'online' && !source.error
-  const status = current && window.status && window.status !== 'error' ? window.status : 'unknown'
+  const available = !!window && source?.status === 'online' && !source.error
+  const current = fresh && available
+  const status = available && window.status && window.status !== 'error' ? window.status : 'unknown'
   return { status, fresh: current, pulse: current && needsAttention(status) }
 }
 

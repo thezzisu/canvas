@@ -1,124 +1,34 @@
 import type { Terminal } from '@xterm/xterm'
 import type { ContentFontSettings } from '../../shared/settings.ts'
+import { fontChain, quoteFamily } from './font-catalog'
+import { createFontLoader } from './font-loading'
 import { t } from './i18n'
 
+export { FONT_CATALOG } from './font-catalog'
 export interface FontPresentation { family: string; features: string }
 
-export interface ContentFontFace {
-  url: string
-  weight: string
-  style: 'normal' | 'italic'
-}
-export interface ContentFontCatalogEntry {
-  family: string
-  cssFamily: string
-  /** Native half-width advance, divided by units per em. */
-  latinAdvance: number
-  faces: readonly ContentFontFace[]
-}
-
-function staticFaces(directory: string): ContentFontFace[] {
-  return [
-    { url: `/fonts/${directory}/regular.woff2`, weight: '400', style: 'normal' },
-    { url: `/fonts/${directory}/bold.woff2`, weight: '700', style: 'normal' },
-    { url: `/fonts/${directory}/italic.woff2`, weight: '400', style: 'italic' },
-    { url: `/fonts/${directory}/bold-italic.woff2`, weight: '700', style: 'italic' },
-  ]
-}
-
-/** Bundled and local fonts share one ordered list of family names. */
-export const FONT_CATALOG: readonly ContentFontCatalogEntry[] = [
-  {
-    family: 'Maple Mono NF CN',
-    cssFamily: 'Canvas Maple Mono NF CN', latinAdvance: 600 / 1000, faces: staticFaces('maple'),
-  },
-  {
-    family: 'Maple Mono Normal NF CN',
-    cssFamily: 'Canvas Maple Mono Normal NF CN', latinAdvance: 600 / 1000, faces: staticFaces('maple-normal'),
-  },
-  {
-    family: 'Cascadia Code PL',
-    cssFamily: 'Canvas Cascadia Code PL', latinAdvance: 1200 / 2048,
-    faces: [
-      { url: '/fonts/cascadia/regular.woff2', weight: '200 700', style: 'normal' },
-      { url: '/fonts/cascadia/italic.woff2', weight: '200 700', style: 'italic' },
-    ],
-  },
-]
-const catalog = new Map(FONT_CATALOG.map(font => [font.family.toLowerCase(), font]))
-const genericFamilies = new Set(['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded', 'emoji', 'math', 'fangsong'])
-
-function quoteFamily(name: string): string {
-  return genericFamilies.has(name.toLowerCase()) ? name.toLowerCase()
-    : `"${name.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\x00-\x1f\x7f]/g, character => `\\${character.charCodeAt(0).toString(16)} `)}"`
-}
-
-interface ResolvedFont { family: string; bundled?: ContentFontCatalogEntry; sizeAdjust?: string }
-
-function fontChain(settings: ContentFontSettings): ResolvedFont[] {
-  const seen = new Set<string>()
-  let primaryAdvance: number | undefined
-  return settings.stack.flatMap((entry, index) => {
-    const name = entry.family.trim()
-    if (!name) return []
-    const bundled = catalog.get(name.toLowerCase())
-    if (index === 0) primaryAdvance = bundled?.latinAdvance
-    // A common, data-driven metric adaptation applies to every bundled fallback.
-    // An unknown system family keeps native metrics; its advance is not guessed.
-    const scale = bundled && primaryAdvance ? primaryAdvance / bundled.latinAdvance : 1
-    const family = bundled ? bundled.cssFamily + (scale !== 1 ? ` @${scale.toFixed(8)}` : '') : name
-    const identity = family.toLowerCase()
-    if (seen.has(identity)) return []
-    seen.add(identity)
-    return [{ family, bundled, ...(scale !== 1 ? { sizeAdjust: `${scale * 100}%` } : {}) }]
-  })
-}
+const fontUrls = import.meta.glob<string>('./assets/fonts/**/*.woff2', { eager: true, query: '?url', import: 'default' })
+let loader: ReturnType<typeof createFontLoader> | undefined
 
 export function buildFontPresentation(settings: ContentFontSettings): FontPresentation {
   return {
-    family: fontChain(settings).map(font => quoteFamily(font.family)).join(', '),
+    // A newly ready fallback changes the actual family chain, which invalidates
+    // xterm's cached glyph widths through its public fontFamily option.
+    family: fontChain(settings).filter(font => !font.bundled || loader?.available(font)).map(font => quoteFamily(font.family)).join(', ') || 'monospace',
     features: settings.ligatures ? '"calt" 1, "liga" 1' : '"calt" 0, "liga" 0, "dlig" 0',
   }
 }
 
-const loaded = new Map<string, Promise<void>>()
-const attempts = new Map<string, number>()
-
-function loadFamily(font: ResolvedFont): Promise<void> {
-  const existing = loaded.get(font.family)
-  if (existing) return existing
-  const attempt = attempts.get(font.family) || 0
-  attempts.set(font.family, attempt + 1)
-  const load = async () => {
-    // Load all native styles before applying the family. Otherwise the first
-    // bold/italic terminal output can change fallback metrics after a resize.
-    // A new FontFace on retry avoids reusing a permanently rejected load promise.
-    return Promise.all(font.bundled!.faces.map(source => {
-      const url = source.url + (attempt ? `?retry=${attempt}` : '')
-      const face = new FontFace(font.family, `url("${url}") format("woff2")`, {
-        style: source.style, weight: source.weight,
-        ...(font.sizeAdjust ? { sizeAdjust: font.sizeAdjust } : {}),
-      })
-      return face.load()
-    }))
-  }
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  const request = Promise.race([load(), new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error(t('common.fontTimeout'))), 45_000)
-  })]).then(faces => {
-    for (const face of faces) document.fonts.add(face)
-  }).catch(error => {
-    if (loaded.get(font.family) === request) loaded.delete(font.family)
-    throw error instanceof Error ? error : new Error(t('common.fontLoadFailed'))
-  }).finally(() => clearTimeout(timeout))
-  loaded.set(font.family, request)
-  return request
-}
-
-/** Load only bundled families in the effective chain; no external font CDN. */
-export async function ensureContentFont(settings: ContentFontSettings): Promise<void> {
+/** Keep native styles consistent; optional families never delay the primary font. */
+export async function ensureContentFont(settings: ContentFontSettings, fallbackReady?: () => void): Promise<void> {
   if (typeof document === 'undefined' || !document.fonts) return
-  await Promise.all(fontChain(settings).filter(font => font.bundled).map(font => loadFamily(font)))
+  loader ||= createFontLoader({
+    fonts: document.fonts,
+    url: file => fontUrls[`./assets/fonts/${file}`],
+    timeoutError: () => new Error(t('common.fontTimeout')),
+  })
+  try { await loader.prepare(fontChain(settings), fallbackReady) }
+  catch (error) { throw error instanceof Error ? error : new Error(t('common.fontLoadFailed')) }
 }
 
 // Documented programming sequences from Maple Mono and Cascadia Code. Grouping

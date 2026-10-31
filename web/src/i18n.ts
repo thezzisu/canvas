@@ -22,6 +22,8 @@ import zhWindowPicker from './locales/zh-CN/window-picker'
 import enWindowPicker from './locales/en/window-picker'
 import zhFileTransfer from './locales/zh-CN/file-transfer'
 import enFileTransfer from './locales/en/file-transfer'
+import zhAccount from './locales/zh-CN/account'
+import enAccount from './locales/en/account'
 
 export type AppLocale = 'zh-CN' | 'en'
 export const languagePreference = useStorage<'system' | AppLocale>('canvas:language', 'system')
@@ -34,8 +36,8 @@ const preferredLocale = computed<AppLocale>(() => {
   }
   return 'en'
 })
-const zh = { common: zhCommon, settings: zhSettings, app: zhApp, panels: zhPanels, terminal: zhTerminal, instances: zhInstances, canvasUi: zhCanvasUi, urls: zhUrls, windowPicker: zhWindowPicker, fileTransfer: zhFileTransfer }
-const en: typeof zh = { common: enCommon, settings: enSettings, app: enApp, panels: enPanels, terminal: enTerminal, instances: enInstances, canvasUi: enCanvasUi, urls: enUrls, windowPicker: enWindowPicker, fileTransfer: enFileTransfer }
+const zh = { common: zhCommon, settings: zhSettings, app: zhApp, panels: zhPanels, terminal: zhTerminal, instances: zhInstances, canvasUi: zhCanvasUi, urls: zhUrls, windowPicker: zhWindowPicker, fileTransfer: zhFileTransfer, account: zhAccount }
+const en: typeof zh = { common: enCommon, settings: enSettings, app: enApp, panels: enPanels, terminal: enTerminal, instances: enInstances, canvasUi: enCanvasUi, urls: enUrls, windowPicker: enWindowPicker, fileTransfer: enFileTransfer, account: enAccount }
 export const i18n = createI18n({ legacy: false, locale: preferredLocale.value, fallbackLocale: 'en', messages: { 'zh-CN': zh, en } })
 export const { t, locale } = i18n.global
 export const uiLocale = computed(() => locale.value === 'zh-CN' ? zhUi : enUi)
@@ -45,6 +47,5 @@ export function watchDocumentLocale() {
   watch(locale, () => {
     document.documentElement.lang = locale.value
     document.documentElement.dir = uiLocale.value.dir || 'ltr'
-    document.title = t('common.appTitle')
   }, { immediate: true, flush: 'sync' })
 }

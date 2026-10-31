@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, shallowRef, watch } from 'vue'
 import { VueFlow, useVueFlow, type Node, type NodeChange, type NodePositionChange, type NodeMouseEvent } from '@vue-flow/core'
-import { useActiveElement, useStorage, watchDebounced } from '@vueuse/core'
+import { useActiveElement, useStorage, useTitle, watchDebounced } from '@vueuse/core'
 import { MiniMap } from '@vue-flow/minimap'
 import UApp from '@nuxt/ui/components/App.vue'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
+import UModal from '@nuxt/ui/components/Modal.vue'
 import { useI18n } from 'vue-i18n'
 import { uiLocale } from './i18n'
 import LanguageSelect from './components/LanguageSelect.vue'
@@ -16,6 +17,8 @@ import { instanceBuild, observeInstanceBuild, staleInstanceBuild } from './insta
 import { buildLabel } from '../../shared/build-info'
 import CanvasNavItem from './components/CanvasNavItem.vue'
 import { canvasIndicators, needsAttention, windowVisualState } from './canvas-status'
+import { createLayoutSaves, type LayoutPatch } from './layout-saves'
+import { createPendingEdits, type NoteEdit } from './pending-edits'
 import { cameraFromViewport, recallFreeCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type CanvasLocation } from './canvas-location'
 import { useCanvasLocation } from './use-canvas-location'
 import { subscribeState } from './state-events'
@@ -37,6 +40,7 @@ import WindowContentDialog from './components/WindowContentDialog.vue'
 import CanvasFileDrop from './components/CanvasFileDrop.vue'
 import WindowPickerTree from './components/WindowPickerTree.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
+import AccountDialog from './components/AccountDialog.vue'
 import PwaUpdatePrompt from './components/PwaUpdatePrompt.vue'
 import CutoutPreview from './components/CutoutPreview.vue'
 import { directoryRequest } from './directories'
@@ -114,6 +118,7 @@ const loading = ref(false)
 const sourcePanel = ref(false)
 const expandedSource = ref('')
 const sourceDialog = ref(false)
+let sourceDialogRevision = 0
 const sourceDraft = reactive<Source>({ id: '', name: '', transport: 'local', target: '', herdrSession: '', herdrSocket: '', sshIdentityFile: '', sshKnownHostsFile: '' })
 const sourceProbe = ref<{ key: string; pending: boolean; version?: string; error?: string }>({ key: '', pending: false })
 const sourceProbeRetry = ref(0)
@@ -128,25 +133,46 @@ const sourceConfigUnchanged = computed(() => {
 })
 const sourceProbeReady = computed(() => sourceConfigUnchanged.value || sourceProbe.value.key === sourceProbeKey.value && !!sourceProbe.value.version)
 const canvasDialog = ref(false)
+let canvasDialogRevision = 0
 const backgroundCanvas = ref<Canvas | null>(null)
 const settingsDialog = ref(false)
+const accountDialog = ref(false)
 const settings = ref<GlobalSettings | null>(null)
 const contentFontStyle = ref<Record<string, string>>({})
 const appliedContentFont = ref('')
 const fontLoading = ref(false)
 let fontSignature = ''
 let fontRevision = 0
-let fontApplication = Promise.resolve()
 const canvasMenu = ref(false)
 const canvasMenuElement = ref<HTMLElement>()
 const canvasDraft = reactive({ id: '', name: '' })
 const dialogError = ref('')
 const actionDialog = ref<{ title: string; description: string; label?: string; optional?: boolean; value: string; danger?: boolean; button: string; submit: (value: string) => Promise<void> } | null>(null)
 const addDialog = ref(false)
+let addDialogRevision = 0
 const addTarget = ref('')
 const addSearch = ref('')
 const selectedWindows = ref<string[]>([])
 const windowMenu = ref<{ node: TerminalCanvasNode; name: string } | null>(null)
+const appDialogOpen = computed(() => sourceDialog.value || canvasDialog.value || !!actionDialog.value || addDialog.value || !!windowMenu.value)
+const appDialogTitle = computed(() => sourceDialog.value ? t(sourceDraft.id ? 'app.editConnection' : 'app.addConnection')
+  : canvasDialog.value ? t(canvasDraft.id ? 'app.renameCanvas' : 'app.newCanvas') : actionDialog.value?.title
+    || (addDialog.value ? t('app.addWindows') : windowMenu.value?.name || ''))
+let pendingKeyboard: TerminalCanvasNode | undefined
+function closeAppDialog(open = false) {
+  if (open || busy.value) return
+  sourceDialog.value = false; canvasDialog.value = false; actionDialog.value = null; addDialog.value = false; windowMenu.value = null
+}
+function restoreDialogFocus(event: Event) {
+  if (!pendingKeyboard) return
+  event.preventDefault()
+  const node = pendingKeyboard; pendingKeyboard = undefined
+  focusWindow(node.sourceId, node.spaceId, node.windowId, true)
+}
+function showWindowKeyboard() {
+  pendingKeyboard = windowMenu.value?.node
+  windowMenu.value = null
+}
 const scanTarget = shallowRef<{ sourceId: string; spaceId: string; windowId: string; name: string; context: DownloadContext } | null>(null)
 const focused = ref<TerminalCanvasNode | null>(null)
 const focusedCardId = ref('')
@@ -172,13 +198,15 @@ let geometryFrame = 0
 const saveState = ref<'' | 'saving' | 'saved' | 'saveFailed'>('')
 let refreshTimer: ReturnType<typeof setInterval>
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
-type LayoutPatch = Partial<Pick<CanvasNode, 'x' | 'y' | 'width' | 'height'>>
-const pendingLayouts = new Map<string, Map<string, LayoutPatch>>()
-type NoteEdit = { canvasId: string; id: string; patch: NotePatch }
+const layoutSaves = createLayoutSaves()
+const pendingLayouts = layoutSaves.pending
 const pendingNotes = new Map<string, NoteEdit>()
 const savingNotes = new Map<string, NoteEdit>()
 const noteTimers = new Map<string, ReturnType<typeof setTimeout>>()
-let noteSave: Promise<void> | undefined
+let noteSave: Promise<boolean> | undefined
+const pendingEdits = createPendingEdits({ getItem: key => sessionStorage.getItem(key), setItem: (key, value) => sessionStorage.setItem(key, value), removeItem: key => sessionStorage.removeItem(key) })
+let draftBase = ''
+function checkpointEdits() { pendingEdits.save(draftBase, pendingLayouts, [...savingNotes.values(), ...pendingNotes.values()]) }
 let layoutGesture = ''
 let latestState: SharedState | undefined
 let stateEvents: ReturnType<typeof subscribeState> | undefined
@@ -315,6 +343,7 @@ const overviewMenu = computed<DropdownMenuItem[][]>(() => [
   [{ label: t('app.reset'), disabled: !overviewChanged.value, onSelect: resetOverview }],
 ])
 const currentName = computed(() => isOverview.value ? t('app.overview') : currentCanvas.value?.name || t('app.canvas'))
+useTitle(computed(() => authenticated.value && !unknownInstance.value ? `${currentName.value} - Canvas` : 'Canvas'))
 const allWindows = computed(() => resources.value.flatMap(source => source.spaces.flatMap(space => space.windows.map(window => ({ source, space, window, key: `${source.id}/${space.id}/${window.id}` })))))
 const windowCount = computed(() => allWindows.value.length)
 const existingAddWindows = computed(() => new Set(canvases.value.find(canvas => canvas.id === addTarget.value)?.nodes.filter(isTerminalNode).map(node => `${node.sourceId}/${node.windowId}`) || []))
@@ -323,7 +352,7 @@ watch([allWindows, existingAddWindows], () => {
   const next = selectedAddWindows.value.map(item => item.key)
   if (next.length !== selectedWindows.value.length || next.some((key, index) => selectedWindows.value[index] !== key)) selectedWindows.value = next
 })
-const modalOpen = computed(() => sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || windowMenu.value || backgroundCanvas.value || settingsDialog.value || scanTarget.value)
+const modalOpen = computed(() => sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || windowMenu.value || backgroundCanvas.value || settingsDialog.value || accountDialog.value || scanTarget.value)
 const { surface: graphSurface, app: appElement, fullscreen: canvasFullscreen, resetPagingFeedback, wheel: canvasWheel, touchStart: canvasTouchStart, touchMove: canvasTouchMove, touchEnd: canvasTouchEnd, touchCancel: canvasTouchCancel, click: canvasClick, toggleFullscreen, exitFullscreen } = useCanvasNavigation({
   getCanvasId: () => `${activeInstance.value.id}/${activeId.value}`, getViewport, setViewport, saveViewport,
   onError: showError,
@@ -509,14 +538,17 @@ function applySettings(value: GlobalSettings) {
   const revision = ++fontRevision
   const config = { ...value.contentFont, stack: value.contentFont.stack.map(entry => ({ ...entry })) }
   fontLoading.value = true
-  fontApplication = (async () => {
+  const apply = () => {
+    if (revision !== fontRevision) return
+    const presentation = buildFontPresentation(config)
+    contentFontStyle.value = { '--content-font-family': presentation.family, '--content-font-features': presentation.features }
+    appliedContentFont.value = config.stack[0]?.family || ''
+    setContentFont(config, presentation)
+  }
+  void (async () => {
     try {
-      await ensureContentFont(config)
-      if (revision !== fontRevision) return
-      const presentation = buildFontPresentation(config)
-      contentFontStyle.value = { '--content-font-family': presentation.family, '--content-font-features': presentation.features }
-      appliedContentFont.value = config.stack[0]?.family || ''
-      setContentFont(config, presentation)
+      await ensureContentFont(config, apply)
+      apply()
     } catch (reason) {
       if (revision === fontRevision) { fontSignature = ''; showError(reason) }
     } finally { if (revision === fontRevision) fontLoading.value = false }
@@ -524,6 +556,13 @@ function applySettings(value: GlobalSettings) {
 }
 function applySharedState(state: SharedState) {
   if (latestState?.instanceId === state.instanceId && state.revision < latestState.revision) return
+  const restoring = !draftBase
+  if (restoring) {
+    draftBase = apiContext().base
+    const drafts = pendingEdits.read(draftBase, state.canvases)
+    for (const [canvasId, nodes] of drafts.layouts) for (const [id, patch] of nodes) layoutSaves.set(canvasId, id, patch)
+    for (const edit of drafts.notes) pendingNotes.set(noteKey(edit.canvasId, edit.id), edit)
+  }
   latestState = state
   pruneFileViews(activeInstance.value.id, state.canvases)
   retainBackgrounds([state.overviewBackground, ...state.canvases.map(canvas => canvas.background)].flatMap(background => background ? [background.url] : []))
@@ -548,6 +587,8 @@ function applySharedState(state: SharedState) {
   for (const [id, timer] of saveTimers) if (!canvases.value.some(canvas => canvas.id === id)) { clearTimeout(timer); saveTimers.delete(id); pendingLayouts.delete(id) }
   for (const id of pendingLayouts.keys()) if (!canvases.value.some(canvas => canvas.id === id)) pendingLayouts.delete(id)
   for (const edit of [...pendingNotes.values(), ...savingNotes.values()]) if (!canvases.value.find(canvas => canvas.id === edit.canvasId)?.nodes.some(node => node.id === edit.id)) clearNoteEdits(edit.canvasId, edit.id)
+  checkpointEdits()
+  if (restoring && (pendingLayouts.size || pendingNotes.size)) queueMicrotask(() => { void flushInstanceEdits() })
   if (!isOverview.value && !currentCanvas.value) navigation.fallback(activeInstance.value.id)
   else {
     if (!isOverview.value && focused.value && !currentCanvas.value?.nodes.some(node => node.id === focused.value?.id)) void closeFocus()
@@ -572,7 +613,7 @@ async function syncState() {
 function stopStateEvents() { stateEvents?.close(); stateEvents = undefined }
 function startStateEvents() {
   stopStateEvents()
-  stateEvents = subscribeState(state => applySharedState(state as SharedState))
+  stateEvents = subscribeState(state => applySharedState(state as SharedState), value => { username.value = value })
 }
 
 function currentLocation(): CanvasLocation {
@@ -755,7 +796,6 @@ async function refreshResources(silent = false): Promise<void> {
 async function load() {
   const context = apiContext()
   await syncState()
-  await fontApplication
   requireCurrentApi(context)
   await refreshResources()
   requireCurrentApi(context)
@@ -780,16 +820,14 @@ async function login() {
 async function flushInstanceEdits() {
   if (!authenticated.value) return true
   const context = apiContext()
-  await flushNotes()
-  if (!isCurrentApi(context) || pendingNotes.size || savingNotes.size) return false
   try {
-    for (const [canvasId, patches] of pendingLayouts) {
-      clearTimeout(saveTimers.get(canvasId)); saveTimers.delete(canvasId)
-      await api(`/api/canvases/${segment(canvasId)}/layout`, { method: 'PATCH', body: JSON.stringify({ nodes: [...patches].map(([id, patch]) => ({ id, ...patch })) }) }, context)
-      pendingLayouts.delete(canvasId)
-    }
+    do {
+      if (!await flushNotes() || !isCurrentApi(context)) return false
+      await Promise.all([...pendingLayouts.keys()].map(id => flushLayout(id)))
+      if (!isCurrentApi(context)) return false
+    } while (pendingLayouts.size || pendingNotes.size || savingNotes.size || layoutSaves.saving)
     return true
-  } catch (reason) { showError(reason); return false }
+  } catch (reason) { if (isCurrentApi(context)) showError(reason); return false }
 }
 async function beforeInstanceChange() {
   if (!await flushInstanceEdits()) return false
@@ -804,12 +842,14 @@ async function logout() {
   await write('/api/logout', 'POST'); if (isCurrentApi(context)) clearAuthentication()
 }
 function clearInstanceRuntime() {
+  checkpointEdits(); draftBase = ''
   stopStateEvents(); resetApiRequests(); clearTerminals(); hideMobileKeyboard(); void exitFullscreen()
   for (const timer of saveTimers.values()) clearTimeout(timer)
-  saveTimers.clear(); pendingLayouts.clear(); clearNoteEdits(); noteSave = undefined
+  saveTimers.clear(); layoutSaves.reset(); clearNoteEdits(); noteSave = undefined
   authenticated.value = false; focused.value = null; focusedCardId.value = ''; scanTarget.value = null
   sourceDialog.value = false; sourcePanel.value = false; canvasDialog.value = false; actionDialog.value = null
-  addDialog.value = false; windowMenu.value = null; backgroundCanvas.value = null; settingsDialog.value = false
+  sourceDialogRevision++; canvasDialogRevision++; addDialogRevision++; pendingKeyboard = undefined
+  addDialog.value = false; windowMenu.value = null; backgroundCanvas.value = null; settingsDialog.value = false; accountDialog.value = false
   sidebarOpen.value = false; overviewMenuOpen.value = false; canvasMenu.value = false
   settings.value = null; fontRevision++; fontSignature = ''; fontLoading.value = false; latestState = undefined
   sources.value = []; resources.value = []; canvases.value = []; nodes.value = []; windowSizes.value = {}
@@ -823,7 +863,7 @@ function clearInstanceRuntime() {
 }
 function visibilityChanged() {
   pageVisible.value = !document.hidden
-  if (!document.hidden) { resourcesFresh.value = false; void refreshResources(true) }
+  if (!document.hidden) void refreshResources(true)
 }
 function clearAuthentication() { setSessionToken(''); clearInstanceRuntime(); checkingInstance.value = false; void exitFullscreen() }
 async function unauthorized() {
@@ -927,21 +967,27 @@ async function toggleCanvasMenu() {
   canvasMenu.value = !canvasMenu.value
   if (canvasMenu.value) { await nextTick(); canvasMenuElement.value?.querySelector<HTMLButtonElement>('.canvas-menu button')?.focus() }
 }
-function openCanvasDialog(canvas?: Canvas) { sidebarOpen.value = false; canvasDraft.id = canvas?.id || ''; canvasDraft.name = canvas?.name || ''; dialogError.value = ''; canvasDialog.value = true }
+function openCanvasDialog(canvas?: Canvas) { canvasDialogRevision++; sidebarOpen.value = false; canvasDraft.id = canvas?.id || ''; canvasDraft.name = canvas?.name || ''; dialogError.value = ''; canvasDialog.value = true }
 async function submitCanvas() {
-  if (!canvasDraft.name.trim()) return
+  if (!canvasDraft.name.trim() || busy.value) return
+  const context = apiContext(), revision = canvasDialogRevision, draft = { ...canvasDraft, name: canvasDraft.name.trim() }
+  const current = () => isCurrentApi(context) && revision === canvasDialogRevision
   busy.value = true; dialogError.value = ''
   try {
-    if (canvasDraft.id) {
-      await write(`/api/canvases/${segment(canvasDraft.id)}`, 'PATCH', { name: canvasDraft.name.trim() })
+    if (draft.id) {
+      await api(`/api/canvases/${segment(draft.id)}`, { method: 'PATCH', body: JSON.stringify({ name: draft.name }) }, context)
+      if (!current()) return
       await syncState()
     } else {
-      const canvas = await write<Canvas>('/api/canvases', 'POST', { name: canvasDraft.name.trim(), nodes: [] })
-      await syncState(); switchCanvas(canvas.id)
+      const canvas = await api<Canvas>('/api/canvases', { method: 'POST', body: JSON.stringify({ name: draft.name, nodes: [] }) }, context)
+      if (!current()) return
+      await syncState()
+      if (!current()) return
+      switchCanvas(canvas.id)
     }
-    canvasDialog.value = false
-  } catch (reason) { dialogError.value = reason instanceof Error ? reason.message : String(reason) }
-  finally { busy.value = false }
+    if (current()) canvasDialog.value = false
+  } catch (reason) { if (current()) dialogError.value = reason instanceof Error ? reason.message : String(reason) }
+  finally { if (current()) busy.value = false }
 }
 function deleteCanvas() {
   const canvas = currentCanvas.value
@@ -949,6 +995,7 @@ function deleteCanvas() {
   actionDialog.value = { get title() { return t('app.deleteNamed', { name: canvas.name }) }, get description() { return t('app.deleteCanvasDescription') }, value: '', danger: true, get button() { return t('app.deleteCanvas') }, submit: async () => { clearTimeout(saveTimers.get(canvas.id)); saveTimers.delete(canvas.id); pendingLayouts.delete(canvas.id); clearNoteEdits(canvas.id); await write(`/api/canvases/${segment(canvas.id)}`, 'DELETE'); await syncState(); switchCanvas('overview') } }
 }
 function openSource(source?: Source) {
+  sourceDialogRevision++
   sidebarOpen.value = false
   Object.assign(sourceDraft, { id: '', name: '', transport: 'local', target: '', herdrSession: '', herdrSocket: '', sshIdentityFile: '', sshKnownHostsFile: '' }, source || {})
   dialogError.value = ''; sourceDialog.value = true
@@ -978,6 +1025,8 @@ watch([sourceDialog, sourceProbeKey, apiRevision, sourceProbeRetry, sourceConfig
 }, { flush: 'sync' })
 async function submitSource() {
   if (!sourceProbeReady.value || !sourceDraft.name.trim() || busy.value) return
+  const context = apiContext(), revision = sourceDialogRevision
+  const current = () => isCurrentApi(context) && revision === sourceDialogRevision
   busy.value = true; dialogError.value = ''
   try {
     const body = { ...sourceDraft, name: sourceDraft.name.trim(), target: sourceDraft.target?.trim() }
@@ -985,12 +1034,17 @@ async function submitSource() {
     body.herdrSocket = body.herdrSocket?.trim() || ''
     if (body.transport === 'ssh' && !body.target) throw new Error(t('app.sshRequired'))
     if (body.id) {
-      await write<Source>(`/api/sources/${segment(body.id)}`, 'PATCH', body)
-    } else { const { id, ...newSource } = body; await write<Source>('/api/sources', 'POST', newSource) }
+      await api<Source>(`/api/sources/${segment(body.id)}`, { method: 'PATCH', body: JSON.stringify(body) }, context)
+    } else { const { id, ...newSource } = body; await api<Source>('/api/sources', { method: 'POST', body: JSON.stringify(newSource) }, context) }
+    if (!current()) return
     await syncState()
-    sourceDialog.value = false; resourceSignature = ''; await refreshResources(); await restoreViewport(); notify(t('app.connectionSaved'))
-  } catch (reason) { dialogError.value = reason instanceof Error ? reason.message : String(reason) }
-  finally { busy.value = false }
+    if (!current()) return
+    resourceSignature = ''; await refreshResources()
+    if (!current()) return
+    await restoreViewport()
+    if (current()) { sourceDialog.value = false; notify(t('app.connectionSaved')) }
+  } catch (reason) { if (current()) dialogError.value = reason instanceof Error ? reason.message : String(reason) }
+  finally { if (current()) busy.value = false }
 }
 function deleteSource(source: Source) {
   actionDialog.value = { get title() { return t('app.removeNamed', { name: source.name }) }, get description() { return t('app.removeConnectionDescription') }, value: '', danger: true, get button() { return t('app.removeConnection') }, submit: async () => { await write(`/api/sources/${segment(source.id)}`, 'DELETE'); await syncState(); await refreshResources() } }
@@ -1074,10 +1128,11 @@ function scanWindowContent(node: TerminalCanvasNode, name: string) {
 async function submitAction() {
   const dialog = actionDialog.value
   if (!dialog || busy.value) return
+  const context = apiContext()
   busy.value = true; dialogError.value = ''
   try { await dialog.submit(dialog.value.trim()); if (actionDialog.value === dialog) actionDialog.value = null }
   catch (reason) { if (actionDialog.value === dialog) dialogError.value = reason instanceof Error ? reason.message : String(reason) }
-  finally { busy.value = false }
+  finally { if (isCurrentApi(context)) busy.value = false }
 }
 watch(actionDialog, () => { dialogError.value = '' })
 function getCanvasNode(id: string): TerminalCanvasNode | undefined {
@@ -1132,6 +1187,7 @@ async function removeNode(id: string) {
   } catch (reason) { showError(reason) }
 }
 function openAdd(node?: TerminalCanvasNode) {
+  addDialogRevision++
   const candidates = node ? canvases.value.filter(canvas => !canvas.nodes.some(item => isTerminalNode(item) && item.sourceId === node.sourceId && item.windowId === node.windowId)) : canvases.value
   addTarget.value = candidates.find(canvas => canvas.id === currentCanvas.value?.id)?.id || candidates[0]?.id || ''
   selectedWindows.value = node ? [`${node.sourceId}/${node.spaceId}/${node.windowId}`] : []
@@ -1140,21 +1196,26 @@ function openAdd(node?: TerminalCanvasNode) {
 async function submitAdd() {
   const chosen = selectedAddWindows.value
   if (!chosen.length || busy.value) return
+  const context = apiContext(), revision = addDialogRevision
+  const current = () => isCurrentApi(context) && revision === addDialogRevision
   busy.value = true; dialogError.value = ''
   try {
     let canvas = canvases.value.find(item => item.id === addTarget.value)
-    if (!canvas) { canvas = await write<Canvas>('/api/canvases', 'POST', { name: t('app.myCanvas'), nodes: [] }); canvas.nodes ||= [] }
+    if (!canvas) { canvas = await api<Canvas>('/api/canvases', { method: 'POST', body: JSON.stringify({ name: t('app.myCanvas'), nodes: [] }) }, context); canvas.nodes ||= [] }
+    if (!current()) return
     let index = canvas.nodes.length
     const additions: CanvasNode[] = []
     for (const item of chosen) {
       if (canvas.nodes.some(node => isTerminalNode(node) && node.sourceId === item.source.id && node.windowId === item.window.id)) continue
       additions.push({ type: 'terminal', id: uuid(), sourceId: item.source.id, spaceId: item.space.id, windowId: item.window.id, x: (index % 3) * 580, y: Math.floor(index / 3) * 390, width: 552, height: 352 }); index++
     }
-    await write(`/api/canvases/${segment(canvas.id)}/nodes`, 'POST', { nodes: additions })
+    await api(`/api/canvases/${segment(canvas.id)}/nodes`, { method: 'POST', body: JSON.stringify({ nodes: additions }) }, context)
+    if (!current()) return
     await syncState()
+    if (!current()) return
     addDialog.value = false; switchCanvas(canvas.id); rebuildNodes(); void fitView({ padding: .15, maxZoom: 1, duration: 200 }); notify(t('app.addedToCanvas', { name: canvas.name }))
-  } catch (reason) { dialogError.value = reason instanceof Error ? reason.message : String(reason) }
-  finally { busy.value = false }
+  } catch (reason) { if (current()) dialogError.value = reason instanceof Error ? reason.message : String(reason) }
+  finally { if (current()) busy.value = false }
 }
 function noteKey(canvasId: string, id: string) { return `${canvasId}/${id}` }
 function clearNoteEdits(canvasId?: string, id?: string) {
@@ -1171,6 +1232,7 @@ function editNote(canvasId: string, id: string, patch: NotePatch) {
   Object.assign(node, changed)
   const key = noteKey(canvasId, id)
   pendingNotes.set(key, { canvasId, id, patch: { ...pendingNotes.get(key)?.patch, ...changed } })
+  checkpointEdits()
   clearTimeout(noteTimers.get(key))
   noteTimers.set(key, setTimeout(() => { noteTimers.delete(key); void flushNotes(canvasId) }, 400))
   if (activeId.value === canvasId) {
@@ -1178,11 +1240,11 @@ function editNote(canvasId: string, id: string, patch: NotePatch) {
     nodes.value = nodes.value.map(flow => flow.id === id ? { ...flow, data: { ...flow.data, ...changed }, style: changed.minimized === undefined ? flow.style : { ...flow.style, height: `${changed.minimized ? 30 : node.height}px` } } : flow)
   }
 }
-async function flushNotes(canvasId?: string): Promise<void> {
+async function flushNotes(canvasId?: string): Promise<boolean> {
   const context = apiContext()
-  if (noteSave) { await noteSave; if (!isCurrentApi(context)) return; if ([...pendingNotes.values()].some(edit => !canvasId || edit.canvasId === canvasId)) return flushNotes(canvasId); return }
+  if (noteSave) { if (!await noteSave || !isCurrentApi(context)) return false; return flushNotes(canvasId) }
   const batch = [...pendingNotes.entries()].filter(([, edit]) => !canvasId || edit.canvasId === canvasId)
-  if (!batch.length) return
+  if (!batch.length) return true
   for (const [key, edit] of batch) {
     clearTimeout(noteTimers.get(key)); noteTimers.delete(key); pendingNotes.delete(key); savingNotes.set(key, edit)
   }
@@ -1193,7 +1255,7 @@ async function flushNotes(canvasId?: string): Promise<void> {
         await api(`/api/canvases/${segment(edit.canvasId)}/notes/${segment(edit.id)}`, { method: 'PATCH', body: JSON.stringify(edit.patch) }, context)
         if (savingNotes.get(key) === edit) savingNotes.delete(key)
       } catch (reason) {
-        if (!isCurrentApi(context)) return
+        if (!isCurrentApi(context)) return false
         failed = true
         if (savingNotes.get(key) === edit) {
           savingNotes.delete(key)
@@ -1202,30 +1264,37 @@ async function flushNotes(canvasId?: string): Promise<void> {
         showError(reason)
       }
     }
-    if (!isCurrentApi(context)) return
+    if (!isCurrentApi(context)) return false
+    checkpointEdits()
     await syncState().catch(showError)
+    if (!isCurrentApi(context)) return false
     if (!canvasId || activeId.value === canvasId) saveState.value = failed ? 'saveFailed' : 'saved'
+    return !failed
   })()
-  try { await noteSave } finally { if (isCurrentApi(context)) noteSave = undefined }
+  let saved = false
+  try { saved = await noteSave } finally { if (isCurrentApi(context)) noteSave = undefined }
+  if (!saved || !isCurrentApi(context)) return false
+  return flushNotes(canvasId)
+}
+async function flushLayout(canvasId: string) {
+  const context = apiContext()
+  clearTimeout(saveTimers.get(canvasId)); saveTimers.delete(canvasId)
+  try {
+    await layoutSaves.flush(canvasId, batch => api(`/api/canvases/${segment(canvasId)}/layout`, { method: 'PATCH', body: JSON.stringify({ nodes: [...batch].map(([id, patch]) => ({ id, ...patch })) }) }, context), checkpointEdits)
+    requireCurrentApi(context)
+    await syncState()
+    if (activeId.value === canvasId) saveState.value = 'saved'
+  } catch (reason) {
+    if (isCurrentApi(context)) { checkpointEdits(); if (activeId.value === canvasId) saveState.value = 'saveFailed' }
+    throw reason
+  }
 }
 function scheduleSave() {
-  const context = apiContext()
   const canvas = currentCanvas.value
   if (!canvas) return
   clearTimeout(saveTimers.get(canvas.id)); saveState.value = 'saving'
-  saveTimers.set(canvas.id, setTimeout(async () => {
-    saveTimers.delete(canvas.id)
-    const batch = new Map(pendingLayouts.get(canvas.id))
-    if (!batch.size) return
-    try {
-      await api(`/api/canvases/${segment(canvas.id)}/layout`, { method: 'PATCH', body: JSON.stringify({ nodes: [...batch].map(([id, patch]) => ({ id, ...patch })) }) }, context)
-      const pending = pendingLayouts.get(canvas.id)
-      for (const [id, patch] of batch) if (pending?.get(id) === patch) pending.delete(id)
-      if (!pending?.size) pendingLayouts.delete(canvas.id)
-      await syncState()
-      if (activeId.value === canvas.id) saveState.value = 'saved'
-    }
-    catch (reason) { if (!isCurrentApi(context)) return; if (activeId.value === canvas.id) saveState.value = 'saveFailed'; showError(reason) }
+  saveTimers.set(canvas.id, setTimeout(() => {
+    void flushLayout(canvas.id).catch(showError)
   }, 450))
 }
 async function addNote() {
@@ -1273,9 +1342,8 @@ function editLayout(id: string, patch: LayoutPatch) {
   const canvas = currentCanvas.value
   const node = canvas?.nodes.find(item => item.id === id)
   if (!canvas || !node) return
-  const pending = pendingLayouts.get(canvas.id) || new Map<string, LayoutPatch>()
-  pending.set(id, { ...pending.get(id), ...patch })
-  pendingLayouts.set(canvas.id, pending)
+  layoutSaves.set(canvas.id, id, patch)
+  checkpointEdits()
   Object.assign(node, patch)
   scheduleSave()
 }
@@ -1298,11 +1366,12 @@ function resizeNode(id: string, width: number, height: number, x?: number, y?: n
 }
 function keydown(event: KeyboardEvent) {
   if (event.defaultPrevented) return
+  if (appDialogOpen.value) return
   if (event.key === 'Escape' && event.composedPath().some(target => target instanceof Element && target.getAttribute('role') === 'menu')) return
   if (directoryRequest.value || urlRequest.value) return
   if (downloadPreview.value) return
   if (backgroundCanvas.value) return
-  if (settingsDialog.value) return
+  if (settingsDialog.value || accountDialog.value) return
   if (scanTarget.value) return
   if ((event.target as HTMLElement)?.closest('.xterm, .note-card input, .note-card textarea') && !modalOpen.value) return
   if (paging.value && !focused.value && !modalOpen.value && !overviewMenuOpen.value && !canvasMenu.value && !sidebarOpen.value && !sourcePanel.value &&
@@ -1330,8 +1399,9 @@ function outsideOverviewMenu(event: PointerEvent) {
   if (!target?.closest('.overview-display-menu, .overview-display-trigger')) overviewMenuOpen.value = false
 }
 function beforeUnload(event: BeforeUnloadEvent) {
-  if (!pendingNotes.size && !savingNotes.size) return
-  void flushNotes()
+  if (!pendingNotes.size && !savingNotes.size && !pendingLayouts.size && !layoutSaves.saving) return
+  checkpointEdits()
+  void flushInstanceEdits()
   event.preventDefault()
   event.returnValue = ''
 }
@@ -1433,7 +1503,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
       <div class="sidebar-divider" />
       <div class="nav-section-label"><span>{{ t('app.connections') }}</span><button class="icon-button" :title="t('app.addConnection')" :aria-label="t('app.addConnection')" @click="openSource()"><Icon name="plus" :size="16" /></button></div>
       <div class="source-nav"><button v-for="source in sources" :key="source.id" class="source-nav-item" :title="`${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}${resources.find(item => item.id === source.id)?.serverVersion ? ` · herdr ${resources.find(item => item.id === source.id)!.serverVersion}` : ''}`" @click="sourcePanel = true; expandedSource = source.id"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}</span><span class="source-nav-status"><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : 'connected'" /></span></button><button v-if="!sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="15" />{{ t('app.addConnection') }}</button></div>
-      <div class="sidebar-footer"><button class="icon-button sidebar-settings" :title="t('common.settings')" :aria-label="t('common.settings')" :aria-busy="fontLoading" :disabled="!settings" @click="openSettings"><span v-if="fontLoading" class="spinner" /><svg v-else width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.5 3-.6 2.3-2 .9-2.1-.7-2.5 4.3 1.7 1.6v2.3L2.3 15l2.5 4.3 2.1-.7 2 .9.6 2.3h5l.6-2.3 2-.9 2.1.7 2.5-4.3-1.7-1.6v-2.3l1.7-1.6-2.5-4.3-2.1.7-2-.9-.6-2.3z" /><circle cx="12" cy="12" r="3" /></svg></button><button class="icon-button" :title="t('app.signOut')" :aria-label="t('app.signOut')" @click="logout"><Icon name="logout" :size="17" /></button></div>
+      <div class="sidebar-footer"><button class="sidebar-account" :title="username" :aria-label="`${t('account.title')}: ${username}`" @click="accountDialog = true"><Icon name="user" :size="17" /><span>{{ username }}</span></button><button class="icon-button sidebar-settings" :title="t('common.settings')" :aria-label="t('common.settings')" :aria-busy="fontLoading" :disabled="!settings" @click="openSettings"><span v-if="fontLoading" class="spinner" /><svg v-else width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.5 3-.6 2.3-2 .9-2.1-.7-2.5 4.3 1.7 1.6v2.3L2.3 15l2.5 4.3 2.1-.7 2 .9.6 2.3h5l.6-2.3 2-.9 2.1.7 2.5-4.3-1.7-1.6v-2.3l1.7-1.6-2.5-4.3-2.1.7-2-.9-.6-2.3z" /><circle cx="12" cy="12" r="3" /></svg></button><button class="icon-button" :title="t('app.signOut')" :aria-label="t('app.signOut')" @click="logout"><Icon name="logout" :size="17" /></button></div>
     </aside>
     <main class="workspace" :inert="!!focusedCard || undefined" :aria-hidden="!!focusedCard || undefined">
       <header class="workspace-header">
@@ -1462,27 +1532,30 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
         <div v-if="showNavigation && !focused" class="canvas-toolbar"><button v-if="canvasFullscreen" :title="t('app.globalSettings')" :aria-label="t('app.globalSettings')" :disabled="!settings" @click="openSettings"><Icon name="settings" :size="17" /></button><button :title="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-label="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-pressed="canvasFullscreen" @click="toggleFullscreen"><Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button><button v-if="isOverview" :title="t('app.pagedBrowsing')" :aria-label="t('app.pagedBrowsing')" :aria-pressed="overviewPaged" @click="togglePaging"><Icon name="pages" :size="17" /></button><button v-if="!isOverview" :title="t('app.snapToGrid')" :aria-label="t('app.snapToGrid')" :aria-pressed="!!currentCanvas?.snapToGrid" @click="toggleSnap"><Icon name="grid" :size="15" /></button><template v-if="paging"><button v-for="item in pageDirections" :key="item.direction" :title="item.label" :aria-label="item.label" :disabled="!pageNeighbor(item.direction)" @pointerdown.prevent @click="movePage(item.direction)"><Icon :name="item.icon" :size="16" :style="{ transform: item.rotation }" /></button></template><button v-if="!paging" :title="t('app.zoomOut')" :aria-label="t('app.zoomOut')" @click="zoomOut({ duration: 150 })"><Icon name="minus" :size="17" /></button><button :title="paging ? t('app.centerWindow') : t('app.fitCanvas')" :aria-label="paging ? t('app.centerWindow') : t('app.fitCanvas')" @click="fitCanvas"><Icon name="fit" :size="17" /></button><button v-if="!paging" :title="t('app.zoomIn')" :aria-label="t('app.zoomIn')" @click="zoomIn({ duration: 150 })"><Icon name="plus" :size="17" /></button></div>
       </div>
     </main>
-    <Transition name="slide"><aside v-if="sourcePanel" class="source-panel"><header><div><h2>{{ t('app.connectionsWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeConnections')" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />{{ t('app.addConnection') }}</button><div class="source-panel-content"><div v-for="source in sources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small><span class="source-address">{{ source.transport === 'local' ? t('app.local') : source.target }}</span><span v-if="resources.find(item => item.id === source.id)?.serverVersion" class="source-version">herdr {{ resources.find(item => item.id === source.id)!.serverVersion }}</span></small></span></button><button class="icon-button" :title="t('app.editConnection')" :aria-label="t('app.editConnection')" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" :title="t('app.removeConnection')" :aria-label="t('app.removeConnection')" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><div v-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" :title="t('app.newWindow')" :aria-label="t('app.newWindow')" @click="windowAction({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="tab-plus" :size="14" /></button><button class="icon-button" :title="t('app.renameSpace')" :aria-label="t('app.renameSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" :title="t('app.closeSpace')" :aria-label="t('app.closeSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :style="{ '--program-color': statusColor(window.status) }" :title="statusLabel(window.status)" /><span>{{ window.name }}</span><button class="icon-button" :title="t('app.addToCanvas')" :aria-label="t('app.addToCanvas')" @click="openAdd({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 })"><Icon name="layers" :size="14" /></button><button class="icon-button" :title="t('app.windowActions')" :aria-label="t('app.windowActions')" @click="windowMenu = { name: window.name, node: { type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" @click="spaceAction(resources.find(item => item.id === source.id) || { ...source, status: '', spaces: [] }, undefined, 'create')"><Icon name="plus" :size="14" />{{ t('app.newSpace') }}</button></template></div><p v-if="!sources.length" class="panel-empty">{{ t('app.noConnections') }}</p></div></aside></Transition>
+    <Transition name="slide"><aside v-if="sourcePanel" class="source-panel"><header><div><h2>{{ t('app.connectionsWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeConnections')" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />{{ t('app.addConnection') }}</button><div class="source-panel-content"><div v-for="source in sources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small><span class="source-address">{{ source.transport === 'local' ? t('app.local') : source.target }}</span><span v-if="resources.find(item => item.id === source.id)?.serverVersion" class="source-version" :title="`herdr ${resources.find(item => item.id === source.id)!.serverVersion}`">herdr {{ resources.find(item => item.id === source.id)!.serverVersion }}</span></small></span></button><button class="icon-button" :title="t('app.editConnection')" :aria-label="t('app.editConnection')" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" :title="t('app.removeConnection')" :aria-label="t('app.removeConnection')" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><div v-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" :title="t('app.newWindow')" :aria-label="t('app.newWindow')" @click="windowAction({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="tab-plus" :size="14" /></button><button class="icon-button" :title="t('app.renameSpace')" :aria-label="t('app.renameSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" :title="t('app.closeSpace')" :aria-label="t('app.closeSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :style="{ '--program-color': statusColor(window.status) }" :title="statusLabel(window.status)" /><span>{{ window.name }}</span><button class="icon-button" :title="t('app.addToCanvas')" :aria-label="t('app.addToCanvas')" @click="openAdd({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 })"><Icon name="layers" :size="14" /></button><button class="icon-button" :title="t('app.windowActions')" :aria-label="t('app.windowActions')" @click="windowMenu = { name: window.name, node: { type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" @click="spaceAction(resources.find(item => item.id === source.id) || { ...source, status: '', spaces: [] }, undefined, 'create')"><Icon name="plus" :size="14" />{{ t('app.newSpace') }}</button></template></div><p v-if="!sources.length" class="panel-empty">{{ t('app.noConnections') }}</p></div></aside></Transition>
     <div v-if="focused || focusedCard" ref="focusViewportElement" class="focus-overlay" :class="{ 'card-focus-overlay': focusedCard }">
       <TerminalNode v-if="focused" :key="focused.id" :id="focused.id" :data="{ ...terminalData(focused, isOverview), ...focusedSize, overview: isOverview, focus: true }" />
       <NoteNode v-else-if="focusedCard?.type === 'note'" :key="focusedCard.id" :id="focusedCard.id" :selected="false" :data="noteData(focusedCard, true)" />
       <FileNode v-else-if="focusedCard?.type === 'file'" :key="focusedCard.id" :id="focusedCard.id" :selected="false" :data="fileData(focusedCard, true)" />
     </div>
-    <BackgroundDialog v-if="backgroundCanvas" :canvas="backgroundCanvas" @close="closeBackgroundDialog" @saved="backgroundSaved" />
+    <BackgroundDialog v-if="backgroundCanvas" :canvas="backgroundCanvas" :portal="appElement" @close="closeBackgroundDialog" @saved="backgroundSaved" />
     <ViewportDiagnostics v-if="developerMode" :settings="settings" :portal="appElement" :reload-blocked="!!modalOpen" />
     <DirectoryDialog :portal="appElement" />
     <UrlDialog :portal="appElement" />
     <DownloadPreviewDialog :portal="appElement" />
     <WindowContentDialog :target="scanTarget" :canvases="canvases" :portal="appElement" @close="scanTarget = null" />
     <SettingsDialog v-if="settings" :open="settingsDialog" :settings="settings" :has-display-cutout="hasSafeTop" :portal="appElement" @close="settingsDialog = false" @saved="settingsSaved" @error="showError" />
+    <AccountDialog :open="accountDialog" :username="username" :portal="appElement" @close="accountDialog = false" @saved="value => { username = value }" />
     <CutoutPreview v-if="settingsDialog && mobile && hasSafeTop" />
-    <div v-if="modalOpen && !backgroundCanvas && !settingsDialog && !scanTarget" class="modal-backdrop" @click.self="!busy && (sourceDialog = false, canvasDialog = false, actionDialog = null, addDialog = false, windowMenu = null)">
-      <section v-if="sourceDialog" class="modal source-modal" role="dialog" aria-modal="true" aria-labelledby="source-title"><header><div><h2 id="source-title">{{ sourceDraft.id ? t('app.editConnection') : t('app.addConnection') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="sourceDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitSource"><label>{{ t('app.connectionName') }}<input v-model="sourceDraft.name" name="sourceName" required :placeholder="t('app.connectionNamePlaceholder')" /></label><div class="segmented-control"><button type="button" :class="{ selected: sourceDraft.transport === 'local' }" @click="sourceDraft.transport = 'local'"><Icon name="server" :size="15" />{{ t('app.local') }}</button><button type="button" :class="{ selected: sourceDraft.transport === 'ssh' }" @click="sourceDraft.transport = 'ssh'"><Icon name="globe" :size="15" />{{ t('app.remoteSsh') }}</button></div><label v-if="sourceDraft.transport === 'ssh'">{{ t('app.sshAddress') }}<input v-model="sourceDraft.target" name="target" placeholder="ssh://user@hostname:22" :required="sourceDraft.transport === 'ssh'" /></label><label>{{ t('app.session') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.herdrSession" name="herdrSession" placeholder="default" /></label><details><summary>{{ t('app.advanced') }}</summary><template v-if="sourceDraft.transport === 'ssh'"><label>{{ t('app.sshIdentity') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.sshIdentityFile" name="sshIdentityFile" placeholder="/path/to/id_ed25519" /></label><label>{{ t('app.sshKnownHosts') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.sshKnownHostsFile" name="sshKnownHostsFile" placeholder="/path/to/known_hosts" /></label></template><label>{{ t('app.socketPath') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.herdrSocket" name="herdrSocket" placeholder="/path/to/herdr.sock" /></label></details><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><div class="source-probe-status" :class="{ failed: sourceProbe.error }" role="status"><span v-if="sourceProbe.pending" class="spinner" /><span :title="sourceProbe.error || sourceProbe.version">{{ sourceProbe.pending ? t('app.checkingConnection') : sourceProbe.error ? t('app.connectionProbeFailed') : sourceProbe.version ? `herdr ${sourceProbe.version}` : '' }}</span><button v-if="sourceProbe.error" type="button" class="icon-button" :aria-label="t('common.retry')" :title="t('common.retry')" @click="sourceProbeRetry++"><Icon name="refresh" :size="14" /></button></div><button class="button subtle" type="button" @click="sourceDialog = false">{{ t('common.cancel') }}</button><button class="button primary" type="submit" :disabled="busy || !sourceProbeReady || !sourceDraft.name.trim()"><span v-if="busy" class="spinner" />{{ busy ? t('app.saving') : t('common.save') }}</button></footer></form></section>
-      <section v-else-if="canvasDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="canvas-title"><header><div><h2 id="canvas-title">{{ canvasDraft.id ? t('app.renameCanvas') : t('app.newCanvas') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="canvasDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitCanvas"><label>{{ t('app.canvasName') }}<input v-model="canvasDraft.name" name="canvasName" required autofocus :placeholder="t('app.canvasNamePlaceholder')" maxlength="80" /></label><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="canvasDialog = false">{{ t('common.cancel') }}</button><button class="button primary" :disabled="busy" type="submit">{{ canvasDraft.id ? t('common.save') : t('app.createCanvas') }}</button></footer></form></section>
-      <section v-else-if="actionDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="action-title"><header><h2 id="action-title">{{ actionDialog.title }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" :disabled="busy" @click="actionDialog = null"><Icon name="close" /></button></header><p v-if="actionDialog.description">{{ actionDialog.description }}</p><form @submit.prevent="submitAction"><label v-if="actionDialog.label">{{ actionDialog.label }}<input v-model="actionDialog.value" name="resourceName" :required="!actionDialog.optional" :placeholder="actionDialog.optional ? t('app.automaticName') : undefined" autofocus maxlength="100" /></label><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" :disabled="busy" @click="actionDialog = null">{{ t('common.cancel') }}</button><button class="button" :class="actionDialog.danger ? 'danger' : 'primary'" :disabled="busy" type="submit">{{ actionDialog.button }}</button></footer></form></section>
-      <section v-else-if="addDialog" class="modal add-modal" role="dialog" aria-modal="true" aria-labelledby="add-title"><header><div><h2 id="add-title">{{ t('app.addWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="addDialog = false"><Icon name="close" /></button></header><label>{{ t('app.targetCanvas') }}<select v-model="addTarget"><option v-for="canvas in canvases" :key="canvas.id" :value="canvas.id">{{ canvas.name }}</option><option value="">{{ t('app.newMyCanvas') }}</option></select></label><div class="search-field"><Icon name="search" :size="16" /><input v-model="addSearch" :aria-label="t('app.searchWindows')" :placeholder="t('app.searchPlaceholder')" /></div><WindowPickerTree v-model:selected="selectedWindows" :sources="sources" :resources="resources" :query="addSearch" :existing="existingAddWindows" /><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><span class="selection-count">{{ t('app.selectedWindows', selectedAddWindows.length) }}</span><button class="button primary" :disabled="busy || !selectedAddWindows.length" @click="submitAdd">{{ t('app.addToCanvas') }}<Icon name="arrow" :size="16" /></button></footer></section>
-      <section v-else-if="windowMenu" class="modal window-menu" role="dialog" aria-modal="true" aria-labelledby="window-title"><header><h2 id="window-title">{{ windowMenu.name }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" @click="windowMenu = null"><Icon name="close" /></button></header><button v-if="mobile && focused?.id === windowMenu.node.id" @pointerdown.prevent @click="focusWindow(windowMenu.node.sourceId, windowMenu.node.spaceId, windowMenu.node.windowId, true); windowMenu = null"><Icon name="terminal" />{{ t('terminal.action.showKeyboard') }}</button><button v-if="mobile" @click="windowMenu = null; openSettings()"><Icon name="canvas" />{{ t('common.settings') }}</button><button v-if="mobile && !isOverview && windowMenu.node.id" :disabled="!terminalData(windowMenu.node).available" @click="terminalData(windowMenu.node).newTab?.create(); windowMenu = null"><Icon name="tab-plus" />{{ t('app.newTab') }}</button><button v-if="copiedFile" :title="t('fileTransfer.pasteNamed', { name: copiedFile.filename })" :disabled="!hasLiveTerminal(windowMenu.node.sourceId, windowMenu.node.windowId)" @click="pasteFileIntoWindow(windowMenu.node.sourceId, windowMenu.node.windowId); windowMenu = null"><Icon name="file" />{{ t('fileTransfer.paste') }}</button><button :disabled="!hasLiveTerminal(windowMenu.node.sourceId, windowMenu.node.windowId)" @click="scanWindowContent(windowMenu.node, windowMenu.name)"><Icon name="search" />{{ t('panels.scan.title') }}</button><button @click="openAdd(windowMenu.node); windowMenu = null"><Icon name="layers" />{{ t('app.addToOtherCanvas') }}</button><button @click="windowAction(windowMenu.node, 'rename')"><Icon name="edit" />{{ t('app.renameWindow') }}</button><button class="danger-text" @click="windowAction(windowMenu.node, 'close')"><Icon name="trash" />{{ t('app.closeWindow') }}</button></section>
-    </div>
+    <UModal :open="appDialogOpen" :title="appDialogTitle" :portal="appElement || false" :dismissible="!busy" :transition="false" :close="false" :ui="{ content: 'app-dialog-shell', overlay: 'app-dialog-overlay' }" :content="{ onCloseAutoFocus: restoreDialogFocus }" @update:open="closeAppDialog">
+      <template #content><fieldset class="app-dialog-fields" :disabled="busy" :aria-busy="busy">
+      <section v-if="sourceDialog" class="modal source-modal"><header><div><h2 id="source-title">{{ sourceDraft.id ? t('app.editConnection') : t('app.addConnection') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="sourceDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitSource"><label>{{ t('app.connectionName') }}<input v-model="sourceDraft.name" name="sourceName" required :placeholder="t('app.connectionNamePlaceholder')" /></label><div class="segmented-control"><button type="button" :class="{ selected: sourceDraft.transport === 'local' }" @click="sourceDraft.transport = 'local'"><Icon name="server" :size="15" />{{ t('app.local') }}</button><button type="button" :class="{ selected: sourceDraft.transport === 'ssh' }" @click="sourceDraft.transport = 'ssh'"><Icon name="globe" :size="15" />{{ t('app.remoteSsh') }}</button></div><label v-if="sourceDraft.transport === 'ssh'">{{ t('app.sshAddress') }}<input v-model="sourceDraft.target" name="target" placeholder="ssh://user@hostname:22" :required="sourceDraft.transport === 'ssh'" /></label><label>{{ t('app.session') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.herdrSession" name="herdrSession" placeholder="default" /></label><details><summary>{{ t('app.advanced') }}</summary><template v-if="sourceDraft.transport === 'ssh'"><label>{{ t('app.sshIdentity') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.sshIdentityFile" name="sshIdentityFile" placeholder="/path/to/id_ed25519" /></label><label>{{ t('app.sshKnownHosts') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.sshKnownHostsFile" name="sshKnownHostsFile" placeholder="/path/to/known_hosts" /></label></template><label>{{ t('app.socketPath') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.herdrSocket" name="herdrSocket" placeholder="/path/to/herdr.sock" /></label></details><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><div class="source-probe-status" :class="{ failed: sourceProbe.error }" role="status"><span v-if="sourceProbe.pending" class="spinner" /><span :title="sourceProbe.error || sourceProbe.version">{{ sourceProbe.pending ? t('app.checkingConnection') : sourceProbe.error ? t('app.connectionProbeFailed') : sourceProbe.version ? `herdr ${sourceProbe.version}` : '' }}</span><button v-if="sourceProbe.error" type="button" class="icon-button" :aria-label="t('common.retry')" :title="t('common.retry')" @click="sourceProbeRetry++"><Icon name="refresh" :size="14" /></button></div><button class="button subtle" type="button" @click="sourceDialog = false">{{ t('common.cancel') }}</button><button class="button primary" type="submit" :disabled="busy || !sourceProbeReady || !sourceDraft.name.trim()"><span v-if="busy" class="spinner" />{{ busy ? t('app.saving') : t('common.save') }}</button></footer></form></section>
+      <section v-else-if="canvasDialog" class="modal"><header><div><h2 id="canvas-title">{{ canvasDraft.id ? t('app.renameCanvas') : t('app.newCanvas') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="canvasDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitCanvas"><label>{{ t('app.canvasName') }}<input v-model="canvasDraft.name" name="canvasName" required autofocus :placeholder="t('app.canvasNamePlaceholder')" maxlength="80" /></label><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="canvasDialog = false">{{ t('common.cancel') }}</button><button class="button primary" :disabled="busy" type="submit">{{ canvasDraft.id ? t('common.save') : t('app.createCanvas') }}</button></footer></form></section>
+      <section v-else-if="actionDialog" class="modal"><header><h2 id="action-title">{{ actionDialog.title }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" :disabled="busy" @click="actionDialog = null"><Icon name="close" /></button></header><p v-if="actionDialog.description">{{ actionDialog.description }}</p><form @submit.prevent="submitAction"><label v-if="actionDialog.label">{{ actionDialog.label }}<input v-model="actionDialog.value" name="resourceName" :required="!actionDialog.optional" :placeholder="actionDialog.optional ? t('app.automaticName') : undefined" autofocus maxlength="100" /></label><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" :disabled="busy" @click="actionDialog = null">{{ t('common.cancel') }}</button><button class="button" :class="actionDialog.danger ? 'danger' : 'primary'" :disabled="busy" type="submit">{{ actionDialog.button }}</button></footer></form></section>
+      <section v-else-if="addDialog" class="modal add-modal"><header><div><h2 id="add-title">{{ t('app.addWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="addDialog = false"><Icon name="close" /></button></header><label>{{ t('app.targetCanvas') }}<select v-model="addTarget"><option v-for="canvas in canvases" :key="canvas.id" :value="canvas.id">{{ canvas.name }}</option><option value="">{{ t('app.newMyCanvas') }}</option></select></label><div class="search-field"><Icon name="search" :size="16" /><input v-model="addSearch" :aria-label="t('app.searchWindows')" :placeholder="t('app.searchPlaceholder')" /></div><WindowPickerTree v-model:selected="selectedWindows" :sources="sources" :resources="resources" :query="addSearch" :existing="existingAddWindows" /><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><span class="selection-count">{{ t('app.selectedWindows', selectedAddWindows.length) }}</span><button class="button primary" :disabled="busy || !selectedAddWindows.length" @click="submitAdd">{{ t('app.addToCanvas') }}<Icon name="arrow" :size="16" /></button></footer></section>
+      <section v-else-if="windowMenu" class="modal window-menu"><header><h2 id="window-title">{{ windowMenu.name }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" @click="windowMenu = null"><Icon name="close" /></button></header><button v-if="mobile && focused?.id === windowMenu.node.id" @pointerdown.prevent @click="showWindowKeyboard"><Icon name="terminal" />{{ t('terminal.action.showKeyboard') }}</button><button v-if="mobile" @click="windowMenu = null; openSettings()"><Icon name="canvas" />{{ t('common.settings') }}</button><button v-if="mobile && !isOverview && windowMenu.node.id" :disabled="!terminalData(windowMenu.node).available" @click="terminalData(windowMenu.node).newTab?.create(); windowMenu = null"><Icon name="tab-plus" />{{ t('app.newTab') }}</button><button v-if="copiedFile" :title="t('fileTransfer.pasteNamed', { name: copiedFile.filename })" :disabled="!hasLiveTerminal(windowMenu.node.sourceId, windowMenu.node.windowId)" @click="pasteFileIntoWindow(windowMenu.node.sourceId, windowMenu.node.windowId); windowMenu = null"><Icon name="file" />{{ t('fileTransfer.paste') }}</button><button :disabled="!hasLiveTerminal(windowMenu.node.sourceId, windowMenu.node.windowId)" @click="scanWindowContent(windowMenu.node, windowMenu.name)"><Icon name="search" />{{ t('panels.scan.title') }}</button><button @click="openAdd(windowMenu.node); windowMenu = null"><Icon name="layers" />{{ t('app.addToOtherCanvas') }}</button><button @click="windowAction(windowMenu.node, 'rename')"><Icon name="edit" />{{ t('app.renameWindow') }}</button><button class="danger-text" @click="windowAction(windowMenu.node, 'close')"><Icon name="trash" />{{ t('app.closeWindow') }}</button></section>
+      </fieldset></template>
+    </UModal>
     <div v-if="error || success" class="toast" :class="{ 'error-toast': error }" role="status"><Icon :name="error ? 'info' : 'check'" :size="17" /><span>{{ error || success }}</span><button class="icon-button" :aria-label="t('app.closeNotification')" @click="error = ''; success = ''"><Icon name="close" :size="15" /></button></div>
   </div>
   </UApp>

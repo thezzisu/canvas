@@ -1,7 +1,6 @@
 {
   "name": "@thezzisu/canvas",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -9,14 +8,13 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "server:dev": "node --import tsx server/main.ts",
-    "server": "node dist/server/main.js",
-    "setup": "node dist/server/setup.js",
+    "server": "node dist/cli/main.js serve",
     "build:server": "node scripts/build-server.mjs",
     "build:web": "vite build",
     "deploy:web": "wrangler pages deploy dist/web",
     "build": "npm run build:server && npm run build:web",
-    "start": "node dist/server/main.js",
-    "prepack": "npm run build",
+    "start": "node dist/cli/main.js serve",
+    "prepack": "VITE_CANVAS_BUILTIN_SERVER=true npm run build",
     "typecheck": "vue-tsc --noEmit",
     "test": "node --import tsx --test \"{server,shared,web/src,cli}/**/*.test.ts\" \"*.test.ts\""
   },
@@ -57,6 +55,22 @@
   "files": [
     "dist",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "THIRD_PARTY_NOTICES"
+  ],
+  "description": "A browser workspace for local and SSH-connected herdr windows",
+  "license": "Apache-2.0",
+  "bin": {
+    "canvas": "dist/cli/main.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thezzisu/canvas.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "!win32"
   ]
 }

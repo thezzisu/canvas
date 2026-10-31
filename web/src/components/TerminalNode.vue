@@ -40,7 +40,7 @@ const windowFocused = useWindowFocus()
 const inputFocused = computed(() => windowFocused.value && !mobilePreview.value && !maximizedElsewhere.value &&
   keepTerminal.value && status.value.status === 'connected' && !status.value.readOnly &&
   !!activeElement.value?.matches('.xterm-helper-textarea, .terminal-mobile-input') && !!host.value?.contains(activeElement.value))
-const frameStatus = computed(() => props.data.statusFresh && !props.data.sourceOffline ? props.data.status : 'unknown')
+const frameStatus = computed(() => !props.data.sourceOffline ? props.data.status : 'unknown')
 const statusPulse = computed(() => props.data.statusFresh === true && !props.data.sourceOffline && needsAttention(frameStatus.value))
 const resizeState = computed(() => !props.data.focus ? 'passive' : !status.value.focusResize ? 'pending' : status.value.focusResize.owned ? 'owned' : 'passive')
 const uploadActive = computed(() => status.value.upload && ['preparing', 'uploading'].includes(status.value.upload.state))

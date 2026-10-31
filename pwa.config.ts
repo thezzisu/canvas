@@ -17,13 +17,22 @@ export const pwaOptions: Partial<VitePWAOptions> = {
   },
   workbox: {
     globPatterns: ['index.html', 'assets/*.{js,css}', 'icons/*.{png,svg}'],
-    globIgnores: ['**/fonts/**'],
+    globIgnores: ['**/fonts/**', '**/*.woff2'],
     maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
     navigateFallback: 'index.html',
     navigateFallbackAllowlist: [shellNavigation],
     cleanupOutdatedCaches: true,
     skipWaiting: false,
     clientsClaim: false,
-    runtimeCaching: [],
+    // Cache only requested, versioned public fonts. No font precache or API cache.
+    runtimeCaching: [{
+      urlPattern: ({ request, url, sameOrigin }) => sameOrigin && request.destination === 'font' && /^\/assets\/[^/]+-[\w-]{8,}\.woff2$/.test(url.pathname),
+      handler: 'CacheFirst',
+      options: {
+        cacheName: 'canvas-content-fonts',
+        cacheableResponse: { statuses: [200] },
+        expiration: { maxEntries: 20, maxAgeSeconds: 365 * 24 * 60 * 60, purgeOnQuotaError: true },
+      },
+    }],
   },
 }

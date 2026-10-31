@@ -95,7 +95,9 @@ async function saveFont(value: ContentFontSettings, current: number) {
 async function applyFont(value: ContentFontSettings, current: number) {
   if (disposed || current !== revision || invalid.value) return
   try {
-    await ensureContentFont(value)
+    await ensureContentFont(value, () => {
+      if (!disposed && current === revision) preview.value = buildFontPresentation(value)
+    })
     if (disposed || current !== revision) return
     preview.value = buildFontPresentation(value)
     writes = writes.then(() => saveFont(value, current))

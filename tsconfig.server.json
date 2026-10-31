@@ -10,6 +10,6 @@
     "outDir": "dist",
     "types": ["node"]
   },
-  "include": ["server/**/*.ts", "shared/**/*.ts"],
+  "include": ["server/**/*.ts", "shared/**/*.ts", "cli/**/*.ts"],
   "exclude": ["**/*.test.ts"]
 }

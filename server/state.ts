@@ -371,6 +371,10 @@ export class Store extends EventEmitter {
     this.db.prepare("DELETE FROM sessions WHERE id=?").run(id);
     this.emit("sessions");
   }
+  removeOtherSessions(id: string) {
+    this.db.prepare('DELETE FROM sessions WHERE id != ?').run(id);
+    this.emit('sessions');
+  }
   close() {
     this.emit("close");
     this.removeAllListeners();

@@ -6,12 +6,14 @@ import ui from '@nuxt/ui/vite'
 import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite'
 import { fileURLToPath } from 'node:url'
 import { readBuildInfo } from './build-info.config.ts'
+import { contentFontsPlugin } from './fonts.config.ts'
+import { thirdPartyNoticesPlugin } from './third-party-notices.config.ts'
 
 export default defineConfig({
   root: 'web',
   plugins: [{ name: 'canvas-build-info', generateBundle() {
     this.emitFile({ type: 'asset', fileName: 'build-info.json', source: JSON.stringify(readBuildInfo()) + '\n' })
-  } }, VitePWA(pwaOptions), vue(), VueI18nPlugin({ include: fileURLToPath(new URL('./web/src/locales/**', import.meta.url)) }), ui({ prose: true, router: false, colorMode: false, autoImport: false, components: false, dts: false,
+  } }, contentFontsPlugin(), thirdPartyNoticesPlugin(), VitePWA(pwaOptions), vue(), VueI18nPlugin({ include: fileURLToPath(new URL('./web/src/locales/**', import.meta.url)) }), ui({ prose: true, router: false, colorMode: false, autoImport: false, components: false, dts: false,
     icon: { clientBundle: { icons: ['lucide:x', 'lucide:chevron-down', 'lucide:check', 'lucide:copy', 'lucide:copy-check'] } },
     ui: { colors: { primary: 'amber', neutral: 'zinc' } },
   })],

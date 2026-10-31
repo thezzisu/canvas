@@ -28,9 +28,19 @@ test('empty canvases, nonterminal cards and unreported windows retain distinct m
   assert.deepEqual(result.missing, { count: 2, status: 'unknown', pulse: false })
 })
 
-test('retained offline snapshots and a failed refresh cannot announce attention', () => {
+test('background or refreshing tabs keep their last native status without attention animation', () => {
   const source = resources[0]!, window = source.spaces[0]!.windows[2]!
-  for (const [entry, fresh] of [[source, false], [{ ...source, status: 'offline' }, true], [{ ...source, error: 'disconnected' }, true]] as const) {
+  assert.deepEqual(windowVisualState(source, window, false), { status: 'attention', fresh: false, pulse: false })
+  assert.deepEqual(canvasIndicators([canvas('a', [terminal('attention')])], [source], false).a, { count: 1, status: 'attention', pulse: false })
+  for (const fresh of [true, false, true, false, true]) {
+    assert.equal(windowVisualState(source, { ...window, status: 'working' }, fresh).status, 'working')
+  }
+  assert.equal(windowVisualState(source, { ...window, status: 'done' }, true).status, 'done')
+})
+
+test('retained offline snapshots cannot announce attention', () => {
+  const source = resources[0]!, window = source.spaces[0]!.windows[2]!
+  for (const [entry, fresh] of [[{ ...source, status: 'offline' }, true], [{ ...source, error: 'disconnected' }, true]] as const) {
     assert.deepEqual(windowVisualState(entry, window, fresh), { status: 'unknown', fresh: false, pulse: false })
     assert.equal(canvasIndicators([canvas('a', [terminal('attention')])], [entry], fresh).a!.pulse, false)
   }
