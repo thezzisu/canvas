@@ -944,7 +944,7 @@ async function activateInstance() {
     if (authenticated.value) await load()
   } catch (reason) {
     if (activation === instanceActivation && isCurrentApi(context)) {
-      if (!authenticated.value) { instanceUnavailable.value = true; instanceSetupMessage.value = instances.value.length ? 'instances.unavailable' : '' }
+      if (!authenticated.value) instanceUnavailable.value = true
       else loginFailure.value = reason
     }
   } finally { if (activation === instanceActivation) checkingInstance.value = false }
