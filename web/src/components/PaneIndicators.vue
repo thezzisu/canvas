@@ -14,6 +14,7 @@ const props = defineProps<{
   connection: 'connecting' | 'connected' | 'disconnected'
   error?: string
   readOnly?: boolean
+  pulse?: boolean
 }>()
 const trigger = ref<HTMLButtonElement>()
 const panel = ref<HTMLElement>()
@@ -59,7 +60,7 @@ onBeforeUnmount(() => clearTimeout(leaveTimer))
 </script>
 
 <template>
-  <button ref="trigger" class="terminal-status-trigger nodrag cutout-status" :class="{ connecting: available && connection === 'connecting' }" :style="{ '--status-color': color }" :data-connection-status="available ? connection : 'unavailable'" :aria-label="t('terminal.statusSummary', { status: summary })" :aria-expanded="open" :aria-controls="panelId" @pointerdown.stop @mouseenter="enter" @mouseleave="leave" @focus="enter" @blur="blur" @click.stop="toggle" @keydown.esc.stop.prevent="close"><i /></button>
+  <button ref="trigger" class="terminal-status-trigger nodrag cutout-status" :style="{ '--status-color': color }" :data-connection-status="available ? connection : 'unavailable'" :aria-label="t('terminal.statusSummary', { status: summary })" :aria-expanded="open" :aria-controls="panelId" @pointerdown.stop @mouseenter="enter" @mouseleave="leave" @focus="enter" @blur="blur" @click.stop="toggle" @keydown.esc.stop.prevent="close"><i :data-status-pulse="pulse && available && connection === 'connected'" /></button>
   <UPopover :open="open" :reference="trigger" :portal="portal" :content="content" :ui="{ content: 'terminal-status-popover' }" @update:open="value => { if (!value) close() }">
     <template #content><div :id="panelId" ref="panel" role="region" :aria-label="t('terminal.windowStatus')" @pointerdown.stop @wheel.stop @keydown.esc.stop.prevent="close">
       <div class="terminal-status-summary"><i class="program-dot" :style="{ '--program-color': color }" /><span>{{ summary }}</span><small v-if="readOnly && connection === 'connected'">{{ t('terminal.readOnly') }}</small></div>

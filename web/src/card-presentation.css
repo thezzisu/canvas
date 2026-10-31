@@ -1,12 +1,7 @@
-@property --status-phase { syntax: '<number>'; inherits: false; initial-value: 1; }
 @media(prefers-reduced-motion:no-preference) {
-  .terminal-card[data-status-pulse=true],.minimap-pulse,.program-dot[data-status-pulse=true],.connection-dot.connecting,.terminal-status-trigger.connecting>i { animation: status-breathe 2.4s ease-in-out infinite; }
+  .minimap-pulse,.terminal-status-trigger>i[data-status-pulse=true] { animation: status-breathe 2.4s ease-in-out infinite; }
 }
-@keyframes status-breathe { 0%,100% { --status-phase: 0; } 50% { --status-phase: 1; } }
-
-.terminal-card[data-status-pulse=true] { border-color: color-mix(in srgb,var(--frame-peak) calc(var(--status-phase) * 100%),var(--frame-rest)); transition: none; }
-.vue-flow__minimap-node.minimap-pulse { fill-opacity: calc(.58 + .42 * var(--status-phase)); }
-.program-dot[data-status-pulse=true] { opacity: calc(.55 + .45 * var(--status-phase)); }
+@keyframes status-breathe { 0%,100% { opacity: .58; } 50% { opacity: 1; } }
 
 .vue-flow__node-note:is(.selected,:focus-visible,:focus-within)>.note-card { border-color: color-mix(in srgb,var(--note-color) 78%,#e7edf5); }
 .vue-flow__node-file:is(.selected,:focus-visible,:focus-within)>.file-card { border-color: #8793a3; }

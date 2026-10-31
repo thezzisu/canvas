@@ -15,6 +15,6 @@ const label = computed(() => props.indicator?.status ? t('canvasUi.canvasStatus'
   <button class="nav-item canvas-nav-item" :class="{ active }" :aria-current="active ? 'page' : undefined" :aria-label="label" :title="label" @click="$emit('select')">
     <Icon :name="overview ? 'grid' : 'canvas'" :size="16" />
     <span class="canvas-nav-name"><span>{{ name }}</span><small class="canvas-nav-count">{{ n(indicator?.count ?? 0) }}</small></span>
-    <span class="canvas-nav-status" aria-hidden="true"><i v-if="indicator?.status" class="program-dot" :data-status-pulse="indicator.pulse" :style="{ '--program-color': statusColor(indicator.status) }" /></span>
+    <span class="canvas-nav-status" aria-hidden="true"><i v-if="indicator?.status" class="program-dot" :style="{ '--program-color': statusColor(indicator.status) }" /></span>
   </button>
 </template>

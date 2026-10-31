@@ -111,7 +111,7 @@ const overviewBackground = ref<Canvas['background']>(null)
 const activeId = ref('overview')
 const navigation = useCanvasLocation({ instanceId: activeInstanceId, hasInstance: id => activeInstance.value.id === id || instances.value.some(instance => instance.id === id), selectInstance: selectHashInstance })
 const { unknownInstance } = navigation
-const indicators = computed(() => canvasIndicators(canvases.value, resources.value, freshStatuses.value))
+const indicators = computed(() => canvasIndicators(canvases.value, resources.value))
 const nodes = shallowRef<Node[]>([])
 const graphKey = ref(0)
 const refreshedAt = ref(0)
