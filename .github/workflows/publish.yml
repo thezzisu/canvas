@@ -80,12 +80,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm pack --ignore-scripts --json > "$RUNNER_TEMP/npm-pack.json"
+          node scripts/pack.mjs > "$RUNNER_TEMP/npm-pack.json"
           node --input-type=module <<'NODE'
           import { readFileSync, existsSync } from 'node:fs'
           import { createHash } from 'node:crypto'
+          import { isLicenseFile } from './scripts/pack.mjs'
           const [pack] = JSON.parse(readFileSync(process.env.RUNNER_TEMP + '/npm-pack.json', 'utf8'))
           const files = new Set(pack.files.map(file => file.path))
+          const licenses = [...files].filter(isLicenseFile)
+          if (licenses.length !== 1 || licenses[0] !== 'LICENSE') throw new Error('Release must contain exactly one top-level LICENSE')
           for (const path of ['dist/cli/main.js', 'dist/web/index.html']) {
             if (!files.has(path)) throw new Error(`Release archive is missing ${path}`)
           }
