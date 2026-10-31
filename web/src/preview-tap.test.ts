@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { PreviewTap } from '../web/src/preview-tap.ts'
+import { PreviewTap } from './preview-tap.ts'
 const point = (values = {}) => ({ pointerId: 1, isPrimary: true, button: 0, clientX: 10, clientY: 20, ...values })
 test('card previews open only on short, still taps or explicit keyboard activation', () => {
   const tap = new PreviewTap()

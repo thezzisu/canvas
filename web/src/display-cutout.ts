@@ -1,4 +1,4 @@
-import { useElementSize, useFullscreen, useStorage } from '@vueuse/core'
+import { useElementSize, useEventListener, useStorage } from '@vueuse/core'
 import { onBeforeUnmount, onMounted, ref, watchEffect, type Ref } from 'vue'
 import { compactHeader } from './header-capacity'
 
@@ -8,12 +8,14 @@ export const cutoutWidth = useStorage('canvas:display:cutout-width', 0)
 
 export function useCompactHeader(header: Ref<HTMLElement | undefined>) {
   const { width } = useElementSize(header, { width: 0, height: 44 }, { box: 'border-box' })
-  const { isFullscreen } = useFullscreen()
+  const fullscreenElement = ref(document.fullscreenElement)
+  useEventListener(document, 'fullscreenchange', () => { fullscreenElement.value = document.fullscreenElement })
   const compact = ref(true)
   watchEffect(() => {
-    void isFullscreen.value
+    void fullscreenElement.value
+    const gap = cutoutWidth.value, position = cutoutPosition.value
     const avoided = header.value?.matches('.cutout-preview') || header.value?.dataset.cutoutPosition && header.value.closest('.canvas-fullscreen.has-display-cutout')
-    compact.value = compactHeader(width.value, avoided ? cutoutWidth.value : 0, cutoutPosition.value)
+    compact.value = compactHeader(width.value, avoided ? gap : 0, position)
   }, { flush: 'post' })
   return compact
 }

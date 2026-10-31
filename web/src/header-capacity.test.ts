@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { compactHeader } from '../web/src/header-capacity.ts'
+import { compactHeader } from './header-capacity.ts'
 
 test('centered cutouts fold the primary action at the actual inner-width boundary', () => {
   assert.equal(compactHeader(320, 56, 'center'), false)
