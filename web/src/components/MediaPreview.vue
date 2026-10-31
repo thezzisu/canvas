@@ -4,7 +4,7 @@ import { useDocumentVisibility, useIntersectionObserver } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{ src: string; kind: 'audio' | 'video'; title: string; readOnly?: boolean }>()
-const emit = defineEmits<{ download: [] }>()
+const emit = defineEmits<{ download: []; loaded: [width: number, height: number] }>()
 const { t } = useI18n()
 const root = ref<HTMLElement>(), player = ref<HTMLMediaElement>()
 const failed = ref(false), visible = ref(true)
@@ -22,6 +22,7 @@ watch(() => props.src, (_, previous) => {
 function loaded() {
   const media = player.value
   if (!media) return
+  if (media instanceof HTMLVideoElement) emit('loaded', media.videoWidth, media.videoHeight)
   if (position && Number.isFinite(media.duration)) media.currentTime = Math.min(position, media.duration)
   if (resume && visible.value && visibility.value === 'visible') void media.play().catch(() => {})
   position = 0; resume = false

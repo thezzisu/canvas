@@ -103,21 +103,6 @@ test("stored files expose transport metadata without a rendering decision", asyn
   }
 });
 
-test("removing obsolete rendering metadata preserves existing files and canvas references", async t => {
-  const f = await fixture(t), bytes = Buffer.from([0, 1, 2, 3]);
-  const upload = await f.begin('recording.mp4', bytes.length);
-  await upload.write(bytes);
-  const asset = await upload.complete(f.context());
-  f.store.db.exec("ALTER TABLE canvas_files ADD COLUMN preview TEXT NOT NULL DEFAULT 'file'");
-  const reopened = new Store(join(f.dir, 'canvas.db'));
-  try {
-    assert(!reopened.db.prepare('PRAGMA table_info(canvas_files)').all().some(column => column.name === 'preview'));
-    assert.equal(reopened.fileAsset(asset.id)?.filename, 'recording.mp4');
-    assert(reopened.canvasView(reopened.get<Canvas>('canvas', f.canvas.id)!).nodes.some(node => node.type === 'file' && node.assetId === asset.id));
-    assert.deepEqual(await readFile(join(f.dir, 'files', asset.id)), bytes);
-  } finally { reopened.close(); }
-});
-
 test("authenticated file routes stream previews safely and support explicit attachment", async t => {
   const f = await fixture(t), content = Buffer.from("private notes\n");
   const upload = await f.begin("notes.txt", content.length);

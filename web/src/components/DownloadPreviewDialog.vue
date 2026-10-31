@@ -54,12 +54,15 @@ const modalStyle = computed(() => {
   const visible = viewport.value, narrow = visible.width <= 600
   let width = Math.min(1000, visible.width - (narrow ? 12 : 32))
   let height = Math.min(800, visible.height - (narrow ? 24 : 48))
-  if (downloadPreview.value?.preview === 'image' && imageSize.value) {
+  if (['image', 'video'].includes(downloadPreview.value?.preview || '') && imageSize.value) {
     const image = imageSize.value
-    // The image viewport excludes the 44px header, 40px tools and two borders.
-    const scale = Math.min(1, Math.max(1, width - 2) / image.width, Math.max(1, height - 86) / image.height)
+    const chrome = downloadPreview.value?.preview === 'image' ? 86 : 46
+    const scale = Math.min(1, Math.max(1, width - 2) / image.width, Math.max(1, height - chrome) / image.height)
     width = Math.min(width, Math.max(300, image.width * scale + 2))
-    height = Math.min(height, Math.max(126, image.height * scale + 86))
+    height = Math.min(height, Math.max(126, image.height * scale + chrome))
+  } else if (downloadPreview.value?.preview === 'audio') {
+    width = Math.min(width, 560)
+    height = Math.min(height, 160)
   }
   return { '--preview-width': `${Math.max(1, width)}px`, '--preview-height': `${Math.max(1, height)}px`,
     '--preview-viewport-width': `${visible.width}px`, '--preview-viewport-height': `${visible.height}px`,
@@ -136,7 +139,7 @@ onBeforeUnmount(() => request?.abort())
         <div v-else-if="loading || (downloadPreview.preview !== 'text' && !previewUrl)" class="download-preview-status" role="status"><span class="spinner" /> {{ t('common.loading') }}</div>
         <div v-if="error" class="download-preview-status" role="alert"><span>{{ error instanceof Error ? error.message : t(error) }}</span><button v-if="downloadPreview.preview === 'text'" type="button" @click="loadText">{{ t('common.retry') }}</button></div>
         <ImagePreview v-if="downloadPreview.preview === 'image' && previewUrl && !error" :key="downloadPreview.id" :id="downloadPreview.id" :src="previewUrl" :alt="downloadPreview.filename" @loaded="imageLoaded" @failed="imageFailed" />
-        <MediaPreview v-else-if="(downloadPreview.preview === 'audio' || downloadPreview.preview === 'video') && previewUrl" :key="downloadPreview.id" :kind="downloadPreview.preview" :src="previewUrl" :title="downloadPreview.filename" @download="download" />
+        <MediaPreview v-else-if="(downloadPreview.preview === 'audio' || downloadPreview.preview === 'video') && previewUrl" :key="downloadPreview.id" :kind="downloadPreview.preview" :src="previewUrl" :title="downloadPreview.filename" @download="download" @loaded="(width, height) => { if (width && height) imageSize = { width, height } }" />
         <template v-else-if="downloadPreview.preview === 'pdf'">
           <iframe v-if="pdfPreview && previewUrl" class="download-preview-pdf" :src="previewUrl" :title="downloadPreview.filename" referrerpolicy="no-referrer" />
           <div v-else class="download-preview-status">{{ t('panels.preview.pdfUnavailable') }}</div>
