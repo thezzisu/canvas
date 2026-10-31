@@ -62,7 +62,7 @@ const items = computed<DropdownMenuItem[][]>(() => [
 </script>
 
 <template>
-  <UDropdownMenu v-model:open="menuOpen" :items="items" :portal="portal || false" :content="{ side: 'top', align: 'start', sideOffset: 6, ...menuDismiss }"
+  <UDropdownMenu v-model:open="menuOpen" :modal="false" :items="items" :portal="portal || false" :content="{ side: 'top', align: 'start', sideOffset: 6, ...menuDismiss }"
     :ui="{ content: 'instance-menu' }">
     <template #item-label="{ item }">
       <span class="instance-menu-label"><span>{{ item.label }}</span><small v-if="item.server" class="instance-version" :class="{ stale: !item.server.fresh }" :title="`${t('instances.serverVersion')}: ${item.server.build.version}${item.server.build.revision ? ` · ${item.server.build.revision}` : ''}${!item.server.fresh ? ` · ${t('instances.lastSeen')}` : ''}`">{{ buildLabel(item.server.build) }}<span v-if="!item.server.fresh"> · {{ t('instances.lastSeen') }}</span></small></span>

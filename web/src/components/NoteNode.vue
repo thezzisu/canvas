@@ -80,7 +80,7 @@ onBeforeUnmount(() => clearTimeout(copyTimer))
       <div class="note-actions nodrag" :class="{ 'cutout-actions': data.focus }">
         <button v-if="!data.focus || !compact" type="button" class="note-copy" :class="{ 'note-copy-failed': copied === 'failed' }" :disabled="!content" :draggable="!!content" :title="copied ? t(`terminal.clipboard.${copied}`) : t('panels.note.copyOrDrag')" :aria-label="t('panels.note.copy')" @pointerdown.stop @click.stop="copyNote" @dragstart="dragNote"><Icon :name="copied === 'copied' ? 'check' : 'copy'" :size="13" /></button>
         <template v-if="data.focus">
-          <UDropdownMenu v-model:open="menuOpen" :items="menu" :portal="false" :content="menuContent" :ui="{ content: 'card-action-menu' }">
+          <UDropdownMenu v-model:open="menuOpen" :modal="false" :items="menu" :portal="false" :content="menuContent" :ui="{ content: 'card-action-menu' }">
             <button ref="menuTrigger" type="button" class="note-more" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></button>
           </UDropdownMenu>
           <button type="button" :title="t('common.returnToCanvas')" :aria-label="t('common.returnToCanvas')" @click.stop="data.onAction('unfocus', id)"><Icon name="collapse" :size="17" /></button>
