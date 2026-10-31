@@ -155,6 +155,7 @@ const size = computed(() => {
 .card-focused .file-title{font-size:13px;margin-inline:6px}
 .card-focused .file-icon{width:32px;height:44px;justify-content:center}
 .card-focused .file-actions{gap:0}
+.card-focused :deep(.text-preview-actions){gap:0}
 .card-focused .file-action{width:44px;height:44px;flex-basis:44px}
 .card-focused :deep(.text-preview-action){width:36px;height:44px}
 .canvas-fullscreen .card-focused .file-header{height:44px;flex-basis:44px;padding-top:0}
