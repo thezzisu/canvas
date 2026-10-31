@@ -99,8 +99,8 @@ const items = computed<DropdownMenuItem[][]>(() => [
     :close="{ 'aria-label': t('common.close') }" :ui="{ content: 'instance-dialog', overlay: 'instance-dialog-overlay', body: 'instance-dialog-body' }">
     <template #body>
       <form id="instance-form" @submit.prevent="submit">
-        <UFormField :label="t('instances.name')" name="name" required><UInput :model-value="draft.name" autofocus maxlength="80" class="w-full" :disabled="working" @update:model-value="value => editField('name', value)" /></UFormField>
-        <UFormField :label="t('instances.address')" name="address" required><UInput :model-value="draft.base" type="url" placeholder="https://canvas.example/" autocomplete="url" class="w-full" :readonly="!!original?.builtin" :disabled="working" @update:model-value="value => editField('base', value)" /></UFormField>
+        <UFormField :label="t('instances.name')" name="name" required><UInput :model-value="draft.name" autofocus maxlength="80" class="w-full" :disabled="working" @update:model-value="(value: string | number) => editField('name', value)" /></UFormField>
+        <UFormField :label="t('instances.address')" name="address" required><UInput :model-value="draft.base" type="url" placeholder="https://canvas.example/" autocomplete="url" class="w-full" :readonly="!!original?.builtin" :disabled="working" @update:model-value="(value: string | number) => editField('base', value)" /></UFormField>
         <dl v-if="draftBuild" class="instance-build-detail"><dt>{{ t('instances.serverVersion') }}</dt><dd>{{ buildLabel(draftBuild.build) }}<small v-if="!draftBuild.fresh">{{ t('instances.lastSeen') }}</small></dd><template v-if="draftBuild.build.revision"><dt>{{ t('instances.revision') }}</dt><dd class="instance-revision">{{ draftBuild.build.revision }}</dd></template></dl>
         <p v-if="error" role="alert" class="instance-error">{{ t(error) }}</p>
       </form>
