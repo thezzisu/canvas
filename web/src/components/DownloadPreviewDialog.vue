@@ -156,7 +156,7 @@ onBeforeUnmount(() => request?.abort())
 .download-preview-actions{display:flex;flex:none;gap:0;align-items:center}
 .download-preview-button{position:static;flex:none;display:flex;align-items:center;justify-content:center;width:var(--header-action-size);min-width:var(--header-action-size);height:var(--header-action-size);padding:0;color:#93a1b4;border-radius:5px}
 .download-preview-button:hover{background:#ffffff08;color:#d4dfec}
-.download-preview-menu{z-index:90}
+.card-action-menu.download-preview-menu{z-index:90}
 .download-preview-mobile .download-preview-header{--header-action-size:44px;padding:0}
 .download-preview-mobile .download-preview-title{padding-left:12px}
 .download-preview-modal{container-type:inline-size}
