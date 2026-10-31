@@ -18,7 +18,7 @@ defineProps<NodeProps<{
     :aria-busy="data.pending()" :disabled="!data.available || data.pending()"
     :title="data.available ? undefined : t('panels.overview.unavailable')" @pointerdown.stop @click.stop="data.create()" @dblclick.stop>
     <span v-if="data.pending()" class="spinner" />
-    <Icon v-else :name="data.spaceId ? 'plus' : 'layers'" :size="data.spaceId ? 22 : 15" />
+    <Icon v-else :name="data.spaceId ? 'tab-plus' : 'layers'" :size="data.spaceId ? 22 : 15" />
     <span>{{ t(data.spaceId ? 'panels.overview.newTab' : 'panels.overview.newSpace') }}</span>
     <i v-if="!data.spaceId" />
   </button>

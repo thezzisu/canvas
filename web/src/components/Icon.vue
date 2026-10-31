@@ -8,6 +8,7 @@ const paths: Record<string, string> = {
   canvas: 'M4 5h16v14H4z M4 10h16 M10 10v9',
   grid: 'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z',
   plus: 'M12 5v14 M5 12h14',
+  'tab-plus': 'M3 4h18v16H3z M3 9h18 M12 12v6 M9 15h6',
   close: 'M6 6l12 12 M18 6L6 18',
   server: 'M4 4h16v6H4z M4 14h16v6H4z M7 7h.01 M7 17h.01 M11 7h6 M11 17h6',
   terminal: 'M5 7l5 5-5 5 M13 17h6',
