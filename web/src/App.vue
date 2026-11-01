@@ -366,7 +366,7 @@ const overviewMenu = computed<DropdownMenuItem[][]>(() => [
 ])
 const onlineCount = computed(() => resources.value.filter(source => !source.error && !['offline', 'error', 'disconnected'].includes(source.status)).length)
 const currentName = computed(() => isOverview.value ? t('app.overview') : currentCanvas.value?.name || t('app.canvas'))
-useTitle(computed(() => authenticated.value && !unknownInstance.value ? `${currentName.value} - Canvas` : 'Canvas'))
+useTitle(computed(() => authenticated.value && latestState.value && !unknownInstance.value ? `${currentName.value} - Canvas` : 'Canvas'))
 const allWindows = computed(() => resources.value.flatMap(source => source.spaces.flatMap(space => space.windows.map(window => ({ source, space, window, key: `${source.id}/${space.id}/${window.id}` })))))
 const windowCount = computed(() => allWindows.value.length)
 const existingAddWindows = computed(() => new Set(canvases.value.find(canvas => canvas.id === addTarget.value)?.nodes.filter(isTerminalNode).map(node => `${node.sourceId}/${node.windowId}`) || []))
@@ -983,7 +983,10 @@ watch(locale, () => {
   })
   if (backgroundCanvas.value?.id === 'overview') backgroundCanvas.value = { ...backgroundCanvas.value, name: t('app.overview') }
 })
-watch([navigation.requested, resourcesLoaded, latestState], () => { void applyRequestedLocation() })
+watch([navigation.requested, resourcesLoaded, latestState], ([requested, loaded], [, wasLoaded]) => {
+  if (requested) void applyRequestedLocation()
+  else if (loaded && !wasLoaded) void restoreViewport()
+})
 watchDebounced(getViewport, saveViewport, { debounce: 160 })
 watch(unknownInstance, async value => {
   if (!value) return
