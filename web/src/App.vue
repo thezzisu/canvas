@@ -55,8 +55,8 @@ import { directoryRequest } from './directories'
 import { copiedFile } from './file-clipboard'
 import { urlRequest } from './urls'
 import { api, apiContext, apiRevision, apiUrl, isCurrentApi, requireCurrentApi, resetApiRequests, setSessionToken, ApiError, segment, uuid, write } from './api'
-import { acknowledgeTerminalMetadata, clearTerminals, focusWindow, hasLiveTerminal, liveTerminalMetadata, pasteFileIntoWindow, retainTerminalMetadata, setContentFont } from './terminals'
-import { mergeLiveResources } from './live-resources'
+import { acknowledgeTerminalMetadata, cachedTerminalView, clearTerminals, focusWindow, hasLiveTerminal, liveTerminalMetadata, pasteFileIntoWindow, retainTerminalMetadata, setContentFont } from './terminals'
+import { mergeLiveResources, windowIsClosed } from './live-resources'
 import { buildFontPresentation, ensureContentFont } from './fonts'
 import type { GlobalSettings } from '../../shared/settings'
 import { useCanvasNavigation } from './canvas-navigation'
@@ -518,7 +518,8 @@ function terminalData(node: TerminalCanvasNode, overview = false): TerminalData 
     create: () => windowAction(node, 'create', { canvasId, anchor: { ...node }, focusedId: focused.value?.id }),
   } : undefined
   const visual = windowVisualState(found.source, found.window, freshStatuses.value)
-  return { ...node, zoomKey: sourceConfig ? terminalZoomKey(latestState.value?.instanceId || activeInstance.value.base, sourceConfig, node.windowId) : '', newTab, status: visual.status, statusFresh: visual.fresh, name: found.window?.name || t('app.closedWindow'), subtitle: `${found.source?.name || sourceConfig?.name || t('app.unknownConnection')} / ${found.space?.name || t('app.space')}`, available: !!found.window && !found.source?.error, sourceOffline: !!found.source?.error, panes: found.window?.panes || [], overview, focus: false, mobile: mobile.value, onAction: terminalAction, onResize: resizeNode, onLayoutStart: layoutStarted, onGeometry: recordGeometry }
+  const closed = windowIsClosed(found.source, node.windowId, liveTerminalMetadata.value.get(`${node.sourceId}/${node.windowId}`))
+  return { ...node, zoomKey: sourceConfig ? terminalZoomKey(latestState.value?.instanceId || activeInstance.value.base, sourceConfig, node.windowId) : '', newTab, status: visual.status, statusFresh: visual.fresh, name: found.window?.name || cachedTerminalView(node.sourceId, node.windowId)?.name || t(closed ? 'app.closedWindow' : 'app.window'), subtitle: `${found.source?.name || sourceConfig?.name || t('app.unknownConnection')} / ${found.space?.name || t('app.space')}`, available: !!found.window && !found.source?.error, closed, sourceOffline: !!found.source?.error, panes: found.window?.panes || [], overview, focus: false, mobile: mobile.value, onAction: terminalAction, onResize: resizeNode, onLayoutStart: layoutStarted, onGeometry: recordGeometry }
 }
 function terminalFlowNode(node: TerminalCanvasNode, overview = false): Node {
   node = { ...node, ...windowSize(node) }
@@ -664,6 +665,10 @@ function applySharedState(state: SharedState) {
   pruneTerminalZooms(state.instanceId, state.sources, [])
   retainBackgrounds([state.overviewBackground, ...state.canvases.map(canvas => canvas.background)].flatMap(background => background ? [background.url] : []))
   applySettings(state.settings)
+  const changedConnections = sources.value.filter(previous => {
+    const next = state.sources.find(source => source.id === previous.id)
+    return next && JSON.stringify(sourceConnection(next)) !== JSON.stringify(sourceConnection(previous))
+  }).map(source => source.id)
   const sourceChanged = JSON.stringify(sources.value) !== JSON.stringify(state.sources)
   const previousNodes = JSON.stringify(currentCanvas.value?.nodes)
   const nextSizes = { ...state.windowSizes }
@@ -679,7 +684,7 @@ function applySharedState(state: SharedState) {
   const sizesChanged = JSON.stringify(windowSizes.value) !== JSON.stringify(nextSizes)
   windowSizes.value = nextSizes
   sources.value = state.sources
-  retainTerminalMetadata(state.sources.map(source => source.id))
+  retainTerminalMetadata(state.sources.map(source => source.id), changedConnections)
   overviewBackground.value = state.overviewBackground
   const sharedNoteDrafts = new Map<string, NotePatch>()
   for (const edit of [...savingNotes.values(), ...pendingNotes.values()]) {
@@ -703,7 +708,7 @@ function applySharedState(state: SharedState) {
   if (backgroundCanvas.value && backgroundCanvas.value.id !== 'overview' && !canvases.value.some(canvas => canvas.id === backgroundCanvas.value?.id)) backgroundCanvas.value = null
   if (sourceChanged) {
     resourcesFresh.value = false
-    polledResources.value = polledResources.value.filter(resource => sources.value.some(source => source.id === resource.id))
+    polledResources.value = polledResources.value.filter(resource => !changedConnections.includes(resource.id) && sources.value.some(source => source.id === resource.id))
     if (focused.value && !sources.value.some(source => source.id === focused.value?.sourceId)) focused.value = null
     resourceSignature = ''; resourceLayoutSignature = ''
     if (isOverview.value && !layoutGesture) rebuildNodes()
@@ -896,7 +901,7 @@ async function refreshResources(silent = false): Promise<void> {
       pruneTerminalZooms(latestState.value!.instanceId, sources.value, body.sources)
       resourcesFresh.value = true; resourcesLoaded.value = true; loadFailure.value = undefined
       polledResources.value = body.sources
-      acknowledgeTerminalMetadata(metadataAtStart, body.sources.filter(source => source.status === 'online' && !source.error).map(source => source.id))
+      acknowledgeTerminalMetadata(metadataAtStart, body.sources)
       refreshedAt.value = Date.now()
     } catch (reason) {
       if (isCurrentApi(context)) {
@@ -1725,7 +1730,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
         </div>
       </header>
       <div ref="graphSurface" :inert="createMenuOpen || undefined" class="graph-wrap" :class="{ 'has-background': currentBackground, paged: paging }" :data-page-window="paging ? currentPage?.id : undefined" @focusout.capture="preserveFitTarget" @mousedown.capture="guardPageDrag" @wheel.capture="canvasWheel" @touchstart.capture="canvasTouchStart" @touchmove.capture="canvasTouchMove" @touchend.capture="canvasTouchEnd" @touchcancel.capture="canvasTouchCancel" @click.capture="canvasClick">
-        <CanvasFileDrop ref="canvasFileDrop" :canvas-id="currentCanvas?.id" :get-viewport="getViewport" />
+        <CanvasFileDrop ref="canvasFileDrop" :canvas-id="currentCanvas?.id" :canvas-name="currentCanvas?.name" :get-viewport="getViewport" />
         <img v-if="currentBackground && backgroundUrl" class="canvas-background" :src="backgroundUrl" :style="{ opacity: currentBackground.opacity }" alt="" aria-hidden="true" />
         <span id="canvas-card-select-help" hidden>{{ t('app.cardSelectHelp') }}</span>
         <span id="canvas-card-move-help" hidden>{{ t('app.cardMoveHelp') }}</span>

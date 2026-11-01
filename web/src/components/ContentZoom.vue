@@ -27,7 +27,7 @@ function change(value: number) { emit('update:modelValue', Math.max(contentZoomL
 
 <template>
   <UPopover v-model:open="open" :portal="portal" :content="content" :ui="{ content: 'content-zoom-popover' }">
-    <button ref="trigger" class="content-zoom-trigger" data-preserve-content-focus :title="label" :aria-label="label" :aria-expanded="open" @pointerdown.stop.prevent="pointer = true" @keydown="pointer = false"><Icon v-if="mobile" name="search" :size="18" /><span v-else>{{ percentage }}</span></button>
+    <button ref="trigger" class="content-zoom-trigger" data-preserve-content-focus :title="label" :aria-label="label" :aria-expanded="open" @pointerdown.stop.prevent="pointer = true" @keydown="pointer = false"><Icon v-if="mobile" name="percent" :size="18" /><span v-else>{{ percentage }}</span></button>
     <template #content><div class="content-zoom-controls" data-preserve-content-focus role="group" :aria-label="label" @pointerdown.stop @wheel.stop @keydown="pointer = false">
       <UButton color="neutral" variant="ghost" :disabled="disabled || modelValue <= contentZoomLimits.min" :aria-label="t('common.zoomOut')" :title="t('common.zoomOut')" @pointerdown.prevent @click="change(modelValue - contentZoomLimits.step)"><Icon name="minus" :size="17" /></UButton>
       <UButton color="neutral" variant="ghost" class="content-zoom-reset" :disabled="disabled" :aria-label="t('common.resetZoom')" :title="t('common.resetZoom')" @pointerdown.prevent @click="change(100)">{{ percentage }}</UButton>

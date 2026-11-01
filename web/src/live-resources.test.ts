@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { computed, ref } from 'vue'
-import { mergeLiveResources, metadataAfterPoll, type LiveWindowMetadata } from './live-resources.ts'
+import { mergeLiveResources, metadataAfterPoll, windowIsClosed, type LiveWindowMetadata } from './live-resources.ts'
 import { canvasIndicators, windowVisualState } from './canvas-status.ts'
 import { overviewResources } from './overview.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
@@ -12,6 +12,20 @@ const source = (): SourceResource => ({ id: 'source', name: 'Source', status: 'o
 ] }] })
 const metadata = (status: WindowMetadata['status']): WindowMetadata => ({ id: 'window', name: 'Tab', status,
   panes: [{ id: 'pane', name: '1', active: true, status, terminalTitle: 'Live title' }] })
+
+test('closed presentation requires native removal or a successful source snapshot without that identity', () => {
+  assert.equal(windowIsClosed(source(), 'window'), false)
+  assert.equal(windowIsClosed(source(), 'missing'), true)
+  assert.equal(windowIsClosed(undefined, 'window'), false)
+  assert.equal(windowIsClosed({ ...source(), status: 'offline' }, 'missing'), false)
+  assert.equal(windowIsClosed({ ...source(), error: 'Connection lost' }, 'missing'), false)
+  assert.equal(windowIsClosed(undefined, 'window', null), true, 'confirmed removal remains closed during a later outage')
+  assert.equal(windowIsClosed(source(), 'missing', metadata('idle')), false, 'newer live metadata wins over a stale missing snapshot')
+  const moved = source(); moved.spaces.push({ id: 'elsewhere', name: 'Elsewhere', windows: moved.spaces[0]!.windows }); moved.spaces[0]!.windows = []
+  assert.equal(windowIsClosed(moved, 'window'), false, 'moving spaces does not close the native identity')
+  const replacement = source(); replacement.spaces[0]!.windows[0]!.id = 'new-id'
+  assert.equal(windowIsClosed(replacement, 'window'), true, 'a same-name replacement does not adopt the closed reference')
+})
 
 test('live metadata updates every resource consumer while another source holds an older poll', async () => {
   const polled = ref([source()]), live = ref(new Map<string, WindowMetadata>())
@@ -66,6 +80,7 @@ test('confirmed window removal wins over in-flight and offline polls until a new
   const removed = new Map<string, LiveWindowMetadata>([['source/window', null]])
   const stale = metadataAfterPoll(removed, started, ['source'])
   assert.equal(stale.get('source/window'), null)
+  assert.equal(windowIsClosed(source(), 'window', stale.get('source/window')), true, 'a stale present snapshot cannot resume a window removed during that poll')
   assert.deepEqual(mergeLiveResources([source()], stale)[0]!.spaces[0]!.windows, [], 'an older poll resurrected the closed window')
   const offline = { ...source(), status: 'offline', error: 'Connection lost' }
   const hidden = metadataAfterPoll(removed, removed, [])
@@ -73,6 +88,7 @@ test('confirmed window removal wins over in-flight and offline polls until a new
   assert.deepEqual(canvasIndicators([], mergeLiveResources([source()], stale)).overview, { count: 0, status: null })
   const fresh = metadataAfterPoll(removed, removed, ['source'])
   assert.equal(fresh.has('source/window'), false, 'a new authoritative poll must be able to describe a replacement native window')
+  assert.equal(windowIsClosed(source(), 'window', fresh.get('source/window')), false, 'only a poll begun after removal can confirm the identity is present again')
   assert.equal(mergeLiveResources([source()], fresh)[0]!.spaces[0]!.windows.length, 1)
   assert.equal(mergeLiveResources([{ ...source(), id: 'unrelated' }], removed)[0]!.spaces[0]!.windows.length, 1)
 });

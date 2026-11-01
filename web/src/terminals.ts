@@ -24,9 +24,10 @@ import type { CanvasFileReference } from './file-reference'
 import { fitTerminalGrid, terminalBox, terminalMetrics, type RenderedTerminalGrid } from './terminal-geometry'
 import { TerminalReconnect, terminalInputHasFocus } from './terminal-reconnect'
 import { normalizeTerminalZoom } from './terminal-zoom'
+import type { SourceResource } from './types'
 
 export type TerminalStatus = {
-  status: 'connecting' | 'connected' | 'disconnected'
+  status: 'connecting' | 'connected' | 'disconnected' | 'closed'
   error?: string
   readOnly?: boolean
   focusedPaneId?: string
@@ -80,6 +81,7 @@ interface Session {
   resetPending?: boolean
   state: TerminalStatus
   metadata?: WindowMetadata
+  lastName?: string
   listeners: Set<(state: TerminalStatus) => void>
   geometryListeners: Set<(geometry: TerminalGeometry) => void>
   resource: { sourceId: string; spaceId: string; windowId: string }
@@ -93,6 +95,7 @@ let metadataSources = new Set<string>()
 function updateMetadata(session: Session, metadata?: WindowMetadata) {
   if (metadata && !metadataSources.has(session.resource.sourceId)) return
   session.metadata = metadata
+  if (metadata) session.lastName = metadata.name
   // A native window can move between spaces while its previous view retires.
   // Closing that view must not erase metadata from its replacement socket.
   metadata ??= metadataSources.has(session.resource.sourceId) ? [...sessions.values()].find(other => other !== session &&
@@ -107,18 +110,37 @@ function updateMetadata(session: Session, metadata?: WindowMetadata) {
   else next.delete(key)
   liveTerminalMetadata.value = next
 }
-export function retainTerminalMetadata(sourceIds: readonly string[]) {
+export function retainTerminalMetadata(sourceIds: readonly string[], changedSources: readonly string[] = []) {
   metadataSources = new Set(sourceIds)
   const next = new Map(liveTerminalMetadata.value)
-  for (const session of sessions.values()) if (!metadataSources.has(session.resource.sourceId)) {
+  for (const session of sessions.values()) if (!metadataSources.has(session.resource.sourceId) || changedSources.includes(session.resource.sourceId)) {
+    if (changedSources.includes(session.resource.sourceId)) {
+      session.reconnect?.pause(); disconnect(session)
+      setState(session, { ...session.state, status: 'disconnected', error: undefined, retryAttempt: undefined })
+    }
     session.metadata = undefined
+    session.lastName = undefined
+    if (session.state.status === 'closed') setState(session, { ...session.state, status: 'disconnected' })
     next.delete(`${session.resource.sourceId}/${session.resource.windowId}`)
   }
   if (next.size !== liveTerminalMetadata.value.size) liveTerminalMetadata.value = next
 }
-export function acknowledgeTerminalMetadata(started: ReadonlyMap<string, LiveWindowMetadata>, sourceIds: readonly string[]) {
-  const next = metadataAfterPoll(liveTerminalMetadata.value, started, sourceIds)
+export function acknowledgeTerminalMetadata(started: ReadonlyMap<string, LiveWindowMetadata>, resources: readonly SourceResource[]) {
+  const current = liveTerminalMetadata.value
+  const online = new Map(resources.filter(source => source.status === 'online' && !source.error).map(source => [source.id, source]))
+  const next = metadataAfterPoll(current, started, [...online.keys()])
   if (next.size !== liveTerminalMetadata.value.size) liveTerminalMetadata.value = next
+  for (const session of sessions.values()) {
+    const source = online.get(session.resource.sourceId)
+    if (!source) continue
+    const key = `${source.id}/${session.resource.windowId}`
+    const present = source.spaces.some(space => space.windows.some(window => window.id === session.resource.windowId))
+    if (present) {
+      if (session.state.status === 'closed' && next.get(key) !== null) session.reconnect?.resume(true)
+      continue
+    }
+    if (current.get(key) === started.get(key)) windowRemoved(session)
+  }
 }
 function syncViewVisibility(session: Session) {
   if (session.state.status !== 'connected' || session.socket?.readyState !== WebSocket.OPEN) return
@@ -161,7 +183,11 @@ watch(locale, () => {
 }, { immediate: true })
 export function hasLiveTerminal(sourceId: string, windowId: string): boolean {
   return [...sessions.values()].some(session => session.resource.sourceId === sourceId && session.resource.windowId === windowId &&
-    session.host?.isConnected && session.state.status !== 'disconnected')
+    session.host?.isConnected && session.state.status !== 'disconnected' && session.state.status !== 'closed')
+}
+export function cachedTerminalView(sourceId: string, windowId: string) {
+  const session = [...sessions.values()].find(session => session.resource.sourceId === sourceId && session.resource.windowId === windowId && session.opened)
+  return session ? { name: session.lastName } : undefined
 }
 let contentFont = defaultContentFont()
 // The authenticated app loads bundled fonts before applying this presentation.
@@ -240,7 +266,7 @@ function setModifiers(session: Session, modifiers: Partial<TerminalModifiers> = 
   setState(session, { ...session.state, modifiers: session.modifiers })
 }
 function focusTerminal(session: Session, keyboard?: boolean) {
-  if (!interactive(session)) return
+  if (!interactive(session) || session.state.status === 'closed') return
   claimFocus(session)
   if (session.mobile) session.keyboard?.focus(keyboard)
   else session.term.focus()
@@ -285,13 +311,18 @@ function connectionFailed(session: Session, error = t('terminal.connection.disco
 function windowRemoved(session: Session) {
   const { sourceId, windowId } = session.resource
   for (const view of sessions.values()) if (view.resource.sourceId === sourceId && view.resource.windowId === windowId) {
+    if (view.state.status === 'closed') continue
     view.reconnect?.stop()
     disconnect(view)
-    setState(view, { ...view.state, status: 'disconnected', error: undefined, retryAttempt: undefined })
+    view.fileRead?.abort(); view.fileRead = undefined
+    view.uploads.clear(); view.keyboard?.blur(); view.term.blur(); view.term.options.disableStdin = true
+    setState(view, { ...view.state, status: 'closed', error: undefined, retryAttempt: undefined, fileReading: false })
   }
-  const next = new Map(liveTerminalMetadata.value)
-  next.set(`${sourceId}/${windowId}`, null)
-  liveTerminalMetadata.value = next
+  if (liveTerminalMetadata.value.get(`${sourceId}/${windowId}`) !== null) {
+    const next = new Map(liveTerminalMetadata.value)
+    next.set(`${sourceId}/${windowId}`, null)
+    liveTerminalMetadata.value = next
+  }
 }
 function terminalVisibilityChanged() {
   for (const session of sessions.values()) {
@@ -387,6 +418,7 @@ async function connect(session: Session, probe: boolean) {
           if (message.status !== 'connected' && message.status !== 'connecting') return
           const restoreInputFocus = probe && message.status === 'connected' && session.state.status !== 'connected'
           if (message.status === 'connected') session.reconnect?.connected()
+          session.term.options.disableStdin = !interactive(session)
           setState(session, { ...session.state, status: message.status, error: undefined,
             retryAttempt: message.status === 'connected' ? undefined : session.state.retryAttempt, readOnly: message.readOnly === true })
           syncViewVisibility(session)
@@ -529,7 +561,7 @@ function sendTerminalData(session: Session, data: string) {
   session.term.input(data, true)
   return true
 }
-export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, onGeometry?: (geometry: TerminalGeometry) => void, options: { magnified?: boolean; mobile?: boolean; zoom?: number } = {}) {
+export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, onGeometry?: (geometry: TerminalGeometry) => void, options: { magnified?: boolean; mobile?: boolean; zoom?: number; closed?: boolean } = {}) {
   installTerminalEvents()
   const id = key(resource.sourceId, resource.spaceId, resource.windowId)
   let session = sessions.get(id)
@@ -656,7 +688,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   session.magnified = options.magnified === true
   setTerminalZoom(session, options.zoom ?? 100)
   session.nativeKey = undefined
-  session.term.options.disableStdin = !interactive(session)
+  session.term.options.disableStdin = !interactive(session) || options.closed === true
   if (!interactive(session)) { session.keyboard?.blur(); session.keyboardRequested = false; session.term.blur() }
   setModifiers(session)
   host.appendChild(session.surface)
@@ -729,8 +761,9 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     !(session.state.presentation?.maximized && !session.state.presentation.owned))
   session.listeners.add(listener)
   if (onGeometry) session.geometryListeners.add(onGeometry)
+  if (options.closed) windowRemoved(session)
   listener(session.state)
-  if (!session.socket || session.socket.readyState === WebSocket.CLOSED)
+  if (!options.closed && (!session.socket || session.socket.readyState === WebSocket.CLOSED))
     session.reconnect?.resume(liveTerminalMetadata.value.get(`${resource.sourceId}/${resource.windowId}`) !== null)
   else if (session.state.status === 'connected') session.reconnect?.connected()
   const current = session
@@ -785,6 +818,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     },
     setTouchMode(mode: TerminalTouchMode) { current.touchMode = mode; setModifiers(current); setState(current, { ...current.state, touchMode: mode }) },
     resize() { return resize(current) },
+    close() { if (current.host === host && isCurrentApi(mountingContext)) windowRemoved(current) },
     cancelUpload() { current.uploads.cancel() },
     reconnect() {
       disconnect(current)

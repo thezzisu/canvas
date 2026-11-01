@@ -3,6 +3,12 @@ import type { SourceResource } from './types'
 
 export type LiveWindowMetadata = WindowMetadata | null
 
+/** A failed or pending discovery cannot prove that a native window is closed. */
+export function windowIsClosed(source: SourceResource | undefined, windowId: string, live?: LiveWindowMetadata) {
+  return live === null || !!source && !live && source.status === 'online' && !source.error &&
+    !source.spaces.some(space => space.windows.some(window => window.id === windowId))
+}
+
 /** A poll may supersede only metadata that was already known when it began. */
 export function metadataAfterPoll(current: ReadonlyMap<string, LiveWindowMetadata>, started: ReadonlyMap<string, LiveWindowMetadata>, sourceIds: readonly string[]) {
   const sources = new Set(sourceIds)

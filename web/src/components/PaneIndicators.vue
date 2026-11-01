@@ -11,7 +11,7 @@ const props = defineProps<{
   panes: PaneResource[]
   status: ProgramStatus
   available: boolean
-  connection: 'connecting' | 'connected' | 'disconnected'
+  connection: 'connecting' | 'connected' | 'disconnected' | 'closed'
   error?: string
   readOnly?: boolean
   pulse?: boolean
@@ -23,8 +23,8 @@ const pinned = ref(false)
 const panelId = useId()
 const portal = computed(() => trigger.value?.closest<HTMLElement>('.app-shell') || document.body)
 let leaveTimer: ReturnType<typeof setTimeout> | undefined
-const summary = computed(() => !props.available ? t('terminal.unavailable') : props.connection === 'connecting' ? t('terminal.connection.connecting') : props.connection === 'disconnected' ? t('terminal.connection.disconnected') : statusLabel(props.status))
-const color = computed(() => !props.available || props.connection === 'disconnected' ? statusColor('error') : props.connection === 'connecting' ? statusColor('working') : statusColor(props.status))
+const summary = computed(() => props.connection === 'closed' ? t('terminal.closed') : !props.available ? t('terminal.unavailable') : props.connection === 'connecting' ? t('terminal.connection.connecting') : props.connection === 'disconnected' ? t('terminal.connection.disconnected') : statusLabel(props.status))
+const color = computed(() => props.connection === 'closed' ? statusColor('unknown') : !props.available || props.connection === 'disconnected' ? statusColor('error') : props.connection === 'connecting' ? statusColor('working') : statusColor(props.status))
 
 function contains(target: EventTarget | null) { return target instanceof Node && (trigger.value?.contains(target) || panel.value?.closest('.terminal-status-popover')?.contains(target)) }
 function close() { clearTimeout(leaveTimer); open.value = false; pinned.value = false }

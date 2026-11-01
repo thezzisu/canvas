@@ -1,16 +1,19 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
+import type { AddressInfo } from 'node:net';
 import { UploadService } from "./uploads.ts";
 import { Store, sourceConnectionKey, type Source } from "./state.ts";
 import { createApp } from "./app.ts";
-import type { TerminalManager } from "./terminals.ts";
+import { TerminalManager } from "./terminals.ts";
 import type { SourceResource } from "./providers.ts";
-import { shellQuote } from "./providers.ts";
+import { closeWindow, createSpace, listResources, shellQuote } from "./providers.ts";
 import type { writeInboxFile } from "./inbox.ts";
 
 class FakeSocket {
@@ -173,27 +176,30 @@ test("source renames preserve active uploads and future uploads from the same at
   assert.equal(f.pasted.length, 2);
 });
 
-test("short or oversized later files remove the earlier batch files and never paste partial results", async t => {
+test("short or oversized later files retain earlier successful files and never paste partial results", async t => {
   for (const [size, bytes] of [[10, Buffer.from("short")], [1, Buffer.from("long")]] as const) {
     const f = fixture(t), tokens = await f.begin([{ name: "first", size: 3 }, { name: "bad", size }]);
     assert.equal(await f.service.receive(tokens[0]!, "session-a", uploadRequest(Buffer.from("one"))), 204);
     const firstPath = [...f.files.keys()][0]!;
     assert.equal(await f.service.receive(tokens[1]!, "session-a", uploadRequest(bytes)), 409);
     await f.service.closeAll();
-    assert.equal(f.files.size, 0);
-    assert(f.removed.some(call => call.paths.includes(firstPath)));
+    assert.equal(f.files.size, 1);
+    assert.deepEqual(f.files.get(firstPath), Buffer.from('one'));
+    assert(!f.removed.some(call => call.paths.includes(firstPath)));
     assert.deepEqual(f.pasted, []);
     assert.equal(f.socket.messages.at(-1)?.state, "failed");
+    assert.equal(f.socket.messages.at(-1)?.failedFile, "bad");
   }
 });
 
-test("closed native windows and failed paste callbacks remove uploaded files", async t => {
+test("closed native windows and failed paste callbacks retain complete files without inserting paths", async t => {
   for (const unavailable of ["resource", "paste"] as const) {
     const f = fixture(t), [token] = await f.begin([{ name: "one", size: 3 }]);
     if (unavailable === "resource") f.windows.delete("window-a"); else f.setPasteFailure();
     assert.equal(await f.service.receive(token!, "session-a", uploadRequest(Buffer.from("one"))), 409);
     await f.service.closeAll();
-    assert.equal(f.files.size, 0);
+    assert.deepEqual([...f.files.values()], [Buffer.from('one')]);
+    assert.deepEqual(f.removed, []);
     assert.deepEqual(f.pasted, []);
     assert.match(f.socket.messages.at(-1)?.error, /目标窗口已关闭/u);
   }
@@ -214,7 +220,7 @@ test("cancellation uses the owning socket and prevents a delayed paste", async t
   assert.equal(f.socket.messages.at(-1)?.state, "cancelled");
 });
 
-test("request abort and source removal cancel blocked bodies and clean completed files", async t => {
+test("network request abort and source failure retain completed files without inserting partial paths", async t => {
   for (const action of ["abort", "close-source"] as const) {
     const f = fixture(t), tokens = await f.begin([{ name: "first", size: 3 }, { name: "pending", size: 10 }]);
     await f.service.receive(tokens[0]!, "session-a", uploadRequest(Buffer.from("one")));
@@ -228,10 +234,43 @@ test("request abort and source removal cancel blocked bodies and clean completed
     assert.equal(await receiving, 409);
     await f.service.closeAll();
     assert.equal(cancelled, true);
-    assert.equal(f.files.size, 0);
+    assert.deepEqual([...f.files.values()], [Buffer.from('one')]);
     assert.deepEqual(f.pasted, []);
     assert.equal(await f.service.receive(tokens[1]!, "session-a", uploadRequest(Buffer.from("ignored"))), 404);
   }
+});
+
+test('a real WebSocket disconnect stops an unfinished batch without deleting completed files or pasting paths', async t => {
+  const f = fixture(t), wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await new Promise<void>(resolve => wss.once('listening', resolve));
+  const connected = new Promise<WebSocket>(resolve => wss.once('connection', resolve));
+  const client = new WebSocket(`ws://127.0.0.1:${(wss.address() as AddressInfo).port}`);
+  const server = await connected;
+  const frames: Record<string, any>[] = [];
+  client.on('message', bytes => frames.push(JSON.parse(bytes.toString())));
+  const closed = new Promise<void>(resolve => server.once('close', () => { f.service.disconnected(server); resolve(); }));
+  t.after(async () => {
+    client.terminate(); server.terminate();
+    await new Promise<void>(resolve => wss.close(() => resolve()));
+  });
+  await f.service.begin(f.source, 'window-a', server, 'session-a', { id: 'socket-batch', files: [{ name: 'first', size: 3 }, { name: 'pending', size: 8 }] });
+  for (let i = 0; i < 200 && !frames.some(frame => frame.type === 'upload-ready'); i++) await new Promise(resolve => setTimeout(resolve, 5));
+  const urls = frames.find(frame => frame.type === 'upload-ready')?.urls as string[];
+  assert(urls);
+  const tokens = urls.map(url => url.split('/').at(-1)!);
+  assert.equal(await f.service.receive(tokens[0]!, 'session-a', uploadRequest(Buffer.from('one'))), 204);
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(Buffer.from('part')); }, cancel() { cancelled = true; } });
+  const receiving = f.service.receive(tokens[1]!, 'session-a', new Request('http://canvas.test/api/uploads/pending', {
+    method: 'PUT', body, duplex: 'half',
+  } as RequestInit));
+  await new Promise(resolve => setImmediate(resolve));
+  client.close(); await closed;
+  assert.equal(await receiving, 409);
+  assert(cancelled);
+  assert.deepEqual([...f.files.values()], [Buffer.from('one')]);
+  assert.deepEqual(f.removed, []); assert.deepEqual(f.pasted, []);
+  assert.equal(await f.service.receive(tokens[1]!, 'session-a', uploadRequest(Buffer.from('ignored'))), 404);
 });
 
 test("validation and unavailable terminal capture never issue upload tokens", async t => {
@@ -272,4 +311,92 @@ test("late writer progress cannot revive a cancelled upload", async t => {
   assert.equal(f.socket.messages.at(-1)?.state, "cancelled");
   assert.equal(f.files.size, 0);
   assert.deepEqual(f.pasted, []);
+});
+
+test('real native terminal receives no upload paths until the whole batch succeeds, and failed later files retain earlier bytes', async t => {
+  const binary = process.env.CANVAS_TEST_HERDR_SERVER_BINARY;
+  if (!binary) { t.skip('Set CANVAS_TEST_HERDR_SERVER_BINARY for an isolated official server'); return; }
+  const root = mkdtempSync(join(tmpdir(), 'cv-upload-batch-')), config = join(root, 'config');
+  const input = join(root, 'input.bin'), receiver = join(root, 'receiver');
+  mkdirSync(join(config, 'herdr'), { recursive: true });
+  writeFileSync(receiver, `#!/usr/bin/python3\nimport os,tty\ntty.setraw(0)\nprint('UPLOAD_READY',flush=True)\nwith open(${JSON.stringify(input)},'ab',buffering=0) as output:\n while True:\n  data=os.read(0,4096)\n  if not data:break\n  output.write(data)\n`, { mode: 0o700 });
+  writeFileSync(join(config, 'herdr/config.toml'), `onboarding=false\n[terminal]\ndefault_shell=${JSON.stringify(receiver)}\nshell_mode="non_login"\n`);
+  const env = { PATH: process.env.PATH, HOME: root, XDG_CONFIG_HOME: config, XDG_STATE_HOME: join(root, 'state'), LANG: 'C.UTF-8' };
+  const source: Source = { id: randomUUID(), name: 'Native fixture', transport: 'local',
+    herdrSocket: join(config, 'herdr/sessions/upload-batch/herdr.sock') };
+  const native = spawn(binary, ['--session', 'upload-batch', 'server'], { env, stdio: 'ignore' });
+  const manager = new TerminalManager(), writing = gate(), files: string[] = [];
+  let writes = 0;
+  const service = new UploadService(manager, {
+    resources: listResources,
+    remove: async (_source, paths) => { for (const path of paths) rmSync(path, { force: true }); },
+    write: async (_source, file, chunks, signal, progress) => {
+      const buffers: Buffer[] = []; let length = 0;
+      for await (const chunk of chunks) { signal.throwIfAborted(); buffers.push(Buffer.from(chunk)); length += chunk.length; progress(length); }
+      if (length !== file.size) throw new Error('Synthetic size mismatch');
+      if (++writes === 2) await writing.promise;
+      signal.throwIfAborted();
+      const path = join(root, `0000000${files.length + 1}_${file.name}`);
+      writeFileSync(path, Buffer.concat(buffers)); files.push(path); return path;
+    },
+  });
+  t.after(async () => {
+    writing.resolve(); await service.closeAll(); await manager.closeAll();
+    if (native.exitCode === null && native.signalCode === null) {
+      const stopped = new Promise<void>(resolve => native.once('exit', () => resolve())); native.kill();
+      const kill = setTimeout(() => native.kill('SIGKILL'), 1500); await stopped; clearTimeout(kill);
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+  const waitFor = async (ready: () => boolean | Promise<boolean>, label: string) => {
+    for (let i = 0; i < 300; i++) { if (await ready()) return; await new Promise(resolve => setTimeout(resolve, 10)); }
+    assert.fail(label);
+  };
+  await waitFor(async () => (await listResources(source)).status === 'online', 'Native server starts');
+  await createSpace(source, 'Upload');
+  const space = (await listResources(source)).spaces.find(space => space.name === 'Upload')!, windowId = space.windows[0]!.id;
+  class Client extends EventEmitter {
+    readyState = 1; bufferedAmount = 0; messages: Record<string, any>[] = [];
+    send(value: string | Buffer) { if (typeof value === 'string') this.messages.push(JSON.parse(value)); }
+    close() { this.readyState = 3; this.emit('close'); }
+  }
+  const client = new Client(), socket = client as unknown as WebSocket;
+  client.once('close', () => service.disconnected(socket));
+  await manager.connect(source, { sourceId: source.id, spaceId: space.id, windowId }, socket);
+  const terminal = (await manager.entries.get(`${source.id}/${windowId}`))!;
+  await waitFor(() => Array.from({ length: terminal.emulator.buffer.active.length }, (_, row) =>
+    terminal.emulator.buffer.active.getLine(row)?.translateToString(true)).join('\n').includes('UPLOAD_READY'), 'Native receiver is ready');
+  client.emit('message', Buffer.from(JSON.stringify({ type: 'focus' })), false);
+  const actualInput = () => existsSync(input) ? readFileSync(input) : Buffer.alloc(0);
+  const baseline = actualInput();
+  const start = async (id: string, names: string[]) => {
+    await service.begin(source, windowId, socket, 'session', { id, files: names.map(name => ({ name, size: 3 })) });
+    const urls = client.messages.findLast(message => message.type === 'upload-ready' && message.id === id)?.urls;
+    assert(urls); return (urls as string[]).map(url => url.split('/').at(-1)!);
+  };
+  const first = await start('success', ["one O'Brian.txt", 'two.txt']);
+  assert.equal(await service.receive(first[0]!, 'session', uploadRequest(Buffer.from('one'))), 204);
+  const last = service.receive(first[1]!, 'session', uploadRequest(Buffer.from('two')));
+  await waitFor(() => writes === 2, 'Last file is in progress');
+  assert.deepEqual(actualInput(), baseline, 'No path was inserted while any file was incomplete');
+  writing.resolve(); assert.equal(await last, 204);
+  const inserted = Buffer.from(files.map(shellQuote).join(' '));
+  await waitFor(() => actualInput().length === baseline.length + inserted.length, 'The complete batch reaches native input');
+  assert.deepEqual(actualInput(), Buffer.concat([baseline, inserted]));
+  assert(!inserted.includes(10) && !inserted.includes(13));
+  const failed = await start('failure', ['retained.txt', 'broken.txt']);
+  assert.equal(await service.receive(failed[0]!, 'session', uploadRequest(Buffer.from('yes'))), 204);
+  const beforeFailure = actualInput(), retained = files.at(-1)!;
+  assert.equal(await service.receive(failed[1]!, 'session', uploadRequest(Buffer.from('short'))), 409);
+  assert.deepEqual(actualInput(), beforeFailure, 'Failed batch inserts no partial path');
+  assert.equal(readFileSync(retained, 'utf8'), 'yes');
+  assert.equal(client.messages.at(-1)?.failedFile, 'broken.txt');
+  const closing = await start('native-close', ['closed-retained.txt', 'never.txt']);
+  assert.equal(await service.receive(closing[0]!, 'session', uploadRequest(Buffer.from('yes'))), 204);
+  const closedPath = files.at(-1)!, beforeClose = actualInput();
+  await closeWindow(source, space.id, windowId);
+  await waitFor(() => client.readyState === 3, 'Native close retires the browser transport');
+  assert.equal(await service.receive(closing[1]!, 'session', uploadRequest(Buffer.from('new'))), 404);
+  assert.equal(readFileSync(closedPath, 'utf8'), 'yes');
+  assert.deepEqual(actualInput(), beforeClose, 'Closing native window inserts no upload paths');
 });

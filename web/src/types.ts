@@ -83,6 +83,7 @@ export interface TerminalData {
   width: number
   height: number
   available: boolean
+  closed?: boolean
   sourceOffline?: boolean
   status: ProgramStatus
   statusFresh: boolean

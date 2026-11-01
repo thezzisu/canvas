@@ -1,5 +1,6 @@
 import { t } from './i18n'
 import { apiContext, apiFetch, apiUrl, uuid, type ApiContext } from './api'
+import { hasFileTransfer, readFileTransfer } from './browser-file-input'
 
 export interface TerminalUploadState {
   id?: string
@@ -11,6 +12,7 @@ export interface TerminalUploadState {
   error?: string
   queued?: number
   cancelling?: boolean
+  rejected?: string
 }
 interface Batch { context: ApiContext; id: string; files: File[]; total: number; request?: AbortController; running: boolean; cancelling?: boolean }
 interface UploadOptions {
@@ -36,7 +38,7 @@ export class TerminalUploads {
   }
 
   reject(error: string) {
-    if (this.current) return
+    if (this.current) { this.update({ rejected: error }); return }
     clearTimeout(this.dismissed)
     this.state = { name: '', transferred: 0, total: 0, state: 'failed', error }
     this.options.changed(this.state)
@@ -46,12 +48,13 @@ export class TerminalUploads {
   enqueue(files: File[]) {
     if (!files.length) return
     if (!this.options.available()) { this.reject(t('terminal.upload.disconnected')); return }
+    if (files.some(file => file.webkitRelativePath)) { this.reject(t('terminal.upload.foldersUnsupported')); return }
     if (this.current?.cancelling) return
     const total = files.reduce((sum, file) => sum + file.size, 0)
     if (!Number.isSafeInteger(total)) { this.reject(t('terminal.upload.invalidSize')); return }
     this.options.focus()
     this.pending.push({ context: apiContext(), id: uuid(), files, total, running: false })
-    if (this.current) this.update({})
+    if (this.current) this.update({ rejected: undefined })
     else this.next()
   }
 
@@ -107,27 +110,33 @@ export class TerminalUploads {
     }
     if (message.state === 'completed') this.finish('completed')
     else if (message.state === 'cancelled') this.finish('cancelled')
-    else if (message.state === 'failed') this.finish('failed', typeof message.error === 'string' ? message.error : t('terminal.upload.failed'))
+    else if (message.state === 'failed') {
+      const error = typeof message.error === 'string' ? message.error : t('terminal.upload.failed')
+      this.finish('failed', typeof message.failedFile === 'string' ? t('terminal.upload.fileFailed', { name: message.failedFile, error }) : error)
+    }
     else if (message.state === 'uploading') this.update({ state: 'uploading' })
     return true
   }
 
   private async put(batch: Batch, urls: string[]) {
     batch.request = new AbortController()
+    let name = ''
     try {
       for (const [index, file] of batch.files.entries()) {
         if (this.current !== batch) return
+        name = file.name
         const response = await apiFetch(urls[index]!, { method: 'PUT', body: file,
           headers: { 'Content-Type': 'application/octet-stream' }, signal: batch.request.signal }, batch.context)
-            if (!response.ok) throw new Error('Upload failed')
+        if (!response.ok) throw new Error('Upload failed')
       }
       // The last PUT commits the batch and inserts its paths on the server.
       if (this.current === batch) this.finish('completed')
     } catch {
       if (this.current !== batch) return
       if (batch.cancelling) return
-      this.options.send({ type: 'upload-cancel', id: batch.id })
-      this.finish('failed', t('terminal.upload.failed'))
+      // A lost request is a failure, not permission to delete earlier successes.
+      // The server retires it on request abort or its existing upload deadline.
+      this.finish('failed', t('terminal.upload.fileFailed', { name, error: t('terminal.upload.failed') }))
     }
   }
 
@@ -137,7 +146,7 @@ export class TerminalUploads {
     clearTimeout(this.timer)
     this.current = undefined
     if (state !== 'completed') { batch.request?.abort(); this.pending = [] }
-    this.update({ state, error, cancelling: false, ...(state === 'completed' ? { transferred: batch.total } : {}) })
+    this.update({ state, error, cancelling: false, rejected: undefined, ...(state === 'completed' ? { transferred: batch.total } : {}) })
     if (this.pending.length) { this.next(); return }
     this.dismissed = setTimeout(() => { this.state = undefined; this.options.changed(undefined) }, state === 'failed' ? 6000 : 1800)
   }
@@ -148,8 +157,8 @@ export class TerminalUploads {
       const batch = this.current
       if (batch.cancelling) return
       batch.cancelling = true
-      batch.request?.abort()
       this.options.send({ type: 'upload-cancel', id: batch.id })
+      batch.request?.abort()
       clearTimeout(this.timer)
       this.update({ cancelling: true })
       this.timer = setTimeout(() => { if (this.current === batch) this.finish('cancelled') }, 5000)
@@ -172,31 +181,26 @@ export class TerminalUploads {
   }
 }
 
-function hasFiles(data: DataTransfer | null) {
-  return !!data && ([...data.items].some(item => item.kind === 'file') || [...data.types].includes('Files'))
-}
 export function preventFileNavigation(event: DragEvent) {
-  if (!hasFiles(event.dataTransfer)) return
+  if (!hasFileTransfer(event.dataTransfer)) return
   event.preventDefault()
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'none'
 }
-function filesFrom(data: DataTransfer | null) {
-  if (!data) return []
-  const files = data.files.length ? [...data.files] : [...data.items].filter(item => item.kind === 'file').map(item => item.getAsFile()).filter((file): file is File => !!file)
-  return files.map(file => file.name ? file : new File([file], file.type === 'image/png' ? 'clipboard.png' : 'clipboard', { type: file.type }))
-}
-
 /** Capture files before xterm pastes fallback text; plain text stays with xterm. */
 export function bindFileInput(host: HTMLElement, uploads: TerminalUploads, dragging: (value: boolean) => void) {
+  const accept = (data: DataTransfer | null) => {
+    const { files, error } = readFileTransfer(data)
+    if (error) uploads.reject(t(error === 'folders' ? 'terminal.upload.foldersUnsupported' : 'terminal.upload.unreadable'))
+    else uploads.enqueue(files)
+  }
   const paste = (event: ClipboardEvent) => {
-    const files = filesFrom(event.clipboardData)
-    if (!files.length) return
+    if (!hasFileTransfer(event.clipboardData)) return
     event.preventDefault()
     event.stopImmediatePropagation()
-    uploads.enqueue(files)
+    accept(event.clipboardData)
   }
   const over = (event: DragEvent) => {
-    if (!hasFiles(event.dataTransfer)) return
+    if (!hasFileTransfer(event.dataTransfer)) return
     event.preventDefault()
     event.stopPropagation()
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
@@ -207,15 +211,11 @@ export function bindFileInput(host: HTMLElement, uploads: TerminalUploads, dragg
     dragging(false)
   }
   const drop = (event: DragEvent) => {
-    if (!hasFiles(event.dataTransfer)) return
+    if (!hasFileTransfer(event.dataTransfer)) return
     event.preventDefault()
     event.stopImmediatePropagation()
     dragging(false)
-    if ([...event.dataTransfer?.items || []].some(item => item.webkitGetAsEntry?.()?.isDirectory)) {
-      uploads.reject(t('terminal.upload.foldersUnsupported'))
-      return
-    }
-    uploads.enqueue(filesFrom(event.dataTransfer))
+    accept(event.dataTransfer)
   }
   host.addEventListener('paste', paste, true)
   host.addEventListener('dragenter', over)

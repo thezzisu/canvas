@@ -18,7 +18,7 @@ export default {
     close: 'Close preview', remaining: '{count} more file to preview | {count} more files to preview', fullscreen: 'Fullscreen preview', exitFullscreen: 'Exit fullscreen preview',
     unavailable: 'Unable to preview this file', mediaUnavailable: 'This browser cannot play this file.', pdfUnavailable: 'This browser cannot preview PDFs', truncated: 'Showing the first 1 MiB',
   },
-  file: { addFailed: 'Could not add this file', dropToAdd: 'Drop to add file notes', adding: 'Adding files', download: 'Download file', remove: 'Delete file', downloadNamed: 'Download {name}', downloadOriginal: 'Download original', unreadable: 'Unable to read this text file' },
+  file: { singleOnly: 'Choose one file at a time', uploadBusy: 'An upload is already in progress', dropOnCanvas: 'Drop on an empty canvas area', unreadableTransfer: 'Could not read the dropped file', uploadingTo: 'Uploading to {name}', addFailed: 'Could not add this file', dropToAdd: 'Drop to add a file note', adding: 'Adding file', download: 'Download file', remove: 'Delete file', downloadNamed: 'Download {name}', downloadOriginal: 'Download original', unreadable: 'Unable to read this text file' },
   image: { zoom: 'Image zoom', zoomOut: 'Zoom out', zoomIn: 'Zoom in', fit: 'Fit image', scale: 'Zoom level' },
   note: {
     copy: 'Copy note', copyOrDrag: 'Copy note · drag to a terminal to paste', paste: 'Paste note', openToPaste: 'Open this window to paste',

@@ -32,14 +32,15 @@ export class UploadService {
   private send(socket: WebSocket, value: unknown) {
     if (socket.readyState === 1) socket.send(JSON.stringify(value));
   }
-  private progress(batch: Batch, state: "uploading" | "completed" | "cancelled" | "failed", error?: string) {
+  private progress(batch: Batch, state: "uploading" | "completed" | "cancelled" | "failed", error?: string, failedFile?: string) {
     this.send(batch.socket, { type: "upload-progress", id: batch.id, state,
       transferred: batch.transferred, total: batch.total, ...(error ? { error } : {}),
+      ...(failedFile ? { failedFile } : {}),
       ...(state === "completed" ? { paths: batch.paths } : {}) });
   }
   private deadline(batch: Batch) {
     clearTimeout(batch.timer);
-    batch.timer = setTimeout(() => this.fail(batch, "上传超时"), 60_000);
+    batch.timer = setTimeout(() => this.fail(batch, "上传超时", false, batch.files[batch.next]?.name), 60_000);
     batch.timer.unref();
   }
   async begin(source: Source, windowId: string, socket: WebSocket, session: string, input: unknown) {
@@ -80,16 +81,21 @@ export class UploadService {
     const cleaning = this.options.remove(source, paths).catch(() => {}).finally(() => this.closing.delete(cleaning));
     this.closing.add(cleaning);
   }
-  private fail(batch: Batch, error: string, cancelled = false) {
+  private fail(batch: Batch, error: string, cancelled = false, failedFile?: string) {
     if (this.batches.get(batch.key) !== batch) return;
     this.removeBatch(batch);
     batch.controller.abort();
-    this.progress(batch, cancelled ? "cancelled" : "failed", error);
-    this.cleanup(batch.source, [...batch.paths]);
+    this.progress(batch, cancelled ? "cancelled" : "failed", error, failedFile);
+    // A failed later file never pastes a partial batch or deletes earlier successes.
+    if (cancelled) this.cleanup(batch.source, [...batch.paths]);
   }
   cancel(socket: WebSocket, id?: string) {
     for (const batch of this.batches.values())
       if (batch.socket === socket && (id === undefined || batch.id === id)) this.fail(batch, "上传已取消", true);
+  }
+  disconnected(socket: WebSocket) {
+    for (const batch of this.batches.values())
+      if (batch.socket === socket) this.fail(batch, "上传连接中断", false, batch.files[batch.next]?.name);
   }
   closeSource(sourceId: string) {
     this.sourceGenerations.set(sourceId, (this.sourceGenerations.get(sourceId) || 0) + 1);
@@ -103,8 +109,8 @@ export class UploadService {
     batch.busy = true;
     this.tokens.delete(token);
     const reader = request.body?.getReader();
-    const cancelled = () => this.fail(batch, "上传已取消", true);
-    request.signal.addEventListener("abort", cancelled, { once: true });
+    const interrupted = () => this.fail(batch, "上传连接中断", false, batch.files[index]!.name);
+    request.signal.addEventListener("abort", interrupted, { once: true });
     const abortReader = () => { void reader?.cancel().catch(() => {}); };
     batch.controller.signal.addEventListener("abort", abortReader, { once: true });
     const chunks = async function* () {
@@ -115,6 +121,7 @@ export class UploadService {
         yield chunk.value;
       }
     };
+    let written = false;
     try {
       if (request.signal.aborted) throw new Error("上传已取消");
       const path = await this.options.write(batch.source, batch.files[index]!, chunks(), batch.controller.signal, received => {
@@ -123,6 +130,7 @@ export class UploadService {
         this.deadline(batch);
         if (Date.now() - batch.lastProgress > 100) { batch.lastProgress = Date.now(); this.progress(batch, "uploading"); }
       });
+      written = true;
       if (this.batches.get(batch.key) !== batch) { this.cleanup(batch.source, [path]); return 409; }
       batch.paths.push(path);
       batch.next++; batch.completedBytes += batch.files[index]!.size; batch.transferred = batch.completedBytes;
@@ -138,10 +146,10 @@ export class UploadService {
       } else this.progress(batch, "uploading");
       return 204;
     } catch (error) {
-      this.fail(batch, error instanceof Error ? error.message : "文件上传失败");
+      this.fail(batch, error instanceof Error ? error.message : "文件上传失败", false, written ? undefined : batch.files[index]!.name);
       return 409;
     } finally {
-      request.signal.removeEventListener("abort", cancelled);
+      request.signal.removeEventListener("abort", interrupted);
       batch.controller.signal.removeEventListener("abort", abortReader);
       await reader?.cancel().catch(() => {});
     }

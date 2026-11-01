@@ -28,6 +28,7 @@ const paths: Record<string, string> = {
   edit: 'M14 5l5 5 M4 20l5-1L20 8a2.8 2.8 0 0 0-4-4L5 15z',
   trash: 'M3 6h18 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7',
   search: 'M20 20l-5-5 M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0',
+  percent: 'M19 5L5 19 M9 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0 M21 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0',
   lock: 'M6 10h12v11H6z M8 10V6a4 4 0 0 1 8 0v4',
   check: 'M5 12l4 4L19 6',
   layers: 'M12 3l10 5-10 5L2 8z M2 12l10 5 10-5 M2 16l10 5 10-5',

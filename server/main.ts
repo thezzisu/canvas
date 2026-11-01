@@ -141,7 +141,7 @@ const upgrade = (request: import("node:http").IncomingMessage, socket: import("n
       return;
     }
     socketSessions.set(ws, token);
-    ws.once("close", () => uploads.cancel(ws));
+    ws.once("close", () => uploads.disconnected(ws));
     ws.on("message", (bytes, binary) => {
       if (binary || Buffer.byteLength(bytes.toString()) > 128 * 1024) return;
       const session = socketSessions.get(ws) || "";
