@@ -6,7 +6,10 @@ export function useCardContentFocus(body: Ref<HTMLElement | undefined>, readOnly
   const { activeElement, windowFocused } = useDocumentFocus()
   const active = computed(() => {
     const element = activeElement.value
-    return !readOnly() && windowFocused.value && !!element && !!body.value?.contains(element) && !element.closest('.card-content-activate')
+    // Native viewers retain activation until focus moves elsewhere in this page.
+    // Their child-window focus events are not exposed to the parent document.
+    return !readOnly() && (windowFocused.value || element instanceof HTMLIFrameElement) &&
+      !!element && !!body.value?.contains(element) && !element.closest('.card-content-activate')
   })
   function focus() { if (!readOnly()) body.value?.focus({ preventScroll: true }) }
   function pointerDown(event: PointerEvent) {
