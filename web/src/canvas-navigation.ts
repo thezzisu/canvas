@@ -21,7 +21,6 @@ export function useCanvasNavigation(options: {
   const app = ref<HTMLElement>()
   const fullscreen = ref(false)
   let previous: { canvasId: string; viewport: Viewport; width: number; height: number; frame?: CanvasFrame } | undefined
-  let saveTimer: ReturnType<typeof setTimeout> | undefined
   let changing = false
   let gesture: { count: number; viewport: Viewport; point: TouchPosition; distance: number; paged: boolean; multi: boolean; latest: TouchPosition; axis?: 'x' | 'y' } | undefined
   const pageWheel = new PageWheelGesture()
@@ -170,10 +169,6 @@ export function useCanvasNavigation(options: {
       if (preview && options.paging?.enabled() && !options.blocked()) finishPage(direction || undefined)
       return
     }
-    if (moved) {
-      clearTimeout(saveTimer)
-      saveTimer = setTimeout(options.saveViewport, 160)
-    }
     gesture = event.touches.length && surface.value
       ? { ...gesture, ...touchPosition(event.touches), viewport: { ...options.getViewport() } } : undefined
   }
@@ -242,8 +237,6 @@ export function useCanvasNavigation(options: {
         x: current.x - (horizontal ? event.deltaY : event.deltaX) * unit,
         y: current.y - (horizontal ? 0 : event.deltaY) * unit })
     }
-    clearTimeout(saveTimer)
-    saveTimer = setTimeout(options.saveViewport, 160)
   }
 
   async function settle() {
@@ -323,7 +316,6 @@ export function useCanvasNavigation(options: {
     window.addEventListener('blur', blurPaging)
   })
   onBeforeUnmount(() => {
-    clearTimeout(saveTimer)
     resetPagingFeedback()
     document.removeEventListener('fullscreenchange', fullscreenChanged)
     document.removeEventListener('pointermove', pointerMoved, true)

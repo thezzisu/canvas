@@ -1,6 +1,9 @@
 @media(prefers-reduced-motion:no-preference) {
-  .minimap-pulse,.terminal-status-trigger>i[data-status-pulse=true] { animation: status-breathe 2.4s ease-in-out infinite; }
+  .minimap-pulse { animation: minimap-breathe 2.4s ease-in-out infinite; }
+  .terminal-status-trigger>i[data-status-pulse=true] { animation: status-breathe 2.4s ease-in-out infinite; }
 }
+/* Avoid a separate composited layer for each minimap window. */
+@keyframes minimap-breathe { 0%,100% { fill-opacity: .58; } 50% { fill-opacity: 1; } }
 @keyframes status-breathe { 0%,100% { opacity: .58; } 50% { opacity: 1; } }
 
 .vue-flow__node-note:is(.selected,:focus-visible,:focus-within)>.note-card { border-color: color-mix(in srgb,var(--note-color) 78%,#e7edf5); }

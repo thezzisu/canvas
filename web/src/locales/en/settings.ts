@@ -3,6 +3,7 @@ export default {
   close: 'Close settings', thisBrowser: 'This browser', cutout: 'Display cutout', position: 'Position', width: 'Width',
   inputMode: 'Input mode', inputAuto: 'Automatic', inputTouch: 'Touch', inputKeyboard: 'Keyboard & mouse',
   uiScale: 'UI scale',
+  copyFrontendVersion: 'Copy frontend version',
   left: 'Left', center: 'Center', right: 'Right', contentFont: 'Content font', addFont: 'Add font', add: 'Add',
   fontOrder: 'Font order', primaryFont: 'Primary font', fallbackFont: 'Fallback font', font: 'Font {index}',
   fontPlaceholder: 'Choose or enter a font family', localFont: 'Use a local font', moveFontUp: 'Move font {index} up',

@@ -903,6 +903,7 @@ function clearInstanceRuntime() {
   username.value = activeInstance.value.username || ''; password.value = ''; loginFailure.value = undefined
 }
 function visibilityChanged() {
+  if (document.hidden) saveViewport()
   pageVisible.value = !document.hidden
   if (!document.hidden) void refreshResources(true)
 }
@@ -1492,6 +1493,7 @@ function keydown(event: KeyboardEvent) {
   }
 }
 function beforeUnload(event: BeforeUnloadEvent) {
+  saveViewport()
   if (!pendingNotes.size && !savingNotes.size && !pendingLayouts.size && !layoutSaves.saving) return
   checkpointEdits()
   void flushInstanceEdits()

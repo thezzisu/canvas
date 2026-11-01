@@ -1,7 +1,7 @@
 function alignPulse(event: AnimationEvent) {
-  if (event.animationName !== 'status-breathe' || !(event.target instanceof Element)) return
+  if (!['status-breathe', 'minimap-breathe'].includes(event.animationName) || !(event.target instanceof Element)) return
   for (const animation of event.target.getAnimations()) {
-    if (animation instanceof CSSAnimation && animation.animationName === 'status-breathe') animation.startTime = 0
+    if (animation instanceof CSSAnimation && animation.animationName === event.animationName) animation.startTime = 0
   }
 }
 
