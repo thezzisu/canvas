@@ -40,6 +40,7 @@ const paths: Record<string, string> = {
   note: 'M4 3h16v13l-5 5H4z M15 21v-5h5 M8 8h8 M8 12h6',
   file: 'M5 3h9l5 5v13H5z M14 3v6h5',
   download: 'M12 3v12 M7 10l5 5 5-5 M4 17v4h16v-4',
+  eye: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0',
   image: 'M3 3h18v18H3z M3 16l6-6 5 5 3-3 4 4 M16 7h.01',
 }
 </script>

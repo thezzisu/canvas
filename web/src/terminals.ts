@@ -188,9 +188,8 @@ export function terminalConsumesWheel(event: WheelEvent): boolean {
   return target instanceof Node && [...sessions.values()].some(session =>
     session.term.element?.contains(target) &&
     session.term.element.contains(document.activeElement) && document.hasFocus() &&
-    session.state.status === 'connected' && !session.state.readOnly &&
-    !(session.state.presentation?.maximized && !session.state.presentation.owned) &&
-    session.term.modes.mouseTrackingMode !== 'none')
+    interactive(session) && session.state.status === 'connected' && !session.state.readOnly &&
+    !(session.state.presentation?.maximized && !session.state.presentation.owned))
 }
 function normalizeMouseCoordinates(event: MouseEvent) {
   // Canvas gestures need screen coordinates; only native wheel reports need
@@ -200,6 +199,7 @@ function normalizeMouseCoordinates(event: MouseEvent) {
   const pointed = target instanceof Node
     ? [...sessions.values()].find(session => session.term.element?.contains(target))
     : undefined
+  if (event instanceof WheelEvent && pointed?.term.modes.mouseTrackingMode === 'none') return
   if (event.type === 'mousemove' && event.buttons === 0 && !pointed) mouseOwner = undefined
   if (event.type === 'mousedown') mouseOwner = pointed
   const session = event.type === 'mousemove' || event.type === 'mouseup' ? mouseOwner || pointed : pointed

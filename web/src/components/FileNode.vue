@@ -22,6 +22,7 @@ import { writeFileReference } from '../file-reference'
 import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
 import { useFileView } from '../file-view'
 import { usePointerDismiss } from '../pointer-dismiss'
+import { useCardContentFocus } from '../card-content-focus'
 
 const { t, n } = useI18n()
 
@@ -53,6 +54,7 @@ const imageFailed = ref(false)
 watch(() => props.data.assetId, () => { imageFailed.value = false })
 function download() { void downloadMedia(path.value, props.data.asset.filename).catch(reportDownloadError) }
 const fileBody = ref<HTMLElement>()
+const { active: contentActive, focus: focusContent, pointerDown: contentPointerDown } = useCardContentFocus(fileBody, () => mobilePreview.value)
 const text = ref('')
 const textLoading = ref(false)
 const textError = ref<string | Error>('')
@@ -111,7 +113,7 @@ const size = computed(() => {
   <template v-if="!data.mobile && !data.focus">
     <NodeResizeControl v-for="position in (['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const)" :key="position" :node-id="id" :position="position" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
   </template>
-  <article class="file-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus }" :data-asset-id="data.assetId" :data-preview-kind="preview">
+  <article class="file-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus, 'input-focused': contentActive }" :data-asset-id="data.assetId" :data-preview-kind="preview">
     <header ref="header" class="file-header drag-handle" :class="{ 'cutout-header': data.focus }" :data-cutout-position="data.focus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
       <span class="file-icon" :class="{ 'cutout-status': data.focus }"><Icon name="file" :size="13" /></span>
       <span class="file-title" :class="{ 'cutout-title': data.focus }" :title="data.asset.filename">{{ data.asset.filename }}</span>
@@ -131,7 +133,7 @@ const size = computed(() => {
       <button v-else class="file-action nodrag" :title="t('panels.file.remove')" :aria-label="t('panels.file.remove')" @click.stop="data.onRemove(id)"><Icon name="close" :size="14" /></button>
       </div>
     </header>
-    <div ref="fileBody" class="file-body nodrag nopan" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.stop @dblclick.stop>
+    <div ref="fileBody" class="file-body card-content nodrag nopan" :data-content-active="contentActive" :tabindex="mobilePreview ? -1 : 0" :aria-label="data.asset.filename" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.stop="contentPointerDown" @dblclick.stop>
       <div v-if="(['image', 'audio', 'video'].includes(preview) || preview === 'pdf' && pdfPreview) && !url" class="file-text-status" :role="ticketError ? 'alert' : 'status'">
         <template v-if="ticketError"><span>{{ t('panels.preview.unavailable') }}</span><button type="button" @click="retryTicket">{{ t('common.retry') }}</button></template>
         <template v-else><span class="spinner" />{{ t('common.loading') }}</template>
@@ -144,7 +146,10 @@ const size = computed(() => {
         <TextPreview v-else :text="text" :filename="data.asset.filename" :rendered="rendered" :wrap="wrap" :reading="reading" :read-only="mobilePreview" @reading="remember" />
         <div v-if="truncated" class="file-text-truncated"><span>{{ t('panels.preview.truncated') }}</span><button type="button" @click="download">{{ t('panels.file.downloadOriginal') }}</button></div>
       </div>
-      <iframe v-else-if="preview === 'pdf' && pdfPreview && url" class="file-preview nowheel" :src="url" :title="data.asset.filename" loading="lazy" referrerpolicy="no-referrer" />
+      <template v-else-if="preview === 'pdf' && pdfPreview && url">
+        <iframe class="file-preview nowheel" :src="url" :title="data.asset.filename" :tabindex="!data.mobile && !contentActive ? -1 : 0" loading="lazy" referrerpolicy="no-referrer" />
+        <div v-if="!data.mobile && !contentActive" class="file-preview-activate card-content-activate" role="button" tabindex="0" :aria-label="t('common.openCard', { name: data.asset.filename })" @click.stop="focusContent" @keydown.enter.stop.prevent="focusContent" @keydown.space.stop.prevent="focusContent" />
+      </template>
       <button v-else type="button" class="file-download" @click="download" :aria-label="t('panels.file.downloadNamed', { name: data.asset.filename })"><Icon name="file" :size="42" /><span>{{ data.asset.filename }}</span></button>
     </div>
     <CardPreview v-if="mobilePreview" :label="t('common.openCard', { name: data.asset.filename })" @open="data.onAction?.('focus', id)" />

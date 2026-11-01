@@ -1,5 +1,6 @@
 export default {
   scan: {
+    preview: 'Preview',
     addNote: 'Add as note', added: 'Added', createCanvasFirst: 'Create a canvas first',
     title: 'Scan content', scope: 'Current screen', refresh: 'Rescan', empty: 'No files or links found',
     failed: 'Could not scan this window', openFailed: 'Could not open this file', staging: 'Staging…',

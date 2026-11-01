@@ -1,5 +1,6 @@
 export default {
   scan: {
+    preview: '预览',
     addNote: '加为便签', added: '已添加', createCanvasFirst: '请先新建画布',
     title: '扫描内容', scope: '当前画面', refresh: '重新扫描', empty: '未发现文件或链接',
     failed: '扫描失败', openFailed: '无法打开文件', staging: '暂存中…',

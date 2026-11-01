@@ -9,14 +9,17 @@ import Icon from './Icon.vue'
 import CardPreview from './CardPreview.vue'
 import { noteColor } from '../status'
 import { copyText } from '../clipboard'
-import { writeNoteTransfer } from '../note-transfer'
+import { rejectNoteCardDrop, writeNoteTransfer } from '../note-transfer'
 import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
 import { usePointerDismiss } from '../pointer-dismiss'
+import { useCardContentFocus } from '../card-content-focus'
 
 const { t } = useI18n()
 
 const props = withDefaults(defineProps<Pick<NodeProps<NoteData>, 'id' | 'data'> & { selected?: boolean }>(), { selected: false })
 const mobilePreview = computed(() => !!props.data.mobile && !props.data.focus)
+const noteBody = ref<HTMLElement>()
+const { active: contentActive, pointerDown: contentPointerDown } = useCardContentFocus(noteBody, () => mobilePreview.value)
 const header = ref<HTMLElement>()
 const compact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined))
 const menu = computed(() => [
@@ -68,7 +71,7 @@ onBeforeUnmount(() => clearTimeout(copyTimer))
   <template v-if="!data.minimized && !data.mobile && !data.focus">
     <NodeResizeControl v-for="position in (['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const)" :key="position" :node-id="id" :position="position" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
   </template>
-  <article class="note-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus }" :data-note-id="id" :style="{ '--note-color': noteColor(color) }">
+  <article class="note-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus, 'input-focused': contentActive }" :data-note-id="id" :style="{ '--note-color': noteColor(color) }" @dragenter.capture="rejectNoteCardDrop" @dragover.capture="rejectNoteCardDrop" @drop.capture="rejectNoteCardDrop">
     <header ref="header" class="note-header drag-handle" :class="{ 'cutout-header': data.focus }" :data-cutout-position="data.focus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
       <div ref="colorPicker" class="note-color-picker nodrag" :class="{ 'cutout-status': data.focus }">
         <button class="note-color-dot" :title="t('panels.note.color')" :aria-label="t('panels.note.color')" :aria-expanded="colorOpen" @click.stop="colorOpen = !colorOpen" @keydown.esc.stop="colorOpen = false" />
@@ -95,7 +98,7 @@ onBeforeUnmount(() => clearTimeout(copyTimer))
       </div>
       <span class="sr-only" role="status">{{ copied ? t(`terminal.clipboard.${copied}`) : '' }}</span>
     </header>
-    <textarea v-if="!data.minimized || data.focus" v-model="content" class="note-content nodrag nowheel" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :readonly="mobilePreview" :tabindex="mobilePreview ? -1 : undefined" :aria-label="t('panels.note.content')" :placeholder="t('panels.note.placeholder')" maxlength="200000" @input="emitChange({ content })" @blur="flush" @pointerdown.stop @wheel.stop @dblclick.stop />
+    <textarea v-if="!data.minimized || data.focus" ref="noteBody" v-model="content" class="note-content card-content nodrag nowheel" :data-content-active="contentActive" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :readonly="mobilePreview" :tabindex="mobilePreview ? -1 : undefined" :aria-label="t('panels.note.content')" :placeholder="t('panels.note.placeholder')" maxlength="200000" @input="emitChange({ content })" @blur="flush" @pointerdown.stop="contentPointerDown" @wheel.stop @dblclick.stop />
     <CardPreview v-if="mobilePreview" :label="t('common.openCard', { name: title || t('panels.note.name') })" @open="data.onAction('focus', id)" />
   </article>
 </template>

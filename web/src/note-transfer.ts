@@ -1,3 +1,5 @@
+import { CANVAS_FILE_TYPE } from './file-reference'
+
 export const NOTE_TEXT_TYPE = 'application/x-canvas-note-text'
 
 /** Keep the full note as plain text for both Canvas and an explicit external drop. */
@@ -11,6 +13,16 @@ export function writeNoteTransfer(data: DataTransfer | null, text: string): bool
 
 export function isNoteTransfer(data: DataTransfer | null): data is DataTransfer {
   return !!data && data.types.includes(NOTE_TEXT_TYPE) && !data.types.includes('Files')
+}
+
+/** Notes accept ordinary text editing, but not Canvas card transfers. */
+export function rejectNoteCardDrop(event: DragEvent): boolean {
+  const data = event.dataTransfer
+  if (!data || !data.types.includes(NOTE_TEXT_TYPE) && !data.types.includes(CANVAS_FILE_TYPE)) return false
+  event.preventDefault()
+  event.stopPropagation()
+  data.dropEffect = 'none'
+  return true
 }
 
 /** Leave ordinary text and file drops to their existing handlers. */

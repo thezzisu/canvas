@@ -9,11 +9,13 @@ import type { WindowContentItem, WindowContentOpen, WindowContentScan } from '..
 import { api, apiContext, apiUrl, requireCurrentApi, segment, uuid } from '../api'
 import { copyText } from '../clipboard'
 import { presentDownload, type DownloadContext } from '../downloads'
+import { filePreview } from '../file-preview'
 import Icon from './Icon.vue'
 import { presentUrl } from '../urls'
 
 type Target = { sourceId: string; spaceId: string; windowId: string; name: string; context: DownloadContext }
 type FileItem = Extract<WindowContentItem, { kind: 'file' }>
+type FileAction = 'download' | 'preview' | Canvas
 const props = defineProps<{ target: Target | null; canvases: Canvas[]; portal?: HTMLElement }>()
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
@@ -26,13 +28,14 @@ const added = ref<string>()
 const errorMessage = computed(() => error.value instanceof Error ? error.value.message : error.value ? t(error.value) : '')
 const panes = computed(() => result.value?.scan.panes.filter(pane => pane.items.length).map(pane => ({ ...pane,
   items: pane.items.map(item => ({ ...item,
+    previewable: item.kind === 'file' && !!item.path && filePreview({ filename: item.path }) !== 'file',
     displayLabel: item.kind === 'file' ? item.label.split('/').filter(Boolean).at(-1) || item.label : item.label,
     href: item.kind === 'link' ? externalLink(item.url) : undefined })),
 })) || [])
 let scanRequest: AbortController | undefined
 let fileRequest: AbortController | undefined
 let copyTimer: ReturnType<typeof setTimeout> | undefined
-let retryItem: { item: FileItem; canvas?: Canvas } | undefined
+let retryItem: { item: FileItem; action: FileAction } | undefined
 
 function externalLink(value: string) {
   try {
@@ -74,9 +77,10 @@ function close(open = false) {
   cancelRequests()
   emit('close')
 }
-async function openFile(item: FileItem, canvas?: Canvas) {
+async function openFile(item: FileItem, action: FileAction = 'download') {
   const snapshot = result.value
   if (!snapshot || !item.path || opening.value || loading.value || props.target !== snapshot.target) return
+  const canvas = typeof action === 'string' ? undefined : action
   const context = apiContext()
   const current = fileRequest = new AbortController()
   opening.value = item.id; error.value = ''; retryItem = undefined
@@ -89,20 +93,19 @@ async function openFile(item: FileItem, canvas?: Canvas) {
     if (fileRequest !== current || current.signal.aborted || result.value !== snapshot || props.target !== snapshot.target) return
     const url = apiUrl(file.url, context)
     if (!/^api\/(?:files|downloads)\/[^/]+$/.test(url.pathname.slice(new URL(context.base).pathname.length)) || url.search) throw new Error(t('panels.scan.openFailed'))
-    fileRequest = undefined; opening.value = ''
     requireCurrentApi(context)
     if (canvas) added.value = item.id
-    else await presentDownload(file, true)
+    else await presentDownload(file, action === 'download')
   } catch (reason) {
     if (!current.signal.aborted && result.value === snapshot && props.target === snapshot.target) {
       error.value = reason instanceof Error ? reason : 'panels.scan.openFailed'
-      retryItem = { item, canvas }
+      retryItem = { item, action }
     }
   } finally {
     if (fileRequest === current) { fileRequest = undefined; opening.value = '' }
   }
 }
-function retry() { if (retryItem) void openFile(retryItem.item, retryItem.canvas); else void scan() }
+function retry() { if (retryItem) void openFile(retryItem.item, retryItem.action); else void scan() }
 function destinations(item: FileItem): DropdownMenuItem[] {
   return props.canvases.map(canvas => ({ label: canvas.name, onSelect: () => { void openFile(item, canvas) } }))
 }
@@ -162,6 +165,7 @@ onBeforeUnmount(() => { cancelRequests(); clearTimeout(copyTimer) })
           </button>
           <UButton type="button" color="neutral" variant="ghost" class="content-scan-action" :aria-label="t(item.kind === 'file' ? 'panels.scan.copyPath' : 'panels.scan.copyLink')" :title="copied?.id === item.id ? t(copied.failed ? 'terminal.clipboard.failed' : 'terminal.clipboard.copied') : t(item.kind === 'file' ? 'panels.scan.copyPath' : 'panels.scan.copyLink')" @click="copy(item)"><Icon :name="copied?.id === item.id ? copied.failed ? 'info' : 'check' : 'copy'" :size="15" /></UButton>
           <div v-if="item.kind === 'file' && item.path" class="content-scan-file-actions">
+            <UButton v-if="item.previewable" type="button" color="neutral" variant="ghost" size="xs" :disabled="!!opening" @click="openFile(item, 'preview')"><Icon name="eye" :size="13" />{{ t('panels.scan.preview') }}</UButton>
             <UButton type="button" color="neutral" variant="ghost" size="xs" :disabled="!!opening" @click="openFile(item)"><Icon name="download" :size="13" />{{ t('panels.file.download') }}</UButton>
             <UDropdownMenu :items="destinations(item)" :portal="portal || false" :content="{ side: 'bottom', align: 'start' }" :ui="{ content: 'content-scan-destinations' }">
               <UButton type="button" color="neutral" variant="ghost" size="xs" :disabled="!!opening || !canvases.length" :title="!canvases.length ? t('panels.scan.createCanvasFirst') : undefined"><Icon :name="added === item.id ? 'check' : 'plus'" :size="13" />{{ t(added === item.id ? 'panels.scan.added' : 'panels.scan.addNote') }}<Icon name="down" :size="11" /></UButton>
@@ -194,7 +198,7 @@ onBeforeUnmount(() => { cancelRequests(); clearTimeout(copyTimer) })
 .content-scan-item{display:flex;align-items:center;gap:2px;min-width:0;border-radius:6px}
 .content-scan-item[data-item-kind='file']{display:grid;grid-template-columns:minmax(0,1fr) auto}
 .content-scan-file-label{cursor:default;padding-bottom:3px;min-height:43px}
-.content-scan-file-actions{grid-column:1/-1;display:flex;gap:5px;padding:0 5px 6px 29px}.content-scan-file-actions>button,.content-scan-file-actions>span{font-size:10px}.content-scan-destinations{z-index:90;max-width:280px}
+.content-scan-file-actions{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:5px;padding:0 5px 6px 29px}.content-scan-file-actions>button,.content-scan-file-actions>span{font-size:10px}.content-scan-destinations{z-index:90;max-width:280px}
 .content-scan-item:hover{background:#ffffff04}
 .content-scan-open{display:flex;align-items:center;flex:1;min-width:0;gap:9px;min-height:47px;padding:8px 6px;color:#b9c5d4;text-align:left;text-decoration:none;border-radius:5px}
 .content-scan-open>svg,.content-scan-open>.spinner{flex:none;color:#8796aa}

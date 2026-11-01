@@ -220,3 +220,12 @@ html{zoom:var(--ui-zoom)}#app{position:fixed;inset:0;width:auto;height:auto}.app
 .app-dialog-shell{width:max-content;max-width:calc(100% - 32px);max-height:calc(100% - 32px);padding:0;border:0;background:transparent;box-shadow:none;overflow:auto;z-index:50;outline:none;--tw-ring-shadow:0 0 #0000}.app-dialog-overlay{background:#090b10a8;backdrop-filter:blur(5px);z-index:49}.app-dialog-fields{display:contents}.app-dialog-shell .modal{max-width:100%;max-height:none}.mobile-layout .app-dialog-shell{max-width:calc(100% - 20px);max-height:calc(100% - max(10px,var(--ui-safe-top)) - max(10px,var(--ui-safe-bottom)))}
 
 .workspace-status{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:12px;color:var(--muted);font-size:12px}.workspace-error{flex-direction:column}
+
+.app-shell .note-card.input-focused:focus-within{border-color:color-mix(in srgb,var(--note-color) 60%,#fff)}
+.note-card.input-focused .note-header{background:color-mix(in srgb,var(--note-color) 27%,#22262d)}
+.app-shell .file-card.input-focused:focus-within{border-color:#aeb9c8}
+.file-card.input-focused .file-header{background:#303947}
+:is(.note-card,.file-card).input-focused :is(.note-title,.file-title){color:#f4f6f9}
+.file-body.card-content{position:relative;outline:none}
+.file-preview-activate{position:absolute;inset:0;z-index:1;cursor:pointer;outline:none}
+.note-content,.file-body :is(.text-preview-source,.text-preview-markdown){overscroll-behavior:contain}
