@@ -15,6 +15,9 @@ import { uiScale, uiZoom } from '../ui-scale'
 import { cutoutPosition, cutoutWidth, type CutoutPosition } from '../display-cutout'
 import { developerMode, viewportFit, interactiveWidget, viewportReloadRequired } from '../developer-mode'
 import { keepScreenAwake, retryScreenWakeLock, screenWakeLockState, screenWakeLockUnavailable } from '../screen-wake-lock'
+import { notificationSoundEnabled, notificationSystemEnabled, notificationSoundSupported, systemNotificationSupported,
+  systemNotificationPermission, systemNotificationRequesting, notificationSettingsError, setNotificationSound,
+  setSystemNotifications, refreshNotificationPermission } from '../notification-settings'
 import Icon from './Icon.vue'
 import LanguageSelect from './LanguageSelect.vue'
 import PwaControls from './PwaControls.vue'
@@ -43,6 +46,11 @@ function copyVersion() {
   if (copyText(JSON.stringify(frontendBuild, null, 2), () => feedback('failed'))) feedback('copied')
 }
 watch(() => props.open, clearVersionFeedback)
+watch(() => props.open, open => { if (open) refreshNotificationPermission() }, { immediate: true })
+const systemNotificationStatus = computed(() => !systemNotificationSupported.value
+  ? window.isSecureContext ? 'common.unsupportedBrowser' : 'common.httpsRequired'
+  : systemNotificationRequesting.value ? 'settings.requesting'
+  : systemNotificationPermission.value === 'denied' ? 'settings.notificationPermissionDenied' : '')
 const viewportFits = ['cover', 'contain']
 const interactiveWidgets = ['resizes-content', 'resizes-visual', 'overlays-content']
 const viewportSelectUi = { content: 'settings-select-menu', item: 'settings-select-item' }
@@ -222,6 +230,18 @@ onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer); clearV
         </div>
         <div v-if="fontError" class="font-error" role="alert"><span>{{ fontErrorMessage }}</span><UButton type="button" color="neutral" variant="link" size="xs" :aria-label="t('settings.retryFont')" @click="retryPreview">{{ t('common.retry') }}</UButton></div>
       </form>
+      <section class="notification-settings" :aria-label="t('settings.notifications')">
+        <div class="notification-settings-heading"><span>{{ t('settings.notifications') }}</span><small>{{ t('settings.thisBrowser') }}</small></div>
+        <div class="notification-setting-row">
+          <USwitch :model-value="notificationSoundEnabled" :disabled="!notificationSoundSupported" :label="t('settings.notificationSound')" :aria-label="t('settings.notificationSound')" size="sm" class="settings-switch" @update:model-value="setNotificationSound" />
+          <small v-if="!notificationSoundSupported">{{ t('common.unsupportedBrowser') }}</small>
+        </div>
+        <div class="notification-setting-row">
+          <USwitch :model-value="systemNotificationSupported && notificationSystemEnabled && systemNotificationPermission === 'granted'" :disabled="!systemNotificationSupported || systemNotificationRequesting" :label="t('settings.systemNotifications')" :aria-label="t('settings.systemNotifications')" size="sm" class="settings-switch" @update:model-value="setSystemNotifications" />
+          <small v-if="systemNotificationStatus" role="status">{{ t(systemNotificationStatus) }}</small>
+        </div>
+        <small v-if="notificationSettingsError" class="notification-settings-error" role="alert">{{ t(notificationSettingsError) }}</small>
+      </section>
       <div class="wake-lock-setting">
         <USwitch :model-value="!screenWakeLockUnavailable && keepScreenAwake" :disabled="!!screenWakeLockUnavailable" :label="t('settings.keepAwake')" :aria-label="t('settings.keepAwake')" size="sm" class="settings-switch" @update:model-value="keepScreenAwake = $event" />
         <small v-if="screenWakeLockUnavailable">{{ screenWakeLockUnavailable }}</small>
@@ -290,6 +310,11 @@ onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer); clearV
 .wake-lock-setting{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:18px;padding-top:16px;border-top:1px solid #343b46}
 .wake-lock-setting>small{margin-left:auto;color:#8793a4;font-size:11px}
 .wake-lock-setting+.developer-setting{margin-top:14px;padding-top:0;border-top:0}
+.notification-settings{display:grid;gap:8px;margin-top:18px;padding-top:16px;border-top:1px solid #343b46}
+.notification-settings-heading,.notification-setting-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0;color:#c4cbd6;font-size:12px}
+.notification-settings-heading{font-weight:500}.notification-settings-heading small,.notification-setting-row>small{font-size:11px;font-weight:400;color:#8793a4}
+.notification-setting-row{flex-wrap:wrap}.notification-setting-row>small{margin-left:auto}
+.notification-settings-error{color:#dfaaa5;font-size:11px}
 .viewport-experiments{display:grid;gap:12px;margin-top:10px;padding:14px 0 0;border-top:1px solid #343b46}
 .viewport-experiment-heading{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;color:#c4cbd6;font-size:12px;font-weight:500}
 .viewport-experiment-heading small{white-space:nowrap}.viewport-experiment-heading small,.viewport-experiment-field code{font-size:11px;font-weight:400;color:#8793a4}

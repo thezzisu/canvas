@@ -31,6 +31,7 @@ async function fixture(t: TestContext, options: { temporaryTtlMs?: number } = {}
   const assets = new AssetStore(dir, store, options);
   const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {
     closeAll: async () => {}, closeSource: async () => {},
+    onNotification: () => ({ dispose() {} }),
   } as unknown as TerminalManager, { assets });
   store.addSession("test");
   t.after(async () => { await assets.close(); store.close(); await rm(dir, { recursive: true, force: true }); });

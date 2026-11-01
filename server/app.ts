@@ -24,6 +24,7 @@ import {
 } from "./state.ts";
 import * as providers from "./providers.ts";
 import type { TerminalManager } from "./terminals.ts";
+import type { CanvasNotification } from "../shared/notification.ts";
 import type { DownloadContext } from "./open-download.ts";
 import type { AssetStore } from "./assets.ts";
 import type { UploadService } from "./uploads.ts";
@@ -312,18 +313,25 @@ export function createApp(
     const encoder = new TextEncoder();
     let controller: ReadableStreamDefaultController<Uint8Array>;
     let pending: string | undefined;
+    const notificationQueue: string[] = [];
     let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let notifications: { dispose(): void } | undefined;
     let closed = false;
     const flush = () => {
-      if (!closed && pending && (controller.desiredSize ?? 0) > 0) {
-        controller.enqueue(encoder.encode(pending));
-        pending = undefined;
+      if (!closed && (controller.desiredSize ?? 0) > 0) {
+        const event = pending || notificationQueue.shift();
+        if (event) {
+          pending = undefined;
+          controller.enqueue(encoder.encode(event));
+        }
       }
     };
     const close = (unauthorized = false) => {
       if (closed) return;
       closed = true;
       clearInterval(heartbeat);
+      notifications?.dispose();
+      notificationQueue.length = 0;
       store.off("change", publish);
       store.off("sessions", checkSession);
       store.off("close", stopped);
@@ -357,10 +365,18 @@ export function createApp(
     const publishAccount = () => {
       if (!closed && checkSession()) controller.enqueue(encoder.encode(`event: account\ndata: ${JSON.stringify({ username: account.username })}\n\n`));
     };
+    const publishNotification = (notification: CanvasNotification) => {
+      if (closed || !checkSession() || !store.get<Source>('source', notification.sourceId)) return;
+      // Keep a small live burst, never a durable/reconnect notification history.
+      if (notificationQueue.length === 32) notificationQueue.shift();
+      notificationQueue.push(`event: notification\ndata: ${JSON.stringify(notification)}\n\n`);
+      flush();
+    };
     const aborted = () => close();
     const stream = new ReadableStream<Uint8Array>({
       start(value) {
         controller = value;
+        notifications = terminals.onNotification(publishNotification);
         store.on("change", publish);
         store.on("sessions", checkSession);
         store.on("close", stopped);

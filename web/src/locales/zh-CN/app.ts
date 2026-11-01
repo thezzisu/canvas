@@ -77,6 +77,7 @@ export default {
   "zoomOut": "缩小",
   "centerWindow": "居中窗口",
   "fitCanvas": "适合画布",
+  "fitWindow": "适合当前卡片",
   "zoomIn": "放大",
   "closeConnections": "关闭连接面板",
   "editConnection": "编辑连接",

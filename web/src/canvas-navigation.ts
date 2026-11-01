@@ -16,6 +16,7 @@ export function useCanvasNavigation(options: {
   beforeFullscreen(): void
   onError(reason: unknown): void
   mobile(): boolean
+  onNavigate?(): void
   paging?: { enabled(): boolean; canMove(direction: PageDirection): boolean; move(direction: PageDirection): void; recenter(animate?: boolean): Promise<unknown> }
 }) {
   const surface = ref<HTMLElement>()
@@ -133,6 +134,7 @@ export function useCanvasNavigation(options: {
     suppressClickUntil = performance.now() + 500
     event.preventDefault()
     event.stopPropagation()
+    options.onNavigate?.()
     void options.setViewport(touchViewport(gesture.viewport, gesture.point, current.point, gesture.distance, current.distance))
   }
   function touchEnd(event: TouchEvent) {
@@ -212,6 +214,7 @@ export function useCanvasNavigation(options: {
       return
     }
     pageWheel.reset()
+    options.onNavigate?.()
     const current = options.getViewport()
     if (event.ctrlKey) {
       const zoom = Math.max(.08, Math.min(2, current.zoom * 2 ** (-event.deltaY * unit * .02)))
@@ -232,6 +235,7 @@ export function useCanvasNavigation(options: {
   }
   async function restore() {
     if (!fullscreen.value) return
+    options.onNavigate?.()
     const saved = previous
     previous = undefined
     resetPagingFeedback()
@@ -292,7 +296,8 @@ export function useCanvasNavigation(options: {
   function pointerDown(event: PointerEvent) {
     const active = document.activeElement
     const body = active instanceof HTMLElement ? active.closest('.card-content') : null
-    if (!options.mobile() && body && active instanceof HTMLElement && event.target instanceof Node && !body.contains(event.target)) active.blur()
+    const fitControl = event.target instanceof Element && event.target.closest('.canvas-fit')
+    if (!options.mobile() && !fitControl && body && active instanceof HTMLElement && event.target instanceof Node && !body.contains(event.target)) active.blur()
     interacted()
   }
   function blurPaging() { wheelOwner.reset(); cancelFeedback(false) }

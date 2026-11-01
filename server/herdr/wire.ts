@@ -1,5 +1,6 @@
 // Herdr endpoint generation 1, matching the frozen shell.*.v1 codecs.
 // Transport: u32 little-endian length followed by bincode 2 standard encoding.
+import type { NativeNotification } from '../../shared/notification.ts'
 export const MAX_FRAME_BYTES = 32 * 1024 * 1024
 const MAX_CELLS = 1_000_000
 const utf8 = new TextDecoder('utf-8', { fatal: true })
@@ -58,6 +59,7 @@ export type ServerMessage = { type: 'control'; kind: string; data: string }
   | { type: 'surface'; surface: PaneSurfaceFrame } | { type: 'patch'; patch: PaneSurfacePatch }
   | { type: 'response'; boot_id: string; request_id: string; final_chunk: boolean; data: Buffer }
   | { type: 'clipboard'; data: string } | { type: 'bell'; count: number }
+  | { type: 'notification'; notification: NativeNotification }
   | { type: 'title'; title: string | null } | { type: 'error'; message: string }
   | { type: 'shutdown'; reason: string | null } | { type: 'mouse'; enabled: boolean; sgr_pixels: boolean }
   | { type: 'ignored' }
@@ -212,7 +214,18 @@ function surface(r: Reader): PaneSurfaceFrame {
   return result
 }
 
-/** Decode exactly one payload; irrelevant negotiated notifications stay bounded. */
+function notification(r: Reader): NativeNotification {
+  const kind = (['attention', 'done', 'update', 'custom'] as const)[r.uint(3)]!
+  const title = r.string(), body = r.option(() => r.string())
+  r.option(() => r.uint(1)) // Native sound selection; the browser owns its opt-in policy.
+  const agent = r.option(() => r.string()), spaceId = r.option(() => r.string())
+  const windowId = r.option(() => r.string()), paneId = r.option(() => r.string())
+  r.option(() => r.uint(3)) // Native toast position is not a Canvas layout instruction.
+  return { kind, title, ...(body !== null && { body }), ...(agent !== null && { agent }),
+    ...(spaceId !== null && { spaceId }), ...(windowId !== null && { windowId }), ...(paneId !== null && { paneId }) }
+}
+
+/** Decode exactly one payload; irrelevant negotiated graphics stay bounded. */
 export function decodeServerMessage(payload: Buffer): ServerMessage {
   const r = new Reader(payload), tag = r.uint(20)
   let message: ServerMessage
@@ -223,6 +236,14 @@ export function decodeServerMessage(payload: Buffer): ServerMessage {
     case 8: message = { type: 'mouse', enabled: r.bool(), sgr_pixels: r.bool() }; break
     case 9: message = { type: 'bell', count: r.uint(65535) }; break
     case 13: message = { type: 'surface', surface: surface(r) }; break
+    case 14:
+      // Optional notifications must not interrupt terminal rendering. The outer
+      // frame is already bounded, so unsupported fields can be discarded whole.
+      try {
+        const value = notification(r)
+        r.done()
+        return { type: 'notification', notification: value }
+      } catch { return { type: 'ignored' } }
     case 15: message = { type: 'error', message: r.string() }; break
     case 18: message = { type: 'response', boot_id: r.string(4096), request_id: r.string(4096), final_chunk: r.bool(), data: r.data() }; break
     case 19: message = { type: 'patch', patch: { boot_id: r.string(4096), projection_revision: r.uint(), base_surface_revision: r.uint(), surface_revision: r.uint(),
@@ -230,7 +251,7 @@ export function decodeServerMessage(payload: Buffer): ServerMessage {
       panes: r.list(() => pane(r), 10000), cursor: r.option(() => cursor(r)) } }; break
     case 20: message = { type: 'control', kind: r.string(4096), data: r.string(MAX_FRAME_BYTES) }; break
     case 0: throw new Error('Herdr server does not support the stable endpoint protocol')
-    // These carry optional notifications/graphics, never terminal text for a
+    // These carry optional legacy notifications/graphics, never terminal text for a
     // client-owned surface. Frame length still bounds their complete payload.
     default: return { type: 'ignored' }
   }

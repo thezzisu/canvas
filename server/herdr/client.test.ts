@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { createHerdrClient, type HerdrClientExit } from './client.ts'
 import { Writer } from './wire.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
+import type { NativeNotification } from '../../shared/notification.ts'
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 async function until(check: () => boolean | Promise<boolean>) { for (let i = 0; i < 100; i++) { if (await check()) return; await delay(5) } assert.fail('fixture state did not settle') }
@@ -75,6 +76,30 @@ async function fixture(t: TestContext, options: { holdFocus?: boolean; badWelcom
   return { path, requests, tags, focuses, snapshot, removeTarget, surface, response, control, send, peer: () => peer, hello: () => hello,
     connect: (handshakeTimeoutMs = 300) => createHerdrClient({ socketPath: path, tabId: 'target', cols: 8, rows: 1, handshakeTimeoutMs, readSelection: options.readSelection, readContent: options.readContent }) }
 }
+
+test('native notifications remain source-wide ephemeral events, separate from terminal text', async t => {
+  const f = await fixture(t), client = await f.connect()
+  t.after(() => client.kill())
+  const events: NativeNotification[] = [], late: NativeNotification[] = []
+  let output = ''
+  client.onData(data => { output += data })
+  await until(() => output.includes('R') && output.includes('\x1b[?2004h'))
+  const subscription = client.onNotification(value => events.push(value))
+  const before = output
+  f.send(new Writer().uint(14).uint(0).string('Input needed').byte(1).string('A different pane')
+    .byte(1).uint(1).byte(1).string('codex').byte(1).string('space').byte(1).string('other').byte(1).string('other-pane').byte(1).uint(0))
+  await until(() => events.length === 1)
+  assert.deepEqual(events[0], { kind: 'attention', title: 'Input needed', body: 'A different pane', agent: 'codex',
+    spaceId: 'space', windowId: 'other', paneId: 'other-pane' })
+  assert.equal(output, before)
+  client.onNotification(value => late.push(value))
+  await delay(10)
+  assert.deepEqual(late, [], 'new listeners never replay past notifications')
+  subscription.dispose()
+  f.send(new Writer().uint(14).uint(3).string('Next').byte(0).byte(0).byte(0).byte(0).byte(0).byte(0).byte(0))
+  await until(() => late.length === 1)
+  assert.equal(events.length, 1)
+})
 
 test('native client waits for focus and buffers its initial frame until asynchronous listener installation', async t => {
   const f = await fixture(t, { holdFocus: true })

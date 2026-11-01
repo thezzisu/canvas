@@ -24,6 +24,8 @@ import zhFileTransfer from './locales/zh-CN/file-transfer'
 import enFileTransfer from './locales/en/file-transfer'
 import zhAccount from './locales/zh-CN/account'
 import enAccount from './locales/en/account'
+import zhNotifications from './locales/zh-CN/notifications'
+import enNotifications from './locales/en/notifications'
 
 export type AppLocale = 'zh-CN' | 'en'
 export const languagePreference = useStorage<'system' | AppLocale>('canvas:language', 'system')
@@ -36,8 +38,8 @@ const preferredLocale = computed<AppLocale>(() => {
   }
   return 'en'
 })
-const zh = { common: zhCommon, settings: zhSettings, app: zhApp, panels: zhPanels, terminal: zhTerminal, instances: zhInstances, canvasUi: zhCanvasUi, urls: zhUrls, windowPicker: zhWindowPicker, fileTransfer: zhFileTransfer, account: zhAccount }
-const en: typeof zh = { common: enCommon, settings: enSettings, app: enApp, panels: enPanels, terminal: enTerminal, instances: enInstances, canvasUi: enCanvasUi, urls: enUrls, windowPicker: enWindowPicker, fileTransfer: enFileTransfer, account: enAccount }
+const zh = { common: zhCommon, settings: zhSettings, app: zhApp, panels: zhPanels, terminal: zhTerminal, instances: zhInstances, canvasUi: zhCanvasUi, urls: zhUrls, windowPicker: zhWindowPicker, fileTransfer: zhFileTransfer, account: zhAccount, notifications: zhNotifications }
+const en: typeof zh = { common: enCommon, settings: enSettings, app: enApp, panels: enPanels, terminal: enTerminal, instances: enInstances, canvasUi: enCanvasUi, urls: enUrls, windowPicker: enWindowPicker, fileTransfer: enFileTransfer, account: enAccount, notifications: enNotifications }
 export const i18n = createI18n({ legacy: false, locale: preferredLocale.value, fallbackLocale: 'en', messages: { 'zh-CN': zh, en } })
 export const { t, locale } = i18n.global
 export const uiLocale = computed(() => locale.value === 'zh-CN' ? zhUi : enUi)

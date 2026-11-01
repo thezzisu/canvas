@@ -7,6 +7,8 @@ import { openTerminal } from "./providers.ts";
 import { GeometryController, type Size } from "./geometry.ts";
 import { HERDR_MOUSE_ENCODING, type HerdrClientTransport } from "./herdr/client.ts";
 import type { WindowMetadata } from "../shared/window-metadata.ts";
+import { randomUUID } from "node:crypto";
+import type { CanvasNotification } from "../shared/notification.ts";
 const { Terminal } = headless;
 const { SerializeAddon } = serialize;
 export type TerminalTarget = {
@@ -369,8 +371,14 @@ class LiveTerminal {
 }
 export class TerminalManager {
   entries = new Map<string, Promise<LiveTerminal>>();
+  private readonly live = new Set<LiveTerminal>();
+  private readonly notificationListeners = new Set<(notification: CanvasNotification) => void>();
   private stopped = false;
   private closingSources = new Set<string>();
+  onNotification(listener: (notification: CanvasNotification) => void) {
+    this.notificationListeners.add(listener);
+    return { dispose: () => { this.notificationListeners.delete(listener); } };
+  }
   async connect(source: Source, target: TerminalTarget, ws: WebSocket) {
     if (this.stopped || this.closingSources.has(source.id))
       throw new Error("Terminal service is closing");
@@ -384,7 +392,7 @@ export class TerminalManager {
         try {
           const cols = 100, rows = 30;
           transport = await handle.connect(cols, rows);
-          return new LiveTerminal(
+          const terminal = new LiveTerminal(
             key,
             source.id,
             sourceConnectionKey(source),
@@ -392,9 +400,20 @@ export class TerminalManager {
             handle,
             cols,
             rows,
-            () => this.entries.delete(key),
+            () => { this.entries.delete(key); this.live.delete(terminal); },
             transport,
           );
+          this.live.add(terminal);
+          transport.onNotification(notification => {
+            if (this.stopped || this.closingSources.has(source.id) || terminal.closed) return;
+            // Herdr broadcasts to every native shell. One existing endpoint owns
+            // this connection's live intake; closing it naturally promotes the next.
+            const owner = [...this.live].find(candidate => !candidate.closed && candidate.sourceId === source.id && candidate.connectionKey === terminal.connectionKey);
+            if (owner !== terminal) return;
+            const event = { ...notification, id: randomUUID(), sourceId: source.id };
+            for (const listener of this.notificationListeners) listener(event);
+          });
+          return terminal;
         } catch (error) {
           transport?.kill();
           await handle.cleanup();
@@ -448,6 +467,7 @@ export class TerminalManager {
   }
   async closeAll() {
     this.stopped = true;
+    this.notificationListeners.clear();
     await Promise.all(
       [...this.entries.values()].map(async (p) =>
         (await p.catch(() => undefined))?.close(),

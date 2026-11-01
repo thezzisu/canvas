@@ -19,6 +19,7 @@ const paths: Record<string, string> = {
   more: 'M5 12h.01 M12 12h.01 M19 12h.01',
   expand: 'M8 4H4v4 M16 4h4v4 M4 16v4h4 M20 16v4h-4',
   fit: 'M8 3H3v5 M16 3h5v5 M3 16v5h5 M21 16v5h-5 M8 8h8v8H8z',
+  'fit-window': 'M8 3H5a2 2 0 0 0-2 2v3 M16 3h3a2 2 0 0 1 2 2v3 M3 16v3a2 2 0 0 0 2 2h3 M21 16v3a2 2 0 0 1-2 2h-3 M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0',
   collapse: 'M4 8h4V4 M20 8h-4V4 M8 20v-4H4 M16 20v-4h4',
   refresh: 'M20 7v5h-5 M4 17v-5h5 M6.1 6.1A8 8 0 0 1 19.4 9 M4.6 15a8 8 0 0 0 13.3 2.9',
   arrow: 'M5 12h14 M13 6l6 6-6 6',

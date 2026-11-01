@@ -6,6 +6,7 @@ import { MiniMap } from '@vue-flow/minimap'
 import UApp from '@nuxt/ui/components/App.vue'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import UModal from '@nuxt/ui/components/Modal.vue'
+import { useToast } from '@nuxt/ui/composables/useToast'
 import { useI18n } from 'vue-i18n'
 import { uiLocale } from './i18n'
 import LanguageSelect from './components/LanguageSelect.vue'
@@ -16,6 +17,9 @@ import { isCanvasSession } from './instance-url'
 import { instanceBuild, observeInstanceBuild, staleInstanceBuild } from './instance-builds'
 import { buildLabel } from '../../shared/build-info'
 import CanvasNavItem from './components/CanvasNavItem.vue'
+import NotificationCenter from './components/NotificationCenter.vue'
+import type { CanvasNotification } from '../../shared/notification'
+import { notificationTarget } from './notification-model'
 import { canvasIndicators, needsAttention, windowVisualState } from './canvas-status'
 import { createLayoutSaves, type LayoutPatch } from './layout-saves'
 import { createPendingEdits, retargetNoteEdit, type NoteEdit } from './pending-edits'
@@ -193,6 +197,7 @@ function showWindowKeyboard() {
   windowMenu.value = null
 }
 const scanTarget = shallowRef<{ sourceId: string; spaceId: string; windowId: string; name: string } | null>(null)
+const notificationCenter = ref<InstanceType<typeof NotificationCenter>>()
 const focused = ref<TerminalCanvasNode | null>(null)
 const focusedCardId = ref('')
 const hasFocus = computed(() => !!focused.value || !!focusedCardId.value)
@@ -228,6 +233,14 @@ let draftBase = ''
 function checkpointEdits() { pendingEdits.save(draftBase, pendingLayouts, [...savingNotes.values(), ...pendingNotes.values()]) }
 let layoutGesture = ''
 const latestState = shallowRef<SharedState>()
+const notificationToasts = useToast().toasts
+// Nuxt UI can enqueue after nextTick; reject stale account notices when published.
+watch([notificationToasts, apiRevision, authenticated, () => latestState.value?.instanceId], ([items, revision, signedIn, backend]) => {
+  const prefix = `notification:${revision}:${backend}:`
+  const current = items.filter(item => !String(item.id).startsWith('notification:') || signedIn && String(item.id).startsWith(prefix)
+    && (item.type !== 'foreground' || notificationCenter.value?.acceptsToast(item.id)))
+  if (current.length !== items.length) notificationToasts.value = current
+}, { flush: 'sync' })
 const workspacePending = computed(() => !latestState.value || !resourcesLoaded.value)
 let stateEvents: ReturnType<typeof subscribeState> | undefined
 let noticeTimer: ReturnType<typeof setTimeout>
@@ -305,10 +318,24 @@ function guardPageDrag(event: MouseEvent) {
     event.preventDefault(); event.stopPropagation()
   }
 }
-function fitCanvas() { if (paging.value) void fitPage(true); else void fitView({ padding: .14, maxZoom: 1, duration: 200 }) }
+function fitViewport() {
+  if (paging.value) { void fitPage(true); return }
+  const target = fitTarget.value, frame = graphSurface.value
+  const duration = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 200
+  if (target && !fittedFocusedCard.value && frame?.clientWidth && frame.clientHeight) {
+    fittedFocusedCard.value = true
+    void setViewport(pageViewport({ ...target.position, width: target.data.width, height: target.data.height },
+      { width: frame.clientWidth, height: frame.clientHeight }),
+    { duration, interpolate: 'linear', ease: value => 1 - (1 - value) ** 3 })
+  } else {
+    fittedFocusedCard.value = false
+    void fitView({ padding: .14, maxZoom: 1, duration })
+  }
+}
 async function navigateMinimap({ event, node }: NodeMouseEvent) {
   if (node.type !== 'terminal' || focused.value) return
   event.stopPropagation()
+  clearFitContext()
   const canvasId = activeId.value
   resetPagingFeedback()
   cancelCreatedReveal()
@@ -341,7 +368,35 @@ const overviewDismiss = usePointerDismiss(overviewMenuOpen, overviewTrigger)
 const overviewFiltered = computed(() => overviewSelected.value.length !== overviewStatuses.length)
 const overviewFocused = computed(() => overviewSelected.value.length === overviewFocusStatuses.length && overviewFocusStatuses.every(status => overviewSelected.value.includes(status)))
 const overviewChanged = computed(() => overviewFiltered.value || overviewOrder.value !== 'native')
-const { activeElement } = useDocumentFocus()
+const { activeElement, windowFocused } = useDocumentFocus()
+const fittedFocusedCard = ref(false)
+const fitToolbar = ref<HTMLDivElement>()
+const fitToolbarTarget = ref<string>()
+function cardForFocusedBody(active?: Element | null) {
+  if (!active) return
+  const body = active.closest('.card-content')
+  if (!body || body.closest('[inert]') || active.closest('.card-content-activate')) return
+  const id = body.closest<HTMLElement>('.vue-flow__node')?.dataset.id
+  return nodes.value.find(node => node.id === id && ['terminal', 'note', 'file'].includes(node.type || ''))
+}
+function clearFitContext() { fittedFocusedCard.value = false; fitToolbarTarget.value = undefined }
+function preserveFitTarget(event: FocusEvent) {
+  const toolbar = fitToolbar.value
+  if (!toolbar || !(event.relatedTarget instanceof Node) || !toolbar.contains(event.relatedTarget)) {
+    clearFitContext(); return
+  }
+  if (event.target instanceof Element && !toolbar.contains(event.target)) {
+    fitToolbarTarget.value = cardForFocusedBody(event.target)?.id
+  }
+}
+const fitTarget = computed(() => {
+  const active = activeElement.value
+  if (hasFocus.value || !active || !windowFocused.value && !(active instanceof HTMLIFrameElement)) return
+  return fitToolbar.value?.contains(active) ? nodes.value.find(node => node.id === fitToolbarTarget.value) : cardForFocusedBody(active)
+})
+const fitFocusedCard = computed(() => !paging.value && !!fitTarget.value && !fittedFocusedCard.value)
+watch([() => fitTarget.value?.id, activeId, paging], () => { fittedFocusedCard.value = false }, { flush: 'sync' })
+watch([activeId, activeInstanceId, paging], clearFitContext, { flush: 'sync' })
 const overviewInteraction = computed<OverviewInteraction | undefined>(() => {
   if (!isOverview.value) return
   if (pendingCreatedWindow.value) return pendingCreatedWindow.value
@@ -385,8 +440,9 @@ const { surface: graphSurface, app: appElement, fullscreen: canvasFullscreen, re
   onError: showError,
   blocked: () => workspacePending.value || overviewMenuOpen.value || !!modalOpen.value || !!directoryRequest.value || !!urlRequest.value || !!downloadPreview.value || hasFocus.value || (mobile.value && (sidebarOpen.value || sourcePanel.value)),
   mobile: () => mobile.value,
+  onNavigate: clearFitContext,
   paging: { enabled: () => paging.value, canMove: direction => !!pageNeighbor(direction), move: movePage, recenter: fitPage },
-  beforeFullscreen: () => { sourcePanel.value = false; sidebarOpen.value = false; canvasMenu.value = false },
+  beforeFullscreen: () => { clearFitContext(); sourcePanel.value = false; sidebarOpen.value = false; canvasMenu.value = false },
 })
 provide(cutoutActiveKey, computed(() => canvasFullscreen.value && hasSafeTop.value))
 const currentBackground = computed(() => isOverview.value ? overviewBackground.value : currentCanvas.value?.background)
@@ -652,7 +708,8 @@ async function syncState() {
 function stopStateEvents() { stateEvents?.close(); stateEvents = undefined }
 function startStateEvents() {
   stopStateEvents()
-  stateEvents = subscribeState(state => applySharedState(state as SharedState), value => { username.value = value })
+  stateEvents = subscribeState(state => applySharedState(state as SharedState), value => { username.value = value },
+    value => notificationCenter.value?.receive(value))
 }
 
 function currentLocation(): CanvasLocation {
@@ -694,6 +751,7 @@ async function applyRequestedLocation() {
   await restoreViewport()
 }
 async function restoreViewport() {
+  clearFitContext()
   if (!authenticated.value || !resourcesLoaded.value || unknownInstance.value) return
   const id = activeId.value, instance = activeInstance.value.id
   const requested = navigation.requested.value
@@ -1195,6 +1253,21 @@ function getCanvasNode(id: string): TerminalCanvasNode | undefined {
   const node = nodes.value.find(item => item.id === id)
   return node?.type === 'terminal' ? { type: 'terminal', id, sourceId: node.data.sourceId, spaceId: node.data.spaceId, windowId: node.data.windowId, x: node.position.x, y: node.position.y, width: node.data.width, height: node.data.height } : undefined
 }
+async function openNotification(event: CanvasNotification) {
+  const target = notificationTarget(event, resources.value)
+  if (!target) return
+  const context = apiContext()
+  if (focusedCardId.value) await closeCardFocus()
+  if (focused.value) await closeFocus()
+  if (!isCurrentApi(context)) return
+  const placed = currentCanvas.value?.nodes.find(node => isTerminalNode(node) && node.sourceId === event.sourceId && node.windowId === target.window.id)
+  const size = windowSize({ sourceId: event.sourceId, windowId: target.window.id })
+  const node: TerminalCanvasNode = placed && isTerminalNode(placed) ? placed : {
+    type: 'terminal', id: `notification:${event.sourceId}/${target.window.id}`,
+    sourceId: event.sourceId, spaceId: target.space.id, windowId: target.window.id, x: 0, y: 0, ...size,
+  }
+  sidebarOpen.value = false; sourcePanel.value = false; saveViewport(); focused.value = node
+}
 function terminalAction(action: string, id: string) {
   const node = getCanvasNode(id) || focused.value
   if (!node) return
@@ -1572,7 +1645,9 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
 </script>
 
 <template>
-  <UApp :locale="uiLocale" :portal="appElement || false" :toaster="null">
+  <UApp :locale="uiLocale" :portal="appElement || false" :toaster="{ position: 'bottom-right', max: authenticated ? 4 : 0, progress: false, ui: { viewport: 'canvas-notifications' } }">
+  <NotificationCenter v-if="authenticated && latestState" :key="`${activeInstance.id}:${latestState.instanceId}`" ref="notificationCenter"
+    :instance-id="activeInstance.id" :backend-id="latestState.instanceId" :resources="resources" :refresh="() => refreshResources(true)" @open="openNotification" />
   <PwaUpdatePrompt :portal="appElement" />
   <div v-if="!ready" class="boot-screen"><span class="spinner" />{{ t('common.loading') }}</div>
   <div v-else-if="!authenticated || unknownInstance" class="login-screen" :class="{ 'mobile-layout': mobile }" :style="mobileViewportStyle">
@@ -1629,7 +1704,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
           <button v-if="isOverview" class="button primary" :title="t('app.addConnection')" :aria-label="t('app.addConnection')" @click="openSource()"><Icon name="plus" :size="15" />{{ t('app.addConnection') }}</button><button v-else class="button primary" :title="t('app.addWindows')" :aria-label="t('app.addWindows')" @click="openAdd()"><Icon name="layers" :size="15" />{{ t('app.addWindows') }}</button>
         </div>
       </header>
-      <div ref="graphSurface" class="graph-wrap" :class="{ 'has-background': currentBackground, paged: paging }" :data-page-window="paging ? currentPage?.id : undefined" @mousedown.capture="guardPageDrag" @wheel.capture="canvasWheel" @touchstart.capture="canvasTouchStart" @touchmove.capture="canvasTouchMove" @touchend.capture="canvasTouchEnd" @touchcancel.capture="canvasTouchCancel" @click.capture="canvasClick">
+      <div ref="graphSurface" class="graph-wrap" :class="{ 'has-background': currentBackground, paged: paging }" :data-page-window="paging ? currentPage?.id : undefined" @focusout.capture="preserveFitTarget" @mousedown.capture="guardPageDrag" @wheel.capture="canvasWheel" @touchstart.capture="canvasTouchStart" @touchmove.capture="canvasTouchMove" @touchend.capture="canvasTouchEnd" @touchcancel.capture="canvasTouchCancel" @click.capture="canvasClick">
         <CanvasFileDrop :canvas-id="currentCanvas?.id" :get-viewport="getViewport" />
         <img v-if="currentBackground && backgroundUrl" class="canvas-background" :src="backgroundUrl" :style="{ opacity: currentBackground.opacity }" alt="" aria-hidden="true" />
         <span id="canvas-card-select-help" hidden>{{ t('app.cardSelectHelp') }}</span>
@@ -1642,7 +1717,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
         <div v-else-if="!nodes.length && isOverview" class="empty-state"><Icon name="server" :size="32" /><h2>{{ windowCount && overviewFiltered ? t('app.noMatchingWindows') : sources.length ? t('app.noWindows') : t('app.noConnections') }}</h2><button v-if="windowCount && overviewFiltered" class="button subtle" @click="overviewSelected = [...overviewStatuses]">{{ t('app.clearFilters') }}</button><button v-else class="button primary" @click="sources.length ? sourcePanel = true : openSource()"><Icon :name="sources.length ? 'server' : 'plus'" :size="17" />{{ sources.length ? t('app.connections') : t('app.addConnection') }}</button></div>
         <div v-else-if="!nodes.length && !isOverview" class="empty-state"><Icon name="canvas" :size="32" /><h2>{{ t('app.emptyCanvas') }}</h2><button class="button primary" @click="openAdd()"><Icon name="layers" :size="17" />{{ t('app.addWindows') }}</button></div>
         <button v-if="canvasFullscreen && !showNavigation && !focused" class="icon-button canvas-fullscreen-exit" :title="t('app.exitFullscreen')" :aria-label="t('app.exitFullscreen')" @click="exitFullscreen"><Icon name="collapse" :size="19" /></button>
-        <div v-if="!workspacePending && showNavigation && !focused" class="canvas-toolbar"><button v-if="canvasFullscreen" :title="t('app.globalSettings')" :aria-label="t('app.globalSettings')" :disabled="!settings" @click="openSettings"><Icon name="settings" :size="17" /></button><button :title="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-label="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-pressed="canvasFullscreen" @click="toggleFullscreen"><Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button><button v-if="isOverview" :title="t('app.pagedBrowsing')" :aria-label="t('app.pagedBrowsing')" :aria-pressed="overviewPaged" @click="togglePaging"><Icon name="pages" :size="17" /></button><button v-if="!isOverview" :title="t('app.snapToGrid')" :aria-label="t('app.snapToGrid')" :aria-pressed="!!currentCanvas?.snapToGrid" @click="toggleSnap"><Icon name="grid" :size="15" /></button><template v-if="paging"><button v-for="item in pageDirections" :key="item.direction" :title="item.label" :aria-label="item.label" :disabled="!pageNeighbor(item.direction)" @pointerdown.prevent @click="movePage(item.direction)"><Icon :name="item.icon" :size="16" :style="{ transform: item.rotation }" /></button></template><button v-if="!paging" :title="t('app.zoomOut')" :aria-label="t('app.zoomOut')" @click="zoomOut({ duration: 150 })"><Icon name="minus" :size="17" /></button><button :title="paging ? t('app.centerWindow') : t('app.fitCanvas')" :aria-label="paging ? t('app.centerWindow') : t('app.fitCanvas')" @click="fitCanvas"><Icon name="fit" :size="17" /></button><button v-if="!paging" :title="t('app.zoomIn')" :aria-label="t('app.zoomIn')" @click="zoomIn({ duration: 150 })"><Icon name="plus" :size="17" /></button></div>
+        <div v-if="!workspacePending && showNavigation && !focused" ref="fitToolbar" class="canvas-toolbar"><button v-if="canvasFullscreen" :title="t('app.globalSettings')" :aria-label="t('app.globalSettings')" :disabled="!settings" @click="openSettings"><Icon name="settings" :size="17" /></button><button :title="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-label="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-pressed="canvasFullscreen" @click="toggleFullscreen"><Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button><button v-if="isOverview" :title="t('app.pagedBrowsing')" :aria-label="t('app.pagedBrowsing')" :aria-pressed="overviewPaged" @click="togglePaging"><Icon name="pages" :size="17" /></button><button v-if="!isOverview" :title="t('app.snapToGrid')" :aria-label="t('app.snapToGrid')" :aria-pressed="!!currentCanvas?.snapToGrid" @click="toggleSnap"><Icon name="grid" :size="15" /></button><template v-if="paging"><button v-for="item in pageDirections" :key="item.direction" :title="item.label" :aria-label="item.label" :disabled="!pageNeighbor(item.direction)" @pointerdown.prevent @click="movePage(item.direction)"><Icon :name="item.icon" :size="16" :style="{ transform: item.rotation }" /></button></template><button v-if="!paging" :title="t('app.zoomOut')" :aria-label="t('app.zoomOut')" @click="clearFitContext(); zoomOut({ duration: 150 })"><Icon name="minus" :size="17" /></button><button class="canvas-fit" :title="t(paging ? 'app.centerWindow' : fitFocusedCard ? 'app.fitWindow' : 'app.fitCanvas')" :aria-label="t(paging ? 'app.centerWindow' : fitFocusedCard ? 'app.fitWindow' : 'app.fitCanvas')" @pointerdown.prevent @click="fitViewport"><Icon :name="fitFocusedCard ? 'fit-window' : 'fit'" :size="17" /></button><button v-if="!paging" :title="t('app.zoomIn')" :aria-label="t('app.zoomIn')" @click="clearFitContext(); zoomIn({ duration: 150 })"><Icon name="plus" :size="17" /></button></div>
       </div>
     </main>
     <Transition name="slide"><aside v-if="sourcePanel" ref="sourcePanelElement" class="source-panel"><header><div><h2>{{ t('app.connectionsWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeConnections')" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />{{ t('app.addConnection') }}</button><div class="source-panel-content"><p v-if="!latestState" class="panel-empty" role="status">{{ loadFailure ? t('app.loadFailed') : t('common.loading') }}</p><div v-for="source in sources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small><span class="source-address">{{ source.transport === 'local' ? t('app.local') : source.target }}</span><span v-if="resources.find(item => item.id === source.id)?.serverVersion" class="source-version" :title="`herdr ${resources.find(item => item.id === source.id)!.serverVersion}`">herdr {{ resources.find(item => item.id === source.id)!.serverVersion }}</span></small></span></button><button class="icon-button" :title="t('app.editConnection')" :aria-label="t('app.editConnection')" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" :title="t('app.removeConnection')" :aria-label="t('app.removeConnection')" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><p v-if="undiscoveredSources.some(item => item.id === source.id)" class="panel-empty" role="status">{{ loadFailure ? t('app.loadFailed') : t('common.loading') }}</p><div v-else-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" :title="t('app.newWindow')" :aria-label="t('app.newWindow')" @click="windowAction({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="tab-plus" :size="14" /></button><button class="icon-button" :title="t('app.renameSpace')" :aria-label="t('app.renameSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" :title="t('app.closeSpace')" :aria-label="t('app.closeSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :style="{ '--program-color': statusColor(window.status) }" :title="statusLabel(window.status)" /><span>{{ window.name }}</span><button class="icon-button" :title="t('app.addToCanvas')" :aria-label="t('app.addToCanvas')" @click="openAdd({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 })"><Icon name="layers" :size="14" /></button><button class="icon-button" :title="t('app.windowActions')" :aria-label="t('app.windowActions')" @click="windowMenu = { name: window.name, node: { type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" :disabled="!resources.some(item => item.id === source.id && !item.error)" @click="spaceAction(resources.find(item => item.id === source.id)!, undefined, 'create')"><Icon name="plus" :size="14" />{{ t('app.newSpace') }}</button></template></div><p v-if="latestState && !sources.length" class="panel-empty">{{ t('app.noConnections') }}</p></div></aside></Transition>

@@ -13,6 +13,7 @@ function fixture(t: TestContext) {
   const store = new Store(join(dir, "canvas.db"));
   const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {
     closeAll: async () => {}, closeSource: async () => {},
+    onNotification: () => ({ dispose() {} }),
   } as unknown as TerminalManager);
   store.addSession("test");
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });

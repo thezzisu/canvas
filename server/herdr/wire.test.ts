@@ -27,6 +27,34 @@ test('herdr streaming reader preserves arbitrary frame boundaries and complete m
   }
 })
 
+test('semantic notifications decode the frozen generation-one fields without treating presentation hints as commands', () => {
+  const bytes = Buffer.from([14, 1, 4, 68, 111, 110, 101, 1, 5, 114, 101, 97, 100, 121,
+    1, 0, 1, 2, 112, 105, 1, 1, 115, 1, 1, 116, 1, 1, 112, 1, 3])
+  assert.deepEqual(decodeServerMessage(bytes), { type: 'notification', notification: {
+    kind: 'done', title: 'Done', body: 'ready', agent: 'pi', spaceId: 's', windowId: 't', paneId: 'p',
+  } })
+  assert.deepEqual(decodeServerMessage(Buffer.from([14, 3, 4, 73, 110, 102, 111, 0, 0, 0, 0, 0, 0, 0])),
+    { type: 'notification', notification: { kind: 'custom', title: 'Info' } })
+})
+
+test('unsupported optional notification frames never corrupt the following core message', () => {
+  const notices = [
+    Buffer.from([14, 4]), // Unknown semantic kind.
+    Buffer.from([14, 0, 4, 65]), // Incomplete field within a complete outer frame.
+    Buffer.from([14, 3, 1, 255, 0, 0, 0, 0, 0, 0, 0]), // Invalid UTF-8.
+    Buffer.from([14, 3, 1, 65, 0, 0, 0, 0, 0, 0, 0, 99]), // Future trailing field.
+  ]
+  const core = new Writer().uint(20).string('shell.snapshot.v1').string('{"revision":7}').finish()
+  const bytes = Buffer.concat([...notices, core].map(framed))
+  for (const chunkSize of [1, 3, bytes.length]) {
+    const reader = new FrameReader(), messages = []
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) messages.push(...reader.feed(bytes.subarray(offset, offset + chunkSize)))
+    reader.end()
+    assert.deepEqual(messages, [...notices.map(() => ({ type: 'ignored' })),
+      { type: 'control', kind: 'shell.snapshot.v1', data: '{"revision":7}' }])
+  }
+})
+
 test('herdr framing rejects oversized, truncated and structurally invalid peer messages', () => {
   const oversized = Buffer.alloc(4); oversized.writeUInt32LE(MAX_FRAME_BYTES + 1)
   assert.throws(() => new FrameReader().feed(oversized), /length/)

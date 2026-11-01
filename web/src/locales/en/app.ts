@@ -77,6 +77,7 @@ export default {
   "zoomOut": "Zoom out",
   "centerWindow": "Center window",
   "fitCanvas": "Fit canvas",
+  "fitWindow": "Fit focused card",
   "zoomIn": "Zoom in",
   "closeConnections": "Close connections",
   "editConnection": "Edit connection",

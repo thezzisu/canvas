@@ -7,11 +7,13 @@ import { randomUUID } from "node:crypto";
 import { createApp } from "./app.ts";
 import { Store, type SharedState, type Canvas } from "./state.ts";
 import type { TerminalManager } from "./terminals.ts";
+import type { CanvasNotification } from "../shared/notification.ts";
 
 function fixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), "canvas-sync-"));
   const store = new Store(join(directory, "canvas.db"));
   let terminalShutdowns = 0;
+  const notifications = new Set<(notification: CanvasNotification) => void>();
   const app = createApp(
     store,
     { username: "fixture", passwordHash: "unused" },
@@ -20,6 +22,10 @@ function fixture(t: TestContext) {
         terminalShutdowns++;
       },
       closeSource: async () => {},
+      onNotification: (listener: (notification: CanvasNotification) => void) => {
+        notifications.add(listener);
+        return { dispose: () => { notifications.delete(listener); } };
+      },
     } as unknown as TerminalManager,
   );
   store.addSession("first");
@@ -81,6 +87,8 @@ function fixture(t: TestContext) {
     store,
     request,
     subscribe,
+    notifications,
+    notify: (notification: CanvasNotification) => { for (const listener of notifications) listener(notification); },
     get terminalShutdowns() {
       return terminalShutdowns;
     },
@@ -128,6 +136,40 @@ test("slow readers receive the latest state without an unbounded mutation queue"
   const latest = (await stream.next()).state!;
   assert.equal(latest.canvases[0]?.name, "Update 49");
   assert.equal(latest.revision, 50);
+});
+
+test('live notifications reach authenticated subscribers, bound bursts and retire with their sessions', async t => {
+  const f = fixture(t), sourceId = randomUUID();
+  f.store.put('source', { id: sourceId, name: 'Synthetic source', transport: 'local' });
+  const first = await f.subscribe(), second = await f.subscribe('second');
+  await first.next(); await second.next();
+  assert.equal(f.notifications.size, 2);
+  const event = (id: string): CanvasNotification => ({ id, sourceId, kind: 'custom', title: id });
+  f.notify({ ...event('unknown-source'), sourceId: randomUUID() });
+  f.notify(event('live'));
+  assert.deepEqual(await first.next(), { event: 'notification', state: event('live') });
+  assert.deepEqual(await second.next(), { event: 'notification', state: event('live') });
+  await first.cancel();
+  assert.equal(f.notifications.size, 1);
+
+  for (let index = 0; index < 40; index++) f.notify(event(`burst-${index}`));
+  const received: string[] = [];
+  // One event can already be in the stream; the bounded queue keeps the latest burst.
+  for (let index = 0; index < 33; index++) received.push(((await second.next()).state as unknown as CanvasNotification).id);
+  assert.equal(received[0], 'burst-0');
+  assert.deepEqual(received.slice(1), Array.from({ length: 32 }, (_, index) => `burst-${index + 8}`));
+
+  const returned = await f.subscribe();
+  assert.equal((await returned.next()).event, 'state', 'new streams start with state, never notification history');
+  f.notify(event('fresh'));
+  assert.deepEqual(await returned.next(), { event: 'notification', state: event('fresh') });
+  await second.next();
+  f.store.removeSession('second');
+  assert.equal((await second.next()).event, 'unauthorized');
+  assert.equal((await second.next()).event, 'closed');
+  assert.equal(f.notifications.size, 1);
+  await returned.cancel();
+  assert.equal(f.notifications.size, 0);
 });
 
 test("global font settings broadcast to both browsers without altering canvas documents", async t => {

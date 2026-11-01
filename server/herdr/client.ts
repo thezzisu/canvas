@@ -6,11 +6,13 @@ import { FrameReader, encodeClientMessage, type ClientMessage, type ClientShellS
 import { readWindowContent, type NativeContentPane } from './content.ts'
 import { windowMetadata } from './metadata.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
+import type { NativeNotification } from '../../shared/notification.ts'
 
 export interface HerdrClientTransport {
   onData(listener: (data: string) => void): { dispose(): void }
   onPaneFocus(listener: (paneId: string | undefined) => void): { dispose(): void }
   onMetadata(listener: (metadata: WindowMetadata) => void): { dispose(): void }
+  onNotification(listener: (notification: NativeNotification) => void): { dispose(): void }
   onExit(listener: (event: HerdrClientExit) => void): { dispose(): void }
   content(): Promise<NativeContentPane[] | undefined>
   write(data: string | Buffer): void
@@ -53,6 +55,7 @@ class HerdrClient implements HerdrClientTransport {
   private readonly dataListeners = new Set<(data: string) => void>()
   private readonly paneFocusListeners = new Set<(paneId: string | undefined) => void>()
   private readonly metadataListeners = new Set<(metadata: WindowMetadata) => void>()
+  private readonly notificationListeners = new Set<(notification: NativeNotification) => void>()
   private metadata?: WindowMetadata
   private metadataSignature = ''
   private focusedPaneId?: string
@@ -240,6 +243,9 @@ class HerdrClient implements HerdrClientTransport {
         request.resolve(response.result)
       } catch (error) { request.reject(error instanceof Error ? error : new Error('Invalid herdr response')) }
     } else if (message.type === 'clipboard') this.clipboard(message.data)
+    else if (message.type === 'notification') {
+      if (this.initialized) for (const listener of this.notificationListeners) listener(message.notification)
+    }
     else if (message.type === 'bell') this.emit('\x07'.repeat(Math.min(message.count, 16)))
     else if (message.type === 'shutdown') this.finish({ exitCode: 0 })
     else if (message.type === 'error') throw new Error(message.message)
@@ -312,6 +318,10 @@ class HerdrClient implements HerdrClientTransport {
     queueMicrotask(() => { if (!this.closed && current && this.metadata === current && this.metadataListeners.has(listener)) listener(current) })
     return { dispose: () => { this.metadataListeners.delete(listener) } }
   }
+  onNotification(listener: (notification: NativeNotification) => void) {
+    this.notificationListeners.add(listener)
+    return { dispose: () => { this.notificationListeners.delete(listener) } }
+  }
   onExit(listener: (event: HerdrClientExit) => void) {
     this.exitListeners.add(listener)
     if (this.exit) queueMicrotask(() => { if (this.exitListeners.has(listener)) listener(this.exit!) })
@@ -371,6 +381,7 @@ class HerdrClient implements HerdrClientTransport {
     this.input.dispose()
     for (const request of this.requests.values()) { clearTimeout(request.timer); request.reject(error) }
     this.requests.clear(); this.output = []; this.outputBytes = 0; this.writeQueue = []; this.writeBytes = 0
+    this.notificationListeners.clear()
     this.pendingInput = []; this.pendingInputBytes = 0
     this.socket.destroy()
     for (const listener of this.exitListeners) listener(exit)

@@ -12,6 +12,8 @@ import { terminalUnicodeAddon } from "../shared/terminal-unicode.ts";
 import { terminalInputChunks } from "../web/src/terminal-input-chunks.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createSpace, createWindow, listResources, shellQuote, type Source } from "./providers.ts";
+import type { CanvasNotification } from "../shared/notification.ts";
+import { herdrApiRequest } from "./herdr/api.ts";
 
 class Client extends EventEmitter {
   readyState = 1;
@@ -89,11 +91,58 @@ async function fixture(t: TestContext, probe = false, quietProbe = false) {
   const reportAgent = (paneId: string, state: 'working' | 'idle' | 'blocked') => execFileSync(binary,
     ['--session', session, 'pane', 'report-agent', paneId, '--source', 'canvas-test', '--agent', 'pi', '--state', state],
     { env, stdio: 'ignore', timeout: 5000 });
-  return { root, bytes, manager, source, target, shellResult, assertSize, ready, text, reportAgent };
+  const notify = async (title: string) => {
+    let result: Record<string, unknown>;
+    await waitFor(async () => {
+      result = await herdrApiRequest(source.herdrSocket!, 'notification.show', { title, body: 'Synthetic body' });
+      return result.reason !== 'rate_limited';
+    }, 'native notification API remained rate-limited');
+    return result!;
+  };
+  return { root, bytes, manager, source, target, shellResult, assertSize, ready, text, reportAgent, notify };
 }
+
+test('one existing native endpoint per source delivers live notifications across viewers, owner closure and reconnect', async t => {
+  const f = await fixture(t); if (!f) return;
+  const first = new Client(), duplicateView = new Client(), siblingView = new Client();
+  const events: CanvasNotification[] = [];
+  const subscription = f.manager.onNotification(value => events.push(value));
+  await f.manager.connect(f.source, f.target, first.socket);
+  await f.manager.connect(f.source, f.target, duplicateView.socket);
+  const sibling = await createWindow(f.source, f.target.spaceId, 'Sibling');
+  await f.manager.connect(f.source, { ...f.target, windowId: sibling.windowId }, siblingView.socket);
+  assert.equal(f.manager.entries.size, 2, 'notifications must not create an additional native attachment');
+  assert.equal((await f.notify('First event')).shown, true);
+  await waitFor(() => events.length === 1, 'native notification was not delivered');
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(events.length, 1, 'source-wide native broadcast was duplicated per window/viewer');
+  assert.deepEqual({ ...events[0], id: undefined }, { id: undefined, sourceId: f.source.id, kind: 'custom', title: 'First event', body: 'Synthetic body' });
+
+  await (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!.close();
+  assert.equal((await f.notify('Promoted endpoint')).shown, true);
+  await waitFor(() => events.length === 2, 'remaining endpoint did not take over notification intake');
+  assert.equal(events[1]!.title, 'Promoted endpoint');
+  assert.notEqual(events[0]!.id, events[1]!.id);
+
+  await f.manager.closeSource(f.source.id);
+  assert.equal((await f.notify('Disconnected event')).shown, false);
+  const reconnected = new Client();
+  await f.manager.connect(f.source, f.target, reconnected.socket);
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(events.length, 2, 'reconnect replayed a notification from before attachment');
+  assert.equal((await f.notify('Reconnected event')).shown, true);
+  await waitFor(() => events.length === 3, 'reconnected source did not deliver its next live event');
+  assert.equal(events[2]!.title, 'Reconnected event');
+  subscription.dispose();
+  assert.equal((await f.notify('Disposed event')).shown, true);
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(events.length, 3);
+});
 
 test('native agent metadata reaches both viewers and late joiners without resource polling or a second attachment', async t => {
   const f = await fixture(t); if (!f) return;
+  const notifications: CanvasNotification[] = [];
+  f.manager.onNotification(value => notifications.push(value));
   const first = new Client(), second = new Client(), late = new Client();
   const metadata = (client: Client) => messages(client).filter(message => message.type === 'metadata').at(-1)?.window;
   await f.manager.connect(f.source, f.target, first.socket);
@@ -107,6 +156,10 @@ test('native agent metadata reaches both viewers and late joiners without resour
   await waitFor(() => metadata(first)?.status === 'working' && metadata(second)?.status === 'working', 'working metadata was not pushed');
   f.reportAgent(paneId, 'idle');
   await waitFor(() => metadata(first)?.status === 'done' && metadata(second)?.status === 'done', 'unseen completion was not pushed');
+  await waitFor(() => notifications.some(value => value.kind === 'done'), 'native completion notification was not pushed');
+  const done = notifications.find(value => value.kind === 'done')!;
+  assert.deepEqual([done.sourceId, done.spaceId, done.windowId, done.paneId],
+    [f.source.id, f.target.spaceId, f.target.windowId, paneId]);
   second.command({ type: 'focus' });
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(metadata(first).status, 'done', 'controller ownership incorrectly acknowledged native work');
@@ -123,6 +176,9 @@ test('native agent metadata reaches both viewers and late joiners without resour
   f.reportAgent(paneId, 'working');
   await waitFor(() => metadata(first)?.panes[0].terminalTitle === 'Live title', 'native title snapshot was not pushed');
   assert.equal(metadata(second).panes[0].terminalTitle, 'Live title');
+  f.reportAgent(paneId, 'blocked');
+  await waitFor(() => notifications.some(value => value.kind === 'attention'), 'native attention notification was not pushed');
+  assert.equal(notifications.find(value => value.kind === 'attention')!.paneId, paneId);
 });
 
 test("a transport closing during queued browser join rejects the connection", async () => {

@@ -1,4 +1,10 @@
 import type { VitePWAOptions } from 'vite-plugin-pwa'
+import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+
+const notificationSource = readFileSync(new URL('./web/notification-worker.js', import.meta.url), 'utf8')
+export const notificationWorker = { source: notificationSource,
+  fileName: `assets/notification-worker-${createHash('sha256').update(notificationSource).digest('hex').slice(0, 12)}.js` }
 
 // Canvas uses fragment navigation. API and forwarded documents never get a shell fallback.
 export const shellNavigation = /^\/(?:index\.html)?(?:\?.*)?$/
@@ -16,6 +22,7 @@ export const pwaOptions: Partial<VitePWAOptions> = {
     ],
   },
   workbox: {
+    importScripts: [notificationWorker.fileName],
     globPatterns: ['index.html', 'assets/*.{js,css}', 'icons/*.{png,svg}'],
     globIgnores: ['**/fonts/**', '**/*.woff2'],
     maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
