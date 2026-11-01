@@ -18,6 +18,8 @@ const content = { side: 'bottom' as const, align: 'end' as const, sideOffset: 6,
   onCloseAutoFocus: (event: Event) => { if (pointer.value) event.preventDefault() } }
 useEventListener(computed(() => open.value ? document : undefined), 'keydown', (event: KeyboardEvent) => {
   if (event.key !== 'Escape') return
+  // Let the IME consume Escape without dismissing the surrounding popover.
+  if (event.isComposing || event.keyCode === 229) { event.stopPropagation(); return }
   event.preventDefault(); event.stopPropagation(); open.value = false
 }, { capture: true })
 function change(value: number) { emit('update:modelValue', Math.max(contentZoomLimits.min, Math.min(contentZoomLimits.max, value))) }

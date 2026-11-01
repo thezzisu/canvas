@@ -27,6 +27,10 @@ function loaded() {
   if (resume && visible.value && visibility.value === 'visible') void media.play().catch(() => {})
   position = 0; resume = false
 }
+function keydown(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229 ||
+      document.fullscreenElement === player.value) event.stopPropagation()
+}
 onBeforeUnmount(() => {
   player.value?.pause()
   player.value?.removeAttribute('src')
@@ -35,7 +39,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="root" class="media-preview nowheel nopan" :class="`media-preview-${kind}`" @keydown.stop @wheel.stop>
+  <div ref="root" class="media-preview nowheel nopan" :class="`media-preview-${kind}`" @keydown="keydown" @wheel.stop>
     <component :is="kind" v-if="!failed" ref="player" :src="src" :controls="!readOnly" preload="metadata" playsinline :aria-label="title" @loadedmetadata="loaded" @error="failed = true" />
     <div v-else class="media-preview-error" role="status"><span>{{ t('panels.preview.mediaUnavailable') }}</span><button v-if="!readOnly" type="button" @click="emit('download')">{{ t('panels.file.downloadOriginal') }}</button></div>
   </div>

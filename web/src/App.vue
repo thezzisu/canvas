@@ -342,20 +342,21 @@ function fitViewport() {
   }
 }
 async function navigateMinimap({ event, node }: NodeMouseEvent) {
-  if (node.type !== 'terminal' || focused.value) return
+  if (!['terminal', 'note', 'file'].includes(node.type || '') || hasFocus.value) return
   event.stopPropagation()
   clearFitContext()
-  const canvasId = activeId.value
+  const canvasId = activeId.value, context = apiContext()
   resetPagingFeedback()
   cancelCreatedReveal()
-  if (document.activeElement instanceof HTMLElement && document.activeElement.closest('.terminal-host')) document.activeElement.blur()
+  if (document.activeElement instanceof HTMLElement && document.activeElement.closest('.card-content')) document.activeElement.blur()
   // Blurring can remove a focus-exempt window from the filtered overview.
   await nextTick()
-  if (activeId.value !== canvasId || focused.value) return
-  const target = nodes.value.find(item => item.id === node.id && item.type === 'terminal')
+  if (!isCurrentApi(context) || activeId.value !== canvasId || hasFocus.value) return
+  const target = nodes.value.find(item => item.id === node.id && item.type === node.type)
   const frame = graphSurface.value
   if (!target || !frame?.clientWidth || !frame.clientHeight) return
   if (paging.value) {
+    if (target.type !== 'terminal') return
     selectPage(pages.value.find(page => page.id === `${target.data.sourceId}/${target.data.windowId}`))
     void fitPage(true)
   } else {
@@ -1554,7 +1555,7 @@ function resizeNode(id: string, width: number, height: number, x?: number, y?: n
   rebuildNodes()
 }
 function keydown(event: KeyboardEvent) {
-  if (event.defaultPrevented) return
+  if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
   if (appDialogOpen.value) return
   if (event.key === 'Escape' && event.composedPath().some(target => target instanceof Element && target.getAttribute('role') === 'menu')) return
   if (directoryRequest.value || urlRequest.value) return
@@ -1562,7 +1563,9 @@ function keydown(event: KeyboardEvent) {
   if (backgroundCanvas.value) return
   if (settingsDialog.value || accountDialog.value) return
   if (scanTarget.value) return
-  if ((event.target as HTMLElement)?.closest('.xterm, .note-card input, .note-card textarea') && !modalOpen.value) return
+  const target = event.target instanceof Element ? event.target : undefined
+  if (!modalOpen.value && (target?.closest('.xterm') || target?.closest('.note-card input, .note-card textarea')
+    && !(focusedCardId.value && event.key === 'Escape'))) return
   if (paging.value && !focused.value && !modalOpen.value && !overviewMenuOpen.value && !canvasMenu.value && !sidebarOpen.value && !sourcePanel.value &&
       !event.ctrlKey && !event.altKey && !event.metaKey && !(event.target as HTMLElement)?.closest('input, textarea, select, button, a, [contenteditable="true"]')) {
     const direction = pageDirections.value.find(item => item.key === event.key)?.direction
@@ -1578,7 +1581,7 @@ function keydown(event: KeyboardEvent) {
     else if (canvasDialog.value) canvasDialog.value = false
     else if (addDialog.value) addDialog.value = false
     else if (focused.value) void closeFocus()
-    else if (focusedCardId.value) void closeCardFocus()
+    else if (focusedCardId.value) { event.preventDefault(); void closeCardFocus() }
     else sourcePanel.value = false
   }
 }
@@ -1720,7 +1723,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
         <img v-if="currentBackground && backgroundUrl" class="canvas-background" :src="backgroundUrl" :style="{ opacity: currentBackground.opacity }" alt="" aria-hidden="true" />
         <span id="canvas-card-select-help" hidden>{{ t('app.cardSelectHelp') }}</span>
         <span id="canvas-card-move-help" hidden>{{ t('app.cardMoveHelp') }}</span>
-        <VueFlow :snap-to-grid="!isOverview && !!currentCanvas?.snapToGrid" :snap-grid="[24, 24]" v-if="nodes.length && !hasFocus" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && !mobile" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized" @nodes-change="announceNodeMove"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><template #node-create="nodeProps"><OverviewCreateNode v-bind="nodeProps" /></template><MiniMap v-if="showMinimap" :aria-label="t('app.windowNavigation')" @node-click="navigateMinimap" :node-class-name="node => node.type === 'terminal' ? `minimap-window${node.data.statusFresh && needsAttention(node.data.status) ? ' minimap-pulse' : ''}${paging && currentPage?.id === `${node.data.sourceId}/${node.data.windowId}` ? ' minimap-current' : ''}` : 'minimap-decoration'" :pannable="!paging" :zoomable="!mobile && !paging" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? noteColor(node.data.color) : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
+        <VueFlow :snap-to-grid="!isOverview && !!currentCanvas?.snapToGrid" :snap-grid="[24, 24]" v-if="nodes.length && !hasFocus" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && !mobile" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized" @nodes-change="announceNodeMove"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><template #node-create="nodeProps"><OverviewCreateNode v-bind="nodeProps" /></template><MiniMap v-if="showMinimap" :aria-label="t('app.windowNavigation')" @node-click="navigateMinimap" :node-class-name="node => node.type === 'terminal' ? `minimap-card minimap-window${node.data.statusFresh && needsAttention(node.data.status) ? ' minimap-pulse' : ''}${paging && currentPage?.id === `${node.data.sourceId}/${node.data.windowId}` ? ' minimap-current' : ''}` : node.type === 'note' || node.type === 'file' ? 'minimap-card' : 'minimap-decoration'" :pannable="!paging" :zoomable="!mobile && !paging" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? noteColor(node.data.color) : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
         <div v-if="workspacePending || !nodes.length && undiscoveredSources.length" class="workspace-status" :class="loadFailure ? 'workspace-error' : 'workspace-loading'" role="status">
           <template v-if="loadFailure"><span :title="loadFailure instanceof Error ? loadFailure.message : undefined">{{ t('app.loadFailed') }}</span><button class="button subtle" @click="load">{{ t('common.retry') }}</button></template>
           <template v-else><span class="spinner" />{{ t('common.loading') }}</template>
