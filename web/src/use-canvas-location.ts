@@ -1,18 +1,19 @@
 import { onScopeDispose, shallowRef, type Ref } from 'vue'
-import { bindCanvasHistory, recallCanvasLocation, rememberCanvasLocation, type CanvasLocation } from './canvas-location'
+import { bindCanvasHistory, recallCanvasLocation, recallLastCanvasLocation, rememberCanvasLocation, type CanvasLocation } from './canvas-location'
 
 export interface CanvasNavigation { location: CanvasLocation; revision: number }
 interface Options {
   instanceId: Readonly<Ref<string>>
   hasInstance(id: string): boolean
   selectInstance(id: string): void
+  canRemember?(): boolean
 }
 
 /** App applies a request only after that instance's authenticated state and nodes are ready. */
 export function useCanvasLocation(options: Options) {
   const requested = shallowRef<CanvasNavigation>()
   const unknownInstance = shallowRef<string>()
-  let revision = 0
+  let revision = 0, initial = true
   const stage = (location: CanvasLocation | undefined) => {
     requested.value = location ? { location, revision: ++revision } : undefined
     unknownInstance.value = location && !options.hasInstance(location.instance) ? location.instance : undefined
@@ -20,11 +21,20 @@ export function useCanvasLocation(options: Options) {
   }
   const history = bindCanvasHistory(window, stage)
   onScopeDispose(history.dispose)
-  const remember = (location: CanvasLocation) => rememberCanvasLocation(localStorage, location)
+  const remember = (location: CanvasLocation) => {
+    if (options.canRemember?.() !== false) rememberCanvasLocation(localStorage, location)
+  }
   return {
     requested, unknownInstance,
     // Call before the initial session request, while the instance watcher is still gated.
-    read: history.read,
+    read() {
+      if (initial && !window.location.hash) {
+        const last = recallLastCanvasLocation(localStorage, options.instanceId.value)
+        if (last && options.hasInstance(last.instance)) { history.write(last, 'replace'); stage(last) }
+      }
+      initial = false
+      history.read()
+    },
     saved: (instance: string, canvas: string) => recallCanvasLocation(localStorage, instance, canvas),
     visit(instance: string, canvas: string) {
       if (!options.hasInstance(instance)) return false

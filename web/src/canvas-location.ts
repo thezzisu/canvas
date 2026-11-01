@@ -74,12 +74,20 @@ export function restoreCanvasPage(location: CanvasLocation, pages: readonly Over
 }
 
 const storageKey = (instance: string, canvas: string) => `canvas:view:${instance}:${canvas}`
+const lastCanvasKey = (instance: string) => `canvas:last-canvas:${instance}`
 export function rememberCanvasLocation(storage: Pick<Storage, 'setItem'>, location: CanvasLocation) {
   try {
     const hash = formatCanvasLocation(location), key = storageKey(location.instance, location.canvas)
     storage.setItem(key, hash)
     if (!location.view) storage.setItem(`${key}:free`, hash)
+    storage.setItem(lastCanvasKey(location.instance), location.canvas)
   } catch { /* Navigation works when browser storage is full or unavailable. */ }
+}
+export function recallLastCanvasLocation(storage: Pick<Storage, 'getItem'>, instance: string): CanvasLocation | undefined {
+  try {
+    const canvas = storage.getItem(lastCanvasKey(instance))
+    if (canvas && (canvas === 'overview' || uuid.test(canvas))) return recallCanvasLocation(storage, instance, canvas)
+  } catch { /* A neutral startup remains usable without browser storage. */ }
 }
 export function recallCanvasLocation(storage: Pick<Storage, 'getItem'>, instance: string, canvas: string): CanvasLocation | undefined {
   try {

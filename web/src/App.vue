@@ -23,7 +23,7 @@ import { notificationTarget } from './notification-model'
 import { canvasIndicators, needsAttention, windowVisualState } from './canvas-status'
 import { createLayoutSaves, type LayoutPatch } from './layout-saves'
 import { createPendingEdits, retargetNoteEdit, type NoteEdit } from './pending-edits'
-import { cameraFromViewport, recallFreeCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type CanvasLocation } from './canvas-location'
+import { cameraFromViewport, parseCanvasLocation, recallFreeCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type CanvasLocation } from './canvas-location'
 import { useCanvasLocation } from './use-canvas-location'
 import { usePointerDismiss } from './pointer-dismiss'
 import { useDocumentFocus } from './document-focus'
@@ -121,7 +121,8 @@ const canvases = ref<Canvas[]>([])
 const windowSizes = ref<Record<string, WindowSize>>({})
 const overviewBackground = ref<Canvas['background']>(null)
 const activeId = ref('overview')
-const navigation = useCanvasLocation({ instanceId: activeInstanceId, hasInstance: id => activeInstance.value.id === id || instances.value.some(instance => instance.id === id), selectInstance: selectHashInstance })
+const navigation = useCanvasLocation({ instanceId: activeInstanceId, hasInstance: id => activeInstance.value.id === id || instances.value.some(instance => instance.id === id), selectInstance: selectHashInstance,
+  canRemember: () => pageVisible.value })
 const { unknownInstance } = navigation
 const indicators = computed(() => resourcesLoaded.value && !undiscoveredSources.value.length ? canvasIndicators(canvases.value, resources.value) : {})
 const nodes = shallowRef<Node[]>([])
@@ -726,13 +727,15 @@ function currentLocation(): CanvasLocation {
   const frame = graphSurface.value
   const bounds = frame ? { width: frame.clientWidth, height: frame.clientHeight } : undefined
   const viewport = bounds && paging.value && currentPage.value ? pageViewport(currentPage.value, bounds) : getViewport()
-  const camera = bounds && !hasFocus.value ? cameraFromViewport(viewport, bounds) : navigation.saved(activeInstance.value.id, activeId.value)?.camera
+  const ownLocation = parseCanvasLocation(window.location.hash)
+  const camera = bounds && !hasFocus.value ? cameraFromViewport(viewport, bounds)
+    : ownLocation?.instance === activeInstance.value.id && ownLocation.canvas === activeId.value ? ownLocation.camera : undefined
   return { instance: activeInstance.value.id, canvas: activeId.value, ...(camera ? { camera } : {}),
     ...(paging.value ? { view: 'paged' as const, ...(currentPage.value ? { page: currentPage.value.id } : {}) } : {}) }
 }
 function rememberCurrentLocation() {
   const location = currentLocation()
-  if (hasFocus.value) return
+  if (hasFocus.value || !pageVisible.value || !authenticated.value || !resourcesLoaded.value || pendingViewport) return
   rememberCanvasLocation(localStorage, location)
   return location
 }
@@ -774,8 +777,10 @@ async function restoreViewport() {
   const initialized = new Set(getNodesInitialized.value.map(node => node.id))
   if (nodes.value.some(node => !initialized.has(node.id))) return
   if (requested && (requested.location.instance !== instance || requested.location.canvas !== id && canvases.value.some(canvas => canvas.id === requested.location.canvas))) return
+  const ownLocation = parseCanvasLocation(window.location.hash)
   const saved = requested ? resolveCanvasLocation(requested.location, canvases.value.map(canvas => canvas.id))
-    : (overviewPaged.value ? navigation.saved(instance, id) : recallFreeCanvasLocation(localStorage, instance, id))
+    : ownLocation?.instance === instance && ownLocation.canvas === id && !!ownLocation.view === overviewPaged.value ? ownLocation
+      : (overviewPaged.value ? navigation.saved(instance, id) : recallFreeCanvasLocation(localStorage, instance, id))
   if (requested && saved) overviewPaged.value = saved.view === 'paged'
   if (paging.value) {
     if (requested && saved) selectPage(restoreCanvasPage(saved, pages.value, { width: frame.clientWidth, height: frame.clientHeight }))
@@ -836,7 +841,8 @@ function nodesInitialized() {
   void nextTick().then(() => { focusNewNote(); focusCreatedWindow() })
 }
 function saveViewport() {
-  if (pendingViewport || hasFocus.value || !authenticated.value || !resourcesLoaded.value) return
+  if (pendingViewport || !authenticated.value || !resourcesLoaded.value) return
+  if (hasFocus.value) { navigation.save(currentLocation()); return }
   const frame = canvasFrame(graphSurface.value)
   if (mobile.value && (!frame || cameraFrame && Math.abs(cameraFrame.layoutWidth - frame.layoutWidth) >= 1)) {
     queueCameraResize(); return
@@ -982,7 +988,7 @@ function clearInstanceRuntime() {
 function visibilityChanged() {
   if (document.hidden) saveViewport()
   pageVisible.value = !document.hidden
-  if (!document.hidden) void refreshResources(true)
+  if (!document.hidden) { saveViewport(); void refreshResources(true) }
 }
 function clearAuthentication() { setSessionToken(''); clearInstanceRuntime(); checkingInstance.value = false; void exitFullscreen() }
 async function unauthorized() {
@@ -1646,11 +1652,11 @@ onMounted(async () => {
   window.addEventListener('keydown', keydown)
   window.addEventListener('resize', windowResize)
   window.addEventListener('beforeunload', beforeUnload)
+  document.addEventListener('visibilitychange', visibilityChanged)
   navigation.read()
   instanceBooted = true
   if (unknownInstance.value || invalidInstanceLink) ready.value = true
   else await activateInstance()
-  document.addEventListener('visibilitychange', visibilityChanged)
   refreshTimer = setInterval(() => { if (!document.hidden) void refreshResources(true) }, 2000)
 })
 onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload) })
