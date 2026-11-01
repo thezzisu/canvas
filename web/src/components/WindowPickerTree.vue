@@ -10,6 +10,7 @@ import Icon from './Icon.vue'
 const props = defineProps<{ resources: SourceResource[]; sources: Source[]; query: string; selected: string[]; existing: Set<string> }>()
 const emit = defineEmits<{ 'update:selected': [value: string[]] }>()
 const { t, n } = useI18n()
+const pending = computed(() => props.sources.some(source => !props.resources.some(resource => resource.id === source.id)))
 const groups = computed(() => pickerGroups(props.sources, props.resources, props.query, props.existing))
 const selected = computed(() => new Set(props.selected))
 const collapsed = ref(new Set<string>())
@@ -45,7 +46,7 @@ const checkboxUi = { root: 'picker-checkbox', base: 'picker-checkbox-base' }
         </label>
       </details>
     </details>
-    <p v-if="!groups.length" class="picker-empty">{{ t('windowPicker.empty') }}</p>
+    <p v-if="!pending && !groups.length" class="picker-empty">{{ t('windowPicker.empty') }}</p>
   </div>
 </template>
 

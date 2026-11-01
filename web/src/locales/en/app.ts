@@ -65,6 +65,7 @@ export default {
   "renameCanvas": "Rename canvas",
   "windowNavigation": "Window navigation",
   "noMatchingWindows": "No matching windows",
+  "loadFailed": "Could not load workspace",
   "noWindows": "No windows",
   "noConnections": "No connections",
   "clearFilters": "Clear filters",

@@ -65,6 +65,7 @@ export default {
   "renameCanvas": "重命名画布",
   "windowNavigation": "窗口导航",
   "noMatchingWindows": "没有匹配的窗口",
+  "loadFailed": "无法加载工作区",
   "noWindows": "暂无窗口",
   "noConnections": "暂无连接",
   "clearFilters": "清除筛选",

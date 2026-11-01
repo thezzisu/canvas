@@ -107,6 +107,8 @@ const polledResources = ref<SourceResource[]>([])
 const resources = computed(() => mergeLiveResources(polledResources.value, liveTerminalMetadata.value))
 const resourcesFresh = ref(false)
 const resourcesLoaded = ref(false)
+const loadFailure = shallowRef<unknown>()
+const undiscoveredSources = computed(() => sources.value.filter(source => !resources.value.some(resource => resource.id === source.id)))
 const pageVisible = ref(!document.hidden)
 const freshStatuses = computed(() => resourcesFresh.value && pageVisible.value)
 const canvases = ref<Canvas[]>([])
@@ -115,7 +117,7 @@ const overviewBackground = ref<Canvas['background']>(null)
 const activeId = ref('overview')
 const navigation = useCanvasLocation({ instanceId: activeInstanceId, hasInstance: id => activeInstance.value.id === id || instances.value.some(instance => instance.id === id), selectInstance: selectHashInstance })
 const { unknownInstance } = navigation
-const indicators = computed(() => canvasIndicators(canvases.value, resources.value))
+const indicators = computed(() => resourcesLoaded.value && !undiscoveredSources.value.length ? canvasIndicators(canvases.value, resources.value) : {})
 const nodes = shallowRef<Node[]>([])
 const graphKey = ref(0)
 const refreshedAt = ref(0)
@@ -225,7 +227,8 @@ const pendingEdits = createPendingEdits({ getItem: key => sessionStorage.getItem
 let draftBase = ''
 function checkpointEdits() { pendingEdits.save(draftBase, pendingLayouts, [...savingNotes.values(), ...pendingNotes.values()]) }
 let layoutGesture = ''
-let latestState: SharedState | undefined
+const latestState = shallowRef<SharedState>()
+const workspacePending = computed(() => !latestState.value || !resourcesLoaded.value)
 let stateEvents: ReturnType<typeof subscribeState> | undefined
 let noticeTimer: ReturnType<typeof setTimeout>
 let resourceSignature = ''
@@ -380,7 +383,7 @@ usePointerDismiss(computed({
 const { surface: graphSurface, app: appElement, fullscreen: canvasFullscreen, resetPagingFeedback, wheel: canvasWheel, touchStart: canvasTouchStart, touchMove: canvasTouchMove, touchEnd: canvasTouchEnd, touchCancel: canvasTouchCancel, click: canvasClick, toggleFullscreen, exitFullscreen } = useCanvasNavigation({
   getCanvasId: () => `${activeInstance.value.id}/${activeId.value}`, getViewport, setViewport, saveViewport,
   onError: showError,
-  blocked: () => overviewMenuOpen.value || !!modalOpen.value || !!directoryRequest.value || !!urlRequest.value || !!downloadPreview.value || hasFocus.value || (mobile.value && (sidebarOpen.value || sourcePanel.value)),
+  blocked: () => workspacePending.value || overviewMenuOpen.value || !!modalOpen.value || !!directoryRequest.value || !!urlRequest.value || !!downloadPreview.value || hasFocus.value || (mobile.value && (sidebarOpen.value || sourcePanel.value)),
   mobile: () => mobile.value,
   paging: { enabled: () => paging.value, canMove: direction => !!pageNeighbor(direction), move: movePage, recenter: fitPage },
   beforeFullscreen: () => { sourcePanel.value = false; sidebarOpen.value = false; canvasMenu.value = false },
@@ -551,6 +554,7 @@ function announceNodeMove(changes: NodeChange[]) {
   ariaLiveMessage.value = t('app.cardMoved', { name, x: n(Math.round(change.position.x)), y: n(Math.round(change.position.y)) })
 }
 function rebuildNodes() {
+  if (!resourcesLoaded.value) return
   const previous = new Map(nodes.value.map(node => [node.id, node as Node & { selected?: boolean }]))
   nodes.value = (isOverview.value ? overviewNodes() : (currentCanvas.value?.nodes || []).map(flowNode)).map(node => accessibleNode({ ...node, selected: previous.get(node.id)?.selected }))
 }
@@ -578,7 +582,7 @@ function applySettings(value: GlobalSettings) {
   })()
 }
 function applySharedState(state: SharedState) {
-  if (latestState?.instanceId === state.instanceId && state.revision < latestState.revision) return
+  if (latestState.value?.instanceId === state.instanceId && state.revision < latestState.value.revision) return
   const restoring = !draftBase
   if (restoring) {
     draftBase = apiContext().base
@@ -587,7 +591,7 @@ function applySharedState(state: SharedState) {
     for (const edit of drafts.notes) pendingNotes.set(noteKey(edit.canvasId, edit.id), edit)
   }
   reconcileNoteEdits(state.canvases)
-  latestState = state
+  latestState.value = state
   pruneFileViews(activeInstance.value.id, state.canvases)
   retainBackgrounds([state.overviewBackground, ...state.canvases.map(canvas => canvas.background)].flatMap(background => background ? [background.url] : []))
   applySettings(state.settings)
@@ -636,13 +640,13 @@ function applySharedState(state: SharedState) {
     if (focused.value && !sources.value.some(source => source.id === focused.value?.sourceId)) focused.value = null
     resourceSignature = ''; resourceLayoutSignature = ''
     if (isOverview.value && !layoutGesture) rebuildNodes()
-    void refreshResources(true)
+    if (resourcesLoaded.value) void refreshResources(true)
   }
 }
 async function syncState() {
-  const previous = latestState
+  const previous = latestState.value
   const state = await api<SharedState>('/api/state')
-  if (latestState !== previous && latestState?.instanceId !== state.instanceId) return
+  if (latestState.value !== previous && latestState.value?.instanceId !== state.instanceId) return
   applySharedState(state)
 }
 function stopStateEvents() { stateEvents?.close(); stateEvents = undefined }
@@ -675,7 +679,7 @@ async function selectHashInstance(id: string) {
 }
 async function applyRequestedLocation() {
   const requested = navigation.requested.value
-  if (!requested || unknownInstance.value || requested.location.instance !== activeInstance.value.id || !authenticated.value || !latestState || !resourcesLoaded.value) return
+  if (!requested || unknownInstance.value || requested.location.instance !== activeInstance.value.id || !authenticated.value || !latestState.value) return
   const location = resolveCanvasLocation(requested.location, canvases.value.map(canvas => canvas.id))
   if (focusedCardId.value) void flushNotes(activeId.value)
   focused.value = null; focusedCardId.value = ''
@@ -800,7 +804,7 @@ async function refreshResources(silent = false): Promise<void> {
     await resourceRequest
     return refreshResources()
   }
-  if (!authenticated.value || unknownInstance.value) return
+  if (!authenticated.value || unknownInstance.value || !latestState.value) return
   loading.value = !silent
   const context = apiContext()
   const sourceConfiguration = JSON.stringify(sources.value)
@@ -815,14 +819,15 @@ async function refreshResources(silent = false): Promise<void> {
           return windows.length ? [{ ...space, windows }] : []
         }),
       } : source)
-      resourcesFresh.value = true; resourcesLoaded.value = true
+      resourcesFresh.value = true; resourcesLoaded.value = true; loadFailure.value = undefined
       polledResources.value = body.sources
       acknowledgeTerminalMetadata(metadataAtStart, body.sources.filter(source => source.status === 'online' && !source.error).map(source => source.id))
       refreshedAt.value = Date.now()
     } catch (reason) {
       if (isCurrentApi(context)) {
-        resourcesFresh.value = false; resourcesLoaded.value = true
-        if (!silent) showError(reason)
+        resourcesFresh.value = false
+        if (!resourcesLoaded.value || undiscoveredSources.value.length) loadFailure.value = reason
+        else if (!silent) showError(reason)
       }
     }
     finally {
@@ -836,15 +841,18 @@ async function refreshResources(silent = false): Promise<void> {
 }
 async function load() {
   const context = apiContext()
-  await syncState()
-  requireCurrentApi(context)
-  await refreshResources()
-  requireCurrentApi(context)
-  rebuildNodes()
-  if (navigation.requested.value) await applyRequestedLocation()
-  else await restoreViewport()
-  requireCurrentApi(context)
-  startStateEvents()
+  loadFailure.value = undefined
+  try {
+    await syncState()
+    requireCurrentApi(context)
+    await refreshResources()
+    requireCurrentApi(context)
+    rebuildNodes()
+    if (navigation.requested.value) await applyRequestedLocation()
+    else await restoreViewport()
+    requireCurrentApi(context)
+    startStateEvents()
+  } catch (reason) { if (isCurrentApi(context)) loadFailure.value = reason }
 }
 async function login() {
   const context = apiContext()
@@ -892,9 +900,9 @@ function clearInstanceRuntime() {
   sourceDialogRevision++; canvasDialogRevision++; addDialogRevision++; pendingKeyboard = undefined
   addDialog.value = false; shareCard.value = undefined; windowMenu.value = null; backgroundCanvas.value = null; settingsDialog.value = false; accountDialog.value = false
   sidebarOpen.value = false; overviewMenuOpen.value = false; canvasMenu.value = false
-  settings.value = null; fontRevision++; fontSignature = ''; latestState = undefined
+  settings.value = null; fontRevision++; fontSignature = ''; latestState.value = undefined
   sources.value = []; polledResources.value = []; canvases.value = []; nodes.value = []; windowSizes.value = {}
-  resourcesFresh.value = false; resourcesLoaded.value = false
+  resourcesFresh.value = false; resourcesLoaded.value = false; loadFailure.value = undefined
   overviewBackground.value = null; windowGeometry.clear(); resourceSignature = ''; resourceLayoutSignature = ''; resourceRequest = undefined
   currentPage.value = undefined; overviewPaged.value = false; preferredPageX.value = undefined
   pendingViewport = ''; viewportRequest++; cancelCreatedReveal(); lastOverviewInteraction = undefined
@@ -975,7 +983,7 @@ watch(locale, () => {
   })
   if (backgroundCanvas.value?.id === 'overview') backgroundCanvas.value = { ...backgroundCanvas.value, name: t('app.overview') }
 })
-watch([navigation.requested, resourcesLoaded], () => { void applyRequestedLocation() })
+watch([navigation.requested, resourcesLoaded, latestState], () => { void applyRequestedLocation() })
 watchDebounced(getViewport, saveViewport, { debounce: 160 })
 watch(unknownInstance, async value => {
   if (!value) return
@@ -1596,7 +1604,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
       </nav>
       <div class="sidebar-divider" />
       <div class="nav-section-label"><span>{{ t('app.connections') }}</span><button class="icon-button" :title="t('app.addConnection')" :aria-label="t('app.addConnection')" @click="openSource()"><Icon name="plus" :size="16" /></button></div>
-      <div class="source-nav"><button v-for="source in sources" :key="source.id" class="source-nav-item" :title="`${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}${resources.find(item => item.id === source.id)?.serverVersion ? ` · herdr ${resources.find(item => item.id === source.id)!.serverVersion}` : ''}`" @click="sourcePanel = true; expandedSource = source.id"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}</span><span class="source-nav-status"><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : 'connected'" /></span></button><button v-if="!sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="15" />{{ t('app.addConnection') }}</button></div>
+      <div class="source-nav"><button v-for="source in sources" :key="source.id" class="source-nav-item" :title="`${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}${resources.find(item => item.id === source.id)?.serverVersion ? ` · herdr ${resources.find(item => item.id === source.id)!.serverVersion}` : ''}`" @click="sourcePanel = true; expandedSource = source.id"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}</span><span class="source-nav-status"><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : resources.find(item => item.id === source.id)?.status === 'online' ? 'connected' : ''" /></span></button><button v-if="latestState && !sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="15" />{{ t('app.addConnection') }}</button></div>
       <div class="sidebar-footer">
         <button class="sidebar-account" :title="username" :aria-label="`${t('account.title')}: ${username}`" @click="accountDialog = true">
           <span class="avatar" aria-hidden="true">{{ username.slice(0, 1).toUpperCase() || 'C' }}</span>
@@ -1608,8 +1616,8 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
     </aside>
     <main class="workspace" :inert="!!focusedCard || undefined" :aria-hidden="!!focusedCard || undefined">
       <header class="workspace-header">
-        <div class="header-context"><button v-if="mobile" class="icon-button mobile-menu-trigger" :aria-label="t('app.openCanvasList')" aria-controls="canvas-sidebar" :aria-expanded="sidebarOpen" @click="sidebarOpen = !sidebarOpen"><Icon name="menu" :size="21" /></button><div class="breadcrumb"><h1 :title="currentName">{{ currentName }}</h1></div><span class="header-counts">{{ canvasCounts }}</span><button class="icon-button refresh-button" :title="refreshedAt ? t('app.refreshUpdated', { time: refreshedTime }) : t('app.refresh')" :aria-label="t('app.refresh')" :disabled="loading" @click="refreshResources()"><Icon name="refresh" :size="14" :class="{ spinning: loading }" /></button></div>
-        <div class="header-actions">
+        <div class="header-context"><button v-if="mobile" class="icon-button mobile-menu-trigger" :aria-label="t('app.openCanvasList')" aria-controls="canvas-sidebar" :aria-expanded="sidebarOpen" @click="sidebarOpen = !sidebarOpen"><Icon name="menu" :size="21" /></button><div class="breadcrumb"><h1 v-if="latestState" :title="currentName">{{ currentName }}</h1></div><span v-if="!workspacePending && !undiscoveredSources.length" class="header-counts">{{ canvasCounts }}</span><button class="icon-button refresh-button" :title="refreshedAt ? t('app.refreshUpdated', { time: refreshedTime }) : t('app.refresh')" :aria-label="t('app.refresh')" :disabled="loading || workspacePending" @click="refreshResources()"><Icon name="refresh" :size="14" :class="{ spinning: loading }" /></button></div>
+        <div class="header-actions" :inert="workspacePending || undefined">
           <UDropdownMenu v-if="isOverview" v-model:open="overviewMenuOpen" :modal="false" :items="overviewMenu" :portal="appElement || false" :content="{ align: 'end', ...overviewDismiss }" :ui="{ content: 'overview-display-menu', item: 'overview-display-item', label: 'overview-display-label' }">
             <button ref="overviewTrigger" class="icon-button overview-display-trigger" :class="{ active: overviewChanged }" :title="t('app.filterSort')" :aria-label="t('app.overviewFilterSort')"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg><i v-if="overviewChanged" /></button>
             <template #item-leading="{ item }"><span class="overview-display-leading" aria-hidden="true"><i v-if="item.status" class="program-dot" :style="{ '--program-color': statusColor(item.status) }" /></span></template>
@@ -1627,13 +1635,17 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
         <span id="canvas-card-select-help" hidden>{{ t('app.cardSelectHelp') }}</span>
         <span id="canvas-card-move-help" hidden>{{ t('app.cardMoveHelp') }}</span>
         <VueFlow :snap-to-grid="!isOverview && !!currentCanvas?.snapToGrid" :snap-grid="[24, 24]" v-if="nodes.length && !hasFocus" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && !mobile" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized" @nodes-change="announceNodeMove"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><template #node-create="nodeProps"><OverviewCreateNode v-bind="nodeProps" /></template><MiniMap v-if="showMinimap" :aria-label="t('app.windowNavigation')" @node-click="navigateMinimap" :node-class-name="node => node.type === 'terminal' ? `minimap-window${node.data.statusFresh && needsAttention(node.data.status) ? ' minimap-pulse' : ''}${paging && currentPage?.id === `${node.data.sourceId}/${node.data.windowId}` ? ' minimap-current' : ''}` : 'minimap-decoration'" :pannable="!paging" :zoomable="!mobile && !paging" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? noteColor(node.data.color) : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
-        <div v-if="!nodes.length && isOverview" class="empty-state"><Icon name="server" :size="32" /><h2>{{ windowCount && overviewFiltered ? t('app.noMatchingWindows') : sources.length ? t('app.noWindows') : t('app.noConnections') }}</h2><button v-if="windowCount && overviewFiltered" class="button subtle" @click="overviewSelected = [...overviewStatuses]">{{ t('app.clearFilters') }}</button><button v-else class="button primary" @click="sources.length ? sourcePanel = true : openSource()"><Icon :name="sources.length ? 'server' : 'plus'" :size="17" />{{ sources.length ? t('app.connections') : t('app.addConnection') }}</button></div>
-        <div v-if="!nodes.length && !isOverview" class="empty-state"><Icon name="canvas" :size="32" /><h2>{{ t('app.emptyCanvas') }}</h2><button class="button primary" @click="openAdd()"><Icon name="layers" :size="17" />{{ t('app.addWindows') }}</button></div>
+        <div v-if="workspacePending || !nodes.length && undiscoveredSources.length" class="workspace-status" :class="loadFailure ? 'workspace-error' : 'workspace-loading'" role="status">
+          <template v-if="loadFailure"><span :title="loadFailure instanceof Error ? loadFailure.message : undefined">{{ t('app.loadFailed') }}</span><button class="button subtle" @click="load">{{ t('common.retry') }}</button></template>
+          <template v-else><span class="spinner" />{{ t('common.loading') }}</template>
+        </div>
+        <div v-else-if="!nodes.length && isOverview" class="empty-state"><Icon name="server" :size="32" /><h2>{{ windowCount && overviewFiltered ? t('app.noMatchingWindows') : sources.length ? t('app.noWindows') : t('app.noConnections') }}</h2><button v-if="windowCount && overviewFiltered" class="button subtle" @click="overviewSelected = [...overviewStatuses]">{{ t('app.clearFilters') }}</button><button v-else class="button primary" @click="sources.length ? sourcePanel = true : openSource()"><Icon :name="sources.length ? 'server' : 'plus'" :size="17" />{{ sources.length ? t('app.connections') : t('app.addConnection') }}</button></div>
+        <div v-else-if="!nodes.length && !isOverview" class="empty-state"><Icon name="canvas" :size="32" /><h2>{{ t('app.emptyCanvas') }}</h2><button class="button primary" @click="openAdd()"><Icon name="layers" :size="17" />{{ t('app.addWindows') }}</button></div>
         <button v-if="canvasFullscreen && !showNavigation && !focused" class="icon-button canvas-fullscreen-exit" :title="t('app.exitFullscreen')" :aria-label="t('app.exitFullscreen')" @click="exitFullscreen"><Icon name="collapse" :size="19" /></button>
-        <div v-if="showNavigation && !focused" class="canvas-toolbar"><button v-if="canvasFullscreen" :title="t('app.globalSettings')" :aria-label="t('app.globalSettings')" :disabled="!settings" @click="openSettings"><Icon name="settings" :size="17" /></button><button :title="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-label="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-pressed="canvasFullscreen" @click="toggleFullscreen"><Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button><button v-if="isOverview" :title="t('app.pagedBrowsing')" :aria-label="t('app.pagedBrowsing')" :aria-pressed="overviewPaged" @click="togglePaging"><Icon name="pages" :size="17" /></button><button v-if="!isOverview" :title="t('app.snapToGrid')" :aria-label="t('app.snapToGrid')" :aria-pressed="!!currentCanvas?.snapToGrid" @click="toggleSnap"><Icon name="grid" :size="15" /></button><template v-if="paging"><button v-for="item in pageDirections" :key="item.direction" :title="item.label" :aria-label="item.label" :disabled="!pageNeighbor(item.direction)" @pointerdown.prevent @click="movePage(item.direction)"><Icon :name="item.icon" :size="16" :style="{ transform: item.rotation }" /></button></template><button v-if="!paging" :title="t('app.zoomOut')" :aria-label="t('app.zoomOut')" @click="zoomOut({ duration: 150 })"><Icon name="minus" :size="17" /></button><button :title="paging ? t('app.centerWindow') : t('app.fitCanvas')" :aria-label="paging ? t('app.centerWindow') : t('app.fitCanvas')" @click="fitCanvas"><Icon name="fit" :size="17" /></button><button v-if="!paging" :title="t('app.zoomIn')" :aria-label="t('app.zoomIn')" @click="zoomIn({ duration: 150 })"><Icon name="plus" :size="17" /></button></div>
+        <div v-if="!workspacePending && showNavigation && !focused" class="canvas-toolbar"><button v-if="canvasFullscreen" :title="t('app.globalSettings')" :aria-label="t('app.globalSettings')" :disabled="!settings" @click="openSettings"><Icon name="settings" :size="17" /></button><button :title="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-label="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-pressed="canvasFullscreen" @click="toggleFullscreen"><Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button><button v-if="isOverview" :title="t('app.pagedBrowsing')" :aria-label="t('app.pagedBrowsing')" :aria-pressed="overviewPaged" @click="togglePaging"><Icon name="pages" :size="17" /></button><button v-if="!isOverview" :title="t('app.snapToGrid')" :aria-label="t('app.snapToGrid')" :aria-pressed="!!currentCanvas?.snapToGrid" @click="toggleSnap"><Icon name="grid" :size="15" /></button><template v-if="paging"><button v-for="item in pageDirections" :key="item.direction" :title="item.label" :aria-label="item.label" :disabled="!pageNeighbor(item.direction)" @pointerdown.prevent @click="movePage(item.direction)"><Icon :name="item.icon" :size="16" :style="{ transform: item.rotation }" /></button></template><button v-if="!paging" :title="t('app.zoomOut')" :aria-label="t('app.zoomOut')" @click="zoomOut({ duration: 150 })"><Icon name="minus" :size="17" /></button><button :title="paging ? t('app.centerWindow') : t('app.fitCanvas')" :aria-label="paging ? t('app.centerWindow') : t('app.fitCanvas')" @click="fitCanvas"><Icon name="fit" :size="17" /></button><button v-if="!paging" :title="t('app.zoomIn')" :aria-label="t('app.zoomIn')" @click="zoomIn({ duration: 150 })"><Icon name="plus" :size="17" /></button></div>
       </div>
     </main>
-    <Transition name="slide"><aside v-if="sourcePanel" ref="sourcePanelElement" class="source-panel"><header><div><h2>{{ t('app.connectionsWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeConnections')" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />{{ t('app.addConnection') }}</button><div class="source-panel-content"><div v-for="source in sources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small><span class="source-address">{{ source.transport === 'local' ? t('app.local') : source.target }}</span><span v-if="resources.find(item => item.id === source.id)?.serverVersion" class="source-version" :title="`herdr ${resources.find(item => item.id === source.id)!.serverVersion}`">herdr {{ resources.find(item => item.id === source.id)!.serverVersion }}</span></small></span></button><button class="icon-button" :title="t('app.editConnection')" :aria-label="t('app.editConnection')" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" :title="t('app.removeConnection')" :aria-label="t('app.removeConnection')" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><div v-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" :title="t('app.newWindow')" :aria-label="t('app.newWindow')" @click="windowAction({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="tab-plus" :size="14" /></button><button class="icon-button" :title="t('app.renameSpace')" :aria-label="t('app.renameSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" :title="t('app.closeSpace')" :aria-label="t('app.closeSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :style="{ '--program-color': statusColor(window.status) }" :title="statusLabel(window.status)" /><span>{{ window.name }}</span><button class="icon-button" :title="t('app.addToCanvas')" :aria-label="t('app.addToCanvas')" @click="openAdd({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 })"><Icon name="layers" :size="14" /></button><button class="icon-button" :title="t('app.windowActions')" :aria-label="t('app.windowActions')" @click="windowMenu = { name: window.name, node: { type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" @click="spaceAction(resources.find(item => item.id === source.id) || { ...source, status: '', spaces: [] }, undefined, 'create')"><Icon name="plus" :size="14" />{{ t('app.newSpace') }}</button></template></div><p v-if="!sources.length" class="panel-empty">{{ t('app.noConnections') }}</p></div></aside></Transition>
+    <Transition name="slide"><aside v-if="sourcePanel" ref="sourcePanelElement" class="source-panel"><header><div><h2>{{ t('app.connectionsWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeConnections')" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />{{ t('app.addConnection') }}</button><div class="source-panel-content"><p v-if="!latestState" class="panel-empty" role="status">{{ loadFailure ? t('app.loadFailed') : t('common.loading') }}</p><div v-for="source in sources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small><span class="source-address">{{ source.transport === 'local' ? t('app.local') : source.target }}</span><span v-if="resources.find(item => item.id === source.id)?.serverVersion" class="source-version" :title="`herdr ${resources.find(item => item.id === source.id)!.serverVersion}`">herdr {{ resources.find(item => item.id === source.id)!.serverVersion }}</span></small></span></button><button class="icon-button" :title="t('app.editConnection')" :aria-label="t('app.editConnection')" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" :title="t('app.removeConnection')" :aria-label="t('app.removeConnection')" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><p v-if="undiscoveredSources.some(item => item.id === source.id)" class="panel-empty" role="status">{{ loadFailure ? t('app.loadFailed') : t('common.loading') }}</p><div v-else-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" :title="t('app.newWindow')" :aria-label="t('app.newWindow')" @click="windowAction({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="tab-plus" :size="14" /></button><button class="icon-button" :title="t('app.renameSpace')" :aria-label="t('app.renameSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" :title="t('app.closeSpace')" :aria-label="t('app.closeSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :style="{ '--program-color': statusColor(window.status) }" :title="statusLabel(window.status)" /><span>{{ window.name }}</span><button class="icon-button" :title="t('app.addToCanvas')" :aria-label="t('app.addToCanvas')" @click="openAdd({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 })"><Icon name="layers" :size="14" /></button><button class="icon-button" :title="t('app.windowActions')" :aria-label="t('app.windowActions')" @click="windowMenu = { name: window.name, node: { type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, width: 480, height: 302 } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" :disabled="!resources.some(item => item.id === source.id && !item.error)" @click="spaceAction(resources.find(item => item.id === source.id)!, undefined, 'create')"><Icon name="plus" :size="14" />{{ t('app.newSpace') }}</button></template></div><p v-if="latestState && !sources.length" class="panel-empty">{{ t('app.noConnections') }}</p></div></aside></Transition>
     <div v-if="focused || focusedCard" ref="focusViewportElement" class="focus-overlay" :class="{ 'card-focus-overlay': focusedCard }">
       <TerminalNode v-if="focused" :key="focused.id" :id="focused.id" :data="{ ...terminalData(focused, isOverview), ...focusedSize, overview: isOverview, focus: true }" />
       <NoteNode v-else-if="focusedCard?.type === 'note'" :key="focusedCard.id" :id="focusedCard.id" :selected="false" :data="noteData(focusedCard, true)" />
@@ -1653,7 +1665,7 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
       <section v-if="sourceDialog" class="modal source-modal"><header><div><h2 id="source-title">{{ sourceDraft.id ? t('app.editConnection') : t('app.addConnection') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="sourceDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitSource"><label>{{ t('app.connectionName') }}<input v-model="sourceDraft.name" name="sourceName" required :placeholder="t('app.connectionNamePlaceholder')" /></label><div class="segmented-control"><button type="button" :class="{ selected: sourceDraft.transport === 'local' }" @click="sourceDraft.transport = 'local'"><Icon name="server" :size="15" />{{ t('app.local') }}</button><button type="button" :class="{ selected: sourceDraft.transport === 'ssh' }" @click="sourceDraft.transport = 'ssh'"><Icon name="globe" :size="15" />{{ t('app.remoteSsh') }}</button></div><label v-if="sourceDraft.transport === 'ssh'">{{ t('app.sshAddress') }}<input v-model="sourceDraft.target" name="target" placeholder="ssh://user@hostname:22" :required="sourceDraft.transport === 'ssh'" /></label><label>{{ t('app.session') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.herdrSession" name="herdrSession" placeholder="default" /></label><details><summary>{{ t('app.advanced') }}</summary><template v-if="sourceDraft.transport === 'ssh'"><label>{{ t('app.sshIdentity') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.sshIdentityFile" name="sshIdentityFile" placeholder="/path/to/id_ed25519" /></label><label>{{ t('app.sshKnownHosts') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.sshKnownHostsFile" name="sshKnownHostsFile" placeholder="/path/to/known_hosts" /></label></template><label>{{ t('app.socketPath') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.herdrSocket" name="herdrSocket" placeholder="/path/to/herdr.sock" /></label></details><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><div class="source-probe-status" :class="{ failed: sourceProbe.error }" role="status"><span v-if="sourceProbe.pending" class="spinner" /><span :title="sourceProbe.error || sourceProbe.version">{{ sourceProbe.pending ? t('app.checkingConnection') : sourceProbe.error ? t('app.connectionProbeFailed') : sourceProbe.version ? `herdr ${sourceProbe.version}` : '' }}</span><button v-if="sourceProbe.error" type="button" class="icon-button" :aria-label="t('common.retry')" :title="t('common.retry')" @click="sourceProbeRetry++"><Icon name="refresh" :size="14" /></button></div><button class="button subtle" type="button" @click="sourceDialog = false">{{ t('common.cancel') }}</button><button class="button primary" type="submit" :disabled="busy || !sourceProbeReady || !sourceDraft.name.trim()"><span v-if="busy" class="spinner" />{{ busy ? t('app.saving') : t('common.save') }}</button></footer></form></section>
       <section v-else-if="canvasDialog" class="modal"><header><div><h2 id="canvas-title">{{ canvasDraft.id ? t('app.renameCanvas') : t('app.newCanvas') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="canvasDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitCanvas"><label>{{ t('app.canvasName') }}<input v-model="canvasDraft.name" name="canvasName" required autofocus :placeholder="t('app.canvasNamePlaceholder')" maxlength="80" /></label><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="canvasDialog = false">{{ t('common.cancel') }}</button><button class="button primary" :disabled="busy" type="submit">{{ canvasDraft.id ? t('common.save') : t('app.createCanvas') }}</button></footer></form></section>
       <section v-else-if="actionDialog" class="modal"><header><h2 id="action-title">{{ actionDialog.title }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" :disabled="busy" @click="actionDialog = null"><Icon name="close" /></button></header><p v-if="actionDialog.description">{{ actionDialog.description }}</p><form @submit.prevent="submitAction"><label v-if="actionDialog.label">{{ actionDialog.label }}<input v-model="actionDialog.value" name="resourceName" :required="!actionDialog.optional" :placeholder="actionDialog.optional ? t('app.automaticName') : undefined" autofocus maxlength="100" /></label><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" :disabled="busy" @click="actionDialog = null">{{ t('common.cancel') }}</button><button class="button" :class="actionDialog.danger ? 'danger' : 'primary'" :disabled="busy" type="submit">{{ actionDialog.button }}</button></footer></form></section>
-      <section v-else-if="addDialog" class="modal add-modal"><header><div><h2 id="add-title">{{ t('app.addWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="addDialog = false"><Icon name="close" /></button></header><label>{{ t('app.targetCanvas') }}<select v-model="addTarget"><option v-for="canvas in canvases" :key="canvas.id" :value="canvas.id">{{ canvas.name }}</option><option value="">{{ t('app.newMyCanvas') }}</option></select></label><div class="search-field"><Icon name="search" :size="16" /><input v-model="addSearch" :aria-label="t('app.searchWindows')" :placeholder="t('app.searchPlaceholder')" /></div><WindowPickerTree v-model:selected="selectedWindows" :sources="sources" :resources="resources" :query="addSearch" :existing="existingAddWindows" /><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><span class="selection-count">{{ t('app.selectedWindows', selectedAddWindows.length) }}</span><button class="button primary" :disabled="busy || !selectedAddWindows.length" @click="submitAdd">{{ t('app.addToCanvas') }}<Icon name="arrow" :size="16" /></button></footer></section>
+      <section v-else-if="addDialog" class="modal add-modal"><header><div><h2 id="add-title">{{ t('app.addWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="addDialog = false"><Icon name="close" /></button></header><label>{{ t('app.targetCanvas') }}<select v-model="addTarget"><option v-for="canvas in canvases" :key="canvas.id" :value="canvas.id">{{ canvas.name }}</option><option value="">{{ t('app.newMyCanvas') }}</option></select></label><div class="search-field"><Icon name="search" :size="16" /><input v-model="addSearch" :aria-label="t('app.searchWindows')" :placeholder="t('app.searchPlaceholder')" /></div><p v-if="!resourcesLoaded || undiscoveredSources.length" class="panel-empty" role="status">{{ loadFailure ? t('app.loadFailed') : t('common.loading') }}</p><WindowPickerTree v-if="resourcesLoaded" v-model:selected="selectedWindows" :sources="sources" :resources="resources" :query="addSearch" :existing="existingAddWindows" /><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><span class="selection-count">{{ t('app.selectedWindows', selectedAddWindows.length) }}</span><button class="button primary" :disabled="busy || !selectedAddWindows.length" @click="submitAdd">{{ t('app.addToCanvas') }}<Icon name="arrow" :size="16" /></button></footer></section>
       <section v-else-if="shareCard" class="modal share-card-modal"><header><h2>{{ t('app.addToOtherCanvas') }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" @click="shareCard = undefined"><Icon name="close" /></button></header><form @submit.prevent="submitCardReference"><label>{{ t('app.targetCanvas') }}<select v-model="shareTarget" name="targetCanvas"><option v-if="!shareTargets.length" value="" disabled>{{ t('app.noOtherCanvases') }}</option><option v-for="canvas in shareTargets" :key="canvas.id" :value="canvas.id" :disabled="canvas.disabled">{{ canvas.name }}</option></select></label><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="shareCard = undefined">{{ t('common.cancel') }}</button><button class="button primary" type="submit" :disabled="busy || !shareTargets.some(canvas => canvas.id === shareTarget && !canvas.disabled)">{{ t('app.addToCanvas') }}</button></footer></form></section>
       <section v-else-if="windowMenu" class="modal window-menu"><header><h2 id="window-title">{{ windowMenu.name }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" @click="windowMenu = null"><Icon name="close" /></button></header><button v-if="mobile && focused?.id === windowMenu.node.id" @pointerdown.prevent @click="showWindowKeyboard"><Icon name="terminal" />{{ t('terminal.action.showKeyboard') }}</button><button v-if="mobile" @click="windowMenu = null; openSettings()"><Icon name="canvas" />{{ t('common.settings') }}</button><button v-if="mobile && !isOverview && windowMenu.node.id" :disabled="!terminalData(windowMenu.node).available" @click="terminalData(windowMenu.node).newTab?.create(); windowMenu = null"><Icon name="tab-plus" />{{ t('app.newTab') }}</button><button v-if="copiedFile" :title="t('fileTransfer.pasteNamed', { name: copiedFile.filename })" :disabled="!hasLiveTerminal(windowMenu.node.sourceId, windowMenu.node.windowId)" @click="pasteFileIntoWindow(windowMenu.node.sourceId, windowMenu.node.windowId); windowMenu = null"><Icon name="file" />{{ t('fileTransfer.paste') }}</button><button :disabled="!hasLiveTerminal(windowMenu.node.sourceId, windowMenu.node.windowId)" @click="scanWindowContent(windowMenu.node, windowMenu.name)"><Icon name="search" />{{ t('panels.scan.title') }}</button><button @click="openAdd(windowMenu.node); windowMenu = null"><Icon name="layers" />{{ t('app.addToOtherCanvas') }}</button><button @click="windowAction(windowMenu.node, 'rename')"><Icon name="edit" />{{ t('app.renameWindow') }}</button><button class="danger-text" @click="windowAction(windowMenu.node, 'close')"><Icon name="trash" />{{ t('app.closeWindow') }}</button></section>
       </fieldset></template>
