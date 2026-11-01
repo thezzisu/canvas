@@ -1,4 +1,5 @@
 export default {
+  maximize: 'Maximize', contentZoom: 'Content zoom', zoomIn: 'Zoom in', zoomOut: 'Zoom out', resetZoom: 'Reset zoom',
   cancel: 'Cancel', close: 'Close', save: 'Save', create: 'Create', delete: 'Delete', rename: 'Rename',
   download: 'Download', upload: 'Upload', loading: 'Loading…', retry: 'Retry', done: 'Done',
   settings: 'Settings', more: 'More', copy: 'Copy', back: 'Back',

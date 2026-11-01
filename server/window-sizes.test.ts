@@ -26,7 +26,7 @@ test("terminal presentation dimensions are shared across canvases while position
     return await response.json() as Canvas;
   };
   const first = await create("First", [node("first")]);
-  const second = await create("Second", [node("second"), { id: "note", type: "note", title: "Notes", content: "stay", color: "yellow", minimized: false, x: 5, y: 6, width: 300, height: 200 }]);
+  const second = await create("Second", [node("second"), { id: "note", type: "note", title: "Notes", content: "stay", color: "yellow", x: 5, y: 6, width: 300, height: 200 }]);
   assert.equal(first.nodes[0]!.width, 480);
   assert.equal(second.nodes[0]!.height, 302);
   const firstPath = `/api/canvases/${first.id}`, secondPath = `/api/canvases/${second.id}`;

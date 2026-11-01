@@ -20,7 +20,7 @@ test('canvas indicators aggregate all linked windows regardless of spaces or dup
 })
 
 test('empty canvases, nonterminal cards and unreported windows retain distinct meanings', () => {
-  const note: CanvasNode = { id: 'n', type: 'note', title: 'Note', content: '', color: 'blue', minimized: false, x: 0, y: 0, width: 300, height: 200 }
+  const note: CanvasNode = { id: 'n', type: 'note', title: 'Note', content: '', color: 'blue', x: 0, y: 0, width: 300, height: 200 }
   const result = canvasIndicators([canvas('empty', []), canvas('notes', [note]), canvas('missing', [note, terminal('closed')])], [])
   assert.deepEqual(result.overview, { count: 0, status: null })
   assert.deepEqual(result.empty, { count: 0, status: null })

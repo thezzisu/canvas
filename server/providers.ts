@@ -713,8 +713,8 @@ export async function renameSpace(
 export async function closeSpace(
   source: Source,
   spaceId: string,
-): Promise<void> {
-  await requireResource(source, spaceId);
+): Promise<string[]> {
+  const space = await requireResource(source, spaceId);
   await Promise.all(
     [...active]
       .filter(
@@ -723,6 +723,12 @@ export async function closeSpace(
       .map((handle) => handle.cleanup()),
   );
   await requestHerdr(source, "workspace.close", { workspace_id: spaceId });
+  // Membership can change while the close is in flight. Never remove a tab
+  // that survived in another space, or infer removal from a failed discovery.
+  const after = await listResources(source);
+  if (after.status !== "online") return [];
+  const remaining = new Set(after.spaces.flatMap(space => space.windows.map(window => window.id)));
+  return space.windows.map(window => window.id).filter(id => !remaining.has(id));
 }
 export async function createWindow(
   source: Source,

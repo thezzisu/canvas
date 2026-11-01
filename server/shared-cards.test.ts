@@ -45,14 +45,13 @@ test('note references share content in one published transaction while layout an
   const snapshots: string[][] = []
   const inspect = () => snapshots.push([f.a.id, f.b.id].map(id => noteIn(f.store, id, note.id).content))
   f.store.on('change', inspect)
-  assert.equal((await f.request(`/api/canvases/${f.a.id}/notes/${note.id}`, 'PATCH', { title: 'Latest', content: 'Both browsers', color: 'green', minimized: true })).status, 200)
+  assert.equal((await f.request(`/api/canvases/${f.a.id}/notes/${note.id}`, 'PATCH', { title: 'Latest', content: 'Both browsers', color: 'green' })).status, 200)
   f.store.off('change', inspect)
   assert.deepEqual(snapshots, [['Both browsers', 'Both browsers']], 'only the complete multi-canvas snapshot is published')
   for (const id of [f.a.id, f.b.id]) {
     const current = noteIn(f.store, id, note.id)
     assert.equal(current.title, 'Latest'); assert.equal(current.color, 'green'); assert.equal(current.content, 'Both browsers')
   }
-  assert.equal(noteIn(f.store, f.a.id, note.id).minimized, true); assert.equal(noteIn(f.store, f.b.id, note.id).minimized, false)
   assert.equal(noteIn(f.store, f.a.id, note.id).width, 320); assert.equal(noteIn(f.store, f.b.id, note.id).width, 720)
   for (const [method, stale] of [['PUT', staleA], ['PATCH', staleB]] as const) {
     assert.equal((await f.request(`/api/canvases/${stale.id}`, method, { ...stale, name: 'Rename with old body' })).status, 200)

@@ -1,4 +1,5 @@
 export default {
+  addContent: 'Add content', uploadFile: 'Upload files',
   "previousWindow": "Previous window",
   "previousSpace": "Previous space",
   "nextSpace": "Next space",

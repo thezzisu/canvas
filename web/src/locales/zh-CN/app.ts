@@ -1,4 +1,5 @@
 export default {
+  addContent: '添加内容', uploadFile: '上传文件',
   "previousWindow": "上一个窗口",
   "previousSpace": "上一个 Space",
   "nextSpace": "下一个 Space",

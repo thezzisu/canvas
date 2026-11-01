@@ -12,6 +12,9 @@ import { filePreview } from '../file-preview'
 import TextPreview from './TextPreview.vue'
 import TextPreviewActions from './TextPreviewActions.vue'
 import MediaPreview from './MediaPreview.vue'
+import ImagePreview from './ImagePreview.vue'
+import ContentZoom from './ContentZoom.vue'
+import { useContentZoom } from '../content-zoom'
 import { isMarkdownFile } from '../markdown'
 import { activeInstance } from '../instances'
 import { downloadMedia, useMediaUrl } from '../media'
@@ -31,8 +34,10 @@ const binary = ref(false)
 const preview = computed(() => binary.value ? 'file' : filePreview(props.data.asset))
 watch(() => props.data.assetId, () => { binary.value = false })
 const mobilePreview = computed(() => !!props.data.mobile && !props.data.focus)
+const zoom = useContentZoom(() => props.data.zoomKey)
 const header = ref<HTMLElement>()
-const compact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined))
+const headerCompact = useCompactHeader(computed(() => props.data.focus ? header.value : undefined))
+const compact = computed(() => props.data.focus && headerCompact.value)
 const markdown = computed(() => preview.value === 'text' && isMarkdownFile(props.data.asset.filename))
 const { rendered, wrap, reading, remember } = useFileView(props.data.instanceId, props.data.canvasId, props.id, markdown.value, props.data.canPersistView)
 const menuOpen = ref(false), menuTrigger = ref<HTMLButtonElement>()
@@ -114,7 +119,7 @@ const size = computed(() => {
     <NodeResizeControl v-for="position in (['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const)" :key="position" :node-id="id" :position="position" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
   </template>
   <article class="file-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus, 'input-focused': contentActive }" :data-asset-id="data.assetId" :data-preview-kind="preview">
-    <header ref="header" class="file-header drag-handle" :class="{ 'cutout-header': data.focus }" :data-cutout-position="data.focus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
+    <header ref="header" class="file-header drag-handle" :class="{ 'cutout-header': data.focus && data.mobile }" :data-cutout-position="data.focus && data.mobile && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus && data.mobile ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
       <span class="file-icon" :class="{ 'cutout-status': data.focus }"><Icon name="file" :size="13" /></span>
       <span class="file-title" :class="{ 'cutout-title': data.focus }" :title="data.asset.filename">{{ data.asset.filename }}</span>
       <span v-if="!data.focus" class="file-size">{{ size }}</span>
@@ -125,20 +130,24 @@ const size = computed(() => {
       <span class="sr-only" role="status">{{ copyFeedback ? t(copyFeedback) : '' }}</span>
       <button v-if="!data.focus || !markdown && !compact" type="button" class="file-action nodrag" @click.stop="download" :title="t('panels.file.download')" :aria-label="t('panels.file.download')" @pointerdown.stop><Icon name="download" :size="14" /></button>
       <template v-if="data.focus">
+        <ContentZoom v-if="preview === 'text'" v-model="zoom" :mobile="data.mobile" :label="t('common.contentZoom')" />
         <UDropdownMenu v-model:open="menuOpen" :modal="false" :items="menu" :portal="false" :content="{ align: 'end', ...menuDismiss }" :ui="{ content: 'card-action-menu' }">
           <button ref="menuTrigger" type="button" class="file-action file-more nodrag" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></button>
         </UDropdownMenu>
         <button type="button" class="file-action nodrag" :title="t('common.returnToCanvas')" :aria-label="t('common.returnToCanvas')" @click.stop="data.onAction?.('unfocus', id)"><Icon name="collapse" :size="17" /></button>
       </template>
-      <button v-else class="file-action nodrag" :title="t('panels.file.remove')" :aria-label="t('panels.file.remove')" @click.stop="data.onRemove(id)"><Icon name="close" :size="14" /></button>
+      <template v-else>
+        <button class="file-action nodrag" :title="t('common.maximize')" :aria-label="t('common.maximize')" @click.stop="data.onAction?.('focus', id)"><Icon name="expand" :size="14" /></button>
+        <button class="file-action nodrag" :title="t('panels.file.remove')" :aria-label="t('panels.file.remove')" @click.stop="data.onRemove(id)"><Icon name="close" :size="14" /></button>
+      </template>
       </div>
     </header>
-    <div ref="fileBody" class="file-body card-content nodrag nopan" :data-content-active="contentActive" :tabindex="mobilePreview ? -1 : 0" :aria-label="data.asset.filename" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.stop="contentPointerDown" @dblclick.stop>
+    <div ref="fileBody" class="file-body card-content nodrag nopan" :style="{ '--content-zoom': data.focus ? zoom / 100 : 1 }" :data-content-active="contentActive" :tabindex="mobilePreview ? -1 : 0" :aria-label="data.asset.filename" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.capture="contentPointerDown" @pointerdown.stop @dblclick.stop>
       <div v-if="(['image', 'audio', 'video'].includes(preview) || preview === 'pdf' && pdfPreview) && !url" class="file-text-status" :role="ticketError ? 'alert' : 'status'">
         <template v-if="ticketError"><span>{{ t('panels.preview.unavailable') }}</span><button type="button" @click="retryTicket">{{ t('common.retry') }}</button></template>
         <template v-else><span class="spinner" />{{ t('common.loading') }}</template>
       </div>
-      <img v-else-if="preview === 'image' && url && !imageFailed" class="file-image" :src="url" :alt="data.asset.filename" draggable="false" loading="lazy" @error="imageFailed = true" />
+      <ImagePreview v-else-if="preview === 'image' && url && !imageFailed" :key="data.assetId" :id="data.assetId" :src="url" :alt="data.asset.filename" :read-only="mobilePreview" @failed="imageFailed = true" />
       <MediaPreview v-else-if="(preview === 'audio' || preview === 'video') && url" :key="data.assetId" :kind="preview" :src="url" :title="data.asset.filename" :read-only="mobilePreview" @download="download" />
       <div v-else-if="preview === 'text'" class="file-text-body nowheel" @wheel.stop>
         <div v-if="textLoading" class="file-text-status" role="status"><span class="spinner" /> {{ t('common.loading') }}</div>
@@ -167,7 +176,6 @@ const size = computed(() => {
 .file-copy{cursor:grab}.file-copy:active{cursor:grabbing}
 .file-action:focus-visible, .file-download:focus-visible { outline: 2px solid #8c9ef8; outline-offset: -2px; }
 .file-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
-.file-image { width: 100%; height: 100%; object-fit: contain; }
 .file-preview { border: 0; width: 100%; height: 100%; background: #fff; color-scheme: light; }
 .file-text-body { display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 0; background: #14191f; }
 .file-text-status { display: flex; flex: 1; align-items: center; justify-content: center; gap: 8px; padding: 12px; color: #8b98a9; font-size: 11px; }
@@ -177,13 +185,14 @@ const size = computed(() => {
 .file-download { display: flex; flex: 1; min-width: 0; align-items: center; justify-content: center; flex-direction: column; gap: 14px; padding: 24px; color: #a9b0be; text-decoration: none; }
 .file-download:hover { color: #e0e3ea; background: #ffffff04; }
 .file-download span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.card-focused .file-header{height:calc(44px + var(--mobile-safe-top,0px));flex-basis:calc(44px + var(--mobile-safe-top,0px));padding:var(--mobile-safe-top,0px) 0 0;gap:0;cursor:default}
-.card-focused .file-title{font-size:13px;margin-inline:6px}
-.card-focused .file-icon{width:44px;height:44px;justify-content:center}
+.card-focused .file-header{cursor:default}
+.mobile-layout .card-focused .file-header{height:calc(44px + var(--mobile-safe-top,0px));flex-basis:calc(44px + var(--mobile-safe-top,0px));padding:var(--mobile-safe-top,0px) 0 0;gap:0}
+.mobile-layout .card-focused .file-title{font-size:13px;margin-inline:6px}
+.mobile-layout .card-focused .file-icon{width:44px;height:44px;justify-content:center}
 .card-focused .file-actions{gap:0}
 .card-focused :deep(.text-preview-actions){gap:0}
-.card-focused .file-action{width:44px;height:44px;flex-basis:44px}
-.card-focused{--header-action-size:44px}
-.canvas-fullscreen .card-focused .file-header{height:44px;flex-basis:44px;padding-top:0}
+.mobile-layout .card-focused .file-action{width:44px;height:44px;flex-basis:44px}
+.mobile-layout .card-focused{--header-action-size:44px}
+.mobile-layout.canvas-fullscreen .card-focused .file-header{height:44px;flex-basis:44px;padding-top:0}
 
 </style>

@@ -22,7 +22,7 @@ export default {
   image: { zoom: '图片缩放', zoomOut: '缩小图片', zoomIn: '放大图片', fit: '适合图片', scale: '缩放比例' },
   note: {
     copy: '复制便签', copyOrDrag: '复制便签 · 拖入终端粘贴', paste: '粘贴便签', openToPaste: '打开窗口后粘贴',
-    name: '便签', color: '便签颜色', title: '便签标题', rename: '重命名便签', expand: '展开便签', collapse: '收起便签',
+    name: '便签', color: '便签颜色', title: '便签标题', rename: '重命名便签',
     remove: '删除便签', content: '便签内容', placeholder: '写点什么…',
     colors: { yellow: '黄色', blue: '蓝色', green: '绿色', pink: '粉色', neutral: '灰色' },
   },

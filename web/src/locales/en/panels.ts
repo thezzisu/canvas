@@ -22,7 +22,7 @@ export default {
   image: { zoom: 'Image zoom', zoomOut: 'Zoom out', zoomIn: 'Zoom in', fit: 'Fit image', scale: 'Zoom level' },
   note: {
     copy: 'Copy note', copyOrDrag: 'Copy note · drag to a terminal to paste', paste: 'Paste note', openToPaste: 'Open this window to paste',
-    name: 'Note', color: 'Note color', title: 'Note title', rename: 'Rename note', expand: 'Expand note', collapse: 'Collapse note',
+    name: 'Note', color: 'Note color', title: 'Note title', rename: 'Rename note',
     remove: 'Delete note', content: 'Note content', placeholder: 'Write something…',
     colors: { yellow: 'Yellow', blue: 'Blue', green: 'Green', pink: 'Pink', neutral: 'Gray' },
   },

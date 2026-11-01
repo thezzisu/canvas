@@ -59,7 +59,6 @@ export const noteNodeSchema = nodeLayoutSchema.extend({
   title: z.string().max(200).default(""),
   content: z.string().max(200_000).default(""),
   color: noteColorSchema.default("yellow"),
-  minimized: z.boolean().default(false),
 }).strict();
 export const fileAssetSchema = z.object({
   id: z.string().uuid(),
@@ -175,6 +174,28 @@ export class Store extends EventEmitter {
       .run(kind, id);
     this.changed();
   }
+  /** Publish all references of successfully closed native windows as one change. */
+  removeWindowReferences(source: Source, windowIds: readonly string[]) {
+    const current = this.get<Source>("source", source.id);
+    if (!current || sourceConnectionKey(current) !== sourceConnectionKey(source)) return;
+    const closed = new Set(windowIds);
+    if (!closed.size) return;
+    let changed = false;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const update = this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?");
+      for (const canvas of this.list<Canvas>("canvas")) {
+        const nodes = canvas.nodes.filter(node => !isTerminalNode(node) || node.sourceId !== source.id || !closed.has(node.windowId));
+        if (nodes.length === canvas.nodes.length) continue;
+        update.run(JSON.stringify({ ...canvas, nodes }), canvas.id);
+        changed = true;
+      }
+      const removeSize = this.db.prepare("DELETE FROM documents WHERE kind='window-size' AND id=?");
+      for (const windowId of closed) changed = !!removeSize.run(`${source.id}/${windowId}`).changes || changed;
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    if (changed) this.changed();
+  }
   private changed() {
     this.revision++;
     this.emit("change");
@@ -260,19 +281,18 @@ export class Store extends EventEmitter {
         throw new Error("File asset not found in this canvas");
   }
 
-  updateNote(canvasId: string, nodeId: string, patch: Partial<Pick<NoteNode, "title" | "content" | "color" | "minimized">>): Canvas {
+  updateNote(canvasId: string, nodeId: string, patch: Partial<Pick<NoteNode, "title" | "content" | "color">>): Canvas {
     this.db.exec("BEGIN IMMEDIATE");
     let selected: Canvas | undefined;
     try {
       const canvases = this.list<Canvas>("canvas");
       selected = canvases.find(canvas => canvas.id === canvasId);
       if (!selected?.nodes.some(node => node.id === nodeId && node.type === "note")) throw new Error("Note not found");
-      const { minimized, ...shared } = patch;
       const update = this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?");
       for (const canvas of canvases) {
         const node = canvas.nodes.find((item): item is NoteNode => item.id === nodeId && item.type === "note");
         if (!node) continue;
-        Object.assign(node, shared, canvas.id === canvasId && minimized !== undefined ? { minimized } : {});
+        Object.assign(node, patch);
         update.run(JSON.stringify(canvas), canvas.id);
       }
       this.db.exec("COMMIT");

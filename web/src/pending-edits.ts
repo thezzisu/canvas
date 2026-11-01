@@ -5,13 +5,12 @@ export interface NoteEdit { canvasId: string; id: string; patch: NotePatch }
 export interface PendingEdits { layouts: [string, [string, LayoutPatch][]][]; notes: NoteEdit[] }
 type Storage = Pick<globalThis.Storage, 'getItem' | 'setItem' | 'removeItem'>
 
-/** Shared content survives removal of its view; local minimization does not. */
+/** Shared content survives removal of an individual canvas reference. */
 export function retargetNoteEdit(edit: NoteEdit, canvases: Canvas[]): NoteEdit | undefined {
   const contains = (canvas: Canvas) => canvas.nodes.some(node => node.id === edit.id && node.type === 'note')
   if (canvases.some(canvas => canvas.id === edit.canvasId && contains(canvas))) return edit
   const target = canvases.find(contains)
-  const { minimized: _minimized, ...shared } = edit.patch
-  return target && Object.keys(shared).length ? { ...edit, canvasId: target.id, patch: shared } : undefined
+  return target && Object.keys(edit.patch).length ? { ...edit, canvasId: target.id } : undefined
 }
 
 /** Drafts belong to the endpoint, even if another tab changes its local entry. */
@@ -55,7 +54,6 @@ export function createPendingEdits(storage?: Storage) {
         const patch: NotePatch = {}
         if (typeof edit.patch.title === 'string') patch.title = edit.patch.title
         if (typeof edit.patch.content === 'string') patch.content = edit.patch.content
-        if (typeof edit.patch.minimized === 'boolean') patch.minimized = edit.patch.minimized
         if (['yellow', 'blue', 'green', 'pink', 'neutral'].includes(edit.patch.color || '')) patch.color = edit.patch.color
         const target = Object.keys(patch).length && retargetNoteEdit({ canvasId: edit.canvasId, id: edit.id, patch }, canvases)
         if (target) {

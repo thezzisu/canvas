@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useFileDialog } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import UProgress from '@nuxt/ui/components/Progress.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
@@ -43,6 +44,9 @@ async function drop(event: DragEvent) {
   if (!incoming.length) return
   const canvasId = props.canvasId!, context = apiContext(), viewport = props.getViewport(), bounds = host.getBoundingClientRect()
   const position = { x: (event.clientX - bounds.left - viewport.x) / viewport.zoom, y: (event.clientY - bounds.top - viewport.y) / viewport.zoom }
+  await upload(incoming, canvasId, position, context)
+}
+async function upload(incoming: File[], canvasId: string, position: { x: number; y: number }, context = apiContext()) {
   const request = current = new AbortController()
   try {
     for (const [index, file] of incoming.entries()) {
@@ -58,7 +62,24 @@ async function drop(event: DragEvent) {
     if (!request.signal.aborted && !context.signal.aborted) error.value = reason instanceof Error ? reason.message : t('panels.file.addFailed')
   } finally { if (current === request) { current = undefined; progress.value = undefined } }
 }
-watch(apiRevision, () => { cancel(); error.value = '' })
+const fileDialog = useFileDialog({ multiple: true, reset: true })
+let selection: { canvasId: string; context: ReturnType<typeof apiContext>; position: { x: number; y: number } } | undefined
+function chooseFiles() {
+  if (!props.canvasId || !host || current) return
+  const viewport = props.getViewport(), bounds = host.getBoundingClientRect()
+  selection = { canvasId: props.canvasId, context: apiContext(), position: {
+    x: (bounds.width / 2 - viewport.x) / viewport.zoom - 160,
+    y: (bounds.height / 2 - viewport.y) / viewport.zoom - 120 } }
+  fileDialog.open()
+}
+fileDialog.onChange(files => {
+  const target = selection; selection = undefined
+  if (!files?.length || !target || current || target.context.signal.aborted) return
+  error.value = ''
+  void upload([...files], target.canvasId, target.position, target.context)
+})
+defineExpose({ chooseFiles, uploading: computed(() => !!progress.value) })
+watch(apiRevision, () => { cancel(); selection = undefined; error.value = '' })
 onMounted(() => {
   document.addEventListener('dragover', preventNavigation); document.addEventListener('drop', preventNavigation)
   host = marker.value?.parentElement || null

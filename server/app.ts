@@ -70,7 +70,6 @@ const notePatchSchema = z.object({
   title: z.string().max(200).optional(),
   content: z.string().max(200_000).optional(),
   color: noteColorSchema.optional(),
-  minimized: z.boolean().optional(),
 }).strict();
 const isBackgroundUpload = (method: string, path: string) =>
   method === "PUT" && /^\/api\/canvases\/[^/]+\/background$/.test(path);
@@ -633,7 +632,9 @@ export function createApp(
     return c.json({ ok: true });
   });
   app.delete("/api/sources/:id/spaces/:space", async (c) => {
-    await providers.closeSpace(source(c.req.param("id")), c.req.param("space"));
+    const connection = source(c.req.param("id"));
+    const windows = await providers.closeSpace(connection, c.req.param("space"));
+    store.removeWindowReferences(connection, windows);
     return c.json({ ok: true });
   });
   app.post("/api/sources/:id/spaces/:space/windows", async (c) => {
@@ -655,11 +656,13 @@ export function createApp(
     return c.json({ ok: true });
   });
   app.delete("/api/sources/:id/spaces/:space/windows/:window", async (c) => {
+    const connection = source(c.req.param("id")), windowId = c.req.param("window");
     await providers.closeWindow(
-      source(c.req.param("id")),
+      connection,
       c.req.param("space"),
-      c.req.param("window"),
+      windowId,
     );
+    store.removeWindowReferences(connection, [windowId]);
     return c.json({ ok: true });
   });
   app.onError((error, c) => {

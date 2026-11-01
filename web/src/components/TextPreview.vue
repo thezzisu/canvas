@@ -82,7 +82,7 @@ watch([() => props.text, renderMarkdown], async () => {
 </template>
 
 <style scoped>
-.text-preview{display:flex;flex:1;flex-direction:column;min-height:0;min-width:0;width:100%;overflow:hidden;background:#14191f;color:#cdd5e1}
+.text-preview{display:flex;flex:1;flex-direction:column;min-height:0;min-width:0;width:auto;zoom:var(--content-zoom,1);overflow:hidden;background:#14191f;color:#cdd5e1}
 .text-preview-source,.text-preview-markdown{flex:1;min-width:0;min-height:0;overflow:auto;margin:0;padding:12px;user-select:text;-webkit-user-select:text;touch-action:pan-x pan-y;scrollbar-width:thin;outline:none}
 .text-preview-source{font-family:var(--content-font-family,monospace);font-feature-settings:var(--content-font-features);font-size:13px;line-height:1.5;white-space:pre;tab-size:4}
 .text-preview-wrap{white-space:pre-wrap;overflow-wrap:anywhere}

@@ -1,14 +1,9 @@
-import { computed, effectScope, shallowRef, watch, type Ref } from 'vue'
-import { useStorage } from '@vueuse/core'
+import { contentZoomLimits, normalizeContentZoom, useContentZoom } from './content-zoom'
 import type { Source, SourceResource } from './types'
 
-export const terminalZoomLimits = { min: 50, max: 200, step: 10 } as const
+export const terminalZoomLimits = contentZoomLimits
+export const normalizeTerminalZoom = normalizeContentZoom
 const prefix = 'canvas:terminal-zoom:'
-export function normalizeTerminalZoom(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= terminalZoomLimits.min && value <= terminalZoomLimits.max
-    ? Math.round(value) : 100
-}
-
 /** The native tab, not its name, canvas reference or browser tab, owns the preference. */
 export function terminalZoomKey(instance: string, source: Source, windowId: string) {
   return JSON.stringify([instance, source.id, source.transport, source.transport === 'ssh' ? source.target?.trim() || '' : '',
@@ -16,24 +11,7 @@ export function terminalZoomKey(instance: string, source: Source, windowId: stri
 }
 export const terminalZoomStorageKey = (key: string) => prefix + key
 export function useTerminalZoom(key: () => string, storage?: Storage) {
-  const saved = shallowRef<Ref<number | null>>()
-  // VueUse 10 binds a storage key once; retire that binding when connection identity changes.
-  watch(key, (identity, _, cleanup) => {
-    const scope = effectScope()
-    saved.value = scope.run(() => useStorage<number | null>(terminalZoomStorageKey(identity), 100, storage, {
-      writeDefaults: false, flush: 'sync',
-      serializer: {
-        read(raw) { try { return normalizeTerminalZoom(JSON.parse(raw)) } catch { return 100 } },
-        write(value) { return String(normalizeTerminalZoom(value)) },
-      },
-      onError() { /* An unavailable browser store must not prevent terminal use. */ },
-    }))
-    cleanup(() => scope.stop())
-  }, { immediate: true, flush: 'sync' })
-  return computed({
-    get: () => normalizeTerminalZoom(saved.value?.value),
-    set: (value: number) => { if (saved.value) saved.value.value = normalizeTerminalZoom(value) === 100 ? null : normalizeTerminalZoom(value) },
-  })
+  return useContentZoom(() => terminalZoomStorageKey(key()), storage)
 }
 
 /** Remove individual confirmed-closed tabs; unrelated concurrent writes remain untouched. */

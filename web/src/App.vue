@@ -30,6 +30,7 @@ import { useDocumentFocus } from './document-focus'
 import { subscribeState } from './state-events'
 import { retainBackgrounds, useBackgroundUrl } from './backgrounds'
 import { pruneFileViews } from './file-view'
+import { cardZoomKey, pruneCardZooms } from './card-zoom'
 import { pruneTerminalZooms, terminalZoomKey } from './terminal-zoom'
 import Icon from './components/Icon.vue'
 import TerminalNode from './components/TerminalNode.vue'
@@ -158,6 +159,13 @@ let fontSignature = ''
 let fontRevision = 0
 const canvasMenu = ref(false)
 const canvasMenuElement = ref<HTMLElement>()
+const createMenuOpen = ref(false)
+const canvasFileDrop = ref<InstanceType<typeof CanvasFileDrop>>()
+const createMenu = computed<DropdownMenuItem[]>(() => [
+  { label: t('app.addNote'), onSelect: () => { void addNote() } },
+  { label: t('app.uploadFile'), disabled: canvasFileDrop.value?.uploading, onSelect: () => canvasFileDrop.value?.chooseFiles() },
+])
+watch([activeId, apiRevision], () => { createMenuOpen.value = false })
 usePointerDismiss(canvasMenu, canvasMenuElement)
 const canvasDraft = reactive({ id: '', name: '' })
 const dialogError = ref('')
@@ -517,13 +525,13 @@ function terminalFlowNode(node: TerminalCanvasNode, overview = false): Node {
 }
 function noteData(node: NoteCanvasNode, focus = false): NoteData {
   const canvasId = activeId.value
-  return { ...node, mobile: mobile.value, focus, onResize: resizeNode, onLayoutStart: layoutStarted,
+  return { ...node, zoomKey: cardZoomKey(latestState.value?.instanceId || activeInstance.value.base, node.id), mobile: mobile.value, focus, onResize: resizeNode, onLayoutStart: layoutStarted,
     onChange: (id, patch) => editNote(canvasId, id, patch), onFlush: () => void flushNotes(canvasId),
     onAction: (action, id) => { if (action === 'remove') removeNote(id); else cardAction(action, id) } }
 }
 function fileData(node: FileCanvasNode, focus = false): FileData {
   const { id: instanceId, base } = activeInstance.value, canvasId = activeId.value
-  return { ...node, instanceId, canvasId, mobile: mobile.value, focus, onResize: resizeNode, onLayoutStart: layoutStarted, onRemove: removeFile, onAction: cardAction,
+  return { ...node, zoomKey: cardZoomKey(latestState.value?.instanceId || base, node.id), instanceId, canvasId, mobile: mobile.value, focus, onResize: resizeNode, onLayoutStart: layoutStarted, onRemove: removeFile, onAction: cardAction,
     canPersistView: () => activeInstance.value.id === instanceId && activeInstance.value.base === base &&
       !!canvases.value.find(canvas => canvas.id === canvasId)?.nodes.some(candidate => candidate.id === node.id && candidate.type === 'file') }
 }
@@ -537,7 +545,7 @@ function flowNode(node: CanvasNode): Node {
   }
   const data = noteData(node)
   return { id: node.id, type: 'note', position: { x: node.x, y: node.y }, data,
-    style: { width: `${node.width}px`, height: `${node.minimized ? 30 : node.height}px` },
+    style: { width: `${node.width}px`, height: `${node.height}px` },
     draggable: !mobile.value, selectable: !mobile.value, dragHandle: '.drag-handle' }
 }
 function creationId(sourceId: string, spaceId?: string) { return spaceId ? `create-tab:${sourceId}:${spaceId}` : `create-space:${sourceId}` }
@@ -650,6 +658,7 @@ function applySharedState(state: SharedState) {
   reconcileNoteEdits(state.canvases)
   latestState.value = state
   pruneFileViews(activeInstance.value.id, state.canvases)
+  pruneCardZooms(state.instanceId, state.canvases)
   pruneTerminalZooms(state.instanceId, state.sources, [])
   retainBackgrounds([state.overviewBackground, ...state.canvases.map(canvas => canvas.background)].flatMap(background => background ? [background.url] : []))
   applySettings(state.settings)
@@ -673,13 +682,11 @@ function applySharedState(state: SharedState) {
   const sharedNoteDrafts = new Map<string, NotePatch>()
   for (const edit of [...savingNotes.values(), ...pendingNotes.values()]) {
     if (!state.canvases.some(canvas => canvas.id === edit.canvasId && canvas.nodes.some(node => node.id === edit.id && node.type === 'note'))) continue
-    const { minimized: _minimized, ...shared } = edit.patch
-    sharedNoteDrafts.set(edit.id, { ...sharedNoteDrafts.get(edit.id), ...shared })
+    sharedNoteDrafts.set(edit.id, { ...sharedNoteDrafts.get(edit.id), ...edit.patch })
   }
   canvases.value = state.canvases.map(canvas => ({ ...canvas, nodes: (canvas.nodes || []).map(node => {
-    const minimized = pendingNotes.get(noteKey(canvas.id, node.id))?.patch.minimized ?? savingNotes.get(noteKey(canvas.id, node.id))?.patch.minimized
     return { ...node, ...pendingLayouts.get(canvas.id)?.get(node.id), ...(node.type === 'note'
-      ? { ...sharedNoteDrafts.get(node.id), ...(minimized === undefined ? {} : { minimized }) } : {}) }
+      ? sharedNoteDrafts.get(node.id) : {}) }
   }) }))
   for (const [id, timer] of saveTimers) if (!canvases.value.some(canvas => canvas.id === id)) { clearTimeout(timer); saveTimers.delete(id); pendingLayouts.delete(id) }
   for (const id of pendingLayouts.keys()) if (!canvases.value.some(canvas => canvas.id === id)) pendingLayouts.delete(id)
@@ -1302,7 +1309,7 @@ function cardAction(action: string, id: string) {
     return
   }
   if (action === 'unfocus') { void closeCardFocus(); return }
-  if (action !== 'focus' || !mobile.value || !currentCanvas.value?.nodes.some(node => node.id === id && node.type !== 'terminal')) return
+  if (action !== 'focus' || !currentCanvas.value?.nodes.some(node => node.id === id && node.type !== 'terminal')) return
   sidebarOpen.value = false; sourcePanel.value = false; canvasMenu.value = false
   hideMobileKeyboard(); saveViewport(); focusedCardId.value = id
 }
@@ -1405,12 +1412,11 @@ function editNote(canvasId: string, id: string, patch: NotePatch) {
   if (!node || node.type !== 'note') return
   const changed = Object.fromEntries(Object.entries(patch).filter(([key, value]) => node[key as keyof NotePatch] !== value)) as NotePatch
   if (!Object.keys(changed).length) return
-  const { minimized: _minimized, ...shared } = changed
   for (const canvas of canvases.value) for (const reference of canvas.nodes)
-    if (reference.type === 'note' && reference.id === id) Object.assign(reference, shared)
+    if (reference.type === 'note' && reference.id === id) Object.assign(reference, changed)
   // Queued writes from another canvas must not replay an older shared field.
   for (const edit of [...savingNotes.values(), ...pendingNotes.values()]) if (edit.id === id)
-    for (const [field, value] of Object.entries(shared)) if (Object.hasOwn(edit.patch, field)) Object.assign(edit.patch, { [field]: value })
+    for (const [field, value] of Object.entries(changed)) if (Object.hasOwn(edit.patch, field)) Object.assign(edit.patch, { [field]: value })
   Object.assign(node, changed)
   const key = noteKey(canvasId, id)
   pendingNotes.set(key, { canvasId, id, patch: { ...pendingNotes.get(key)?.patch, ...changed } })
@@ -1420,7 +1426,7 @@ function editNote(canvasId: string, id: string, patch: NotePatch) {
   if (activeId.value === canvasId) saveState.value = 'saving'
   const visible = currentCanvas.value?.nodes.find((item): item is NoteCanvasNode => item.id === id && item.type === 'note')
   if (visible) nodes.value = nodes.value.map(flow => flow.id === id ? { ...flow, data: { ...flow.data, ...visible },
-    style: { ...flow.style, height: `${visible.minimized ? 30 : visible.height}px` } } : flow)
+    style: { ...flow.style, height: `${visible.height}px` } } : flow)
 }
 async function flushNotes(canvasId?: string): Promise<boolean> {
   const context = apiContext()
@@ -1619,7 +1625,7 @@ watch(graphSurface, element => {
 })
 watch(visibleViewport, () => { if (mobile.value) void nextTick(windowResize) })
 watch(uiZoom, () => { void nextTick(windowResize) })
-watch(mobile, () => { sidebarOpen.value = false; if (!mobile.value && focusedCardId.value) void closeCardFocus(); canvasTouchCancel(); rebuildNodes() })
+watch(mobile, () => { sidebarOpen.value = false; canvasTouchCancel(); rebuildNodes() })
 watch(sourcePanel, value => { if (value && mobile.value) sidebarOpen.value = false })
 watch(sidebarOpen, value => { if (value) canvasMenu.value = false })
 watch(canvasFullscreen, async () => { await nextTick(); cameraFrame = canvasFrame(graphSurface.value) })
@@ -1700,15 +1706,17 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
             <button ref="overviewTrigger" class="icon-button overview-display-trigger" :class="{ active: overviewChanged }" :title="t('app.filterSort')" :aria-label="t('app.overviewFilterSort')"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg><i v-if="overviewChanged" /></button>
             <template #item-leading="{ item }"><span class="overview-display-leading" aria-hidden="true"><i v-if="item.status" class="program-dot" :style="{ '--program-color': statusColor(item.status) }" /></span></template>
           </UDropdownMenu>
-          <button v-if="!isOverview" class="button subtle" :title="t('app.addNote')" :aria-label="t('app.addNote')" :disabled="busy" @click="addNote"><Icon name="note" :size="14" />{{ t('app.note') }}</button>
+          <UDropdownMenu v-if="!isOverview" v-model:open="createMenuOpen" :items="createMenu" :portal="appElement || false" :content="{ align: 'end' }" :ui="{ content: 'canvas-create-menu' }">
+            <button class="icon-button canvas-create-trigger" :title="t('app.addContent')" :aria-label="t('app.addContent')" :disabled="busy"><Icon name="plus" :size="17" /></button>
+          </UDropdownMenu>
           <span v-if="!isOverview && saveState" class="save-state" :title="t(`app.${saveState}`)" :aria-label="t(`app.${saveState}`)"><span v-if="saveState === 'saving'" class="spinner" /><Icon v-else :name="saveState === 'saved' ? 'check' : 'info'" :size="13" /></span>
-          <div ref="canvasMenuElement" class="canvas-menu-wrap"><button class="icon-button canvas-menu-trigger" :title="t('app.canvasSettings')" :aria-label="t('app.canvasSettings')" :aria-expanded="canvasMenu" aria-controls="canvas-menu" @click="toggleCanvasMenu"><Icon name="more" :size="17" /></button><div v-if="canvasMenu" id="canvas-menu" class="canvas-menu"><template v-if="mobile"><button @click="canvasMenu = false; refreshResources()"><Icon name="refresh" :size="15" />{{ t('app.refresh') }}</button><button @click="canvasMenu = false; sourcePanel = true"><Icon name="server" :size="15" />{{ t('app.connections') }}</button><button v-if="!isOverview" @click="canvasMenu = false; addNote()"><Icon name="note" :size="15" />{{ t('app.addNote') }}</button><button v-if="!isOverview" @click="canvasMenu = false; openAdd()"><Icon name="plus" :size="15" />{{ t('app.addWindows') }}</button></template><button @click="openBackground"><Icon name="image" :size="15" />{{ t('app.background') }}</button><button :aria-pressed="showMinimap" @click="showMinimap = !showMinimap"><Icon name="map" :size="15" />{{ t('app.minimap') }}<Icon class="canvas-menu-check" :class="{ unchecked: !showMinimap }" name="check" :size="15" /></button><button :aria-pressed="showNavigation" @click="showNavigation = !showNavigation"><Icon name="navigation" :size="15" />{{ t('app.navigation') }}<Icon class="canvas-menu-check" :class="{ unchecked: !showNavigation }" name="check" :size="15" /></button><button v-if="!isOverview" @click="canvasMenu = false; openCanvasDialog(currentCanvas)"><Icon name="edit" :size="15" />{{ t('app.renameCanvas') }}</button><button v-if="!isOverview" class="danger-text" @click="canvasMenu = false; deleteCanvas()"><Icon name="trash" :size="15" />{{ t('app.deleteCanvas') }}</button></div></div>
+          <div ref="canvasMenuElement" class="canvas-menu-wrap"><button class="icon-button canvas-menu-trigger" :title="t('app.canvasSettings')" :aria-label="t('app.canvasSettings')" :aria-expanded="canvasMenu" aria-controls="canvas-menu" @click="toggleCanvasMenu"><Icon name="more" :size="17" /></button><div v-if="canvasMenu" id="canvas-menu" class="canvas-menu"><template v-if="mobile"><button @click="canvasMenu = false; refreshResources()"><Icon name="refresh" :size="15" />{{ t('app.refresh') }}</button><button @click="canvasMenu = false; sourcePanel = true"><Icon name="server" :size="15" />{{ t('app.connections') }}</button><button v-if="!isOverview" @click="canvasMenu = false; openAdd()"><Icon name="plus" :size="15" />{{ t('app.addWindows') }}</button></template><button @click="openBackground"><Icon name="image" :size="15" />{{ t('app.background') }}</button><button :aria-pressed="showMinimap" @click="showMinimap = !showMinimap"><Icon name="map" :size="15" />{{ t('app.minimap') }}<Icon class="canvas-menu-check" :class="{ unchecked: !showMinimap }" name="check" :size="15" /></button><button :aria-pressed="showNavigation" @click="showNavigation = !showNavigation"><Icon name="navigation" :size="15" />{{ t('app.navigation') }}<Icon class="canvas-menu-check" :class="{ unchecked: !showNavigation }" name="check" :size="15" /></button><button v-if="!isOverview" @click="canvasMenu = false; openCanvasDialog(currentCanvas)"><Icon name="edit" :size="15" />{{ t('app.renameCanvas') }}</button><button v-if="!isOverview" class="danger-text" @click="canvasMenu = false; deleteCanvas()"><Icon name="trash" :size="15" />{{ t('app.deleteCanvas') }}</button></div></div>
           <button class="button subtle" :title="t('app.connections')" :aria-label="t('app.connections')" @click="sourcePanel = true"><Icon name="server" :size="15" />{{ t('app.connections') }}</button>
           <button v-if="isOverview" class="button primary" :title="t('app.addConnection')" :aria-label="t('app.addConnection')" @click="openSource()"><Icon name="plus" :size="15" />{{ t('app.addConnection') }}</button><button v-else class="button primary" :title="t('app.addWindows')" :aria-label="t('app.addWindows')" @click="openAdd()"><Icon name="layers" :size="15" />{{ t('app.addWindows') }}</button>
         </div>
       </header>
-      <div ref="graphSurface" class="graph-wrap" :class="{ 'has-background': currentBackground, paged: paging }" :data-page-window="paging ? currentPage?.id : undefined" @focusout.capture="preserveFitTarget" @mousedown.capture="guardPageDrag" @wheel.capture="canvasWheel" @touchstart.capture="canvasTouchStart" @touchmove.capture="canvasTouchMove" @touchend.capture="canvasTouchEnd" @touchcancel.capture="canvasTouchCancel" @click.capture="canvasClick">
-        <CanvasFileDrop :canvas-id="currentCanvas?.id" :get-viewport="getViewport" />
+      <div ref="graphSurface" :inert="createMenuOpen || undefined" class="graph-wrap" :class="{ 'has-background': currentBackground, paged: paging }" :data-page-window="paging ? currentPage?.id : undefined" @focusout.capture="preserveFitTarget" @mousedown.capture="guardPageDrag" @wheel.capture="canvasWheel" @touchstart.capture="canvasTouchStart" @touchmove.capture="canvasTouchMove" @touchend.capture="canvasTouchEnd" @touchcancel.capture="canvasTouchCancel" @click.capture="canvasClick">
+        <CanvasFileDrop ref="canvasFileDrop" :canvas-id="currentCanvas?.id" :get-viewport="getViewport" />
         <img v-if="currentBackground && backgroundUrl" class="canvas-background" :src="backgroundUrl" :style="{ opacity: currentBackground.opacity }" alt="" aria-hidden="true" />
         <span id="canvas-card-select-help" hidden>{{ t('app.cardSelectHelp') }}</span>
         <span id="canvas-card-move-help" hidden>{{ t('app.cardMoveHelp') }}</span>

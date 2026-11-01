@@ -5,7 +5,7 @@ import Icon from './Icon.vue'
 
 const { t, n } = useI18n()
 
-const props = defineProps<{ id: string; src: string; alt: string }>()
+const props = defineProps<{ id: string; src: string; alt: string; readOnly?: boolean }>()
 const emit = defineEmits<{ loaded: [id: string, width: number, height: number]; failed: [id: string] }>()
 const viewport = ref<HTMLElement>()
 const natural = ref({ width: 0, height: 0 })
@@ -40,8 +40,9 @@ function clampPan(value: Point, zoom = scale.value): Point {
   return { x: Math.min(maxX, Math.max(-maxX, value.x)), y: Math.min(maxY, Math.max(-maxY, value.y)) }
 }
 function localPoint(clientX: number, clientY: number): Point {
-  const box = viewport.value!.getBoundingClientRect()
-  return { x: clientX - box.left - box.width / 2, y: clientY - box.top - box.height / 2 }
+  const element = viewport.value!, box = element.getBoundingClientRect()
+  return { x: (clientX - box.left) * element.clientWidth / box.width - element.clientWidth / 2,
+    y: (clientY - box.top) * element.clientHeight / box.height - element.clientHeight / 2 }
 }
 function position() {
   const points = [...pointers.values()]
@@ -93,13 +94,14 @@ function zoom(value: number, anchor: Point = { x: 0, y: 0 }) {
   rebase()
 }
 function wheel(event: WheelEvent) {
+  if (props.readOnly) return
   event.preventDefault(); event.stopPropagation()
   const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? bounds.value.height : 1)
   if (!delta) return
   zoom(scale.value * Math.exp(Math.max(-1, Math.min(1, -delta * .002))), localPoint(event.clientX, event.clientY))
 }
 function pointerDown(event: PointerEvent) {
-  if (!ready.value || event.button !== 0) return
+  if (props.readOnly || !ready.value || event.button !== 0) return
   event.preventDefault(); event.stopPropagation()
   const point = localPoint(event.clientX, event.clientY)
   pointers.set(event.pointerId, point)
@@ -149,6 +151,7 @@ function pointerEnd(event: PointerEvent, cancelled = false) {
   }
 }
 function doubleClick(event: MouseEvent) {
+  if (props.readOnly) return
   event.preventDefault(); event.stopPropagation()
   if (performance.now() >= suppressDoubleClickUntil) toggleZoom(localPoint(event.clientX, event.clientY))
 }
@@ -173,7 +176,7 @@ onBeforeUnmount(() => {
       @wheel="wheel" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerEnd" @pointercancel="pointerEnd($event, true)" @lostpointercapture="pointerEnd($event, true)" @dblclick="doubleClick" @dragstart.prevent @contextmenu.prevent>
       <img class="download-preview-image" :data-preview-id="id" :src="src" :alt="alt" :style="imageStyle" draggable="false" @load="loaded" @error="failed" />
     </div>
-    <div v-if="ready" class="image-preview-tools" role="toolbar" :aria-label="t('panels.image.zoom')" @pointerdown.stop @mousedown.prevent.stop @dblclick.stop>
+    <div v-if="ready && !readOnly" class="image-preview-tools" role="toolbar" :aria-label="t('panels.image.zoom')" @pointerdown.stop @mousedown.prevent.stop @dblclick.stop>
       <button type="button" :aria-label="t('panels.image.zoomOut')" :title="t('panels.image.zoomOut')" :disabled="scale <= minimumScale + .00001" @click="zoom(scale / 1.25)"><Icon name="minus" :size="16" /></button>
       <button type="button" :aria-label="t('panels.image.fit')" :title="t('panels.image.fit')" @click="fit"><Icon name="fit" :size="16" /></button>
       <output class="image-preview-scale" :aria-label="t('panels.image.scale')">{{ percentage }}</output>

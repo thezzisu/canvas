@@ -1,4 +1,5 @@
 export default {
+  maximize: '最大化', contentZoom: '内容缩放', zoomIn: '放大字号', zoomOut: '缩小字号', resetZoom: '重置缩放',
   cancel: '取消', close: '关闭', save: '保存', create: '创建', delete: '删除', rename: '重命名',
   download: '下载', upload: '上传', loading: '加载中…', retry: '重试', done: '完成',
   settings: '设置', more: '更多', copy: '复制', back: '返回',

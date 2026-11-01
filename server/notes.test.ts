@@ -32,7 +32,7 @@ function fixture(t: TestContext) {
   return { store, request, delayed, app };
 }
 const terminal = () => ({ id: "terminal", type: "terminal" as const, sourceId: randomUUID(), spaceId: "space", windowId: "window", x: 0, y: 0, width: 500, height: 300 });
-const note = () => ({ id: "note", type: "note" as const, title: "A", content: "A", color: "yellow" as const, minimized: false, x: 0, y: 0, width: 320, height: 240 });
+const note = () => ({ id: "note", type: "note" as const, title: "A", content: "A", color: "yellow" as const, x: 0, y: 0, width: 320, height: 240 });
 const findNote = (canvas: Canvas, id = "note") => canvas.nodes.filter(node => node.type === "note").find(node => node.id === id)!;
 
 test("notes persist alongside terminal nodes with validated editable fields", async (t) => {
@@ -47,11 +47,10 @@ test("notes persist alongside terminal nodes with validated editable fields", as
   const added = noteCanvas.nodes.find(node => node.type === "note")!;
   assert.equal(added.width, 320);
   assert.equal(noteCanvas.nodes[0]?.type, "terminal");
-  assert.equal((await f.request(`${path}/notes/${added.id}`, "PATCH", { content: "second", minimized: true })).status, 200);
+  assert.equal((await f.request(`${path}/notes/${added.id}`, "PATCH", { content: "second" })).status, 200);
   const stored = f.store.get<Canvas>("canvas", canvas.id)!;
   assert.equal(findNote(stored, added.id).title, "Ship");
   assert.equal(findNote(stored, added.id).content, "second");
-  assert.equal(findNote(stored, added.id).minimized, true);
   assert.equal((await f.request(`${path}/notes/${added.id}`, "PATCH", { color: "invalid" })).status, 400);
   assert.equal((await f.request(`${path}/notes/${added.id}`, "PATCH", { x: 50 })).status, 400);
   assert.equal((await f.request(`${path}/notes/terminal`, "PATCH", { content: "bad" })).status, 404);
