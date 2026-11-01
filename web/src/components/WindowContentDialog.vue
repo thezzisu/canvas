@@ -8,18 +8,18 @@ import type { Canvas } from '../types'
 import type { WindowContentItem, WindowContentOpen, WindowContentScan } from '../../../shared/window-content'
 import { api, apiContext, apiUrl, requireCurrentApi, segment, uuid } from '../api'
 import { copyText } from '../clipboard'
-import { presentDownload, type DownloadContext } from '../downloads'
+import { presentDownload } from '../downloads'
 import { filePreview } from '../file-preview'
 import Icon from './Icon.vue'
 import { presentUrl } from '../urls'
 
-type Target = { sourceId: string; spaceId: string; windowId: string; name: string; context: DownloadContext }
+type Target = { sourceId: string; spaceId: string; windowId: string; name: string }
 type FileItem = Extract<WindowContentItem, { kind: 'file' }>
 type FileAction = 'download' | 'preview' | Canvas
 const props = defineProps<{ target: Target | null; canvases: Canvas[]; portal?: HTMLElement }>()
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
-const result = shallowRef<{ scan: WindowContentScan; target: Target; context: DownloadContext }>()
+const result = shallowRef<{ scan: WindowContentScan; target: Target }>()
 const loading = ref(false)
 const opening = ref('')
 const error = shallowRef<string | Error>('')
@@ -58,14 +58,13 @@ async function scan() {
   cancelRequests()
   result.value = undefined; error.value = ''; retryItem = undefined
   copied.value = undefined; clearTimeout(copyTimer)
-  const context = { ...target.context }
   const current = scanRequest = new AbortController()
   loading.value = true
   try {
     const snapshot = await api<WindowContentScan>(`/api/sources/${segment(target.sourceId)}/spaces/${segment(target.spaceId)}/windows/${segment(target.windowId)}/scan`,
       { method: 'POST', body: '{}', signal: current.signal })
     if (scanRequest !== current || current.signal.aborted || props.target !== target) return
-    result.value = { scan: snapshot, target, context }
+    result.value = { scan: snapshot, target }
   } catch (reason) {
     if (scanRequest === current && !current.signal.aborted && props.target === target) error.value = reason instanceof Error ? reason : 'panels.scan.failed'
   } finally {

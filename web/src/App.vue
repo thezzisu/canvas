@@ -30,7 +30,7 @@ import Icon from './components/Icon.vue'
 import TerminalNode from './components/TerminalNode.vue'
 import NoteNode from './components/NoteNode.vue'
 import FileNode from './components/FileNode.vue'
-import { downloadPreview, setDownloadContext, type DownloadContext } from './downloads'
+import { downloadPreview, setDownloadContext } from './downloads'
 import { isTerminalNode } from './types'
 import GroupNode from './components/GroupNode.vue'
 import OverviewCreateNode from './components/OverviewCreateNode.vue'
@@ -192,7 +192,7 @@ function showWindowKeyboard() {
   pendingKeyboard = windowMenu.value?.node
   windowMenu.value = null
 }
-const scanTarget = shallowRef<{ sourceId: string; spaceId: string; windowId: string; name: string; context: DownloadContext } | null>(null)
+const scanTarget = shallowRef<{ sourceId: string; spaceId: string; windowId: string; name: string } | null>(null)
 const focused = ref<TerminalCanvasNode | null>(null)
 const focusedCardId = ref('')
 const hasFocus = computed(() => !!focused.value || !!focusedCardId.value)
@@ -1178,10 +1178,7 @@ function windowAction(node: TerminalCanvasNode, operation: 'create' | 'rename' |
 function scanWindowContent(node: TerminalCanvasNode, name: string) {
   const source = resources.value.find(item => item.id === node.sourceId)
   const spaceId = source?.spaces.find(space => space.windows.some(window => window.id === node.windowId))?.id || node.spaceId
-  const canvas = currentCanvas.value
-  const anchor = canvas?.nodes.find(item => isTerminalNode(item) && item.sourceId === node.sourceId && item.windowId === node.windowId)
-  scanTarget.value = { sourceId: node.sourceId, spaceId, windowId: node.windowId, name,
-    context: !isOverview.value && canvas && anchor ? { canvasId: canvas.id, anchorId: anchor.id } : {} }
+  scanTarget.value = { sourceId: node.sourceId, spaceId, windowId: node.windowId, name }
   windowMenu.value = null; sourcePanel.value = false
 }
 async function submitAction() {

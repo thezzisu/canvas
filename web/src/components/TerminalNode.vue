@@ -195,7 +195,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
         <button v-if="data.focus" :title="t('terminal.action.restore')" :aria-label="t('terminal.action.restore')" @click.stop="action('unfocus')"><Icon name="collapse" :size="15" /></button>
       </div>
     </header>
-    <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop />
+    <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop />
     <div v-if="mobilePreview" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: data.name })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
     <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">{{ t('terminal.upload.file') }}</div>
     <div v-if="noteDrag || fileDrag" class="terminal-file-drop terminal-note-drop" :class="{ 'note-drop-unavailable': !noteDropAvailable }" aria-hidden="true">{{ !noteDropAvailable ? noteDropLabel : fileDrag ? t(status.fileReading ? 'fileTransfer.preparing' : 'fileTransfer.drop') : noteDropLabel }}</div>
@@ -217,6 +217,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
 </template>
 
 <style scoped>
+.terminal-host[data-content-active=false] :deep(.xterm){cursor:inherit}
 .terminal-name{display:flex;align-items:center;gap:6px}
 .terminal-card.input-focused{--frame-rest:color-mix(in srgb,var(--program-color) 60%,#fff)}
 .terminal-card.input-focused.program-unknown{--frame-rest:#aeb9c8}

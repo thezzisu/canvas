@@ -9,4 +9,5 @@ Single-account terminal canvas for existing herdr windows.
 - Place unit tests beside their modules; keep server integration tests in `server/`.
 - Keep application code and native tests here; private operational notes and environment E2E live in the owning operations repository.
 - Run `npm run typecheck`, `npm test`, and `npm run build` before delivery.
+- Have an independent agent review each change for best practices, simplicity and related inconsistencies before delivery.
 - Keep credentials and runtime databases outside the checkout.

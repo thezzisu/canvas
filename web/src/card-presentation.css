@@ -9,6 +9,8 @@
 .vue-flow__node-note:is(.selected,:focus-visible,:focus-within)>.note-card { border-color: color-mix(in srgb,var(--note-color) 78%,#e7edf5); }
 .vue-flow__node-file:is(.selected,:focus-visible,:focus-within)>.file-card { border-color: #8793a3; }
 .vue-flow__node-file { padding: 0; border: 0; background: transparent; box-shadow: none; }
+.terminal-card,.note-card,.file-card { cursor: auto; }
+.card-content[data-content-active=false] { cursor: pointer; }
 
 .canvas-nav-item .canvas-nav-name { display: flex; align-items: baseline; gap: 6px; flex: 1; min-width: 0; }
 .canvas-nav-name>span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
