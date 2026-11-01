@@ -16,8 +16,8 @@ export function terminalInsets(card: HTMLElement, host: HTMLElement) {
 
 export function fitTerminalGrid(available: { width: number; height: number }, rendered: { width: number; height: number; cols: number; rows: number }) {
   return {
-    cols: Math.max(20, Math.min(500, Math.floor(available.width * rendered.cols / rendered.width))),
-    rows: Math.max(5, Math.min(200, Math.floor(available.height * rendered.rows / rendered.height))),
+    cols: Math.max(2, Math.min(500, Math.floor(available.width * rendered.cols / rendered.width))),
+    rows: Math.max(1, Math.min(200, Math.floor(available.height * rendered.rows / rendered.height))),
   }
 }
 

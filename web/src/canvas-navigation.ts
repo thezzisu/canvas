@@ -296,8 +296,8 @@ export function useCanvasNavigation(options: {
   function pointerDown(event: PointerEvent) {
     const active = document.activeElement
     const body = active instanceof HTMLElement ? active.closest('.card-content') : null
-    const fitControl = event.target instanceof Element && event.target.closest('.canvas-fit')
-    if (!options.mobile() && !fitControl && body && active instanceof HTMLElement && event.target instanceof Node && !body.contains(event.target)) active.blur()
+    const preservesFocus = event.target instanceof Element && event.target.closest('[data-preserve-content-focus]')
+    if (!options.mobile() && !preservesFocus && body && active instanceof HTMLElement && event.target instanceof Node && !body.contains(event.target)) active.blur()
     interacted()
   }
   function blurPaging() { wheelOwner.reset(); cancelFeedback(false) }

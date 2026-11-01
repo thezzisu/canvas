@@ -1,4 +1,5 @@
 import type { CanvasNotification } from '../../shared/notification'
+import { aggregateStatus, type ProgramStatus } from '../../shared/status'
 import type { SourceResource } from './types'
 
 export function isCanvasNotification(value: unknown): value is CanvasNotification {
@@ -32,6 +33,14 @@ export function attentionSummary(resources: readonly SourceResource[]) {
     }
   }
   return { count: windows.size, status: [...windows.values()].includes('attention') ? 'attention' : windows.size ? 'done' : undefined } as const
+}
+
+/** Favicon reflects every native state; the badge only counts actionable windows. */
+export function faviconStatus(resources: readonly SourceResource[]): ProgramStatus | undefined {
+  const statuses = resources.filter(source => source.status === 'online' && !source.error)
+    .flatMap(source => source.spaces.flatMap(space => space.windows.flatMap(window =>
+      window.panes?.length ? window.panes.map(pane => pane.status) : [window.status || 'unknown'])))
+  return statuses.length ? aggregateStatus(statuses) : undefined
 }
 
 export function notificationKey(event: CanvasNotification) {

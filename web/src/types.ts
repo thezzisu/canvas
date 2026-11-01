@@ -75,6 +75,7 @@ export interface Canvas { id: string; name: string; nodes: CanvasNode[]; snapToG
 export interface WindowSize { width: number; height: number }
 export interface SharedState { instanceId: string; revision: number; sources: Source[]; canvases: Canvas[]; overviewBackground: Canvas['background']; windowSizes: Record<string, WindowSize>; settings: GlobalSettings }
 export interface TerminalData {
+  zoomKey: string
   sourceId: string
   spaceId: string
   windowId: string

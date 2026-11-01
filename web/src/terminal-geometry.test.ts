@@ -9,6 +9,11 @@ test('an exact rendered grid retains every cell when resizing, including fractio
   assert.deepEqual(fitTerminalGrid({ width: 348, height: 638 }, grid), { cols: 42, rows: 46 })
 })
 
+test('large text in a narrow viewport fits below twenty columns without clipping', () => {
+  assert.deepEqual(fitTerminalGrid({ width: 212, height: 70 }, { width: 288, height: 100, cols: 20, rows: 5 }), { cols: 14, rows: 3 })
+  assert.deepEqual(fitTerminalGrid({ width: 1, height: 1 }, { width: 288, height: 100, cols: 20, rows: 5 }), { cols: 2, rows: 1 })
+})
+
 test('rounded DOM widths cannot make a fixed 273.6px viewport alternate between 37 and 38 columns', () => {
   const available = { width: 273.6, height: 528.8 }
   const initial = { width: 720, height: 480, cols: 100, rows: 30 }

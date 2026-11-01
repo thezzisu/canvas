@@ -1,4 +1,5 @@
 export default {
+  zoom: { title: 'Terminal zoom', in: 'Zoom in', out: 'Zoom out', reset: 'Reset zoom' },
   status: {
     error: 'Error', attention: 'Needs attention', working: 'Running', done: 'Completed', idle: 'Idle', unknown: 'No status reported',
   },

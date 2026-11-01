@@ -23,6 +23,7 @@ import { loadCanvasFile } from './file-transfer'
 import type { CanvasFileReference } from './file-reference'
 import { fitTerminalGrid, terminalBox, terminalMetrics, type RenderedTerminalGrid } from './terminal-geometry'
 import { TerminalReconnect, terminalInputHasFocus } from './terminal-reconnect'
+import { normalizeTerminalZoom } from './terminal-zoom'
 
 export type TerminalStatus = {
   status: 'connecting' | 'connected' | 'disconnected'
@@ -460,6 +461,14 @@ function present(session: Session) {
   if (!(scale > 0)) return
   Object.assign(session.surface.style, { width: `${width}px`, height: `${height}px`, transform: native ? 'none' : `scale(${scale})` })
 }
+function setTerminalZoom(session: Session, percent: number) {
+  const fontSize = 12 * (session.magnified ? normalizeTerminalZoom(percent) : 100) / 100
+  if (session.term.options.fontSize === fontSize) return
+  session.rendered = undefined; session.metrics = undefined
+  session.term.options.fontSize = fontSize
+  present(session)
+  schedulePresentation(session)
+}
 function proposedSize(session: Session) {
   if (!session.host?.isConnected || !session.opened) return
   const available = availableSize(session.host)
@@ -520,7 +529,7 @@ function sendTerminalData(session: Session, data: string) {
   session.term.input(data, true)
   return true
 }
-export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, onGeometry?: (geometry: TerminalGeometry) => void, options: { magnified?: boolean; mobile?: boolean } = {}) {
+export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, onGeometry?: (geometry: TerminalGeometry) => void, options: { magnified?: boolean; mobile?: boolean; zoom?: number } = {}) {
   installTerminalEvents()
   const id = key(resource.sourceId, resource.spaceId, resource.windowId)
   let session = sessions.get(id)
@@ -645,6 +654,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   session.viewVisible = true
   session.mobile = options.mobile === true
   session.magnified = options.magnified === true
+  setTerminalZoom(session, options.zoom ?? 100)
   session.nativeKey = undefined
   session.term.options.disableStdin = !interactive(session)
   if (!interactive(session)) { session.keyboard?.blur(); session.keyboardRequested = false; session.term.blur() }
@@ -747,6 +757,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     focus(options: { keyboard?: boolean } = {}) { focusTerminal(current, options.keyboard) },
     blur() { if (current.mobile) current.keyboard?.blur(); else current.term.blur(); setModifiers(current) },
     setModifiers(modifiers: Partial<TerminalModifiers>) { setModifiers(current, modifiers) },
+    setZoom(percent: number) { if (current.host === host && isCurrentApi(mountingContext)) setTerminalZoom(current, percent) },
     sendKey(key: string, modifiers: Partial<TerminalModifiers> = current.modifiers) {
       sendTerminalKey(current, key, modifiers)
     },

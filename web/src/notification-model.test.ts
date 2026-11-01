@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { attentionSummary, isCanvasNotification, notificationKey, notificationTarget } from './notification-model.ts'
+import { attentionSummary, faviconStatus, isCanvasNotification, notificationKey, notificationTarget } from './notification-model.ts'
+import { mergeLiveResources } from './live-resources.ts'
 import type { CanvasNotification } from '../../shared/notification.ts'
 import type { SourceResource } from './types.ts'
 
@@ -27,4 +28,21 @@ test('notifications target their pane after a move rather than the window aggreg
 test('notification frames require known kinds and string identity and content', () => {
   assert(isCanvasNotification(event))
   for (const value of [null, [], { ...event, id: 3 }, { ...event, body: {} }, { ...event, kind: 'working' }]) assert(!isCanvasNotification(value))
+})
+test('favicon follows working and idle live metadata even when the attention badge is empty', () => {
+  for (const status of ['working', 'idle', 'unknown'] as const) {
+    const pane = { id: 'pane', name: 'Pane', status, active: true }
+    const polled: SourceResource[] = [{ id: 'source', name: 'Source', status: 'online', spaces: [
+      { id: 'space', name: 'Space', windows: [{ id: 'window', name: 'Window', status: 'done', panes: [] }] },
+    ] }]
+    const current = mergeLiveResources(polled, new Map([['source/window', { id: 'window', name: 'Window', status, panes: [pane] }]]))
+    assert.equal(faviconStatus(current), status)
+    assert.deepEqual(attentionSummary(current), { count: 0, status: undefined })
+  }
+})
+test('favicon uses native urgency across panes, excludes offline sources and restores without windows', () => {
+  assert.equal(faviconStatus(resources), 'attention')
+  assert.equal(faviconStatus([{ ...resources[0]!, status: 'offline' }]), undefined)
+  assert.equal(faviconStatus([{ ...resources[0]!, error: 'offline' }]), undefined)
+  assert.equal(faviconStatus([]), undefined)
 })

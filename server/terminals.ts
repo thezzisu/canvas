@@ -140,7 +140,8 @@ class LiveTerminal {
     this.proc.onExit(event => void this.close(event.reason));
   }
   private canRender(ws: WebSocket) {
-    return !this.hidden.has(ws) && this.rendered.has(ws) && (!this.maximized || this.maximized.owner === ws);
+    return !this.hidden.has(ws) && this.rendered.has(ws) &&
+      (!this.maximized || !this.maximized.releasing && this.maximized.owner === ws);
   }
   downloadRecipient(): WebSocket | undefined {
     const ws = this.downloadController;
@@ -170,7 +171,7 @@ class LiveTerminal {
   private snapshot(ws: WebSocket) {
     if (this.closed || !this.clients.has(ws) || ws.readyState !== 1) return;
     json(ws, { type: "pane-focus", paneId: this.focusedPaneId });
-    if (this.hidden.has(ws) || this.maximized && this.maximized.owner !== ws) {
+    if (this.hidden.has(ws) || this.maximized && (this.maximized.releasing || this.maximized.owner !== ws)) {
       this.rendered.delete(ws);
       this.presentation(ws);
       return;
@@ -256,8 +257,9 @@ class LiveTerminal {
           return;
         }
         const size = {
-          cols: clamp(msg.cols, 20, 500, this.cols),
-          rows: clamp(msg.rows, 5, 200, this.rows),
+          // xterm needs two columns for wide characters; one row is valid.
+          cols: clamp(msg.cols, 2, 500, this.cols),
+          rows: clamp(msg.rows, 1, 200, this.rows),
         };
         if (
           msg.type === "focus-resize-begin" &&

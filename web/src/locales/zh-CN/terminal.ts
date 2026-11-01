@@ -1,4 +1,5 @@
 export default {
+  zoom: { title: '终端缩放', in: '放大字号', out: '缩小字号', reset: '重置缩放' },
   status: {
     error: '错误', attention: '待处理', working: '运行中', done: '已完成', idle: '空闲', unknown: '未报告状态',
   },

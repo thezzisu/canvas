@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useEventListener } from '@vueuse/core'
 import type { NodeProps } from '@vue-flow/core'
 import UButton from '@nuxt/ui/components/Button.vue'
+import UPopover from '@nuxt/ui/components/Popover.vue'
 import { NodeResizer } from '@vue-flow/node-resizer'
 import Icon from './Icon.vue'
 import PaneIndicators from './PaneIndicators.vue'
@@ -17,12 +19,26 @@ import { emptyModifiers, type TerminalModifiers } from '../terminal-input'
 import { terminalInsets } from '../terminal-geometry'
 import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
 import { useDocumentFocus } from '../document-focus'
+import { terminalZoomLimits, useTerminalZoom } from '../terminal-zoom'
 import type { TerminalData } from '../types'
-const { t } = useI18n()
+const { t, n } = useI18n()
 const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>>()
 const host = ref<HTMLElement>()
 const header = ref<HTMLElement>()
 const compact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined))
+const zoom = useTerminalZoom(() => props.data.zoomKey)
+const zoomOpen = ref(false)
+const zoomPointer = ref(false)
+const zoomLabel = computed(() => n(zoom.value / 100, { style: 'percent' }))
+const zoomPortal = computed(() => header.value?.closest<HTMLElement>('.app-shell') || document.body)
+const zoomContent = { side: 'bottom' as const, align: 'end' as const, sideOffset: 6, collisionPadding: 8,
+  onOpenAutoFocus: (event: Event) => { if (zoomPointer.value) event.preventDefault() },
+  onCloseAutoFocus: (event: Event) => { if (zoomPointer.value) event.preventDefault() } }
+// Pointer-opened controls retain terminal/IME focus outside the popover.
+useEventListener(computed(() => zoomOpen.value ? document : undefined), 'keydown', (event: KeyboardEvent) => {
+  if (event.key !== 'Escape') return
+  event.preventDefault(); event.stopPropagation(); zoomOpen.value = false
+}, { capture: true })
 const status = ref<TerminalStatus>({ status: 'connecting' })
 const noteDrag = ref(false)
 const fileDrag = ref(false)
@@ -146,10 +162,11 @@ function mount() {
     if (!element || !card) return
     const inset = terminalInsets(card, element)
     props.data.onGeometry(props.data.sourceId, props.data.windowId, geometry.height / geometry.width, inset.x, inset.y)
-  }, { magnified: props.data.focus, mobile: props.data.mobile })
+  }, { magnified: props.data.focus, mobile: props.data.mobile, zoom: zoom.value })
   if (mobileFocus.value) { terminal?.setTouchMode('scroll'); terminal?.focus({ keyboard: false }) }
 }
 onMounted(() => { mount(); document.addEventListener('dragend', clearNoteDrag); window.addEventListener('blur', clearNoteDrag) })
+watch([zoom, () => props.data.focus], () => { terminal?.setZoom(zoom.value) })
 watch([keepTerminal, () => props.data.mobile, () => props.data.focus], async () => { terminal?.dispose(); terminal = undefined; await nextTick(); mount() })
 onBeforeUnmount(() => { clearPreviewTap(); terminal?.dispose(); document.removeEventListener('dragend', clearNoteDrag); window.removeEventListener('blur', clearNoteDrag) })
 function action(name: string) {
@@ -191,6 +208,14 @@ async function resized(event: { params: { width: number; height: number; x: numb
         <button v-if="data.newTab && !mobileFocus" :title="t('app.newTab')" :aria-label="t('app.newTab')" :disabled="!data.available || data.newTab.pending()" :aria-busy="data.newTab.pending()" @click.stop="data.newTab.create()"><span v-if="data.newTab.pending()" class="spinner" /><Icon v-else name="tab-plus" :size="15" /></button>
         <button v-if="!data.focus" :title="t('terminal.action.focus')" :aria-label="t('terminal.action.focus')" @click.stop="action('focus')"><Icon name="expand" :size="14" /></button>
         <button v-if="mobileFocus && !compact" :title="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-label="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-pressed="status.keyboardRequested" @pointerdown.stop.prevent @click.stop="toggleKeyboard"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10" /></svg></button>
+        <UPopover v-if="data.focus" v-model:open="zoomOpen" :portal="zoomPortal" :content="zoomContent" :ui="{ content: 'terminal-zoom-popover' }">
+          <button class="terminal-zoom-trigger" data-preserve-content-focus :title="t('terminal.zoom.title')" :aria-label="t('terminal.zoom.title')" :aria-expanded="zoomOpen" @pointerdown.stop.prevent="zoomPointer = true" @keydown="zoomPointer = false"><Icon v-if="data.mobile" name="search" :size="18" /><span v-else>{{ zoomLabel }}</span></button>
+          <template #content><div class="terminal-zoom-controls" data-preserve-content-focus role="group" :aria-label="t('terminal.zoom.title')" @pointerdown.stop @wheel.stop @keydown="zoomPointer = false">
+            <UButton color="neutral" variant="ghost" :disabled="zoom <= terminalZoomLimits.min || !data.available" :aria-label="t('terminal.zoom.out')" :title="t('terminal.zoom.out')" @pointerdown.prevent @click="zoom = Math.max(terminalZoomLimits.min, zoom - terminalZoomLimits.step)"><Icon name="minus" :size="17" /></UButton>
+            <UButton color="neutral" variant="ghost" class="terminal-zoom-reset" :aria-label="t('terminal.zoom.reset')" :title="t('terminal.zoom.reset')" @pointerdown.prevent @click="zoom = 100">{{ zoomLabel }}</UButton>
+            <UButton color="neutral" variant="ghost" :disabled="zoom >= terminalZoomLimits.max || !data.available" :aria-label="t('terminal.zoom.in')" :title="t('terminal.zoom.in')" @pointerdown.prevent @click="zoom = Math.min(terminalZoomLimits.max, zoom + terminalZoomLimits.step)"><Icon name="plus" :size="17" /></UButton>
+          </div></template>
+        </UPopover>
         <button :title="t('terminal.action.windowActions')" :aria-label="t('terminal.action.windowActions')" @click.stop="action('menu')"><Icon name="more" :size="17" /></button>
         <button v-if="data.focus" :title="t('terminal.action.restore')" :aria-label="t('terminal.action.restore')" @click.stop="action('unfocus')"><Icon name="collapse" :size="15" /></button>
       </div>
@@ -219,6 +244,8 @@ async function resized(event: { params: { width: number; height: number; x: numb
 <style scoped>
 .terminal-host[data-content-active=false] :deep(.xterm){cursor:inherit}
 .terminal-name{display:flex;align-items:center;gap:6px}
+.terminal-actions .terminal-zoom-trigger{width:43px;min-width:43px;font-size:10px;font-variant-numeric:tabular-nums;padding:0 4px}
+.terminal-actions .terminal-zoom-trigger[aria-expanded=true]{background:#ffffff12;color:#e3c9b5}
 .terminal-card.input-focused{--frame-rest:color-mix(in srgb,var(--program-color) 60%,#fff)}
 .terminal-card.input-focused.program-unknown{--frame-rest:#aeb9c8}
 .terminal-card.input-focused .terminal-header{background:color-mix(in srgb,var(--program-color) 27%,#22262d)}
@@ -263,4 +290,11 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-mobile.focused .terminal-upload{bottom:calc(55px + var(--mobile-safe-bottom,0px))}
 .terminal-mobile.focused .terminal-copy-notice{bottom:calc(57px + var(--mobile-safe-bottom,0px))}
 .terminal-mobile.focused .terminal-disconnected{bottom:calc(49px + var(--mobile-safe-bottom,0px))}
+</style>
+
+<style>
+.terminal-zoom-popover{z-index:70;padding:4px;background:#252b34;border:1px solid #414b59;border-radius:8px;box-shadow:0 8px 24px #0005}
+.terminal-zoom-controls{display:flex;align-items:center;gap:2px}.terminal-zoom-controls>button{justify-content:center;width:36px;height:36px;min-width:36px;padding:0;color:#bac6d6;border-radius:5px}
+.terminal-zoom-controls>.terminal-zoom-reset{width:60px;font-size:12px;font-variant-numeric:tabular-nums}
+.mobile-layout .terminal-zoom-controls>button{height:44px;min-width:44px}
 </style>

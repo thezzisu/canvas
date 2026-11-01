@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useEventListener } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@nuxt/ui/composables/useToast'
 import type { CanvasNotification } from '../../../shared/notification'
 import type { SourceResource } from '../types'
 import { apiContext, isCurrentApi, uuid } from '../api'
-import { attentionSummary, isCanvasNotification, notificationKey, notificationTarget } from '../notification-model'
+import { attentionSummary, faviconStatus, isCanvasNotification, notificationKey, notificationTarget } from '../notification-model'
 import { deliverNotificationEffects, holdNotificationOwner, isBadgeOwnerChange, syncNotificationFocus, updateNotificationBadge } from '../notification-effects'
 import { notificationSoundEnabled, refreshNotificationPermission, unlockNotificationSound } from '../notification-settings'
 import { statusColor } from '../status'
 import { formatCanvasLocation } from '../canvas-location'
+import canvasIcon from '../../public/icons/canvas.svg?raw'
 
 const props = defineProps<{ instanceId: string; backendId: string; resources: SourceResource[]; refresh(): Promise<void> }>()
 const emit = defineEmits<{ open: [event: CanvasNotification] }>()
@@ -23,9 +24,16 @@ const pending = new Map<string, { event: CanvasNotification; expires: number }>(
 let timer: ReturnType<typeof setTimeout> | undefined, disposed = false
 const summary = computed(() => attentionSummary(props.resources))
 const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
-const originalIcon = icon?.href
-const originalIconType = icon?.type
-let iconImage: HTMLImageElement | undefined
+const originalIcon = `${import.meta.env.BASE_URL}icons/canvas.svg`
+const favicon = computed(() => {
+  const status = faviconStatus(props.resources)
+  return status ? `data:image/svg+xml,${encodeURIComponent(canvasIcon.replace('</svg>',
+    `<circle cx="51" cy="51" r="11" fill="${statusColor(status)}" stroke="#17191d" stroke-width="4"/></svg>`))}` : originalIcon
+})
+// Mount after the preceding instance restores its icon during unmount.
+onMounted(() => watch(favicon, value => {
+  if (icon) { icon.type = 'image/svg+xml'; icon.href = value }
+}, { immediate: true }))
 
 function current() { return !disposed && pageActive && isCurrentApi(context) }
 function syncFocus() {
@@ -119,28 +127,10 @@ function receive(value: unknown) {
 }
 watch(() => props.resources, () => { syncFocus(); reconcile() })
 
-function updateIcon() {
-  if (!icon || !originalIcon || disposed) return
-  if (!summary.value.status) { icon.href = originalIcon; icon.type = originalIconType || ''; return }
-  if (!iconImage) {
-    iconImage = new Image()
-    iconImage.onload = updateIcon
-    iconImage.src = originalIcon
-  }
-  if (!iconImage.complete || !iconImage.naturalWidth) return
-  const canvas = document.createElement('canvas'); canvas.width = canvas.height = 64
-  const drawing = canvas.getContext('2d')
-  if (!drawing) return
-  drawing.drawImage(iconImage, 0, 0, 64, 64)
-  drawing.beginPath(); drawing.arc(51, 51, 11, 0, Math.PI * 2)
-  drawing.fillStyle = statusColor(summary.value.status); drawing.fill()
-  drawing.lineWidth = 4; drawing.strokeStyle = '#17191d'; drawing.stroke()
-  icon.type = 'image/png'; icon.href = canvas.toDataURL()
-}
 function updateBadge() {
   void updateNotificationBadge(owner, summary.value.count, document.hasFocus() && !document.hidden)
 }
-watch(() => `${summary.value.status}/${summary.value.count}`, () => { updateIcon(); updateBadge() }, { immediate: true })
+watch(() => summary.value.count, updateBadge, { immediate: true })
 useEventListener(window, ['pointerdown', 'keydown'], event => {
   if (event.isTrusted && notificationSoundEnabled.value) void unlockNotificationSound()
 }, { passive: true })
@@ -166,8 +156,7 @@ onBeforeUnmount(() => {
   disposed = true; clearTimeout(timer); pending.clear()
   for (const item of toast.toasts.value) if (String(item.id).startsWith(toastPrefix)) toast.remove(item.id)
   active.clear()
-  if (icon && originalIcon) { icon.href = originalIcon; icon.type = originalIconType || '' }
-  if (iconImage) iconImage.onload = null
+  if (icon) { icon.href = originalIcon; icon.type = 'image/svg+xml' }
   void syncNotificationFocus(props.backendId, owner, undefined, () => false)
   void updateNotificationBadge(owner, 0, false, true)
   releaseOwner()

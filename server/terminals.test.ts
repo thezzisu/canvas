@@ -376,6 +376,79 @@ test("a paused peer cancels the observed maximization without input, focus takeo
   assert.equal(presentation(peer).maximized, false, "repeated cancel reintroduced a lease");
 });
 
+test('visibility resumes and late viewers stay paused until maximized restoration finishes', async t => {
+  const f = await fixture(t); if (!f) return;
+  const owner = new Client(), peer = new Client(), late = new Client();
+  await f.manager.connect(f.source, f.target, owner.socket);
+  await f.manager.connect(f.source, f.target, peer.socket);
+  await f.ready();
+  const terminal = (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!;
+  const token = randomUUID();
+  owner.command({ type: 'focus-resize-begin', token, cols: 130, rows: 40 });
+  await terminal.geometry.drain(); await terminal.queue;
+  assert.equal(presentation(owner).owned, true);
+
+  const end = terminal.geometry.end.bind(terminal.geometry);
+  let restored!: () => void, release!: () => void;
+  const restoring = new Promise<void>(resolve => { restored = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  terminal.geometry.end = async (ws, lease) => { await end(ws, lease); restored(); await held; };
+  const ownerMark = owner.received.length, peerMark = peer.received.length;
+  try {
+    owner.command({ type: 'focus-resize-end', token });
+    await restoring;
+    assert.deepEqual(terminal.geometry.current, { cols: 100, rows: 30 });
+    owner.command({ type: 'view-visible', visible: false });
+    owner.command({ type: 'view-visible', visible: true });
+    await f.manager.connect(f.source, f.target, late.socket);
+    await terminal.queue;
+    for (const [client, mark] of [[owner, ownerMark], [peer, peerMark], [late, 0]] as const) {
+      assert(client.received.slice(mark).every(value => typeof value === 'string' &&
+        !['reset', 'resize'].includes(JSON.parse(value).type)), 'restoring view received a premature frame or geometry');
+      assert.equal(presentation(client).maximized, true);
+    }
+  } finally {
+    release();
+    terminal.geometry.end = end;
+  }
+  await waitFor(() => [owner, peer, late].every(client => presentation(client)?.maximized === false),
+    'restored viewers retained a stale maximized presentation');
+  for (const [client, mark] of [[owner, ownerMark], [peer, peerMark], [late, 0]] as const) {
+    const received = client.received.slice(mark);
+    const reset = received.findIndex(value => typeof value === 'string' && JSON.parse(value).type === 'reset');
+    assert(reset >= 0);
+    assert.deepEqual(JSON.parse(received[reset + 1] as string), { type: 'resize', cols: 100, rows: 30 });
+    assert(Buffer.isBuffer(received[reset + 2]));
+    assert.deepEqual(JSON.parse(received[reset + 3] as string), { type: 'presentation', maximized: false, owned: false });
+  }
+  assert.equal(f.manager.entries.size, 1, 'restoration replaced the native attachment');
+});
+
+test('a narrow maximized viewport reaches the native pane exactly and restores its original grid', async t => {
+  const f = await fixture(t); if (!f) return;
+  const owner = new Client(), peer = new Client();
+  await f.manager.connect(f.source, f.target, owner.socket);
+  await f.manager.connect(f.source, f.target, peer.socket);
+  await f.ready();
+  const terminal = (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!;
+  const token = randomUUID();
+  owner.command({ type: 'focus-resize-begin', token, cols: 14, rows: 3 });
+  await terminal.geometry.drain();
+  assert.deepEqual(terminal.geometry.current, { cols: 14, rows: 3 });
+  await f.assertSize(owner, 14, 3);
+  assert.deepEqual([terminal.emulator.cols, terminal.emulator.rows], [14, 3]);
+  assert.equal(presentation(peer).owned, false);
+  owner.command({ type: 'focus-resize-update', token, cols: '20', rows: null });
+  await terminal.geometry.drain();
+  assert.deepEqual(terminal.geometry.current, { cols: 14, rows: 3 }, 'non-numeric dimensions changed the grid');
+  owner.command({ type: 'focus-resize-end', token });
+  await waitFor(() => presentation(owner)?.maximized === false && presentation(peer)?.maximized === false,
+    'narrow maximization did not restore both viewers');
+  await f.assertSize(owner, 100, 30);
+  assert.deepEqual(size(peer), { type: 'resize', cols: 100, rows: 30 });
+  assert.equal(f.manager.entries.size, 1);
+});
+
 test("stale peer cancellation cannot end a replacement lease or a takeover queued during restoration", async t => {
   const f = await fixture(t, true); if (!f) return;
   const { manager, source, target } = f;
