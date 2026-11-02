@@ -9,9 +9,14 @@ import { createHerdrClient, type HerdrClientTransport } from "./herdr/client.ts"
 import { discoverHerdrPython, herdrApiRequest, localHerdrSockets, parseHerdrSockets, validateHerdrLocation, type HerdrSockets } from "./herdr/api.ts";
 import type { CompletionToken } from '../shared/completion.ts';
 import { aggregateStatus, herdrStatus, type ProgramStatus } from "../shared/status.ts";
+import { CoreRpc } from './core/rpc.ts';
+import { discoverCorePython, localCoreSocket, parseCoreSocket } from './core/endpoint.ts';
+import { CoreLayout } from './core/layout.ts';
+import { createCoreClient } from './core/client.ts';
 
 export type { Source } from "./state.ts";
 export interface PaneResource {
+  terminalId?: string;
   stateSequence?: number;
   completion?: CompletionToken;
   id: string;
@@ -125,6 +130,7 @@ export function validateSource(source: Source): void {
   )
     throw new Error("Invalid source");
   if (source.transport === "ssh") parseSshTarget(source.target ?? "");
+  if (source.provider !== undefined && !['tui', 'core'].includes(source.provider)) throw new Error('Invalid Herdr runtime');
   validateHerdrLocation(source);
   for (const value of [
     source.herdrSession,
@@ -260,6 +266,36 @@ async function connectedHerdrSockets(source: Source, signal?: AbortSignal): Prom
   return { api: tunnel.sockets["herdr.sock"]!, client: tunnel.sockets["herdr-client.sock"]! };
 }
 
+async function discoverCoreSocket(source: Source, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
+  if (source.transport === 'local') return localCoreSocket(source, signal);
+  const location = { herdrSocket: source.herdrSocket, herdrSession: source.herdrSession };
+  return parseCoreSocket(await execute(sourcePythonCommand(source, discoverCorePython, [JSON.stringify(location)]), commandEnvironment(), signal));
+}
+
+async function connectedCoreSocket(source: Source, signal?: AbortSignal): Promise<string> {
+  const socket = await discoverCoreSocket(source, signal);
+  signal?.throwIfAborted();
+  if (source.transport === 'local') return socket;
+  const tunnel = await ensureSocketTunnel({ ...tunnelRequest(source, { 'core.sock': socket }), signal });
+  return tunnel.sockets['core.sock']!;
+}
+
+async function withCore<T>(source: Source, operation: (layout: CoreLayout, rpc: CoreRpc) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  validateSource(source);
+  preparing.set(source.id, (preparing.get(source.id) || 0) + 1);
+  let rpc: CoreRpc | undefined;
+  try {
+    rpc = await CoreRpc.connect(await connectedCoreSocket(source, signal), { signal });
+    return await operation(new CoreLayout(rpc), rpc);
+  } finally {
+    rpc?.close();
+    const count = preparing.get(source.id)! - 1;
+    if (count) preparing.set(source.id, count); else preparing.delete(source.id);
+    await releaseIdleConnections(source.id);
+  }
+}
+
 async function requestHerdr(source: Source, method: string, params: Record<string, unknown> = {}, signal?: AbortSignal) {
   validateSource(source);
   preparing.set(source.id, (preparing.get(source.id) || 0) + 1);
@@ -316,6 +352,7 @@ async function runRemoteShellWithInput(source: Source, command: string, input: B
 
 export async function nativeSocketForSource(source: Source): Promise<string> {
   validateSource(source);
+  if (source.provider === 'core') return discoverCoreSocket(source);
   return (await discoverHerdrSockets(source)).api;
 }
 
@@ -647,6 +684,7 @@ async function herdrResources(source: Source, signal?: AbortSignal): Promise<Pic
 export async function probeSource(draft: Omit<Source, "id" | "name">, signal?: AbortSignal): Promise<{ status: "online"; serverVersion: string }> {
   const source: Source = { ...draft, id: randomUUID(), name: "Connection probe" };
   try {
+    if (source.provider === 'core') return await withCore(source, async (_layout, rpc) => ({ status: 'online', serverVersion: rpc.hello.version }), signal);
     const { serverVersion } = await herdrResources(source, signal);
     if (!serverVersion) throw new Error("Herdr did not report a server version");
     return { status: "online", serverVersion };
@@ -662,6 +700,7 @@ export async function listResources(source: Source): Promise<SourceResource> {
     spaces: [],
   };
   try {
+    if (source.provider === 'core') return await withCore(source, async (layout, rpc) => ({ ...result, spaces: layout.resources(await layout.snapshot()), serverVersion: rpc.hello.version }));
     Object.assign(result, await herdrResources(source));
   } catch (error) {
     result.status = "offline";
@@ -692,6 +731,7 @@ export async function createSpace(
   label?: string,
   sourceSpaceId?: string,
 ): Promise<{ spaceId: string; windowId: string }> {
+  if (source.provider === 'core') return withCore(source, layout => layout.createSpace(label, sourceSpaceId));
   if (sourceSpaceId) await requireResource(source, sourceSpaceId);
   return createdWindow(await requestHerdr(source, "workspace.create", {
     ...(label?.trim() ? { label: name(label) } : {}),
@@ -711,6 +751,7 @@ export async function renameSpace(
   spaceId: string,
   label: string,
 ): Promise<void> {
+  if (source.provider === 'core') return withCore(source, layout => layout.renameSpace(spaceId, label));
   label = name(label);
   await requireResource(source, spaceId);
   await requestHerdr(source, "workspace.rename", { workspace_id: spaceId, label });
@@ -719,6 +760,7 @@ export async function closeSpace(
   source: Source,
   spaceId: string,
 ): Promise<string[]> {
+  if (source.provider === 'core') return withCore(source, layout => layout.closeSpace(spaceId));
   const space = await requireResource(source, spaceId);
   await Promise.all(
     [...active]
@@ -740,6 +782,7 @@ export async function createWindow(
   spaceId: string,
   label?: string,
 ): Promise<{ spaceId: string; windowId: string }> {
+  if (source.provider === 'core') return withCore(source, layout => layout.createWindow(spaceId, label));
   await requireResource(source, spaceId);
   return createdWindow(await requestHerdr(source, "tab.create", {
     workspace_id: spaceId,
@@ -753,6 +796,7 @@ export async function renameWindow(
   windowId: string,
   label: string,
 ): Promise<void> {
+  if (source.provider === 'core') return withCore(source, layout => layout.renameWindow(spaceId, windowId, label));
   label = name(label);
   await requireResource(source, spaceId, windowId);
   await requestHerdr(source, "tab.rename", { tab_id: windowId, label });
@@ -762,6 +806,7 @@ export async function closeWindow(
   spaceId: string,
   windowId: string,
 ): Promise<void> {
+  if (source.provider === 'core') return withCore(source, layout => layout.closeWindow(spaceId, windowId));
   await requireResource(source, spaceId, windowId);
   await Promise.all(
     [...active]
@@ -796,6 +841,23 @@ async function prepareTerminal(
   windowId: string,
 ): Promise<TerminalHandle> {
   await requireResource(source, spaceId, windowId);
+  if (source.provider === 'core') {
+    const socket = await connectedCoreSocket(source);
+    let rpc: CoreRpc | undefined, closed = false, connecting = false;
+    const controller = new AbortController();
+    const handle = { sourceId: source.id, spaceId, windowId, cleanup: async () => {
+      if (closed) return;
+      closed = true; controller.abort(); rpc?.close(); active.delete(handle); await releaseIdleConnections(source.id);
+    } };
+    active.add(handle);
+    return { cleanup: handle.cleanup, connect: async (cols, rows) => {
+      if (closed || connecting || rpc) throw new Error('Core terminal handle is no longer available');
+      connecting = true;
+      rpc = await CoreRpc.connect(socket, { signal: controller.signal });
+      if (closed) { rpc.close(); throw new Error('Core terminal handle was closed'); }
+      return createCoreClient({ rpc, layout: new CoreLayout(rpc), spaceId, tabId: windowId, cols, rows });
+    } };
+  }
   const sockets = await connectedHerdrSockets(source);
   let closed = false;
   const handle = { sourceId: source.id, spaceId, windowId, cleanup };

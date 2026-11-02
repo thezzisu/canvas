@@ -6,6 +6,7 @@ export type { ProgramStatus } from '../../shared/status'
 export interface Source {
   id: string
   name: string
+  provider?: 'tui' | 'core'
   transport: 'local' | 'ssh'
   target?: string
   sshIdentityFile?: string
@@ -14,6 +15,7 @@ export interface Source {
   herdrSocket?: string
 }
 export interface PaneResource {
+  terminalId?: string
   completion?: CompletionToken
   id: string
   name: string

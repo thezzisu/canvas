@@ -62,3 +62,8 @@ test('invalid browser values default without accepting unbounded or nonfinite fo
   assert.equal(normalizeTerminalZoom(50), 50); assert.equal(normalizeTerminalZoom(200), 200)
   assert.equal(normalizeTerminalZoom(125.4), 125)
 })
+
+test('switching between TUI and Core isolates the native window preference', () => {
+  assert.notEqual(terminalZoomKey('backend', source, 'tab1'), terminalZoomKey('backend', { ...source, provider: 'core' }, 'tab1'));
+  assert.equal(terminalZoomKey('backend', source, 'tab1'), terminalZoomKey('backend', { ...source, provider: 'tui' }, 'tab1'));
+});

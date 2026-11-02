@@ -18,6 +18,7 @@ export interface HerdrClientTransport {
   onMetadata(listener: (metadata: WindowMetadata) => void): { dispose(): void }
   onNotification(listener: (notification: NativeNotification) => void): { dispose(): void }
   completionFence(): Promise<WindowMetadata | undefined>
+  acknowledgeCompletion?(paneId: string, completion: import('../../shared/completion.ts').CompletionToken): Promise<void>
   onExit(listener: (event: HerdrClientExit) => void): { dispose(): void }
   content(): Promise<NativeContentPane[] | undefined>
   paneContext(point: PanePoint): PaneContext | undefined

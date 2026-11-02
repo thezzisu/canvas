@@ -6,7 +6,7 @@ export const normalizeTerminalZoom = normalizeContentZoom
 const prefix = 'canvas:terminal-zoom:'
 /** The native tab, not its name, canvas reference or browser tab, owns the preference. */
 export function terminalZoomKey(instance: string, source: Source, windowId: string) {
-  return JSON.stringify([instance, source.id, source.transport, source.transport === 'ssh' ? source.target?.trim() || '' : '',
+  return JSON.stringify([instance, source.id, source.provider === 'core' ? `core:${source.transport}` : source.transport, source.transport === 'ssh' ? source.target?.trim() || '' : '',
     source.herdrSession?.trim() || '', source.herdrSocket?.trim() || '', windowId])
 }
 export const terminalZoomStorageKey = (key: string) => prefix + key

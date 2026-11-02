@@ -20,9 +20,23 @@ class CanvasError(Exception):
 BRIDGE_PERMISSION_DENIED = "cannot access Canvas bridge: permission denied"
 
 
+selected_runtime = None
+
+
+def identity_runtime():
+    if selected_runtime:
+        return selected_runtime
+    core = bool(os.environ.get("HC_TERMINAL_SOCKET") or os.environ.get("HC_TERMINAL_ID"))
+    tui = bool(os.environ.get("HERDR_SOCKET_PATH") or os.environ.get("HERDR_PANE_ID"))
+    if core and tui:
+        raise CanvasError("both Core and TUI identities are present; use open --runtime core or open --runtime tui")
+    return "core" if core else "tui"
+
+
 def terminal_identity():
-    native_socket = os.environ.get("HERDR_SOCKET_PATH", "")
-    pane = os.environ.get("HERDR_PANE_ID", "")
+    core = identity_runtime() == "core"
+    native_socket = os.environ.get("HC_TERMINAL_SOCKET" if core else "HERDR_SOCKET_PATH", "")
+    pane = os.environ.get("HC_TERMINAL_ID" if core else "HERDR_PANE_ID", "")
     if native_socket and pane and os.path.isabs(native_socket) and len(pane) <= 256:
         if all(ord(char) >= 32 and ord(char) != 127 for char in pane):
             return os.path.realpath(native_socket), pane
@@ -31,8 +45,10 @@ def terminal_identity():
 
 def routing_error(message):
     native_socket, pane = terminal_identity()
-    return CanvasError(message + "\n  HERDR_SOCKET_PATH=" + json.dumps(native_socket)
-                       + " HERDR_PANE_ID=" + json.dumps(pane))
+    core = identity_runtime() == "core"
+    socket_key, pane_key = ("HC_TERMINAL_SOCKET", "HC_TERMINAL_ID") if core else ("HERDR_SOCKET_PATH", "HERDR_PANE_ID")
+    return CanvasError(message + "\n  " + socket_key + "=" + json.dumps(native_socket)
+                       + " " + pane_key + "=" + json.dumps(pane))
 
 
 def registry_entries(native_socket):
@@ -428,6 +444,7 @@ def installed_canvas():
 
 
 def main():
+    global selected_runtime
     if os.environ.get("CANVAS_HELPER_DIRECT") != "1":
         installed = installed_canvas()
         if installed:
@@ -439,10 +456,12 @@ def main():
     parser = argparse.ArgumentParser(prog="canvas", description="Open a file, folder or web address in Canvas.")
     commands = parser.add_subparsers(dest="command", required=True)
     command = commands.add_parser("open", help="open a file, folder or web address", epilog=
-        "Routing uses HERDR_SOCKET_PATH and HERDR_PANE_ID from this process. "
+        "Routing uses HERDR_SOCKET_PATH and HERDR_PANE_ID, or HC_TERMINAL_SOCKET and HC_TERMINAL_ID, from this process. "
         "A daemon must receive the originating pane's values for each invocation.")
+    command.add_argument("--runtime", choices=["core", "tui"], help="select the originating runtime when nested terminal environments contain both identities")
     command.add_argument("path", help="file, folder or HTTP(S) address")
     arguments = parser.parse_args()
+    selected_runtime = arguments.runtime
     try:
         if arguments.path.lower().startswith(("http://", "https://")):
             open_url(arguments.path)

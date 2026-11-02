@@ -300,8 +300,10 @@ class LiveTerminal {
           const pane = frame?.panes.find(pane => pane.id === msg.paneId && pane.active);
           const completion: CompletionToken = { bootId: msg.bootId, sequence: msg.sequence };
           if (Number.isSafeInteger(msg.generation) && msg.generation === (this.readGenerations.get(ws) || 0) && !this.pendingFences.has(ws) &&
-              this.canRender(ws) && pane && pane.id === this.focusedPaneId && pane.completion && sameCompletion(pane.completion, completion))
-            this.reads?.acknowledge(this.source, frame!.id, pane.id, completion);
+              this.canRender(ws) && pane && pane.id === this.focusedPaneId && pane.completion && sameCompletion(pane.completion, completion)) {
+            if (this.proc.acknowledgeCompletion) void this.proc.acknowledgeCompletion(pane.id, completion).catch(() => {});
+            else this.reads?.acknowledge(this.source, frame!.id, pane.id, completion);
+          }
           return;
         }
         if (msg.type === "focus") {

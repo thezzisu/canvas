@@ -14,6 +14,7 @@ export const sourceSchema = z
   .object({
     id: z.string().uuid().optional(),
     name: z.string().trim().min(1).max(100),
+    provider: z.enum(["tui", "core"]).optional(),
     transport: z.enum(["local", "ssh"]),
     target: z.string().max(500).optional(),
     sshIdentityFile: z.string().max(1000).optional(),
@@ -39,7 +40,7 @@ export function sourceConnectionKey(source: Source): string {
   // spaces; local connections do not use any of the retained SSH form fields.
   return JSON.stringify([source.id, source.transport,
     ...(source.transport === "ssh" ? [source.target || null, source.sshIdentityFile || null, source.sshKnownHostsFile || null] : []),
-    source.herdrSession || null, source.herdrSocket || null]);
+    source.herdrSession || null, source.herdrSocket || null, ...(source.provider === "core" ? ["core"] : [])]);
 }
 export const nodeLayoutSchema = z.object({
   id: z.string().min(1).max(150),

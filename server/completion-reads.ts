@@ -63,6 +63,12 @@ export class CompletionReads {
   }
   observe(source: Source, metadata: WindowMetadata): WindowMetadata {
     if (!this.current(source) || !metadata.bootId) return metadata
+    if (metadata.readAuthority === 'native') {
+      this.connections.set(source.id, sourceConnectionKey(source))
+      const windows = this.windows.get(source.id) || new Map<string, WindowMetadata>()
+      windows.set(metadata.id, metadata); this.windows.set(source.id, windows)
+      return metadata
+    }
     this.connections.set(source.id, sourceConnectionKey(source))
     const previous = this.windows.get(source.id)
     const boot = previous?.values().next().value?.bootId
@@ -94,6 +100,7 @@ export class CompletionReads {
     return this.project(source, metadata)
   }
   project(source: Source, metadata: WindowMetadata): WindowMetadata {
+    if (metadata.readAuthority === 'native') return metadata
     const record = metadata.bootId && this.record(source, metadata.bootId)
     const panes = metadata.panes.map(pane => {
       if (pane.status !== 'done' && pane.status !== 'idle') return pane
@@ -112,7 +119,9 @@ export class CompletionReads {
   }
   acknowledge(source: Source, windowId: string, paneId: string, token: unknown): boolean {
     if (!this.current(source) || !isCompletionToken(token)) return false
-    const pane = this.windows.get(source.id)?.get(windowId)?.panes.find(pane => pane.id === paneId)
+    const window = this.windows.get(source.id)?.get(windowId)
+    if (window?.readAuthority === 'native') return false
+    const pane = window?.panes.find(pane => pane.id === paneId)
     if (!pane?.completion || !sameCompletion(pane.completion, token)) return false
     const existing = this.record(source, token.bootId)
     if ((existing?.read[paneId] ?? -1) >= token.sequence) return false
@@ -136,6 +145,7 @@ export class CompletionReads {
     this.windows.delete(sourceId); this.connections.delete(sourceId); this.snapshots.delete(sourceId)
   }
   projectResources(source: Source, resource: SourceResource): SourceResource {
+    if (source.provider === 'core') return resource
     if (resource.status !== 'online' || resource.error || !this.current(source) || this.connections.get(source.id) !== sourceConnectionKey(source)) return resource
     const windows = this.windows.get(source.id)
     return { ...resource, spaces: resource.spaces.map(space => ({ ...space, windows: space.windows.map(window => {

@@ -129,3 +129,18 @@ test('initial idle without completion evidence is never guessed from its nonzero
   assert(reads.observe(source, idle).panes.every(pane => !pane.completion && pane.status === 'idle'))
   assert.equal(store.get('completion-read', source.id), undefined)
 })
+
+test('native read labels remain authoritative through reads, unread changes and resource polling', t => {
+  const { store, reads } = fixture(t), nativeSource: Source = { ...source, provider: 'core' };
+  store.put('source', nativeSource);
+  const unread: WindowMetadata = { ...completed(), readAuthority: 'native' };
+  assert.equal(reads.observe(nativeSource, unread), unread);
+  assert.equal(reads.completion(nativeSource, 'left')?.completion.sequence, 3);
+  assert.equal(reads.acknowledge(nativeSource, 'window', 'left', unread.panes[0]!.completion), false);
+  assert.equal(store.get('completion-read', source.id), undefined);
+  const seen: WindowMetadata = { ...unread, status: 'idle', panes: unread.panes.map(pane => ({ ...pane, status: 'idle' })) };
+  assert.equal(reads.observe(nativeSource, seen).status, 'idle');
+  assert.equal(reads.project(nativeSource, unread).status, 'done', 'upstream mark unread is preserved');
+  const resource: SourceResource = { id: source.id, name: source.name, status: 'online', spaces: [{ id: 'space', name: 'Space', windows: [unread] }] };
+  assert.equal(reads.projectResources(nativeSource, resource), resource, 'fresh labels win over cached rendered views');
+});

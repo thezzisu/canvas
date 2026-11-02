@@ -26,7 +26,7 @@ async function fixture(t: TestContext) {
     HERDR_SOCKET_PATH: nativeSocket, HERDR_PANE_ID: "w1:p2" };
   t.after(() => rm(root, { recursive: true, force: true }));
   const run = (path: string, extra: NodeJS.ProcessEnv = {}, timeouts?: { start: number; idle: number }, tty = false,
-    fault?: { stage: "registry" | "record" | "probe" | "connect"; errno: number }) => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+    fault?: { stage: "registry" | "record" | "probe" | "connect"; errno: number }, runtime?: "core" | "tui") => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
     // Load the real executable and shorten only its inactivity intervals. This
     // exercises the same main/transport code without adding a production env knob.
     const setup = ["import runpy, sys", "module = runpy.run_path(sys.argv.pop(1))"];
@@ -52,7 +52,8 @@ def injected_connect(connection, address):
 socket.socket.connect = injected_connect`);
     }
     setup.push('sys.exit(module["main"]())');
-    const args = timeouts || tty || fault ? ["-c", setup.join("\n"), helper, "open", "--", path] : [helper, "open", "--", path];
+    const runtimeArgs = runtime ? ["--runtime", runtime] : [];
+    const args = timeouts || tty || fault ? ["-c", setup.join("\n"), helper, "open", ...runtimeArgs, "--", path] : [helper, "open", ...runtimeArgs, "--", path];
     const child = spawn("python3", args, { cwd: root, env: { ...env, ...extra } });
     let stdout = "", stderr = "";
     child.stdout.on("data", data => stdout += data);
@@ -487,4 +488,23 @@ test("directory and URL peer closure is immediate and distinct from a timeout", 
     assert.deepEqual(await f.run(path), { code: 1, stdout: "", stderr: "canvas: open connection closed\n" });
     assert(Date.now() - start < 2000);
   }
+});
+
+test("canvas open routes core terminal identity without falling back to inherited TUI identity", async t => {
+  const f = await fixture(t), endpoint = await f.endpoint("core");
+  const content = Buffer.from("Core 文件\n");
+  await writeFile(join(f.root, "core.txt"), content);
+  const result = await f.run("core.txt", { HERDR_SOCKET_PATH: "", HERDR_PANE_ID: "", HC_TERMINAL_SOCKET: f.nativeSocket, HC_TERMINAL_ID: "t7" });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(endpoint.headers[0]!.paneId, "t7");
+  assert(endpoint.bodies[0]!.equals(content));
+  const ambiguous = await f.run("core.txt", { HC_TERMINAL_SOCKET: f.nativeSocket, HC_TERMINAL_ID: "t7" });
+  assert.equal(ambiguous.code, 1);
+  assert.match(ambiguous.stderr, /both Core and TUI identities/u);
+  const explicit = await f.run("core.txt", { HC_TERMINAL_SOCKET: f.nativeSocket, HC_TERMINAL_ID: "t8" }, undefined, false, undefined, "core");
+  assert.equal(explicit.code, 0, explicit.stderr);
+  assert.equal(endpoint.headers.at(-1)!.paneId, "t8");
+  const invalid = await f.run("core.txt", { HC_TERMINAL_ID: "t7", HC_TERMINAL_SOCKET: "" });
+  assert.equal(invalid.code, 1);
+  assert.equal(endpoint.headers.length, 2, "partial core identity cannot fall back to a different TUI pane");
 });

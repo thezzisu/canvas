@@ -36,6 +36,31 @@ server's machine. SSH accepts an alias, `user@host`, or `ssh://user@host:port` a
 uses key authentication. Select the existing herdr session; an absolute API socket
 path can override discovery. Canvas connects directly to herdr sockets.
 
+Choose **Herdr TUI** for existing 0.9.x sessions, or **Herdr Core / App** for
+herdr-core 0.1.17 and the shared layouts used by herdr-app 0.1.12. Core connects
+directly to the selected running Unix socket; the desktop app can be closed.
+Canvas reads and edits that core's shared Spaces, Tabs and terminal splits.
+Ungrouped core terminals appear under Terminals. Existing TUI connections retain
+their protocol and identities. Selecting another runtime does not migrate sessions.
+
+Core discovery follows `HC_SOCKET`, its configuration and runtime directories;
+an explicit socket path overrides discovery. Reading a Core TOML configuration
+requires Python 3.11+, while explicit paths work with Python 3.8+. Use a separate
+Canvas SSH connection for each remote core. Machines relayed through another
+core are not implicitly treated as files or terminals on that core's host.
+
+Core agent status comes from OSC 7501; programs that do not report it remain
+unreported. Core completion reads use the shared `herdr.seen` labels, including
+changes from the desktop app. View focus and pane zoom remain local to Canvas.
+If a slow connection causes core to replace queued output with a repaint that
+skips completed turns, Canvas keeps the completion unread until reconnecting;
+terminal input and output continue. Core's stream has no turn identifier for
+that replacement paint, so Canvas cannot safely acknowledge unseen results.
+Terminal panes are rendered in Canvas; desktop mods have an unavailable-content
+placeholder. Core 0.1.17 omits historical OSC 8 link targets from initial paints;
+live links and visible filesystem paths remain available to the scanner. Terminal
+graphics depend on Canvas's renderer and do not reproduce every GPUI feature.
+
 The overview groups windows by connection and Space. Agent-state filters, native
 or status ordering, a minimap and optional one-window-at-a-time navigation help
 find active work. Custom canvases contain draggable terminal references, notes
@@ -45,6 +70,10 @@ between browsers.
 References to one native window share its size. Maximizing temporarily resizes
 that window; other views pause until it is restored. Removing a card keeps the
 native window running. Closing a native window ends its processes.
+
+Inside nested TUI/Core terminals, `canvas open --runtime core <path>` or
+`canvas open --runtime tui <path>` selects the originating identity explicitly.
+When both identity pairs are inherited, the helper refuses an ambiguous route.
 
 On mobile, cards remain read-only until tapped into fullscreen. The auxiliary
 keyboard provides modifiers, navigation, clipboard and file upload. Desktop
@@ -122,6 +151,9 @@ For live development, run `npm run server:dev` and `npm run dev` separately.
 Before submitting, run `npm run typecheck`, `npm test` and `npm run build`.
 Tests use isolated fixtures; `CANVAS_TEST_HERDR_SERVER_BINARY` selects an official
 herdr executable for native integration tests.
+`CANVAS_TEST_CORE_BINARY` selects an official herdr-core executable for private
+Core and loopback SSH integration tests. These fixtures use separate state and
+sockets and never attach to the account's normal sessions.
 
 ## License
 

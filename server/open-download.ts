@@ -312,7 +312,7 @@ export class OpenDownloadService {
     try { resources = await this.options.resources(source); }
     catch { socket.end(rejected); return; }
     const matches = resources.spaces.flatMap(space => space.windows)
-      .filter(window => window.panes.some(pane => pane.id === header.paneId));
+      .filter(window => window.panes.some(pane => (source.provider === 'core' ? pane.terminalId : pane.id) === header.paneId));
     if (matches.length !== 1) { socket.end(jsonLine({ ok: false, reason: "pane-unavailable" })); return; }
     const windowId = matches[0]!.id;
     const recipient = await this.options.recipient(source.id, windowId).catch(() => undefined);

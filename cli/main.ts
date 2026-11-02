@@ -10,7 +10,8 @@ const help = `Usage: canvas [serve | open <path-or-url> | version]
   version     Print the installed version
   --help      Show this help
 
-open uses the caller's HERDR_SOCKET_PATH and HERDR_PANE_ID.
+open uses the caller's HERDR_SOCKET_PATH and HERDR_PANE_ID for TUI,
+or HC_TERMINAL_SOCKET and HC_TERMINAL_ID for Core.
 Daemon callers must supply the originating pane's values per invocation.
 `
 const [command = 'serve', ...args] = process.argv.slice(2)
