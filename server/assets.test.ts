@@ -68,7 +68,8 @@ test("file assets stream to private storage and publish metadata with a canvas c
   const view = f.store.canvasView(f.store.get<Canvas>("canvas", f.canvas.id)!);
   const node = view.nodes.find(node => node.type === "file");
   assert(node && node.type === "file");
-  assert.equal(node.x, 544);
+  const anchor = view.nodes.find(node => node.type === "terminal")!;
+  assert.equal(node.x, anchor.x + anchor.width + 24);
   assert.equal(node.y, 60);
   assert.equal(node.width, 360);
   assert.equal(node.height, 280);

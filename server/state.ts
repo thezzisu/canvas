@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { defaultSettings, type GlobalSettings } from "../shared/settings.ts";
+import { defaultWindowSize } from "../shared/window-size.ts";
 import { settingsPatchSchema } from "./settings.ts";
 import { getMimeType } from "hono/utils/mime";
 
@@ -106,7 +107,6 @@ export type CanvasView = Omit<Canvas, "nodes"> & {
   background: CanvasBackground | null;
 };
 export type WindowSize = { width: number; height: number };
-const defaultWindowSize: WindowSize = { width: 480, height: 302 };
 export type SharedState = {
   settings: GlobalSettings;
   instanceId: string;
