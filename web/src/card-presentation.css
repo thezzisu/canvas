@@ -34,3 +34,9 @@
 @media(prefers-reduced-motion:reduce) {
   .terminal-card { transition: none; }
 }
+
+/* Invisible resize grips sit above card content; corners keep diagonal priority. */
+.vue-flow__resize-control.line { z-index: 21; border: 0; background: transparent; }
+.vue-flow__resize-control.line:is(.left,.right) { width: var(--card-resize-hit,8px); top: 8px; height: calc(100% - 16px); }
+.vue-flow__resize-control.line:is(.top,.bottom) { height: var(--card-resize-hit,8px); left: 8px; width: calc(100% - 16px); }
+.vue-flow__resize-control.handle { z-index: 22; width: 12px; height: 12px; border: 0; background: transparent; opacity: 0; }

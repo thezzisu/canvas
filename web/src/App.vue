@@ -27,6 +27,7 @@ import { notificationTarget } from './notification-model'
 import { focusedCompletionStatus, projectFocusedResources, type WindowFocus, type FocusedStatus } from './completion-focus'
 import { canvasIndicators, needsAttention, windowVisualState } from './canvas-status'
 import { createLayoutSaves, type LayoutPatch } from './layout-saves'
+import { snapCardPosition, type CardBounds } from './card-alignment'
 import { createPendingEdits, retargetNoteEdit, type NoteEdit } from './pending-edits'
 import { cameraFromViewport, parseCanvasLocation, recallFreeCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type CanvasLocation } from './canvas-location'
 import { useCanvasLocation } from './use-canvas-location'
@@ -1407,6 +1408,9 @@ function terminalAction(action: string, id: string) {
   if (!node) return
   if (action === 'add') openAdd(node)
   else if (action === 'remove') void removeNode(id)
+  else if (action === 'rename' || action === 'close') windowAction(node, action)
+  else if (action === 'scan') scanWindowContent(node, resourceFor(node).window?.name || t('app.window'))
+  else if (action === 'settings') openSettings()
   else if (action === 'focus') {
     if (paging.value) selectPage(pages.value.find(page => page.id === `${node.sourceId}/${node.windowId}`))
     sidebarOpen.value = false; sourcePanel.value = false; windowResize(); saveViewport(); selectedTerminal.value = { sourceId: node.sourceId, windowId: node.windowId }; focused.value = node
@@ -1660,10 +1664,27 @@ function editLayout(id: string, patch: LayoutPatch) {
   Object.assign(node, patch)
   scheduleSave()
 }
-function dragStopped(event: { node: Node }) {
+function cardBounds(node: Node): CardBounds {
+  return { id: node.id, ...node.position, width: node.data.width, height: node.data.height }
+}
+function snapDraggedCards(event: { node: Node; nodes?: Node[] }) {
+  if (mobile.value || isOverview.value || !currentCanvas.value?.snapToGrid) return
+  const moving = event.nodes?.length ? event.nodes : [event.node]
+  const ids = new Set(moving.map(node => node.id))
+  const bounds = moving.map(cardBounds)
+  const x = Math.min(...bounds.map(node => node.x)), y = Math.min(...bounds.map(node => node.y))
+  const group = { id: event.node.id, x, y,
+    width: Math.max(...bounds.map(node => node.x + node.width)) - x,
+    height: Math.max(...bounds.map(node => node.y + node.height)) - y }
+  const peers = nodes.value.filter(node => !ids.has(node.id) && ['terminal', 'note', 'file'].includes(node.type || '')).map(cardBounds)
+  const position = snapCardPosition(group, peers, getViewport().zoom)
+  for (const node of moving) node.position = { x: node.position.x + position.x - x, y: node.position.y + position.y - y }
+}
+function dragStopped(event: { node: Node; nodes?: Node[] }) {
   if (mobile.value) return
+  snapDraggedCards(event)
   layoutGesture = ''
-  editLayout(event.node.id, { x: event.node.position.x, y: event.node.position.y })
+  for (const node of event.nodes?.length ? event.nodes : [event.node]) editLayout(node.id, { x: node.position.x, y: node.position.y })
   rebuildNodes()
 }
 function resizeNode(id: string, width: number, height: number, x?: number, y?: number) {
@@ -1671,7 +1692,7 @@ function resizeNode(id: string, width: number, height: number, x?: number, y?: n
   layoutGesture = ''
   const node = currentCanvas.value?.nodes.find(item => item.id === id)
   if (node) {
-    const size = { width: Math.round(width), height: Math.max(160, Math.min(3000, Math.round(height))) }
+    const size = { width, height: Math.max(160, Math.min(3000, height)) }
     if (isTerminalNode(node)) windowSizes.value[`${node.sourceId}/${node.windowId}`] = size
     editLayout(id, { ...size, ...(x === undefined ? {} : { x }), ...(y === undefined ? {} : { y }) })
   }
@@ -1850,7 +1871,7 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
         <img v-if="currentBackground && backgroundUrl" class="canvas-background" :src="backgroundUrl" :style="{ opacity: currentBackground.opacity }" alt="" aria-hidden="true" />
         <span id="canvas-card-select-help" hidden>{{ t('app.cardSelectHelp') }}</span>
         <span id="canvas-card-move-help" hidden>{{ t('app.cardMoveHelp') }}</span>
-        <VueFlow :snap-to-grid="!isOverview && !!currentCanvas?.snapToGrid" :snap-grid="[24, 24]" v-if="nodes.length && !hasFocus" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && !mobile" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized" @nodes-change="announceNodeMove"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><template #node-create="nodeProps"><OverviewCreateNode v-bind="nodeProps" /></template><MiniMap v-if="showMinimap" :aria-label="t('app.windowNavigation')" @node-click="navigateMinimap" :node-class-name="node => node.type === 'terminal' ? `minimap-card minimap-window${node.data.statusFresh && needsAttention(node.data.status) ? ' minimap-pulse' : ''}${paging && currentPage?.id === `${node.data.sourceId}/${node.data.windowId}` ? ' minimap-current' : ''}` : node.type === 'note' || node.type === 'file' ? 'minimap-card' : 'minimap-decoration'" :pannable="!paging" :zoomable="!mobile && !paging" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? noteColor(node.data.color) : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
+        <VueFlow :style="{ '--card-resize-hit': `${8 / Math.min(getViewport().zoom, 1)}px` }" :snap-to-grid="false" v-if="nodes.length && !hasFocus" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && !mobile" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag="snapDraggedCards" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized" @nodes-change="announceNodeMove"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><template #node-create="nodeProps"><OverviewCreateNode v-bind="nodeProps" /></template><MiniMap v-if="showMinimap" :aria-label="t('app.windowNavigation')" @node-click="navigateMinimap" :node-class-name="node => node.type === 'terminal' ? `minimap-card minimap-window${node.data.statusFresh && needsAttention(node.data.status) ? ' minimap-pulse' : ''}${paging && currentPage?.id === `${node.data.sourceId}/${node.data.windowId}` ? ' minimap-current' : ''}` : node.type === 'note' || node.type === 'file' ? 'minimap-card' : 'minimap-decoration'" :pannable="!paging" :zoomable="!mobile && !paging" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? noteColor(node.data.color) : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
         <div v-if="workspacePending || !nodes.length && undiscoveredSources.length" class="workspace-status" :class="loadFailure ? 'workspace-error' : 'workspace-loading'" role="status">
           <template v-if="loadFailure"><span :title="loadFailure instanceof Error ? loadFailure.message : undefined">{{ t('app.loadFailed') }}</span><button class="button subtle" @click="load">{{ t('common.retry') }}</button></template>
           <template v-else><span class="spinner" />{{ t('common.loading') }}</template>

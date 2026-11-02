@@ -18,3 +18,9 @@ test('side cutouts retain a title and fixed-size controls, folding rather than s
   assert.equal(compactHeader(320, 0, 'center'), false)
   assert.equal(compactHeader(0, 0, 'center'), true)
 })
+test('full card action rows fold on phones and remain expanded when each side has room', () => {
+  assert.equal(compactHeader(320, 0, 'center', 6), true)
+  assert.equal(compactHeader(390, 0, 'center', 6), false)
+  assert.equal(compactHeader(600, 72, 'center', 6), false)
+  assert.equal(compactHeader(598.4, 72, 'center', 6), true)
+})

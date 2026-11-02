@@ -8,9 +8,9 @@ export const cutoutPosition = useStorage<CutoutPosition>('canvas:display:cutout-
 export const cutoutWidth = useStorage('canvas:display:cutout-width', 0)
 export const cutoutActiveKey: InjectionKey<Readonly<Ref<boolean>>> = Symbol('canvas-cutout-active')
 
-export function useCompactHeader(header: Readonly<Ref<HTMLElement | undefined>>, active: MaybeRefOrGetter<boolean> = inject(cutoutActiveKey, ref(false))) {
+export function useCompactHeader(header: Readonly<Ref<HTMLElement | undefined>>, active: MaybeRefOrGetter<boolean> = inject(cutoutActiveKey, ref(false)), controls: MaybeRefOrGetter<number> = 3) {
   const { width } = useElementSize(header, { width: 0, height: 44 }, { box: 'border-box' })
-  return computed(() => compactHeader(width.value, toValue(active) ? cutoutWidth.value / uiZoom.value : 0, cutoutPosition.value))
+  return computed(() => compactHeader(width.value, toValue(active) ? cutoutWidth.value / uiZoom.value : 0, cutoutPosition.value, toValue(controls)))
 }
 
 /** Observe the safe area reported by CSS without guessing the device model. */

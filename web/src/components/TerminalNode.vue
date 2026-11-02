@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { NodeProps } from '@vue-flow/core'
 import UButton from '@nuxt/ui/components/Button.vue'
+import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import { NodeResizer } from '@vue-flow/node-resizer'
 import Icon from './Icon.vue'
 import PaneIndicators from './PaneIndicators.vue'
@@ -19,12 +20,15 @@ import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout
 import { useDocumentFocus } from '../document-focus'
 import { useTerminalZoom } from '../terminal-zoom'
 import ContentZoom from './ContentZoom.vue'
+import CardHeaderActions from './CardHeaderActions.vue'
+import { contentZoomMenu } from '../content-zoom-menu'
 import type { TerminalData } from '../types'
 const { t } = useI18n()
 const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>>()
 const host = ref<HTMLElement>()
 const header = ref<HTMLElement>()
-const compact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined))
+const headerCompact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined), undefined, () => props.data.overview ? 5 : 6)
+const compact = computed(() => !!props.data.mobile && props.data.focus && headerCompact.value)
 const zoom = useTerminalZoom(() => props.data.zoomKey)
 const status = ref<TerminalStatus>({ status: 'connecting' })
 const noteDrag = ref(false)
@@ -162,6 +166,19 @@ function action(name: string) {
   if (name === 'reconnect') terminal?.reconnect()
   else { if (name === 'unfocus' && props.data.mobile) terminal?.blur(); props.data.onAction(name, props.id) }
 }
+const menu = computed<DropdownMenuItem[]>(() => [
+  ...(compact.value ? [
+    ...(props.data.mobile ? [{ label: t(status.value.keyboardRequested ? 'terminal.action.hideKeyboard' : 'terminal.action.showKeyboard'), icon: 'i-lucide-keyboard', onSelect: toggleKeyboard }] : []),
+    ...contentZoomMenu(zoom, !props.data.available),
+    { label: t('terminal.action.addToCanvas'), icon: 'i-lucide-layers', onSelect: () => action('add') },
+  ] : []),
+  ...(props.data.newTab ? [{ label: t('app.newTab'), icon: 'i-lucide-square-plus', disabled: !props.data.available || closed.value || props.data.newTab.pending(), onSelect: () => props.data.newTab?.create() }] : []),
+  { label: t('panels.scan.title'), icon: 'i-lucide-scan-text', disabled: !keepTerminal.value || closed.value, onSelect: () => action('scan') },
+  ...(copiedFile.value ? [{ label: t('fileTransfer.paste'), icon: 'i-lucide-clipboard', disabled: !noteDropAvailable.value || !!status.value.fileReading, onSelect: pasteFile }] : []),
+  { label: t('app.renameWindow'), icon: 'i-lucide-pencil', disabled: !props.data.available || closed.value, onSelect: () => action('rename') },
+  { label: t('common.settings'), icon: 'i-lucide-settings', onSelect: () => action('settings') },
+  { label: t('app.closeWindow'), icon: 'i-lucide-trash', color: 'error', disabled: !props.data.available || closed.value, onSelect: () => action('close') },
+])
 function resizeStarted(event: { params: { x: number; y: number } }) {
   resizeOrigin = { x: event.params.x, y: event.params.y }
   props.data.onLayoutStart()
@@ -188,19 +205,15 @@ async function resized(event: { params: { width: number; height: number; x: numb
 <template>
   <NodeResizer v-if="!data.mobile && !data.overview && !data.focus && !maximizedElsewhere" :min-width="360" :min-height="220" :max-width="4000" :max-height="3000" @resize-start="resizeStarted" @resize-end="resized" />
   <article tabindex="-1" class="terminal-card" :class="[{ selected, unavailable: !closed && !keepTerminal, focused: data.focus, 'input-focused': inputFocused, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview, closed }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="closed ? 'closed' : keepTerminal ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :data-input-focused="inputFocused" :data-note-drop="noteDrag ? noteDropAvailable ? 'ready' : 'unavailable' : undefined" @dragenter.capture="noteDragOver" @dragover.capture="noteDragOver" @dragleave="noteDragLeave" @drop.capture="dropNote" :style="{ '--program-color': statusColor(frameStatus), width: dimensions || mobileFocus ? '100%' : `${data.width}px`, height: dimensions || mobileFocus ? '100%' : `${data.height}px` }" :aria-label="`${data.name} · ${data.subtitle}`">
-    <header ref="header" class="terminal-header drag-handle" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :class="{ 'cutout-header': mobileFocus }" :data-cutout-position="mobileFocus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="mobileFocus ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` } : undefined">
+    <header ref="header" class="terminal-header drag-handle" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :class="{ 'cutout-header': mobileFocus }" :data-cutout-position="mobileFocus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="mobileFocus ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))`, '--cutout-controls': data.overview ? '176px' : '264px' } : undefined">
       <PaneIndicators :panes="data.panes" :status="data.status" :available="keepTerminal" :connection="closed ? 'closed' : status.status" :error="status.error" :read-only="status.readOnly" :pulse="statusPulse" />
       <span class="terminal-name" :class="{ 'cutout-title': mobileFocus }" :title="title"><span class="terminal-tab-name">{{ data.name }}</span><span v-if="liveTitle" class="terminal-live-title">{{ liveTitle }}</span></span>
-      <div class="terminal-actions nodrag" :class="{ 'cutout-actions': mobileFocus }">
-        <button v-if="data.overview && !mobileFocus" :title="t('terminal.action.addToCanvas')" :aria-label="t('terminal.action.addToCanvas')" @click.stop="action('add')"><Icon name="layers" :size="15" /></button>
-        <button v-else-if="!mobileFocus" :title="t('terminal.action.removeFromCanvas')" :aria-label="t('terminal.action.removeFromCanvas')" @click.stop="action('remove')"><Icon name="close" :size="15" /></button>
-        <button v-if="data.newTab && !mobileFocus && !closed" :title="t('app.newTab')" :aria-label="t('app.newTab')" :disabled="!data.available || data.newTab.pending()" :aria-busy="data.newTab.pending()" @click.stop="data.newTab.create()"><span v-if="data.newTab.pending()" class="spinner" /><Icon v-else name="tab-plus" :size="15" /></button>
-        <button v-if="!data.focus && !closed" :title="t('terminal.action.focus')" :aria-label="t('terminal.action.focus')" @click.stop="action('focus')"><Icon name="expand" :size="14" /></button>
-        <button v-if="mobileFocus && !compact" :title="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-label="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-pressed="status.keyboardRequested" @pointerdown.stop.prevent @click.stop="toggleKeyboard"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10" /></svg></button>
+      <CardHeaderActions class="terminal-actions" :class="{ 'cutout-actions': mobileFocus }" :items="menu" :expanded="data.focus" :removable="!data.overview" :compact="compact" :disabled="closed && !data.focus"
+        :add-label="t('terminal.action.addToCanvas')" :remove-label="t('terminal.action.removeFromCanvas')" :maximize-label="t('terminal.action.focus')" :restore-label="t('terminal.action.restore')" :more-label="t('terminal.action.windowActions')"
+        @add="action('add')" @toggle="action(data.focus ? 'unfocus' : 'focus')" @remove="action('remove')">
+        <button v-if="mobileFocus" type="button" class="card-header-action terminal-keyboard" :title="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-label="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-pressed="status.keyboardRequested" @pointerdown.prevent @click="toggleKeyboard"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10" /></svg></button>
         <ContentZoom v-if="data.focus" v-model="zoom" :mobile="data.mobile" :disabled="!data.available" :label="t('terminal.zoom.title')" />
-        <button v-if="!closed" :title="t('terminal.action.windowActions')" :aria-label="t('terminal.action.windowActions')" @click.stop="action('menu')"><Icon name="more" :size="17" /></button>
-        <button v-if="data.focus" :title="t('terminal.action.restore')" :aria-label="t('terminal.action.restore')" @click.stop="action('unfocus')"><Icon name="collapse" :size="15" /></button>
-      </div>
+      </CardHeaderActions>
     </header>
     <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || closed || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop />
     <div v-if="mobilePreview && !closed" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: data.name })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
@@ -267,8 +280,6 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .canvas-fullscreen .terminal-mobile.focused{--terminal-header-height:44px}
 .canvas-fullscreen .terminal-mobile.focused .terminal-header{padding-top:0}
 .terminal-mobile.focused{container-type:inline-size}
-.terminal-mobile.focused .terminal-actions{opacity:1;pointer-events:auto;gap:0}
-.terminal-mobile.focused .terminal-actions button{width:44px;height:44px;min-width:44px;border-radius:4px}
 .terminal-mobile.focused :deep(.terminal-status-trigger){width:44px;height:44px;min-width:44px}
 .terminal-mobile.focused .terminal-host{min-height:0;flex:1;touch-action:none}
 .terminal-mobile.focused .terminal-loading,.terminal-mobile.focused .terminal-maximized,.terminal-mobile.focused .terminal-file-drop{top:var(--terminal-header-height);bottom:calc(49px + var(--mobile-safe-bottom,0px))}

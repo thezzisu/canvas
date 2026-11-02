@@ -2,18 +2,19 @@
 import { useI18n } from 'vue-i18n'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { NodeProps } from '@vue-flow/core'
-import { NodeResizeControl } from '@vue-flow/node-resizer'
-import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
+import { NodeResizer } from '@vue-flow/node-resizer'
+import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import type { FileData } from '../types'
 import Icon from './Icon.vue'
 import CardPreview from './CardPreview.vue'
 import { BinaryFileError, readTextPreview } from '../text-preview'
 import { filePreview } from '../file-preview'
 import TextPreview from './TextPreview.vue'
-import TextPreviewActions from './TextPreviewActions.vue'
 import MediaPreview from './MediaPreview.vue'
 import ImagePreview from './ImagePreview.vue'
 import ContentZoom from './ContentZoom.vue'
+import CardHeaderActions from './CardHeaderActions.vue'
+import { contentZoomMenu } from '../content-zoom-menu'
 import { useContentZoom } from '../content-zoom'
 import { isMarkdownFile } from '../markdown'
 import { activeInstance } from '../instances'
@@ -24,7 +25,6 @@ import { copyCanvasFile, fileReference } from '../file-transfer'
 import { writeFileReference } from '../file-reference'
 import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
 import { useFileView } from '../file-view'
-import { usePointerDismiss } from '../pointer-dismiss'
 import { useCardContentFocus } from '../card-content-focus'
 
 const { t, n } = useI18n()
@@ -36,20 +36,20 @@ watch(() => props.data.assetId, () => { binary.value = false })
 const mobilePreview = computed(() => !!props.data.mobile && !props.data.focus)
 const zoom = useContentZoom(() => props.data.zoomKey)
 const header = ref<HTMLElement>()
-const headerCompact = useCompactHeader(computed(() => props.data.focus ? header.value : undefined))
-const compact = computed(() => props.data.focus && headerCompact.value)
+const headerCompact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined), undefined, () => preview.value === 'text' ? 6 : 5)
+const compact = computed(() => !!props.data.mobile && props.data.focus && headerCompact.value)
 const markdown = computed(() => preview.value === 'text' && isMarkdownFile(props.data.asset.filename))
 const { rendered, wrap, reading, remember } = useFileView(props.data.instanceId, props.data.canvasId, props.id, markdown.value, props.data.canPersistView)
-const menuOpen = ref(false), menuTrigger = ref<HTMLButtonElement>()
-const menuDismiss = usePointerDismiss(menuOpen, menuTrigger)
 const menu = computed<DropdownMenuItem[]>(() => [
-  ...(markdown.value && compact.value ? [{ label: t('panels.preview.source'), type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
-  ...(preview.value === 'text' && (!markdown.value || !rendered.value) ? [{ label: t('panels.preview.wrap'), type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } }] : []),
-  { label: t('panels.file.download'), onSelect: download },
-  { label: t('fileTransfer.copy'), onSelect: copyFile },
-  { label: t('app.addToOtherCanvas'), onSelect: () => props.data.onAction?.('add', props.id) },
-  { label: t('panels.file.remove'), onSelect: () => props.data.onRemove(props.id) },
-  { label: t('common.settings'), onSelect: () => props.data.onAction?.('settings', props.id) },
+  ...(compact.value ? [
+    ...(preview.value === 'text' ? contentZoomMenu(zoom) : []),
+    { label: t('fileTransfer.copy'), icon: 'i-lucide-copy', onSelect: copyFile },
+    { label: t('app.addToOtherCanvas'), icon: 'i-lucide-layers', onSelect: () => props.data.onAction?.('add', props.id) },
+  ] : []),
+  ...(markdown.value ? [{ label: t('panels.preview.source'), icon: 'i-lucide-code', type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
+  ...(preview.value === 'text' && (!markdown.value || !rendered.value) ? [{ label: t('panels.preview.wrap'), icon: 'i-lucide-wrap-text', type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } }] : []),
+  { label: t('panels.file.download'), icon: 'i-lucide-download', onSelect: download },
+  { label: t('common.settings'), icon: 'i-lucide-settings', onSelect: () => props.data.onAction?.('settings', props.id) },
 ])
 const sourceInstance = { id: activeInstance.value.id, base: activeInstance.value.base }
 const pdfPreview = navigator.pdfViewerEnabled
@@ -115,32 +115,17 @@ const size = computed(() => {
 </script>
 
 <template>
-  <template v-if="!data.mobile && !data.focus">
-    <NodeResizeControl v-for="position in (['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const)" :key="position" :node-id="id" :position="position" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
-  </template>
+  <NodeResizer v-if="!data.mobile && !data.focus" :node-id="id" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
   <article class="file-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus, 'input-focused': contentActive }" :data-asset-id="data.assetId" :data-preview-kind="preview">
-    <header ref="header" class="file-header drag-handle" :class="{ 'cutout-header': data.focus && data.mobile }" :data-cutout-position="data.focus && data.mobile && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus && data.mobile ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
+    <header ref="header" class="file-header drag-handle" :class="{ 'cutout-header': data.focus && data.mobile }" :data-cutout-position="data.focus && data.mobile && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus && data.mobile ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))`, '--cutout-controls': '264px' } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
       <span class="file-icon" :class="{ 'cutout-status': data.focus }"><Icon name="file" :size="13" /></span>
-      <span class="file-title" :class="{ 'cutout-title': data.focus }" :title="data.asset.filename">{{ data.asset.filename }}</span>
-      <span v-if="!data.focus" class="file-size">{{ size }}</span>
-      <div class="file-actions" :class="{ 'cutout-actions': data.focus }">
-      <TextPreviewActions v-if="preview === 'text' && (!data.focus || markdown && !compact)" v-model:rendered="rendered" v-model:wrap="wrap" :filename="data.asset.filename" :hide-wrap="data.focus" />
-      <button v-if="!data.focus" type="button" class="file-action file-copy nodrag" draggable="true" :title="t(copyFeedback || 'fileTransfer.copyOrDrag')" :aria-label="t('fileTransfer.copy')" @pointerdown.stop @click.stop="copyFile" @dragstart="dragFile"><Icon :name="copyFeedback === 'fileTransfer.copied' ? 'check' : 'copy'" :size="14" /></button>
-      <button v-if="!data.focus" type="button" class="file-action nodrag" :title="t('app.addToOtherCanvas')" :aria-label="t('app.addToOtherCanvas')" @click.stop="data.onAction?.('add', id)"><Icon name="layers" :size="14" /></button>
+      <span class="file-title" :class="{ 'cutout-title': data.focus }" :title="`${data.asset.filename} · ${size}`">{{ data.asset.filename }}</span>
+      <CardHeaderActions class="file-actions" :class="{ 'cutout-actions': data.mobile && data.focus }" :items="menu" :expanded="!!data.focus" removable :compact="compact" :add-label="t('app.addToOtherCanvas')" :remove-label="t('panels.file.remove')"
+        @add="data.onAction?.('add', id)" @toggle="data.onAction?.(data.focus ? 'unfocus' : 'focus', id)" @remove="data.onRemove(id)">
+        <ContentZoom v-if="data.focus && preview === 'text'" v-model="zoom" :mobile="data.mobile" :label="t('common.contentZoom')" />
+        <button type="button" class="card-header-action file-copy" draggable="true" :title="t(copyFeedback || 'fileTransfer.copyOrDrag')" :aria-label="t('fileTransfer.copy')" @pointerdown.stop @click="copyFile" @dragstart="dragFile"><Icon :name="copyFeedback === 'fileTransfer.copied' ? 'check' : 'copy'" :size="15" /></button>
+      </CardHeaderActions>
       <span class="sr-only" role="status">{{ copyFeedback ? t(copyFeedback) : '' }}</span>
-      <button v-if="!data.focus || !markdown && !compact" type="button" class="file-action nodrag" @click.stop="download" :title="t('panels.file.download')" :aria-label="t('panels.file.download')" @pointerdown.stop><Icon name="download" :size="14" /></button>
-      <template v-if="data.focus">
-        <ContentZoom v-if="preview === 'text'" v-model="zoom" :mobile="data.mobile" :label="t('common.contentZoom')" />
-        <UDropdownMenu v-model:open="menuOpen" :modal="false" :items="menu" :portal="false" :content="{ align: 'end', ...menuDismiss }" :ui="{ content: 'card-action-menu' }">
-          <button ref="menuTrigger" type="button" class="file-action file-more nodrag" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></button>
-        </UDropdownMenu>
-        <button type="button" class="file-action nodrag" :title="t('common.returnToCanvas')" :aria-label="t('common.returnToCanvas')" @click.stop="data.onAction?.('unfocus', id)"><Icon name="collapse" :size="17" /></button>
-      </template>
-      <template v-else>
-        <button class="file-action nodrag" :title="t('common.maximize')" :aria-label="t('common.maximize')" @click.stop="data.onAction?.('focus', id)"><Icon name="expand" :size="14" /></button>
-        <button class="file-action nodrag" :title="t('panels.file.remove')" :aria-label="t('panels.file.remove')" @click.stop="data.onRemove(id)"><Icon name="close" :size="14" /></button>
-      </template>
-      </div>
     </header>
     <div ref="fileBody" class="file-body card-content nodrag nopan" :style="{ '--content-zoom': data.focus ? zoom / 100 : 1 }" :data-content-active="contentActive" :tabindex="mobilePreview ? -1 : 0" :aria-label="data.asset.filename" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.capture="contentPointerDown" @pointerdown.stop @dblclick.stop>
       <div v-if="(['image', 'audio', 'video'].includes(preview) || preview === 'pdf' && pdfPreview) && !url" class="file-text-status" :role="ticketError ? 'alert' : 'status'">
@@ -169,12 +154,9 @@ const size = computed(() => {
 .file-card { position:relative; height: 100%; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #3a3d46; border-radius: 7px; background: #1b1d23; box-shadow: 0 5px 18px #0003; }
 .file-header { display: flex; align-items: center; gap: 7px; height: 30px; flex: 0 0 30px; padding: 0 7px 0 10px; color: #a9b0be; cursor: grab; border-bottom: 1px solid #343740; }
 .file-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: #e0e3ea; }
-.file-size { font-size: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.file-icon,.file-actions{display:flex;align-items:center;flex:none}.file-actions{gap:0}
-.file-action { display: inline-flex; justify-content: center; align-items: center; flex: 0 0 23px; width: 23px; height: 23px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #a9b0be; cursor: pointer; }
-.file-action:hover { color: #fff; background: #ffffff12; }
+.file-icon{display:flex;align-items:center;flex:none}
 .file-copy{cursor:grab}.file-copy:active{cursor:grabbing}
-.file-action:focus-visible, .file-download:focus-visible { outline: 2px solid #8c9ef8; outline-offset: -2px; }
+.file-download:focus-visible { outline: 2px solid #8c9ef8; outline-offset: -2px; }
 .file-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
 .file-preview { border: 0; width: 100%; height: 100%; background: #fff; color-scheme: light; }
 .file-text-body { display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 0; background: #14191f; }
@@ -189,9 +171,6 @@ const size = computed(() => {
 .mobile-layout .card-focused .file-header{height:calc(44px + var(--mobile-safe-top,0px));flex-basis:calc(44px + var(--mobile-safe-top,0px));padding:var(--mobile-safe-top,0px) 0 0;gap:0}
 .mobile-layout .card-focused .file-title{font-size:13px;margin-inline:6px}
 .mobile-layout .card-focused .file-icon{width:44px;height:44px;justify-content:center}
-.card-focused .file-actions{gap:0}
-.card-focused :deep(.text-preview-actions){gap:0}
-.mobile-layout .card-focused .file-action{width:44px;height:44px;flex-basis:44px}
 .mobile-layout .card-focused{--header-action-size:44px}
 .mobile-layout.canvas-fullscreen .card-focused .file-header{height:44px;flex-basis:44px;padding-top:0}
 

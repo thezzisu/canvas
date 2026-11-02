@@ -27,7 +27,7 @@ function change(value: number) { emit('update:modelValue', Math.max(contentZoomL
 
 <template>
   <UPopover v-model:open="open" :portal="portal" :content="content" :ui="{ content: 'content-zoom-popover' }">
-    <button ref="trigger" class="content-zoom-trigger" data-preserve-content-focus :title="label" :aria-label="label" :aria-expanded="open" @pointerdown.stop.prevent="pointer = true" @keydown="pointer = false"><Icon v-if="mobile" name="zoom-in" :size="18" /><span v-else>{{ percentage }}</span></button>
+    <button ref="trigger" class="content-zoom-trigger card-header-action" data-preserve-content-focus :title="label" :aria-label="label" :aria-expanded="open" @pointerdown.stop.prevent="pointer = true" @keydown="pointer = false"><Icon v-if="mobile" name="zoom-in" :size="18" /><span v-else>{{ percentage }}</span></button>
     <template #content><div class="content-zoom-controls" data-preserve-content-focus role="group" :aria-label="label" @pointerdown.stop @wheel.stop @keydown="pointer = false">
       <UButton color="neutral" variant="ghost" :disabled="disabled || modelValue <= contentZoomLimits.min" :aria-label="t('common.zoomOut')" :title="t('common.zoomOut')" @pointerdown.prevent @click="change(modelValue - contentZoomLimits.step)"><Icon name="minus" :size="17" /></UButton>
       <UButton color="neutral" variant="ghost" class="content-zoom-reset" :disabled="disabled" :aria-label="t('common.resetZoom')" :title="t('common.resetZoom')" @pointerdown.prevent @click="change(100)">{{ percentage }}</UButton>
@@ -37,7 +37,7 @@ function change(value: number) { emit('update:modelValue', Math.max(contentZoomL
 </template>
 
 <style scoped>
-.content-zoom-trigger{width:43px;min-width:43px;height:23px;font-size:10px;font-variant-numeric:tabular-nums;padding:0 4px;border-radius:4px}
+.content-zoom-trigger{flex-basis:auto;width:43px;min-width:43px;height:24px;font-size:10px;font-variant-numeric:tabular-nums;padding:0 4px;border-radius:4px}
 .content-zoom-trigger[aria-expanded=true]{background:#ffffff12;color:#e3c9b5}
 .mobile-layout .content-zoom-trigger{width:44px;min-width:44px;height:44px}
 </style>
