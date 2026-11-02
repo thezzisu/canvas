@@ -1092,7 +1092,7 @@ function sessionChanged() {
 }
 watch(() => `${activeInstance.value.id}:${activeInstance.value.base}`, () => {
   if (!instanceBooted) return
-  if (navigation.requested.value?.location.instance !== activeInstance.value.id) navigation.visit(activeInstance.value.id, 'overview')
+  if (navigation.requested.value?.location.instance !== activeInstance.value.id) navigation.visit(activeInstance.value.id)
   void activateInstance()
 }, { flush: 'sync' })
 

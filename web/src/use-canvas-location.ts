@@ -36,9 +36,11 @@ export function useCanvasLocation(options: Options) {
       history.read()
     },
     saved: (instance: string, canvas: string) => recallCanvasLocation(localStorage, instance, canvas),
-    visit(instance: string, canvas: string) {
+    visit(instance: string, canvas?: string) {
       if (!options.hasInstance(instance)) return false
-      const location = recallCanvasLocation(localStorage, instance, canvas) || { instance, canvas }
+      const location = canvas
+        ? recallCanvasLocation(localStorage, instance, canvas) || { instance, canvas }
+        : recallLastCanvasLocation(localStorage, instance) || { instance, canvas: 'overview' }
       history.write(location, 'push')
       stage(location)
       return true
