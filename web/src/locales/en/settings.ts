@@ -1,10 +1,12 @@
 export default {
+  test: 'Test', testSound: 'Test sound', testSystemNotification: 'Test system notification',
+  notificationTestTitle: 'Canvas · Test notification', notificationTestBody: 'System notifications are working.', notificationTestFailed: 'Could not show the test notification',
   installApp: 'Install Canvas', updateApp: 'Reload to update', updateReady: 'Update available', pwaFailed: 'Could not complete this action',
   close: 'Close settings', thisBrowser: 'This browser', cutout: 'Display cutout', position: 'Position', width: 'Width',
   inputMode: 'Input mode', inputAuto: 'Automatic', inputTouch: 'Touch', inputKeyboard: 'Keyboard & mouse',
   uiScale: 'UI scale',
   notifications: 'Notifications', notificationSound: 'Sound', systemNotifications: 'System notifications',
-  notificationSoundFailed: 'Could not enable sound', notificationPermissionDenied: 'Blocked by browser',
+  notificationSoundFailed: 'Could not play sound', notificationPermissionDenied: 'Blocked by browser',
   notificationPermissionMissing: 'Permission not granted', notificationPermissionFailed: 'Could not request permission',
   copyFrontendVersion: 'Copy frontend version',
   left: 'Left', center: 'Center', right: 'Right', contentFont: 'Content font', addFont: 'Add font', add: 'Add',

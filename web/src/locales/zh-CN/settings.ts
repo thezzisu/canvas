@@ -1,10 +1,12 @@
 export default {
+  test: '测试', testSound: '测试提示音', testSystemNotification: '测试系统通知',
+  notificationTestTitle: 'Canvas · 测试通知', notificationTestBody: '系统通知可以正常显示。', notificationTestFailed: '未能显示测试通知',
   installApp: '安装 Canvas', updateApp: '刷新并更新', updateReady: '有新版本可用', pwaFailed: '操作未完成，请重试',
   close: '关闭设置', thisBrowser: '仅此浏览器', cutout: '顶部避让', position: '位置', width: '宽度',
   inputMode: '操作模式', inputAuto: '自动', inputTouch: '纯触摸', inputKeyboard: '键鼠',
   uiScale: '界面缩放',
   notifications: '通知', notificationSound: '提示音', systemNotifications: '系统通知',
-  notificationSoundFailed: '未能启用提示音', notificationPermissionDenied: '已被浏览器阻止',
+  notificationSoundFailed: '无法播放提示音', notificationPermissionDenied: '已被浏览器阻止',
   notificationPermissionMissing: '未获得通知权限', notificationPermissionFailed: '未能请求通知权限',
   copyFrontendVersion: '复制前端版本信息',
   left: '左', center: '中', right: '右', contentFont: '内容字体', addFont: '添加字体', add: '添加',

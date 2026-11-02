@@ -17,7 +17,7 @@ import { developerMode, viewportFit, interactiveWidget, viewportReloadRequired }
 import { keepScreenAwake, retryScreenWakeLock, screenWakeLockState, screenWakeLockUnavailable } from '../screen-wake-lock'
 import { notificationSoundEnabled, notificationSystemEnabled, notificationSoundSupported, systemNotificationSupported,
   systemNotificationPermission, systemNotificationRequesting, notificationSettingsError, setNotificationSound,
-  setSystemNotifications, refreshNotificationPermission } from '../notification-settings'
+  setSystemNotifications, refreshNotificationPermission, testNotificationSound, testSystemNotification } from '../notification-settings'
 import Icon from './Icon.vue'
 import LanguageSelect from './LanguageSelect.vue'
 import PwaControls from './PwaControls.vue'
@@ -51,6 +51,19 @@ const systemNotificationStatus = computed(() => !systemNotificationSupported.val
   ? window.isSecureContext ? 'common.unsupportedBrowser' : 'common.httpsRequired'
   : systemNotificationRequesting.value ? 'settings.requesting'
   : systemNotificationPermission.value === 'denied' ? 'settings.notificationPermissionDenied' : '')
+const testingNotification = ref<'sound' | 'system'>()
+let notificationTestRevision = 0
+watch(() => props.open, () => { notificationTestRevision++; testingNotification.value = undefined })
+async function testNotification(kind: 'sound' | 'system') {
+  if (testingNotification.value || systemNotificationRequesting.value) return
+  const revision = ++notificationTestRevision
+  testingNotification.value = kind
+  const valid = () => !disposed && props.open && revision === notificationTestRevision
+  try {
+    if (kind === 'sound') await testNotificationSound(valid)
+    else await testSystemNotification(t('settings.notificationTestTitle'), t('settings.notificationTestBody'), valid)
+  } finally { if (valid()) testingNotification.value = undefined }
+}
 const viewportFits = ['cover', 'contain']
 const interactiveWidgets = ['resizes-content', 'resizes-visual', 'overlays-content']
 const viewportSelectUi = { content: 'settings-select-menu', item: 'settings-select-item' }
@@ -235,10 +248,12 @@ defineExpose({ close })
         <div class="notification-settings-heading"><span>{{ t('settings.notifications') }}</span><small>{{ t('settings.thisBrowser') }}</small></div>
         <div class="notification-setting-row">
           <USwitch :model-value="notificationSoundEnabled" :disabled="!notificationSoundSupported" :label="t('settings.notificationSound')" :aria-label="t('settings.notificationSound')" size="sm" class="settings-switch" @update:model-value="setNotificationSound" />
+          <UButton type="button" color="neutral" variant="soft" size="xs" :loading="testingNotification === 'sound'" :disabled="!notificationSoundSupported || !!testingNotification || systemNotificationRequesting" :aria-label="t('settings.testSound')" @click="testNotification('sound')">{{ t('settings.test') }}</UButton>
           <small v-if="!notificationSoundSupported">{{ t('common.unsupportedBrowser') }}</small>
         </div>
         <div class="notification-setting-row">
           <USwitch :model-value="systemNotificationSupported && notificationSystemEnabled && systemNotificationPermission === 'granted'" :disabled="!systemNotificationSupported || systemNotificationRequesting" :label="t('settings.systemNotifications')" :aria-label="t('settings.systemNotifications')" size="sm" class="settings-switch" @update:model-value="setSystemNotifications" />
+          <UButton type="button" color="neutral" variant="soft" size="xs" :loading="testingNotification === 'system'" :disabled="!systemNotificationSupported || systemNotificationPermission === 'denied' || systemNotificationRequesting || !!testingNotification" :aria-label="t('settings.testSystemNotification')" @click="testNotification('system')">{{ t('settings.test') }}</UButton>
           <small v-if="systemNotificationStatus" role="status">{{ t(systemNotificationStatus) }}</small>
         </div>
         <small v-if="notificationSettingsError" class="notification-settings-error" role="alert">{{ t(notificationSettingsError) }}</small>
@@ -314,7 +329,7 @@ defineExpose({ close })
 .notification-settings{display:grid;gap:8px;margin-top:18px;padding-top:16px;border-top:1px solid #343b46}
 .notification-settings-heading,.notification-setting-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0;color:#c4cbd6;font-size:12px}
 .notification-settings-heading{font-weight:500}.notification-settings-heading small,.notification-setting-row>small{font-size:11px;font-weight:400;color:#8793a4}
-.notification-setting-row{flex-wrap:wrap}.notification-setting-row>small{margin-left:auto}
+.notification-setting-row{display:grid;grid-template-columns:minmax(0,1fr) auto;row-gap:4px}.notification-setting-row>small{grid-column:1/-1}
 .notification-settings-error{color:#dfaaa5;font-size:11px}
 .viewport-experiments{display:grid;gap:12px;margin-top:10px;padding:14px 0 0;border-top:1px solid #343b46}
 .viewport-experiment-heading{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;color:#c4cbd6;font-size:12px;font-weight:500}

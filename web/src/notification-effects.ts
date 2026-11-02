@@ -1,5 +1,5 @@
 import type { CanvasNotification } from '../../shared/notification'
-import { canPlayNotificationSound, notificationSystemEnabled, playNotificationSound } from './notification-settings'
+import { canPlayNotificationSound, notificationSystemEnabled, playNotificationSound, showSystemNotification } from './notification-settings'
 
 type Focus = { sourceId: string; windowId: string; paneId?: string }
 type Delivery = { id: string; sound?: boolean; system?: boolean; quiet?: boolean }
@@ -85,10 +85,10 @@ export async function deliverNotificationEffects(instance: string, event: Canvas
     }
     if (!record.system && options.valid() && notificationSystemEnabled.value && typeof Notification !== 'undefined' && Notification.permission === 'granted' && registration?.active) {
       try {
-        await registration.showNotification(options.title, {
-          body: options.body, icon: new URL('icons/icon-192.png', location.href).href,
+        await showSystemNotification(registration, options.title, {
+          body: options.body,
           tag: `canvas:${instance}:${event.sourceId}:${event.paneId || event.windowId || event.id}`,
-          silent: true, data: { type: 'canvas-notification', url: options.url, instance, sourceId: event.sourceId, windowId: event.windowId },
+          data: { type: 'canvas-notification', url: options.url, instance, sourceId: event.sourceId, windowId: event.windowId },
         })
         record.system = true
       } catch { /* A different live tab may still deliver this channel. */ }

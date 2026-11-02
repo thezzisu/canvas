@@ -48,50 +48,86 @@ export function canPlayNotificationSound(): boolean {
   return notificationSoundEnabled.value && audio?.state === 'running'
 }
 
-/** Alert delivery never resumes audio or asks for browser permission. */
+/** Automatic delivery never resumes audio or asks for browser permission. */
 export function playNotificationSound(kind: 'attention' | 'done'): void {
-  if (!notificationSoundEnabled.value || audio?.state !== 'running') return
+  if (!canPlayNotificationSound()) return
+  try { playTone(audio!, kind) } catch { /* Optional audio never interrupts the workspace. */ }
+}
+
+function playTone(context: AudioContext, kind: 'attention' | 'done', ended?: () => void) {
+  const start = context.currentTime
+  const tone = context.createOscillator(), gain = context.createGain()
+  tone.type = 'sine'
+  tone.frequency.setValueAtTime(kind === 'attention' ? 660 : 523.25, start)
+  tone.frequency.setValueAtTime(kind === 'attention' ? 880 : 659.25, start + .11)
+  gain.gain.setValueAtTime(0, start)
+  gain.gain.linearRampToValueAtTime(.08, start + .012)
+  gain.gain.linearRampToValueAtTime(0, start + .23)
+  tone.connect(gain); gain.connect(context.destination)
+  tone.onended = () => { tone.disconnect(); gain.disconnect(); ended?.() }
+  tone.start(start); tone.stop(start + .24)
+}
+
+/** A one-off preview does not enable future alerts. */
+export async function testNotificationSound(valid: () => boolean): Promise<void> {
+  notificationSettingsError.value = ''
+  if (!notificationSoundSupported.value) return
+  let preview: AudioContext | undefined
+  const close = () => { void preview?.close().catch(() => {}) }
   try {
-    const context = audio, start = context.currentTime
-    const tone = context.createOscillator(), gain = context.createGain()
-    tone.type = 'sine'
-    tone.frequency.setValueAtTime(kind === 'attention' ? 660 : 523.25, start)
-    tone.frequency.setValueAtTime(kind === 'attention' ? 880 : 659.25, start + .11)
-    gain.gain.setValueAtTime(0, start)
-    gain.gain.linearRampToValueAtTime(.08, start + .012)
-    gain.gain.linearRampToValueAtTime(0, start + .23)
-    tone.connect(gain); gain.connect(context.destination)
-    tone.onended = () => { tone.disconnect(); gain.disconnect() }
-    tone.start(start); tone.stop(start + .24)
-  } catch { /* Audio loss must not interrupt the visual notification. */ }
+    preview = new AudioContext()
+    if (preview.state !== 'running') await preview.resume()
+    if (!valid()) return
+    if (preview.state !== 'running') throw new Error('Audio unavailable')
+    await new Promise<void>(resolve => playTone(preview!, 'done', resolve))
+  } catch {
+    if (valid()) notificationSettingsError.value = 'settings.notificationSoundFailed'
+  } finally { close() }
+}
+
+export function showSystemNotification(registration: ServiceWorkerRegistration, title: string, options: NotificationOptions) {
+  return registration.showNotification(title, { icon: new URL('icons/icon-192.png', location.href).href, silent: true, ...options })
 }
 
 export function refreshNotificationPermission(): void {
   systemNotificationPermission.value = typeof Notification === 'undefined' ? 'default' : Notification.permission
 }
 
-/** Permission is requested only by the settings toggle's user gesture. */
+/** Called only by a settings toggle or test button gesture. */
+async function requestNotificationPermission(valid: () => boolean): Promise<boolean> {
+  if (!systemNotificationSupported.value || systemNotificationRequesting.value) return false
+  refreshNotificationPermission()
+  if (systemNotificationPermission.value === 'granted') return true
+  if (systemNotificationPermission.value === 'denied') return false
+  systemNotificationRequesting.value = true
+  try {
+    systemNotificationPermission.value = await Notification.requestPermission()
+    if (valid() && systemNotificationPermission.value === 'default') notificationSettingsError.value = 'settings.notificationPermissionMissing'
+    return systemNotificationPermission.value === 'granted'
+  } catch {
+    if (valid()) notificationSettingsError.value = 'settings.notificationPermissionFailed'
+    return false
+  } finally { systemNotificationRequesting.value = false }
+}
+
 export async function setSystemNotifications(enabled: boolean): Promise<void> {
   if (enabled && systemNotificationRequesting.value) return
   const current = ++permissionRequest
   notificationSettingsError.value = ''
-  if (!enabled) { notificationSystemEnabled.value = false; systemNotificationRequesting.value = false; return }
-  if (!systemNotificationSupported.value) return
-  refreshNotificationPermission()
-  if (systemNotificationPermission.value === 'granted') { notificationSystemEnabled.value = true; return }
-  systemNotificationRequesting.value = true
+  if (!enabled) { notificationSystemEnabled.value = false; return }
+  const granted = await requestNotificationPermission(() => current === permissionRequest)
+  if (current === permissionRequest) notificationSystemEnabled.value = granted
+}
+
+export async function testSystemNotification(title: string, body: string, valid: () => boolean): Promise<void> {
+  notificationSettingsError.value = ''
+  if (!await requestNotificationPermission(valid) || !valid()) return
   try {
-    const permission = await Notification.requestPermission()
-    systemNotificationPermission.value = permission
-    if (current !== permissionRequest) return
-    notificationSystemEnabled.value = permission === 'granted'
-    if (permission === 'default') notificationSettingsError.value = 'settings.notificationPermissionMissing'
+    const registration = await navigator.serviceWorker.getRegistration()
+    if (!valid()) return
+    if (!registration?.active) throw new Error('No active service worker')
+    await showSystemNotification(registration, title, { body, tag: 'canvas:notification-test' })
   } catch {
-    if (current === permissionRequest) {
-      notificationSystemEnabled.value = false
-      notificationSettingsError.value = 'settings.notificationPermissionFailed'
-    }
-  } finally {
-    if (current === permissionRequest) systemNotificationRequesting.value = false
+    if (valid()) notificationSettingsError.value = 'settings.notificationTestFailed'
   }
 }

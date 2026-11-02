@@ -83,7 +83,7 @@ function show(event: CanvasNotification) {
   if (document.hasFocus() && !document.hidden) toast.add({
     id: `${toastPrefix}${event.id}`, title: title(event), description: description(event),
     color: event.kind === 'attention' ? 'error' : event.kind === 'done' ? 'success' : 'neutral',
-    class: `notice-${event.kind}`, duration: event.kind === 'attention' ? Infinity : important ? 8000 : 3500,
+    class: `notice-${event.kind}`, duration: event.kind === 'attention' ? Infinity : important ? 15000 : 3500,
     progress: false, type: important ? 'foreground' : 'background',
     actions: target ? [
       { label: t('notifications.open'), color: 'neutral', variant: 'outline', get disabled() { return !props.actionsAvailable }, onClick: () => emit('open', event) },
