@@ -56,7 +56,7 @@ test('candidate scan bounds results and never guesses joins between supplied lin
   assert.equal(limited.panes[0]!.items.length, 200)
 })
 
-test('candidate scan ignores prose ratios and placeholders while resolving OSC 8 paths on the window source', () => {
+test('candidate scan ignores prose ratios and retains explicit file references beside OSC 8 targets', () => {
   const content = pane(['commit/push status/diff/log 4/5 0/100 @path/to/file @report.txt', './report.txt subdir/photo.png'], '/work')
   content.links = [
     { label: 'Manual', url: 'https://example.test/manual' },
@@ -70,7 +70,7 @@ test('candidate scan ignores prose ratios and placeholders while resolving OSC 8
   ]
   const items = contentCandidates([content]).panes[0]!.items
   assert.deepEqual(items.filter(item => item.kind === 'file').map(item => item.path), [
-    '/tmp/a b.png', '/tmp/local.txt', '/tmp/source.txt', '/tmp/other.txt', '/work/report.txt', '/work/subdir/photo.png',
+    '/tmp/a b.png', '/tmp/local.txt', '/tmp/source.txt', '/tmp/other.txt', '/work/@path/to/file', '/work/@report.txt', '/work/report.txt', '/work/subdir/photo.png',
   ])
   assert.deepEqual(items.filter(item => item.kind === 'link'), [{ id: '1', kind: 'link', label: 'Manual', url: 'https://example.test/manual' }])
 })
@@ -294,6 +294,21 @@ test('color runs retain filename punctuation, join at pane edges and reject stal
   assert(!windowContent(surface, snapshot, 'window')[0]!.coloredText?.includes(first + last))
 })
 
+test('same-color edge paths can span many physical rows without losing exact fragments', () => {
+  const { surface, snapshot } = nativeFrame()
+  const width = 16, text = `docs/${'part'.repeat(29)}.mp4`, rows = text.match(/.{1,16}/gu)!
+  assert(rows.length > 5)
+  surface.frame = { width, height: rows.length, cursor: null, hyperlinks: [], graphics: Buffer.alloc(0),
+    cells: rows.flatMap(row => Array.from({ length: width }, (_, x) => ({ symbol: row[x] || ' ', fg: row[x] ? 0x0200aa55 : 0,
+      bg: 0, modifier: 0, skip: false, hyperlink: null }))) }
+  surface.panes = [{ ...surface.panes[0]!, rect: { x: 0, y: 0, width, height: rows.length }, inner_rect: { x: 0, y: 0, width, height: rows.length } }]
+  snapshot.panes = [snapshot.panes[0]!]
+  const [pane] = windowContent(surface, snapshot, 'window')
+  assert(pane!.coloredText?.includes(text))
+  assert(pane!.coloredText?.includes(rows[0]!))
+  assert(contentCandidates([pane!]).panes[0]!.items.some(item => item.kind === 'file' && item.path === '/one/' + text))
+})
+
 test('parenthesized wrap reconstruction stops at pane, paragraph, new-item and size boundaries', () => {
   const paths = (lines: string[], nextPane?: string[]) => contentCandidates([
     pane(lines, '/work'), ...(nextPane ? [pane(nextPane, '/work', 'other')] : []),
@@ -301,15 +316,51 @@ test('parenthesized wrap reconstruction stops at pane, paragraph, new-item and s
   for (const lines of [
     ['Video (docs/long', '', 'name.mp4)'],
     ['Video (docs/long', '- name.mp4)'],
-    ['Video (docs/long', '/other/file.mp4)'],
-    ['Video (docs/long', 'other/file.mp4)'],
     ['Video (docs/long', '> ', 'name.mp4)'],
     ['Video (docs/long', 'name.mp4'],
-    ['Video (docs/long', 'a', 'b', 'c', 'd', 'name.mp4)'],
   ]) assert(!paths(lines).some(path => path?.startsWith('/work/docs/long')))
   assert(!paths(['Video (docs/long'], ['name.mp4)']).some(path => path?.startsWith('/work/docs/long')))
   assert(!paths([`Video (docs/${'a'.repeat(8190)}`, 'x.mp4)']).some(path => path && path.length > 8192))
   assert(!paths(['An explanation (ordinary text', 'with a filename.mp4)']).includes('/work/ordinary textwith a filename.mp4'))
+})
+
+test('long explicitly wrapped paths are bounded by path size rather than a four-line cutoff', async t => {
+  const f = await fixture(t)
+  await mkdir(join(f.root, 'docs'))
+  const name = `${'long-'.repeat(28)}演示（完整）.mp4`
+  await writeFile(join(f.root, 'docs', name), 'synthetic')
+  const chunks = name.match(/.{1,12}/gu)!
+  assert(chunks.length > 5)
+  f.setContent([pane([`Video (docs/${chunks[0]}`, ...chunks.slice(1, -1).map(chunk => `  ${chunk}`), `  ${chunks.at(-1)})`], f.root)])
+  assert((await f.scan()).panes[0]!.items.some(item => item.kind === 'file' && item.path === join(f.root, 'docs', name)))
+  const directory = 'docs/one/two/three/four/five/six'
+  await mkdir(join(f.root, directory), { recursive: true })
+  await writeFile(join(f.root, directory, 'report.mp4'), 'synthetic')
+  f.setContent([pane(['Video（docs/one/', ' two/three', ' /four/', ' five/', ' six/', ' report.mp4）'], f.root)])
+  assert((await f.scan()).panes[0]!.items.some(item => item.kind === 'file' && item.path === join(f.root, directory, 'report.mp4')))
+  const bounded = contentCandidates([pane(Array.from({ length: 250 }, () => 'Video (docs/' + 'a'.repeat(8000)), f.root)])
+  assert(bounded.truncated)
+  assert(bounded.panes.flatMap(pane => pane.items).length <= 200)
+})
+
+test('at-prefixed references use the literal filename first and never strip authoritative links', async t => {
+  const f = await fixture(t)
+  await mkdir(join(f.root, 'docs'))
+  for (const name of ['docs/file.md', '@report.md', 'report.md', 'README', 'docs/a b(1).md']) await writeFile(join(f.root, name), 'synthetic')
+  f.setContent([pane(['@docs/file.md @report.md @README "@docs/a b(1).md" @missing.md user@example.test'], f.root)])
+  const scan = await f.scan()
+  const files = scan.panes[0]!.items.flatMap(item => item.kind === 'file' ? [item.path] : [])
+  assert(files.includes(join(f.root, 'docs/file.md')))
+  assert(files.includes(join(f.root, '@report.md')))
+  assert(!files.includes(join(f.root, 'report.md')), 'a real leading @ is preserved')
+  assert(files.includes(join(f.root, 'README')))
+  assert(files.includes(join(f.root, 'docs/a b(1).md')))
+  assert.equal(f.reads(), 0)
+  const linked = pane([], f.root)
+  linked.links = [{ label: 'Exact missing link', url: `file://${f.root}/@docs/file.md` }]
+  f.setContent([linked])
+  assert.deepEqual((await f.scan()).panes, [], 'OSC 8 targets never gain reference fallback')
+  assert(!Object.hasOwn(scan, 'references'), 'fallback bookkeeping stays server-internal')
 })
 
 test('Markdown display decoration is removed from wrapped paths without consuming another filename', async t => {

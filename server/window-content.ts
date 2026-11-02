@@ -54,8 +54,11 @@ export class WindowContentService {
     if (!current || sourceConnectionKey(current) !== sourceKey) throw new Error('Connection changed; scan again')
     if (!this.options.store.hasSession(sessionId)) throw new Error('Please sign in')
     if (!panes) throw new Error('Open this window before scanning its content')
-    const scan = { id: randomUUID(), ...contentCandidates(panes) }
-    const paths = [...new Set(scan.panes.flatMap(pane => pane.items.flatMap(item => item.kind === 'file' && item.path ? [item.path] : [])))]
+    const { references, ...candidates } = contentCandidates(panes)
+    const scan = { id: randomUUID(), ...candidates }
+    const allPaths = [...new Set([...scan.panes.flatMap(pane => pane.items.flatMap(item => item.kind === 'file' && item.path ? [item.path] : [])), ...references.values()])]
+    const paths = allPaths.slice(0, 200)
+    if (paths.length < allPaths.length) scan.truncated = true
     const controller = new AbortController(), abort = () => controller.abort()
     signal.throwIfAborted(); signal.addEventListener('abort', abort, { once: true })
     this.scanning.set(controller, { sourceId: source.id, sourceKey, sessionId })
@@ -70,10 +73,12 @@ export class WindowContentService {
         const seen = new Set<string>()
         const items = pane.items.flatMap<WindowContentItem>(item => {
           if (item.kind === 'link') return [item]
-          const path = item.path && files.get(item.path)
+          const exact = item.path && files.get(item.path)
+          const reference = references.get(item.id)
+          const path = exact || reference && files.get(reference)
           if (!path || seen.has(path)) return []
           seen.add(path)
-          return [{ ...item, path }]
+          return [{ ...item, path, ...(!exact ? { label: path } : {}) }]
         })
         return items.length ? [{ ...pane, items }] : []
       })

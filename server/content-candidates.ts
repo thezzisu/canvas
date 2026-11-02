@@ -23,12 +23,12 @@ function trimPunctuation(value: string): string {
   return value
 }
 
-function filePath(value: string, cwd?: string): string | null | undefined {
+function filePath(value: string, cwd?: string, reference = false): string | null | undefined {
   if (!value || value.length > 8192 || controls.test(value) || /^[a-z][a-z\d+.-]*:\/\//iu.test(value)) return
   // A slash alone also describes prose and ratios. Require an explicit path
   // or a filename extension; the source later confirms each regular file.
-  if (value.startsWith('@') || value.includes('<') || value.includes('>')) return
-  if (!/^(?:\/|~\/|\.{1,2}\/)/u.test(value)
+  if (!reference && value.startsWith('@') || value.includes('<') || value.includes('>')) return
+  if (!reference && !/^(?:\/|~\/|\.{1,2}\/)/u.test(value)
       && !/[^/]+\.[\p{L}][\p{L}\p{N}_-]{0,15}$/u.test(withoutFileLocation(value))) return
   if (value === '/' || value === './' || value === '../' || value === '~/') return
   if (value.startsWith('/')) return posix.normalize(value)
@@ -54,21 +54,22 @@ function pathDisplay(value: string): boolean {
 }
 
 /** Balanced wrappers distinguish inline paths from the prose around them. */
-function wrappedParenthesizedPaths(lines: readonly string[], index: number, budget: { remaining: number }): string[] {
+function wrappedParenthesizedPaths(lines: readonly string[], index: number, budget: { remaining: number; characters: number }): string[] {
   const pairs: Record<string, string> = { '(': ')', '（': '）' }
   const results: string[] = [], line = lines[index]!
-  for (let start = 0; start < line.length && budget.remaining > 0; start++) {
+  for (let start = 0; start < line.length && budget.remaining > 0 && budget.characters > 0; start++) {
     const closing = pairs[line[start]!]
     if (!closing) continue
     budget.remaining--
     const first = line.slice(start + 1, start + 8194).trimStart()
-    if (!/^(?:\/|~\/|\.{1,2}\/|[^\s()（）<>"'`]+\/)/u.test(first)) continue
+    if (!/^@?(?:\/|~\/|\.{1,2}\/|[^\s()（）<>"'`]+\/)/u.test(first)) continue
     const stack = [closing]
     let value = '', valid = true
-    for (let offset = 0; offset <= 4 && index + offset < lines.length && valid && stack.length; offset++) {
+    for (let offset = 0; index + offset < lines.length && valid && stack.length && budget.characters > 0; offset++) {
       const part = (offset ? lines[index + offset]!.slice(0, 8193).trim().replace(/^(?:>\s*)+/u, '') : first).trimEnd()
-      if (!part || offset && /^(?:[-+*•]\s|\d{1,4}[.)]\s|\/|~\/|\.{1,2}\/|[^\s()（）]+\/)/u.test(part)) break
+      if (!part || offset && /^(?:[-+*•]\s|\d{1,4}[.)]\s)/u.test(part)) break
       for (const character of part) {
+        if (--budget.characters < 0) { valid = false; break }
         if (pairs[character]) stack.push(pairs[character]!)
         else if (character === ')' || character === '）') {
           if (stack.pop() !== character) { valid = false; break }
@@ -96,21 +97,25 @@ function linkedFile(value: string): string | undefined {
 }
 
 /** Parse bounded visible text, never shell syntax or adjacent pane rows. */
-export function contentCandidates(panes: NativeContentPane[]): { panes: WindowContentPane[]; truncated: boolean; incomplete?: boolean } {
+export function contentCandidates(panes: NativeContentPane[]): { panes: WindowContentPane[]; truncated: boolean; incomplete?: boolean; references: Map<string, string> } {
   let count = 0, truncated = false
-  const wrapBudget = { remaining: MAX_ITEMS }
+  const wrapBudget = { remaining: MAX_ITEMS, characters: 64 * 1024 }
+  const references = new Map<string, string>()
   const result: WindowContentPane[] = []
   for (const pane of panes) {
     const items: WindowContentItem[] = [], seen = new Set<string>()
     const add = (label: string, exact = false, linkOnly = false, display?: string) => {
       const value = exact ? label : trimPunctuation(label)
-      const url = httpUrl(value), path = url ? undefined : linkOnly ? linkedFile(value) : filePath(value, pane.cwd)
+      const reference = !linkOnly && value.startsWith('@') && value.length > 1 && !value.startsWith('@@')
+        && !/[@<>]/u.test(value.slice(1)) && (exact || !/\s/u.test(value)) ? filePath(value.slice(1), pane.cwd, true) : undefined
+      const url = httpUrl(value), path = url ? undefined : linkOnly ? linkedFile(value) : filePath(value, pane.cwd, reference !== undefined)
       if (!url && path === undefined) return
       const identity = url ? `url:${url}` : `file:${path ?? value}`
       if (seen.has(identity)) return
       seen.add(identity)
       if (count >= MAX_ITEMS) { truncated = true; return }
       const id = String(++count)
+      if (reference) references.set(id, reference)
       const title = display?.trim() || value
       items.push(url ? { id, kind: 'link', label: title, url } : { id, kind: 'file', label: title, path: path! })
     }
@@ -153,6 +158,6 @@ export function contentCandidates(panes: NativeContentPane[]): { panes: WindowCo
     }
     if (items.length) result.push({ id: pane.id, name: pane.name, ...(pane.cwd ? { cwd: pane.cwd } : {}), items })
   }
-  truncated ||= wrapBudget.remaining === 0
-  return { panes: result, truncated, ...(panes.some(pane => pane.incomplete) ? { incomplete: true } : {}) }
+  truncated ||= wrapBudget.remaining === 0 || wrapBudget.characters <= 0
+  return { panes: result, truncated, references, ...(panes.some(pane => pane.incomplete) ? { incomplete: true } : {}) }
 }

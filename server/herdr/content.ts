@@ -20,7 +20,8 @@ const validCwd = (value: unknown): value is string => typeof value === 'string' 
 function readPane(frame: FrameData, rect: SurfaceRect): Pick<NativeContentPane, 'lines' | 'links' | 'coloredText'> {
   const lines: string[] = [], links: NativeContentPane['links'] = []
   const coloredText: string[] = []
-  let previous: { color: number; index: number; row: number; rows: number } | undefined
+  let previous: { color: number; index: number; row: number; joined: boolean } | undefined
+  let coloredCharacters = 0
   for (let y = rect.y; y < Math.min(frame.height, rect.y + rect.height); y++) {
     let line = '', link: { label: string; url: string } | undefined
     const runs: Array<{ color: number; text: string; left: number; right: number }> = []
@@ -53,13 +54,17 @@ function readPane(frame: FrameData, rect: SurfaceRect): Pick<NativeContentPane, 
     let next: typeof previous
     for (const part of runs) {
       const text = part.text.trim()
-      if (!part.color || !text || text.length > 8192 || coloredText.length >= 200) continue
-      let index = coloredText.push(text) - 1, rows = 1
+      if (!part.color || !text || text.length > 8192 || coloredText.length >= 200 || coloredCharacters + text.length > 64 * 1024) continue
+      let index = coloredText.push(text) - 1, joined = false
+      coloredCharacters += text.length
       if (previous?.row === y - 1 && previous.color === part.color && part.left === firstInk
-          && previous.rows < 5 && coloredText.length < 200 && coloredText[previous.index]!.length + text.length <= 8192) {
-        index = coloredText.push(coloredText[previous.index]! + text) - 1; rows = previous.rows + 1
+          && coloredText.length < 200 && coloredText[previous.index]!.length + text.length <= 8192
+          && coloredCharacters + (previous.joined ? 0 : coloredText[previous.index]!.length) + text.length <= 64 * 1024) {
+        if (previous.joined) { index = previous.index; coloredText[index] += text; coloredCharacters += text.length }
+        else { index = coloredText.push(coloredText[previous.index]! + text) - 1; coloredCharacters += coloredText[index]!.length }
+        joined = true
       }
-      if (part.right >= rect.x + rect.width - 1) next = { color: part.color, index, row: y, rows }
+      if (part.right >= rect.x + rect.width - 1) next = { color: part.color, index, row: y, joined }
     }
     previous = next
   }
