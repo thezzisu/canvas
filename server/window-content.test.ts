@@ -218,6 +218,100 @@ test('full-width CJK path display joins a short extension tail and verifies the 
   assert.deepEqual((await f.scan()).panes, [], 'a reconstructed path still requires an existing file')
 })
 
+test('inline parenthesized video paths survive TUI hard wraps and retain their exact filename', async t => {
+  const f = await fixture(t)
+  const directory = 'dist/2026/11/02/layout-preview/tutorial'
+  const relative = `${directory}/示例系统_查询与统计_中文演示.mp4`
+  await mkdir(join(f.root, directory), { recursive: true })
+  await writeFile(join(f.root, relative), 'synthetic video bytes')
+  f.setContent([pane([
+    `  • 重新制作的中文教学视频（2分53秒，约7MB） (${directory}/示例系统_查询`,
+    '    与统计_中文演示.mp4)',
+  ], f.root)])
+  const scanned = await f.scan()
+  assert.deepEqual(scanned.panes[0]!.items.filter(item => item.kind === 'file').map(item => [item.path, item.label]), [[join(f.root, relative), relative]])
+  assert.equal(f.reads(), 0)
+  await rm(join(f.root, relative))
+  assert.deepEqual((await f.scan()).panes, [], 'a reconstructed missing file is never displayed')
+})
+
+test('wrapped Markdown destinations preserve interior spaces and authoritative OSC 8 labels', async t => {
+  const f = await fixture(t)
+  await mkdir(join(f.root, 'docs'))
+  await writeFile(join(f.root, 'docs/video demo.mp4'), 'synthetic')
+  await writeFile(join(f.root, 'docs/videodemo.mp4'), 'different file')
+  const content = pane(['> [Video](docs/video demo.', '>   mp4)'], f.root)
+  content.links = [{ label: 'Trusted title', url: `file://${f.root}/docs/video%20demo.mp4` }]
+  f.setContent([content])
+  assert.deepEqual((await f.scan()).panes[0]!.items.filter(item => item.kind === 'file').map(item => [item.path, item.label]), [[join(f.root, 'docs/video demo.mp4'), 'Trusted title']])
+})
+
+test('balanced half-width and full-width wrappers retain parentheses inside real filenames', async t => {
+  const f = await fixture(t)
+  await mkdir(join(f.root, 'docs'))
+  const names = ['报告(最终).mp4', '报告（最终）.mp4', '报告(第二版（完整）).mp4']
+  for (const name of names) await writeFile(join(f.root, 'docs', name), 'synthetic')
+  f.setContent([pane([
+    `视频（docs/${names[0]}）`,
+    'Video (docs/报告（最', '  终）.mp4)',
+    '[Video](docs/报告(第二版（完', '  整）).mp4)',
+  ], f.root)])
+  const files = (await f.scan()).panes[0]!.items.filter(item => item.kind === 'file').map(item => item.path)
+  assert(names.every(name => files.includes(join(f.root, 'docs', name))))
+  assert.equal(f.reads(), 0)
+})
+
+test('color runs retain filename punctuation, join at pane edges and reject stale or concealed hints', async () => {
+  const { surface, snapshot } = nativeFrame()
+  const first = 'docs/视频（最终）(一).mp', last = '4'
+  const width = terminalCellWidth(first), height = 3
+  surface.frame = { width, height, cursor: null, hyperlinks: [], graphics: Buffer.alloc(0),
+    cells: Array.from({ length: width * height }, () => ({ symbol: ' ', fg: 0, bg: 0, modifier: 0, skip: false, hyperlink: null })) }
+  surface.panes = [{ ...surface.panes[0]!, rect: { x: 0, y: 0, width, height }, inner_rect: { x: 0, y: 0, width, height } }]
+  snapshot.panes = [snapshot.panes[0]!]
+  const put = (row: number, offset: number, text: string, fg: number) => {
+    for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
+      const cell = surface.frame.cells[row * width + offset]!
+      Object.assign(cell, { symbol: segment, fg }); const size = terminalCellWidth(segment)
+      // Native herdr can leave continuation cells as unmarked padding.
+      for (let i = 1; i < size; i++) surface.frame.cells[row * width + offset + i]!.symbol = ' '
+      offset += size
+    }
+  }
+  put(0, 0, first, 0x0200aa55); put(1, 2, last, 0x0200aa55); put(1, 3, ')', 0)
+  put(2, 0, 'docs/real name(1).mp4', 0x0200aa55)
+  const [pane] = windowContent(surface, snapshot, 'window')
+  assert(pane!.coloredText?.includes(first + last))
+  assert(pane!.coloredText?.includes(first), 'a joined hint does not replace its original exact run')
+  const paths = contentCandidates([pane!]).panes[0]!.items.flatMap(item => item.kind === 'file' ? [item.path] : [])
+  assert(paths.includes('/one/' + first + last))
+  assert(paths.includes('/one/docs/real name(1).mp4'))
+  const current = await readWindowContent(surface, snapshot, 'window', async () => ({ pane_id: 'a', text: `${first}\n  ${last})\ndocs/real name(1).mp4` }))
+  assert(current[0]!.coloredText?.includes(first + last))
+  const changed = await readWindowContent(surface, snapshot, 'window', async () => ({ pane_id: 'a', text: 'Current output has changed' }))
+  assert.deepEqual(changed[0]!.coloredText, [])
+  surface.frame.cells[0]!.modifier = 128
+  assert(!windowContent(surface, snapshot, 'window')[0]!.coloredText?.includes(first + last))
+})
+
+test('parenthesized wrap reconstruction stops at pane, paragraph, new-item and size boundaries', () => {
+  const paths = (lines: string[], nextPane?: string[]) => contentCandidates([
+    pane(lines, '/work'), ...(nextPane ? [pane(nextPane, '/work', 'other')] : []),
+  ]).panes.flatMap(group => group.items.flatMap(item => item.kind === 'file' ? [item.path] : []))
+  for (const lines of [
+    ['Video (docs/long', '', 'name.mp4)'],
+    ['Video (docs/long', '- name.mp4)'],
+    ['Video (docs/long', '/other/file.mp4)'],
+    ['Video (docs/long', 'other/file.mp4)'],
+    ['Video (docs/long', '> ', 'name.mp4)'],
+    ['Video (docs/long', 'name.mp4'],
+    ['Video (docs/long', 'a', 'b', 'c', 'd', 'name.mp4)'],
+  ]) assert(!paths(lines).some(path => path?.startsWith('/work/docs/long')))
+  assert(!paths(['Video (docs/long'], ['name.mp4)']).some(path => path?.startsWith('/work/docs/long')))
+  assert(!paths([`Video (docs/${'a'.repeat(8190)}`, 'x.mp4)']).some(path => path && path.length > 8192))
+  assert(!paths(['An explanation (ordinary text', 'with a filename.mp4)']).includes('/work/ordinary textwith a filename.mp4'))
+})
+
 test('Markdown display decoration is removed from wrapped paths without consuming another filename', async t => {
   const f = await fixture(t)
   await mkdir(join(f.root, 'docs'))

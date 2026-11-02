@@ -53,6 +53,35 @@ function pathDisplay(value: string): boolean {
     && !/[<>"'`]/u.test(value) && !/\s+[^\s]*\//u.test(value) && !/^[a-z][a-z\d+.-]*:\/\//iu.test(value)
 }
 
+/** Balanced wrappers distinguish inline paths from the prose around them. */
+function wrappedParenthesizedPaths(lines: readonly string[], index: number, budget: { remaining: number }): string[] {
+  const pairs: Record<string, string> = { '(': ')', '（': '）' }
+  const results: string[] = [], line = lines[index]!
+  for (let start = 0; start < line.length && budget.remaining > 0; start++) {
+    const closing = pairs[line[start]!]
+    if (!closing) continue
+    budget.remaining--
+    const first = line.slice(start + 1, start + 8194).trimStart()
+    if (!/^(?:\/|~\/|\.{1,2}\/|[^\s()（）<>"'`]+\/)/u.test(first)) continue
+    const stack = [closing]
+    let value = '', valid = true
+    for (let offset = 0; offset <= 4 && index + offset < lines.length && valid && stack.length; offset++) {
+      const part = (offset ? lines[index + offset]!.slice(0, 8193).trim().replace(/^(?:>\s*)+/u, '') : first).trimEnd()
+      if (!part || offset && /^(?:[-+*•]\s|\d{1,4}[.)]\s|\/|~\/|\.{1,2}\/|[^\s()（）]+\/)/u.test(part)) break
+      for (const character of part) {
+        if (pairs[character]) stack.push(pairs[character]!)
+        else if (character === ')' || character === '）') {
+          if (stack.pop() !== character) { valid = false; break }
+          if (!stack.length) { if (value) results.push(value); break }
+        }
+        if (/[<>"'`\[\]{}]/u.test(character) || value.length >= 8192) { valid = false; break }
+        value += character
+      }
+    }
+  }
+  return results
+}
+
 function linkedFile(value: string): string | undefined {
   if (value.length > 8192 || controls.test(value)) return
   try {
@@ -69,6 +98,7 @@ function linkedFile(value: string): string | undefined {
 /** Parse bounded visible text, never shell syntax or adjacent pane rows. */
 export function contentCandidates(panes: NativeContentPane[]): { panes: WindowContentPane[]; truncated: boolean; incomplete?: boolean } {
   let count = 0, truncated = false
+  const wrapBudget = { remaining: MAX_ITEMS }
   const result: WindowContentPane[] = []
   for (const pane of panes) {
     const items: WindowContentItem[] = [], seen = new Set<string>()
@@ -85,6 +115,7 @@ export function contentCandidates(panes: NativeContentPane[]): { panes: WindowCo
       items.push(url ? { id, kind: 'link', label: title, url } : { id, kind: 'file', label: title, path: path! })
     }
     for (const link of pane.links) add(link.url, true, true, link.label)
+    for (const value of pane.coloredText || []) if (pathDisplay(value)) add(value, true)
     for (const line of pane.lines) {
       const occupied: Array<[number, number]> = []
       for (const match of line.matchAll(/https?:\/\/[^\s<>"'`]+/giu)) {
@@ -104,6 +135,7 @@ export function contentCandidates(panes: NativeContentPane[]): { panes: WindowCo
       if (pathDisplay(value)) add(value, true)
     }
     for (const [index, line] of pane.lines.entries()) {
+      for (const wrapped of wrappedParenthesizedPaths(pane.lines, index, wrapBudget)) add(wrapped, true)
       const { value, closing } = presentationPath(line)
       const width = pane.columns
       const occupied = terminalCellWidth(line.trimEnd())
@@ -121,5 +153,6 @@ export function contentCandidates(panes: NativeContentPane[]): { panes: WindowCo
     }
     if (items.length) result.push({ id: pane.id, name: pane.name, ...(pane.cwd ? { cwd: pane.cwd } : {}), items })
   }
+  truncated ||= wrapBudget.remaining === 0
   return { panes: result, truncated, ...(panes.some(pane => pane.incomplete) ? { incomplete: true } : {}) }
 }
