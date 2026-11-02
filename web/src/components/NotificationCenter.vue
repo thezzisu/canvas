@@ -13,8 +13,8 @@ import { statusColor } from '../status'
 import { formatCanvasLocation } from '../canvas-location'
 import canvasIcon from '../../public/icons/canvas.svg?raw'
 
-const props = defineProps<{ instanceId: string; backendId: string; resources: SourceResource[]; refresh(): Promise<void> }>()
-const emit = defineEmits<{ open: [event: CanvasNotification] }>()
+const props = defineProps<{ instanceId: string; backendId: string; resources: SourceResource[]; actionsAvailable: boolean; refresh(): Promise<void> }>()
+const emit = defineEmits<{ open: [event: CanvasNotification]; go: [event: CanvasNotification] }>()
 const { t } = useI18n()
 const toast = useToast(), context = apiContext()
 const owner = uuid(), toastPrefix = `notification:${context.revision}:${props.backendId}:`
@@ -85,7 +85,10 @@ function show(event: CanvasNotification) {
     color: event.kind === 'attention' ? 'error' : event.kind === 'done' ? 'success' : 'neutral',
     class: `notice-${event.kind}`, duration: event.kind === 'attention' ? Infinity : important ? 8000 : 3500,
     progress: false, type: important ? 'foreground' : 'background',
-    actions: target ? [{ label: t('notifications.open'), color: 'neutral', variant: 'outline', onClick: () => emit('open', event) }] : [],
+    actions: target ? [
+      { label: t('notifications.open'), color: 'neutral', variant: 'outline', get disabled() { return !props.actionsAvailable }, onClick: () => emit('open', event) },
+      { label: t('notifications.go'), color: 'neutral', variant: 'outline', get disabled() { return !props.actionsAvailable }, onClick: () => emit('go', event) },
+    ] : [],
   })
   if (!important) return
   const url = new URL(location.href)
@@ -167,6 +170,5 @@ defineExpose({ receive, acceptsToast })
 <template><span hidden /></template>
 
 <style>
-.canvas-notifications{position:absolute;right:12px;bottom:max(12px,var(--mobile-safe-bottom,var(--ui-safe-bottom)));max-width:calc(100% - 24px);z-index:100}
 .notice-attention{--ui-error:#f38ba8}.notice-done{--ui-success:#94e2d5}
 </style>

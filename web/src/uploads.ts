@@ -1,4 +1,5 @@
 import { t } from './i18n'
+import { MAX_PASTE_PARTS, MAX_UPLOAD_BEGIN_BYTES, type PastePart } from '../../shared/paste'
 import { apiContext, apiFetch, apiUrl, uuid, type ApiContext } from './api'
 import { hasFileTransfer, readFileTransfer } from './browser-file-input'
 
@@ -14,7 +15,7 @@ export interface TerminalUploadState {
   cancelling?: boolean
   rejected?: string
 }
-interface Batch { context: ApiContext; id: string; files: File[]; total: number; request?: AbortController; running: boolean; cancelling?: boolean }
+interface Batch { context: ApiContext; id: string; files: File[]; parts?: PastePart[]; total: number; request?: AbortController; running: boolean; cancelling?: boolean }
 interface UploadOptions {
   available(): boolean
   focus(): void
@@ -45,17 +46,25 @@ export class TerminalUploads {
     this.dismissed = setTimeout(() => { this.state = undefined; this.options.changed(undefined) }, 6000)
   }
 
-  enqueue(files: File[]) {
+  enqueue(files: File[], parts?: PastePart[]) {
     if (!files.length) return
     if (!this.options.available()) { this.reject(t('terminal.upload.disconnected')); return }
     if (files.some(file => file.webkitRelativePath)) { this.reject(t('terminal.upload.foldersUnsupported')); return }
     if (this.current?.cancelling) return
     const total = files.reduce((sum, file) => sum + file.size, 0)
     if (!Number.isSafeInteger(total)) { this.reject(t('terminal.upload.invalidSize')); return }
+    const batch: Batch = { context: apiContext(), id: uuid(), files, parts, total, running: false }
+    if (files.length > 64 || (parts?.length || 0) > MAX_PASTE_PARTS || new TextEncoder().encode(JSON.stringify(this.beginMessage(batch))).length > MAX_UPLOAD_BEGIN_BYTES) {
+      this.reject(t('terminal.richPaste.tooLarge')); return
+    }
     this.options.focus()
-    this.pending.push({ context: apiContext(), id: uuid(), files, total, running: false })
+    this.pending.push(batch)
     if (this.current) this.update({ rejected: undefined })
     else this.next()
+  }
+
+  private beginMessage(batch: Batch) {
+    return { type: 'upload-begin', id: batch.id, files: batch.files.map(file => ({ name: file.name, size: file.size })), ...(batch.parts ? { parts: batch.parts } : {}) }
   }
 
   private next() {
@@ -65,7 +74,7 @@ export class TerminalUploads {
     this.state = { id: batch.id, name: batch.files.length === 1 ? batch.files[0]!.name : '', fileCount: batch.files.length,
       transferred: 0, total: batch.total, state: 'preparing', queued: this.pending.length }
     this.options.changed(this.state)
-    if (!this.options.send({ type: 'upload-begin', id: batch.id, files: batch.files.map(file => ({ name: file.name, size: file.size })) })) {
+    if (!this.options.send(this.beginMessage(batch))) {
       this.finish('failed', t('terminal.connection.interrupted'))
       return
     }
@@ -187,17 +196,23 @@ export function preventFileNavigation(event: DragEvent) {
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'none'
 }
 /** Capture files before xterm pastes fallback text; plain text stays with xterm. */
-export function bindFileInput(host: HTMLElement, uploads: TerminalUploads, dragging: (value: boolean) => void) {
+export function bindFileInput(host: HTMLElement, uploads: TerminalUploads, dragging: (value: boolean) => void, mixedPaste: (data: DataTransfer) => boolean) {
   const accept = (data: DataTransfer | null) => {
     const { files, error } = readFileTransfer(data)
     if (error) uploads.reject(t(error === 'folders' ? 'terminal.upload.foldersUnsupported' : 'terminal.upload.unreadable'))
     else uploads.enqueue(files)
   }
-  const paste = (event: ClipboardEvent) => {
-    if (!hasFileTransfer(event.clipboardData)) return
+  const receivePaste = (event: Event, data: DataTransfer | null) => {
+    const mixed = !!data && mixedPaste(data)
+    if (!mixed && !hasFileTransfer(data)) return
     event.preventDefault()
     event.stopImmediatePropagation()
-    accept(event.clipboardData)
+    if (!mixed) accept(data)
+  }
+  const paste = (event: ClipboardEvent) => receivePaste(event, event.clipboardData)
+  // Android IMEs may deliver clipboard content only through beforeinput.
+  const beforeInput = (event: InputEvent) => {
+    if (event.inputType === 'insertFromPaste' && event.dataTransfer) receivePaste(event, event.dataTransfer)
   }
   const over = (event: DragEvent) => {
     if (!hasFileTransfer(event.dataTransfer)) return
@@ -218,12 +233,14 @@ export function bindFileInput(host: HTMLElement, uploads: TerminalUploads, dragg
     accept(event.dataTransfer)
   }
   host.addEventListener('paste', paste, true)
+  host.addEventListener('beforeinput', beforeInput, true)
   host.addEventListener('dragenter', over)
   host.addEventListener('dragover', over)
   host.addEventListener('dragleave', leave)
   host.addEventListener('drop', drop, true)
   return () => {
     host.removeEventListener('paste', paste, true)
+    host.removeEventListener('beforeinput', beforeInput, true)
     host.removeEventListener('dragenter', over)
     host.removeEventListener('dragover', over)
     host.removeEventListener('dragleave', leave)

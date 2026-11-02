@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useDocumentVisibility } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
-import UModal from '@nuxt/ui/components/Modal.vue'
+import UModal from './CanvasModal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import type QrScanner from 'qr-scanner'

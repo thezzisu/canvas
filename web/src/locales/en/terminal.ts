@@ -1,4 +1,5 @@
 export default {
+  richPaste: { title: 'Paste preview', body: 'Text', attachments: 'Attachments', markdown: 'Markdown', plain: 'Plain text', links: 'Markdown links', paths: 'Paths', skip: 'Skip', paste: 'Paste', missing: 'Some attachments cannot be read. Choose Skip to paste the text.', tooLarge: 'Clipboard content is too large. Paste a smaller selection.' },
   closed: 'Closed',
   zoom: { title: 'Terminal zoom' },
   status: {

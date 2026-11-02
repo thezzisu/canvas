@@ -5,15 +5,24 @@ import type { Source } from "./state.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { listResources, shellQuote } from "./providers.ts";
 import { validateInboxFile, writeInboxFile, removeInboxFiles, type InboxFile } from "./inbox.ts";
+import { MAX_PASTE_PARTS, MAX_TERMINAL_PASTE_BYTES, MAX_UPLOAD_BEGIN_BYTES, renderPasteParts, type PastePart } from "../shared/paste.ts";
+
+const pastePartSchema = z.union([z.string(), z.object({
+  file: z.number().int().nonnegative(),
+  format: z.enum(["path", "markdown"]),
+  label: z.string().optional(),
+  image: z.boolean().optional(),
+}).strict()]);
 
 const beginSchema = z.object({
   id: z.string().min(1).max(100),
   files: z.array(z.object({ name: z.string(), size: z.number() }).strict()).min(1).max(64),
+  parts: z.array(pastePartSchema).min(1).max(MAX_PASTE_PARTS).optional(),
 }).strict();
 
 interface Batch {
   key: string; id: string; source: Source; windowId: string; session: string; socket: WebSocket;
-  files: InboxFile[]; tokens: string[]; paths: string[]; next: number; busy: boolean;
+  files: InboxFile[]; parts?: PastePart[]; tokens: string[]; paths: string[]; next: number; busy: boolean;
   completedBytes: number; transferred: number; total: number;
   controller: AbortController; timer?: ReturnType<typeof setTimeout>; lastProgress: number;
   paste(text: string, signal: AbortSignal): Promise<void>;
@@ -47,7 +56,13 @@ export class UploadService {
     let id = "";
     try {
       const request = beginSchema.parse(input); id = request.id;
+      if (Buffer.byteLength(JSON.stringify(request)) > MAX_UPLOAD_BEGIN_BYTES) throw new Error("粘贴内容过长");
       for (const file of request.files) validateInboxFile(file);
+      if (request.parts) {
+        const referenced = new Set(request.parts.filter(part => typeof part !== "string").map(part => part.file));
+        if (referenced.size !== request.files.length || [...referenced].some(index => index >= request.files.length))
+          throw new Error("粘贴文件引用无效");
+      }
       const total = request.files.reduce((sum, file) => sum + file.size, 0);
       if (!Number.isSafeInteger(total)) throw new Error("文件大小无效");
       const key = `${source.id}/${windowId}`;
@@ -57,7 +72,7 @@ export class UploadService {
       if (this.stopped || (this.sourceGenerations.get(source.id) || 0) !== generation) throw new Error("连接已关闭");
       if (!paste || socket.readyState !== 1) throw new Error("请先连接目标窗口");
       if (this.batches.has(key)) throw new Error("窗口已有上传任务");
-      const batch: Batch = { key, id, source, windowId, socket, session, files: request.files,
+      const batch: Batch = { key, id, source, windowId, socket, session, files: request.files, parts: request.parts,
         tokens: request.files.map(() => randomBytes(32).toString("base64url")), paths: [], next: 0,
         busy: false, completedBytes: 0, transferred: 0, total, controller: new AbortController(),
         lastProgress: 0, paste };
@@ -140,7 +155,9 @@ export class UploadService {
         const native = await this.options.resources(batch.source);
         if (!native.spaces.some(space => space.windows.some(window => window.id === batch.windowId))) throw new Error("目标窗口已关闭");
         if (this.batches.get(batch.key) !== batch) return 409;
-        await batch.paste(batch.paths.map(shellQuote).join(" "), batch.controller.signal);
+        const text = batch.parts ? renderPasteParts(batch.parts, batch.paths) : batch.paths.map(shellQuote).join(" ");
+        if (Buffer.byteLength(text) > MAX_TERMINAL_PASTE_BYTES) throw new Error("粘贴内容过长");
+        await batch.paste(text, batch.controller.signal);
         this.removeBatch(batch);
         this.progress(batch, "completed");
       } else this.progress(batch, "uploading");

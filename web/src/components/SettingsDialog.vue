@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import UModal from '@nuxt/ui/components/Modal.vue'
+import UModal from './CanvasModal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UInputMenu from '@nuxt/ui/components/InputMenu.vue'
 import USelect from '@nuxt/ui/components/Select.vue'
@@ -192,6 +192,7 @@ function close(open = false) {
   emit('close')
 }
 onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer); clearVersionFeedback() })
+defineExpose({ close })
 </script>
 
 <template>

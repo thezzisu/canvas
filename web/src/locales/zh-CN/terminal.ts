@@ -1,4 +1,5 @@
 export default {
+  richPaste: { title: '粘贴预览', body: '正文', attachments: '附件', markdown: 'Markdown', plain: '纯文本', links: 'Markdown 链接', paths: '路径', skip: '跳过', paste: '粘贴', missing: '部分附件无法读取，请选择跳过后粘贴文字。', tooLarge: '剪贴板内容过大，请分段粘贴。' },
   closed: '已关闭',
   zoom: { title: '终端缩放' },
   status: {

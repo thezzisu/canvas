@@ -1,20 +1,27 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import UAlert from '@nuxt/ui/components/Alert.vue'
+import { useToast, type Toast } from '@nuxt/ui/composables/useToast'
 import { updateAvailable, updateDismissed, pwaBusy, pwaFailure, applyPwaUpdate } from '../pwa'
-defineProps<{ portal?: HTMLElement }>()
-const { t } = useI18n()
-const actions = computed(() => [{ label: t('settings.updateApp'), color: 'neutral' as const, variant: 'outline' as const,
-  loading: pwaBusy.value, onClick: applyPwaUpdate }])
+const { t, locale } = useI18n(), toast = useToast()
+let current: Toast | undefined
+watch([updateAvailable, updateDismissed, pwaBusy, pwaFailure, locale], () => {
+  if (!updateAvailable.value || updateDismissed.value) {
+    if (current) { toast.remove(current.id); current = undefined }
+    return
+  }
+  const notice = { title: t(pwaFailure.value ? 'settings.pwaFailed' : 'settings.updateReady'),
+    color: 'neutral', duration: Infinity, progress: false, type: 'background', class: 'pwa-update-prompt',
+    actions: [{ label: t('settings.updateApp'), color: 'neutral', variant: 'outline',
+      loading: pwaBusy.value, closeOnClick: false, onClick: applyPwaUpdate }],
+    close: { 'aria-label': t('common.close') },
+  } satisfies Partial<Toast>
+  if (current) { toast.update(current.id, notice); return }
+  const entry = toast.add({ ...notice,
+    'onUpdate:open': open => { if (!open && current?.id === entry.id) updateDismissed.value = true },
+  })
+  current = entry
+}, { immediate: true })
+onBeforeUnmount(() => { if (current) toast.remove(current.id) })
 </script>
-<template>
-  <Teleport :to="portal || 'body'">
-    <UAlert v-if="updateAvailable && !updateDismissed" class="pwa-update-prompt" color="neutral" variant="subtle"
-      :title="t(pwaFailure ? 'settings.pwaFailed' : 'settings.updateReady')" :actions="actions" :close="{ 'aria-label': t('common.close') }"
-      :ui="{ title: 'text-xs', actions: 'gap-2' }" @update:open="updateDismissed = true" />
-  </Teleport>
-</template>
-<style scoped>
-.pwa-update-prompt{position:fixed;z-index:99;right:max(12px,var(--ui-safe-right));bottom:calc(12px + var(--ui-safe-bottom));width:min(320px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px));box-shadow:0 8px 30px #0005}
-</style>
+<template><span hidden /></template>

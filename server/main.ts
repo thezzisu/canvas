@@ -151,7 +151,7 @@ const upgrade = (request: import("node:http").IncomingMessage, socket: import("n
         if (message.type === "upload-begin") {
           const current = store.get<Source>("source", sourceId);
           if (current && sourceConnectionKey(current) === sourceConnectionKey(source))
-            void uploads.begin(source, windowId, ws, session, { id: message.id, files: message.files });
+            void uploads.begin(source, windowId, ws, session, { id: message.id, files: message.files, parts: message.parts });
         } else if (message.type === "upload-cancel" && typeof message.id === "string") uploads.cancel(ws, message.id);
         else if (message.type === "directory-received" && typeof message.id === "string") downloads.directoryReceived(message.id, ws, session);
         else if (message.type === "url-received" && typeof message.id === "string") downloads.urlReceived(message.id, ws, session);

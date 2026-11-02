@@ -8,6 +8,8 @@ import { apiContext, apiFetch, apiUrl, isCurrentApi, uuid } from './api'
 import { clearDownloads, disconnectDownloads, receiveDownload } from './downloads'
 import { clearDirectories, receiveDirectory } from './directories'
 import { clearUrls, receiveUrl } from './urls'
+import { captureRichPaste } from './rich-paste'
+import { previewRichPaste } from './rich-paste-dialog'
 import { bindFileInput, preventFileNavigation, TerminalUploads, type TerminalUploadState } from './uploads'
 import { clipboardRestoringFocus, TerminalClipboard, type ClipboardNotice } from './clipboard'
 import { emptyModifiers, hasModifiers, modifiedText, terminalKey, terminalShortcut, type TerminalModifiers } from './terminal-input'
@@ -86,6 +88,7 @@ interface Session {
   geometryListeners: Set<(geometry: TerminalGeometry) => void>
   resource: { sourceId: string; spaceId: string; windowId: string }
   uploads: TerminalUploads
+  pastePreview?: () => void
   fileRead?: AbortController
   clipboard?: TerminalClipboard
 }
@@ -290,6 +293,7 @@ function schedulePresentation(session: Session) {
   })
 }
 function disconnect(session: Session) {
+  session.pastePreview?.(); session.pastePreview = undefined
   updateMetadata(session)
   session.reportedVisible = undefined
   session.connectionRevision++
@@ -768,8 +772,26 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   else if (session.state.status === 'connected') session.reconnect?.connected()
   const current = session
   const mountingContext = apiContext()
+  const canPasteText = () => isCurrentApi(mountingContext) && current.host === host && host.isConnected && interactive(current) && current.state.status === 'connected' && current.socket?.readyState === WebSocket.OPEN &&
+    !(current.state.presentation?.maximized && (!current.state.presentation.owned || !current.magnified))
   const removeFileInput = bindFileInput(host, current.uploads, draggingFile => {
     if (current.host === host) setState(current, { ...current.state, draggingFile })
+  }, data => {
+    const model = captureRichPaste(data)
+    if (!model) return false
+    if (!canPasteText()) { current.uploads.reject(t('terminal.upload.disconnected')); return true }
+    const socket = current.socket
+    current.pastePreview?.()
+    const dismiss = previewRichPaste(model, mountingContext.signal, result => {
+      if (current.socket !== socket || !canPasteText()) { current.uploads.reject(t('terminal.upload.disconnected')); return }
+      if (result.files.length) current.uploads.enqueue(result.files, result.parts)
+      else if (result.preview) {
+        current.nativeKey = undefined; setModifiers(current); claimFocus(current); current.term.paste(result.preview)
+        focusTerminal(current)
+      }
+    }, () => { if (current.pastePreview === dismiss) current.pastePreview = undefined })
+    current.pastePreview = dismiss
+    return true
   })
   const observer = new ResizeObserver(() => { if (current.host === host) { present(current); schedulePresentation(current) } })
   observer.observe(host)
@@ -784,8 +806,6 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   syncViewVisibility(current)
   present(current)
   schedulePresentation(current)
-  const canPasteText = () => isCurrentApi(mountingContext) && current.host === host && host.isConnected && interactive(current) && current.state.status === 'connected' && current.socket?.readyState === WebSocket.OPEN &&
-    !(current.state.presentation?.maximized && (!current.state.presentation.owned || !current.magnified))
   return {
     focus(options: { keyboard?: boolean } = {}) { focusTerminal(current, options.keyboard) },
     blur() { if (current.mobile) current.keyboard?.blur(); else current.term.blur(); setModifiers(current) },
@@ -831,6 +851,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       current.listeners.delete(listener)
       if (onGeometry) current.geometryListeners.delete(onGeometry)
       if (current.host === host) {
+        current.pastePreview?.(); current.pastePreview = undefined
         endFocusSize(current)
         if (current.mobile) current.keyboard?.blur()
         current.host = undefined

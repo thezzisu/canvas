@@ -1,8 +1,8 @@
 import { cellWidth, popupInnerRect } from './screen.ts';
+import { MAX_TERMINAL_PASTE_BYTES as MAX_PENDING } from '../../shared/paste.ts';
 import type { ClientKeyCode, ClientMessage, ClientMouseButton, ClientMouseKind, ClientPaneInputEvent, ClientShellSnapshot, PaneSurfaceFrame, PaneSurfacePane, PaneSurfaceSplit, SurfaceRect } from './wire.ts';
 
 const SHIFT = 1, CONTROL = 2, ALT = 4, SUPER = 8;
-const MAX_PENDING = 1024 * 1024;
 type Point = { row: number; col: number };
 type Mouse = { column: number; row: number; modifiers: number; kind: ClientMouseKind | 'Release' };
 type ParsedInput = { event: ClientPaneInputEvent } | { mouse: Mouse } | { focus: boolean };

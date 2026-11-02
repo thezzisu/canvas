@@ -15,6 +15,7 @@ import { TerminalManager } from "./terminals.ts";
 import type { SourceResource } from "./providers.ts";
 import { closeWindow, createSpace, listResources, shellQuote } from "./providers.ts";
 import type { writeInboxFile } from "./inbox.ts";
+import { MAX_PASTE_PARTS, MAX_UPLOAD_BEGIN_BYTES, renderPasteParts, type PastePart } from "../shared/paste.ts";
 
 class FakeSocket {
   readyState = 1;
@@ -30,7 +31,7 @@ function uploadRequest(bytes: Uint8Array, signal?: AbortSignal) {
   return new Request("http://canvas.test/api/uploads/fixture", { method: "PUT", body: bytes as BodyInit, signal });
 }
 type Writer = typeof writeInboxFile;
-function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; beforePaste?: () => Promise<void>; capture?: () => Promise<void>; reportAfterAbort?: boolean } = {}) {
+function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; beforePaste?: () => Promise<void>; capture?: () => Promise<void>; reportAfterAbort?: boolean; inbox?: string } = {}) {
   const source: Source = { id: randomUUID(), name: "Fixture", transport: "local" };
   const socket = new FakeSocket(), other = new FakeSocket();
   const files = new Map<string, Buffer>(), removed: Array<{ sourceId: string; paths: string[] }> = [];
@@ -53,7 +54,7 @@ function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; b
     }
     signal.throwIfAborted();
     if (size !== file.size) throw new Error("上传不完整");
-    const path = `/fixture/.local/share/canvas/inbox/${(++serial).toString(16).padStart(8, "0")}_${file.name}`;
+    const path = `${options.inbox ?? "/fixture/.local/share/canvas/inbox"}/${(++serial).toString(16).padStart(8, "0")}_${file.name}`;
     files.set(path, Buffer.concat(chunks));
     return path;
   };
@@ -81,8 +82,8 @@ function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; b
     }] }) as SourceResource,
   });
   t.after(() => service.closeAll());
-  const begin = async (files: Array<{ name: string; size: number }>, windowId = "window-a", id = "batch") => {
-    await service.begin(source, windowId, socket as never, "session-a", { id, files });
+  const begin = async (files: Array<{ name: string; size: number }>, windowId = "window-a", id = "batch", parts?: PastePart[]) => {
+    await service.begin(source, windowId, socket as never, "session-a", { id, files, parts });
     const ready = socket.messages.findLast(message => message.type === "upload-ready" && message.id === id);
     assert(ready, "upload batch did not become ready");
     return (ready.urls as string[]).map(url => url.split("/").at(-1)!);
@@ -113,6 +114,80 @@ test("multi-file batches preserve order and paste quoted paths once into the cap
   assert.deepEqual(completed.paths, paths);
   assert.equal(completed.transferred, 10);
   assert.equal(completed.total, 10);
+});
+
+test("confirmed rich paste inserts the complete rendered content only after the final file is durable", async t => {
+  const writing = gate();
+  let writes = 0;
+  const f = fixture(t, { beforeWrite: async () => { if (++writes === 2) await writing.promise; } });
+  const parts: PastePart[] = ["Read **this**\n", { file: 0, format: "markdown", image: true, label: "图 (1).png" },
+    "\nThen ", { file: 1, format: "path" }, " and again ", { file: 0, format: "markdown", label: "the image" }];
+  const tokens = await f.begin([{ name: "图 (1).png", size: 3 }, { name: "O'Brien.pdf", size: 3 }], "window-a", "rich", parts);
+  assert.equal(await f.service.receive(tokens[0]!, "session-a", uploadRequest(Buffer.from("one"))), 204);
+  assert.deepEqual(f.pasted, []);
+  f.windows.add("other-active-window");
+  const pending = f.service.receive(tokens[1]!, "session-a", uploadRequest(Buffer.from("two")));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.pasted, []);
+  writing.resolve();
+  assert.equal(await pending, 204);
+  const text = renderPasteParts(parts, [...f.files.keys()]);
+  assert.deepEqual(f.pasted, [{ sourceId: f.source.id, windowId: "window-a", text }]);
+  assert(!text.endsWith("\n"), "completion must not submit the terminal input");
+});
+
+test("rich upload rejects malformed, unused, out-of-range and oversized parts before capturing or writing", async t => {
+  const invalid: unknown[] = [
+    [], ["no file reference"], [{ file: -1, format: "path" }], [{ file: 0.5, format: "path" }],
+    [{ file: 1, format: "path" }], [{ file: 0, format: "other" }], [{ file: 0, format: "path", path: "/arbitrary" }],
+    [{ file: 0, format: "markdown", image: "true" }], [{ file: 0, format: "markdown", label: {} }],
+    ["x".repeat(MAX_UPLOAD_BEGIN_BYTES), { file: 0, format: "path" }],
+    ["\0".repeat(MAX_UPLOAD_BEGIN_BYTES / 6), { file: 0, format: "path" }],
+    Array.from({ length: MAX_PASTE_PARTS + 1 }, () => ({ file: 0, format: "path" })),
+  ];
+  for (const parts of invalid) {
+    const f = fixture(t);
+    await f.service.begin(f.source, "window-a", f.socket as never, "session-a", { id: "invalid", files: [{ name: "file", size: 0 }], parts });
+    assert.equal(f.socket.messages.at(-1)?.state, "failed");
+    assert.equal(f.socket.messages.some(message => message.type === "upload-ready"), false);
+    assert.equal(f.captures.length, 0);
+    assert.equal(f.files.size, 0);
+  }
+  const unused = fixture(t);
+  await unused.service.begin(unused.source, "window-a", unused.socket as never, "session-a", {
+    id: "unused", files: [{ name: "a", size: 0 }, { name: "b", size: 0 }], parts: [{ file: 0, format: "path" }],
+  });
+  assert.equal(unused.socket.messages.at(-1)?.state, "failed");
+  assert.equal(unused.captures.length, 0);
+});
+
+test("rich uploads never paste partially on failure, cancellation, source change or native window closure", async t => {
+  for (const action of ["failure", "cancel", "source", "window", "disconnect"] as const) {
+    const f = fixture(t);
+    const tokens = await f.begin([{ name: "first", size: 3 }, { name: "second", size: 3 }], "window-a", "rich", [
+      "Start ", { file: 0, format: "path" }, " then ", { file: 1, format: "markdown", label: "second" }, " end",
+    ]);
+    assert.equal(await f.service.receive(tokens[0]!, "session-a", uploadRequest(Buffer.from("one"))), 204);
+    if (action === "cancel") f.service.cancel(f.socket as never, "rich");
+    else if (action === "source") f.service.closeSource(f.source.id);
+    else if (action === "window") f.windows.delete("window-a");
+    else if (action === "disconnect") f.service.disconnected(f.socket as never);
+    assert.notEqual(await f.service.receive(tokens[1]!, "session-a", uploadRequest(Buffer.from(action === "failure" ? "short" : "two"))), 204);
+    await f.service.closeAll();
+    assert.deepEqual(f.pasted, []);
+    assert.equal(f.files.size, action === "cancel" ? 0 : action === "window" ? 2 : 1);
+  }
+});
+
+test("expanded rich paths cannot exceed the native input limit or report a discarded paste as completed", async t => {
+  const f = fixture(t, { inbox: `/fixture/${"deep/".repeat(120)}` });
+  const [token] = await f.begin([{ name: "file", size: 3 }], "window-a", "expanded", Array.from({ length: MAX_PASTE_PARTS },
+    (): PastePart => ({ file: 0, format: "path" })));
+  assert.equal(await f.service.receive(token!, "session-a", uploadRequest(Buffer.from("one"))), 409);
+  assert.deepEqual(f.pasted, []);
+  assert.equal(f.files.size, 1);
+  assert.equal(f.socket.messages.at(-1)?.state, "failed");
+  assert.equal(f.socket.messages.at(-1)?.error, "粘贴内容过长");
 });
 
 test("upload tokens reject other sessions, out-of-order writes and replays", async t => {
@@ -369,8 +444,8 @@ test('real native terminal receives no upload paths until the whole batch succee
   client.emit('message', Buffer.from(JSON.stringify({ type: 'focus' })), false);
   const actualInput = () => existsSync(input) ? readFileSync(input) : Buffer.alloc(0);
   const baseline = actualInput();
-  const start = async (id: string, names: string[]) => {
-    await service.begin(source, windowId, socket, 'session', { id, files: names.map(name => ({ name, size: 3 })) });
+  const start = async (id: string, names: string[], parts?: PastePart[]) => {
+    await service.begin(source, windowId, socket, 'session', { id, files: names.map(name => ({ name, size: 3 })), parts });
     const urls = client.messages.findLast(message => message.type === 'upload-ready' && message.id === id)?.urls;
     assert(urls); return (urls as string[]).map(url => url.split('/').at(-1)!);
   };
@@ -384,6 +459,15 @@ test('real native terminal receives no upload paths until the whole batch succee
   await waitFor(() => actualInput().length === baseline.length + inserted.length, 'The complete batch reaches native input');
   assert.deepEqual(actualInput(), Buffer.concat([baseline, inserted]));
   assert(!inserted.includes(10) && !inserted.includes(13));
+  const richParts: PastePart[] = ["Image: ", { file: 0, format: "markdown", image: true, label: "图.png" },
+    " File: ", { file: 1, format: "path" }, " Done."];
+  const richBaseline = actualInput(), rich = await start('rich', ['图.png', "report O'Brien.pdf"], richParts);
+  assert.equal(await service.receive(rich[0]!, 'session', uploadRequest(Buffer.from('png'))), 204);
+  assert.deepEqual(actualInput(), richBaseline, 'Rich text also waits until every attachment succeeds');
+  assert.equal(await service.receive(rich[1]!, 'session', uploadRequest(Buffer.from('pdf'))), 204);
+  const richInserted = Buffer.from(renderPasteParts(richParts, files.slice(-2)));
+  await waitFor(() => actualInput().length === richBaseline.length + richInserted.length, 'Rich content reaches the original native input');
+  assert.deepEqual(actualInput(), Buffer.concat([richBaseline, richInserted]));
   const failed = await start('failure', ['retained.txt', 'broken.txt']);
   assert.equal(await service.receive(failed[0]!, 'session', uploadRequest(Buffer.from('yes'))), 204);
   const beforeFailure = actualInput(), retained = files.at(-1)!;

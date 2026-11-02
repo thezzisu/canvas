@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { computed, onBeforeUnmount, ref } from 'vue'
-import UModal from '@nuxt/ui/components/Modal.vue'
+import UModal from './CanvasModal.vue'
 import { api, segment, write } from '../api'
 import type { Canvas } from '../types'
 import Icon from './Icon.vue'

@@ -5,7 +5,7 @@ import { useStorage, useTitle, watchDebounced } from '@vueuse/core'
 import { MiniMap } from '@vue-flow/minimap'
 import UApp from '@nuxt/ui/components/App.vue'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
-import UModal from '@nuxt/ui/components/Modal.vue'
+import UModal from './components/CanvasModal.vue'
 import { useToast } from '@nuxt/ui/composables/useToast'
 import { useI18n } from 'vue-i18n'
 import { uiLocale } from './i18n'
@@ -18,6 +18,10 @@ import { instanceBuild, observeInstanceBuild, staleInstanceBuild } from './insta
 import { buildLabel } from '../../shared/build-info'
 import CanvasNavItem from './components/CanvasNavItem.vue'
 import NotificationCenter from './components/NotificationCenter.vue'
+import NotificationHost from './components/NotificationHost.vue'
+import AppFeedback from './components/AppFeedback.vue'
+import { notificationPortal, notificationSurface } from './notification-surface'
+import { lastWindowCanvas, useWindowCanvasHistory } from './window-canvas'
 import type { CanvasNotification } from '../../shared/notification'
 import { notificationTarget } from './notification-model'
 import { canvasIndicators, needsAttention, windowVisualState } from './canvas-status'
@@ -41,6 +45,8 @@ import { isTerminalNode } from './types'
 import GroupNode from './components/GroupNode.vue'
 import OverviewCreateNode from './components/OverviewCreateNode.vue'
 import BackgroundDialog from './components/BackgroundDialog.vue'
+import RichPasteDialog from './components/RichPasteDialog.vue'
+import { richPasteRequest } from './rich-paste-dialog'
 import DirectoryDialog from './components/DirectoryDialog.vue'
 import UrlDialog from './components/UrlDialog.vue'
 import DownloadPreviewDialog from './components/DownloadPreviewDialog.vue'
@@ -152,6 +158,7 @@ const canvasDialog = ref(false)
 let canvasDialogRevision = 0
 const backgroundCanvas = ref<Canvas | null>(null)
 const settingsDialog = ref(false)
+const settingsDialogComponent = ref<InstanceType<typeof SettingsDialog>>()
 const accountDialog = ref(false)
 const settings = ref<GlobalSettings | null>(null)
 const contentFontStyle = ref<Record<string, string>>({})
@@ -217,6 +224,9 @@ interface CanvasTabDestination { canvasId: string; anchor: TerminalCanvasNode; f
 let createdCameraReady = false
 let creationIntent = 0
 let lastOverviewInteraction: OverviewInteraction | undefined
+const notificationReveal = shallowRef<{ canvasId: string; target: OverviewInteraction; request?: typeof navigation.requested.value; pending: boolean }>()
+let notificationIntent = 0
+function cancelNotificationReveal() { notificationIntent++; notificationReveal.value = undefined }
 function cancelCreatedReveal() { creationIntent++; pendingCreatedWindow.value = undefined }
 function creationNavigation(event: Event) {
   if (actionDialog.value && busy.value) return
@@ -224,6 +234,9 @@ function creationNavigation(event: Event) {
   if (control?.dataset.sourceId && creating.has(creationId(control.dataset.sourceId, control.dataset.spaceId)) &&
       (event.type === 'pointerdown' || (event instanceof KeyboardEvent && ['Enter', ' '].includes(event.key)))) return
   cancelCreatedReveal()
+  const card = event.target instanceof Element ? event.target.closest<HTMLElement>('.terminal-card') : undefined
+  const target = notificationReveal.value?.target
+  if (!target || card?.dataset.sourceId !== target.sourceId || card?.dataset.windowId !== target.windowId) cancelNotificationReveal()
 }
 const focusedSize = reactive({ width: mobile.value ? visibleViewport.value.width : window.innerWidth / uiZoom.value - 32, height: mobile.value ? visibleViewport.value.height : window.innerHeight / uiZoom.value - 32 })
 type WindowGeometry = { ratio: number; insetX: number; insetY: number }
@@ -253,7 +266,6 @@ watch([notificationToasts, apiRevision, authenticated, () => latestState.value?.
 }, { flush: 'sync' })
 const workspacePending = computed(() => !latestState.value || !resourcesLoaded.value)
 let stateEvents: ReturnType<typeof subscribeState> | undefined
-let noticeTimer: ReturnType<typeof setTimeout>
 let resourceSignature = ''
 let resourceLayoutSignature = ''
 let resourceRequest: Promise<void> | undefined
@@ -342,9 +354,12 @@ function fitViewport() {
     void fitView({ padding: .14, maxZoom: 1, duration })
   }
 }
-async function navigateMinimap({ event, node }: NodeMouseEvent) {
-  if (!['terminal', 'note', 'file'].includes(node.type || '') || hasFocus.value) return
+function navigateMinimap({ event, node }: NodeMouseEvent) {
   event.stopPropagation()
+  void navigateCard(node)
+}
+async function navigateCard(node: Node) {
+  if (!['terminal', 'note', 'file'].includes(node.type || '') || hasFocus.value) return
   clearFitContext()
   const canvasId = activeId.value, context = apiContext()
   resetPagingFeedback()
@@ -411,10 +426,21 @@ watch([activeId, activeInstanceId, paging], clearFitContext, { flush: 'sync' })
 const overviewInteraction = computed<OverviewInteraction | undefined>(() => {
   if (!isOverview.value) return
   if (pendingCreatedWindow.value) return pendingCreatedWindow.value
+  if (notificationReveal.value?.canvasId === 'overview') return notificationReveal.value.target
   if (focused.value) return { sourceId: focused.value.sourceId, windowId: focused.value.windowId }
   const card = activeElement.value?.closest<HTMLElement>('.terminal-card')
   if (card?.dataset.sourceId && card.dataset.windowId) return { sourceId: card.dataset.sourceId, windowId: card.dataset.windowId }
 })
+useWindowCanvasHistory(() => {
+  const element = activeElement.value
+  if (!authenticated.value || !pageVisible.value || !windowFocused.value || !element?.matches('.xterm-helper-textarea, .terminal-mobile-input')) return
+  const card = element.closest<HTMLElement>('.terminal-card'), sourceId = card?.dataset.sourceId, windowId = card?.dataset.windowId
+  const source = sources.value.find(item => item.id === sourceId)
+  if (!source || !windowId || !latestState.value) return
+  // A notification may open an overlay on a canvas that has no reference to it.
+  if (!isOverview.value && !currentCanvas.value?.nodes.some(node => node.type === 'terminal' && node.sourceId === sourceId && node.windowId === windowId)) return
+  return terminalZoomKey(latestState.value.instanceId, source, windowId)
+}, () => activeId.value, activeElement)
 const visibleOverview = computed(() => overviewResources(resources.value, overviewSelected.value, overviewOrder.value, overviewInteraction.value))
 const visibleOverviewCount = computed(() => visibleOverview.value.reduce((total, source) => total + source.spaces.reduce((sum, space) => sum + space.windows.length, 0), 0))
 function resetOverview() { overviewSelected.value = [...overviewStatuses]; overviewOrder.value = 'native' }
@@ -441,7 +467,7 @@ watch([allWindows, existingAddWindows], () => {
   const next = selectedAddWindows.value.map(item => item.key)
   if (next.length !== selectedWindows.value.length || next.some((key, index) => selectedWindows.value[index] !== key)) selectedWindows.value = next
 })
-const modalOpen = computed(() => sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || shareCard.value || windowMenu.value || backgroundCanvas.value || settingsDialog.value || accountDialog.value || scanTarget.value)
+const modalOpen = computed(() => notificationSurface.value || richPasteRequest.value || sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || shareCard.value || windowMenu.value || backgroundCanvas.value || settingsDialog.value || accountDialog.value || scanTarget.value)
 usePointerDismiss(computed({
   get: () => sourcePanel.value && !modalOpen.value && !directoryRequest.value && !urlRequest.value && !downloadPreview.value,
   set: value => { sourcePanel.value = value },
@@ -497,7 +523,7 @@ function recordGeometry(sourceId: string, windowId: string, ratio: number, inset
   })
 }
 
-function notify(message: string) { success.value = message; clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { success.value = '' }, 3500) }
+function notify(message: string) { success.value = message }
 function showError(reason: unknown) { if (reason instanceof Error && reason.name === 'AbortError') return; error.value = reason instanceof Error ? reason.message : String(reason) }
 function requestError(event: Event) { showError((event as CustomEvent).detail) }
 function resourceFor(node: TerminalCanvasNode) {
@@ -756,6 +782,7 @@ async function applyRequestedLocation() {
   const requested = navigation.requested.value
   if (!requested || unknownInstance.value || requested.location.instance !== activeInstance.value.id || !authenticated.value || !latestState.value) return
   const location = resolveCanvasLocation(requested.location, canvases.value.map(canvas => canvas.id))
+  if (notificationReveal.value && requested !== notificationReveal.value.request) cancelNotificationReveal()
   if (focusedCardId.value) void flushNotes(activeId.value)
   focused.value = null; focusedCardId.value = ''
   if (activeId.value !== location.canvas) {
@@ -800,6 +827,7 @@ async function restoreViewport() {
   pendingViewport = ''
   cameraFrame = canvasFrame(frame)
   navigation.restored(requested, currentLocation())
+  revealNotificationWindow()
 }
 let pendingNoteFocus = ''
 function focusNewNote(attempt = 0) {
@@ -843,7 +871,7 @@ function nodesInitialized() {
   if (pendingViewport === activeId.value) void restoreViewport()
   // VueFlow mounts new node components after its own node-store update.
   // Waiting for that mount keeps focus from falling back to the document body.
-  void nextTick().then(() => { focusNewNote(); focusCreatedWindow() })
+  void nextTick().then(() => { focusNewNote(); focusCreatedWindow(); revealNotificationWindow() })
 }
 function saveViewport() {
   if (pendingViewport || !authenticated.value || !resourcesLoaded.value) return
@@ -985,7 +1013,7 @@ function clearInstanceRuntime() {
   resourcesFresh.value = false; resourcesLoaded.value = false; loadFailure.value = undefined
   overviewBackground.value = null; windowGeometry.clear(); resourceSignature = ''; resourceLayoutSignature = ''; resourceRequest = undefined
   currentPage.value = undefined; overviewPaged.value = false; preferredPageX.value = undefined
-  pendingViewport = ''; viewportRequest++; cancelCreatedReveal(); lastOverviewInteraction = undefined
+  pendingViewport = ''; viewportRequest++; cancelCreatedReveal(); cancelNotificationReveal(); lastOverviewInteraction = undefined
   layoutGesture = ''; saveState.value = ''; activeId.value = 'overview'; graphKey.value++
   refreshedAt.value = 0; loading.value = false; error.value = ''; success.value = ''; busy.value = false
   username.value = activeInstance.value.username || ''; password.value = ''; loginFailure.value = undefined
@@ -1083,6 +1111,7 @@ watch(overviewInteraction, value => { if (value) lastOverviewInteraction = value
 watch([overviewSelected, overviewOrder], async () => { preferredPageX.value = undefined; if (isOverview.value) { rebuildNodes(); await nextTick(); if (paging.value) await fitPage(); else void fitView({ padding: .14, maxZoom: 1, duration: 150 }) } })
 watch(activeId, async () => { if (!authenticated.value) return; scanTarget.value = null; preferredPageX.value = undefined; cancelCreatedReveal(); lastOverviewInteraction = undefined; overviewMenuOpen.value = false; layoutGesture = ''; focused.value = null; focusedCardId.value = ''; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
 function switchCanvas(id: string) {
+  if (notificationReveal.value?.canvasId !== id) cancelNotificationReveal()
   sidebarOpen.value = false
   if (id === activeId.value && !unknownInstance.value && !navigation.requested.value) return
   void flushNotes(activeId.value); saveViewport(); navigation.visit(activeInstance.value.id, id)
@@ -1275,7 +1304,45 @@ function getCanvasNode(id: string): TerminalCanvasNode | undefined {
   const node = nodes.value.find(item => item.id === id)
   return node?.type === 'terminal' ? { type: 'terminal', id, sourceId: node.data.sourceId, spaceId: node.data.spaceId, windowId: node.data.windowId, x: node.position.x, y: node.position.y, width: node.data.width, height: node.data.height } : undefined
 }
+const notificationActionsAvailable = computed(() => !busy.value && (!notificationSurface.value || notificationSurface.value.classList.contains('settings-modal')))
+function prepareNotificationAction() {
+  if (!notificationActionsAvailable.value) return false
+  if (settingsDialog.value) settingsDialogComponent.value?.close()
+  return true
+}
+async function goToNotification(event: CanvasNotification) {
+  if (!prepareNotificationAction()) return
+  const target = notificationTarget(event, resources.value), source = sources.value.find(item => item.id === event.sourceId)
+  if (!target || !source || !latestState.value) return
+  const context = apiContext(), intent = ++notificationIntent
+  if (focusedCardId.value) await closeCardFocus()
+  if (focused.value) await closeFocus()
+  if (!isCurrentApi(context) || intent !== notificationIntent) return
+  const windowId = target.window.id
+  const canvasId = lastWindowCanvas(terminalZoomKey(latestState.value.instanceId, source, windowId), event.sourceId, windowId, canvases.value)
+  notificationReveal.value = { canvasId, target: { sourceId: event.sourceId, windowId }, pending: true }
+  sourcePanel.value = false; sidebarOpen.value = false
+  switchCanvas(canvasId)
+  if (notificationReveal.value) notificationReveal.value.request = navigation.requested.value
+  if (activeId.value === canvasId && !navigation.requested.value) {
+    rebuildNodes()
+    await nextTick()
+    if (!isCurrentApi(context) || intent !== notificationIntent) return
+    revealNotificationWindow()
+  }
+}
+function revealNotificationWindow() {
+  const reveal = notificationReveal.value
+  if (!reveal?.pending || reveal.canvasId !== activeId.value || pendingViewport || navigation.requested.value || hasFocus.value) return
+  const target = nodes.value.find(node => node.type === 'terminal' && node.data.sourceId === reveal.target.sourceId && node.data.windowId === reveal.target.windowId)
+  if (!target) { cancelNotificationReveal(); return }
+  if (!getNodesInitialized.value.some(node => node.id === target.id)) return
+  notificationReveal.value = { ...reveal, pending: false }
+  void navigateCard(target)
+}
 async function openNotification(event: CanvasNotification) {
+  if (!prepareNotificationAction()) return
+  cancelNotificationReveal()
   const target = notificationTarget(event, resources.value)
   if (!target) return
   const context = apiContext()
@@ -1567,9 +1634,9 @@ function resizeNode(id: string, width: number, height: number, x?: number, y?: n
 }
 function keydown(event: KeyboardEvent) {
   if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
-  if (appDialogOpen.value) return
+  if (notificationSurface.value || appDialogOpen.value) return
   if (event.key === 'Escape' && event.composedPath().some(target => target instanceof Element && target.getAttribute('role') === 'menu')) return
-  if (directoryRequest.value || urlRequest.value) return
+  if (richPasteRequest.value || directoryRequest.value || urlRequest.value) return
   if (downloadPreview.value) return
   if (backgroundCanvas.value) return
   if (settingsDialog.value || accountDialog.value) return
@@ -1664,14 +1731,16 @@ onMounted(async () => {
   else await activateInstance()
   refreshTimer = setInterval(() => { if (!document.hidden) void refreshResources(true) }, 2000)
 })
-onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); clearTimeout(noticeTimer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload) })
+onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload) })
 </script>
 
 <template>
-  <UApp :locale="uiLocale" :portal="appElement || false" :toaster="{ position: 'bottom-right', max: authenticated ? 4 : 0, progress: false, ui: { viewport: 'canvas-notifications' } }">
+  <UApp :locale="uiLocale" :portal="appElement || false" :toaster="{ portal: notificationPortal || false, position: 'bottom-right', max: 4, progress: false, ui: { viewport: 'canvas-notifications' } }">
   <NotificationCenter v-if="authenticated && latestState" :key="`${activeInstance.id}:${latestState.instanceId}`" ref="notificationCenter"
-    :instance-id="activeInstance.id" :backend-id="latestState.instanceId" :resources="resources" :refresh="() => refreshResources(true)" @open="openNotification" />
-  <PwaUpdatePrompt :portal="appElement" />
+    :instance-id="activeInstance.id" :backend-id="latestState.instanceId" :resources="resources" :refresh="() => refreshResources(true)" :actions-available="notificationActionsAvailable" @open="openNotification" @go="goToNotification" />
+  <NotificationHost :portal="appElement" />
+  <AppFeedback :error="error" :success="success" @dismiss="error = ''; success = ''" />
+  <PwaUpdatePrompt />
   <div v-if="!ready" class="boot-screen"><span class="spinner" />{{ t('common.loading') }}</div>
   <div v-else-if="!authenticated || unknownInstance" class="login-screen" :class="{ 'mobile-layout': mobile }" :style="mobileViewportStyle">
     <main class="login-content">
@@ -1753,11 +1822,12 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
     </div>
     <BackgroundDialog v-if="backgroundCanvas" :canvas="backgroundCanvas" :portal="appElement" @close="closeBackgroundDialog" @saved="backgroundSaved" />
     <ViewportDiagnostics v-if="developerMode" :settings="settings" :portal="appElement" :reload-blocked="!!modalOpen" />
+    <RichPasteDialog :portal="appElement" />
     <DirectoryDialog :portal="appElement" />
     <UrlDialog :portal="appElement" />
     <DownloadPreviewDialog :portal="appElement" />
     <WindowContentDialog :target="scanTarget" :canvases="canvases" :portal="appElement" @close="scanTarget = null" />
-    <SettingsDialog v-if="settings" :open="settingsDialog" :settings="settings" :has-display-cutout="hasSafeTop" :portal="appElement" @close="settingsDialog = false" @saved="settingsSaved" @error="showError" />
+    <SettingsDialog ref="settingsDialogComponent" v-if="settings" :open="settingsDialog" :settings="settings" :has-display-cutout="hasSafeTop" :portal="appElement" @close="settingsDialog = false" @saved="settingsSaved" @error="showError" />
     <AccountDialog :open="accountDialog" :username="username" :portal="appElement" @close="accountDialog = false" @saved="value => { username = value }" />
     <CutoutPreview v-if="settingsDialog && mobile && hasSafeTop" />
     <UModal :open="appDialogOpen" :title="appDialogTitle" :portal="appElement || false" :dismissible="!busy" :transition="false" :close="false" :ui="{ content: 'app-dialog-shell', overlay: 'app-dialog-overlay app-dialog-backdrop' }" :content="{ onCloseAutoFocus: restoreDialogFocus }" @update:open="closeAppDialog">
@@ -1770,7 +1840,6 @@ onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibil
       <section v-else-if="windowMenu" class="modal window-menu"><header><h2 id="window-title">{{ windowMenu.name }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" @click="windowMenu = null"><Icon name="close" /></button></header><button v-if="mobile && focused?.id === windowMenu.node.id" @pointerdown.prevent @click="showWindowKeyboard"><Icon name="terminal" />{{ t('terminal.action.showKeyboard') }}</button><button v-if="mobile" @click="windowMenu = null; openSettings()"><Icon name="canvas" />{{ t('common.settings') }}</button><button v-if="mobile && !isOverview && windowMenu.node.id" :disabled="!terminalData(windowMenu.node).available" @click="terminalData(windowMenu.node).newTab?.create(); windowMenu = null"><Icon name="tab-plus" />{{ t('app.newTab') }}</button><button v-if="copiedFile" :title="t('fileTransfer.pasteNamed', { name: copiedFile.filename })" :disabled="!hasLiveTerminal(windowMenu.node.sourceId, windowMenu.node.windowId)" @click="pasteFileIntoWindow(windowMenu.node.sourceId, windowMenu.node.windowId); windowMenu = null"><Icon name="file" />{{ t('fileTransfer.paste') }}</button><button :disabled="!hasLiveTerminal(windowMenu.node.sourceId, windowMenu.node.windowId)" @click="scanWindowContent(windowMenu.node, windowMenu.name)"><Icon name="search" />{{ t('panels.scan.title') }}</button><button @click="openAdd(windowMenu.node); windowMenu = null"><Icon name="layers" />{{ t('app.addToOtherCanvas') }}</button><button @click="windowAction(windowMenu.node, 'rename')"><Icon name="edit" />{{ t('app.renameWindow') }}</button><button class="danger-text" @click="windowAction(windowMenu.node, 'close')"><Icon name="trash" />{{ t('app.closeWindow') }}</button></section>
       </fieldset></template>
     </UModal>
-    <div v-if="error || success" class="toast" :class="{ 'error-toast': error }" role="status"><Icon :name="error ? 'info' : 'check'" :size="17" /><span>{{ error || success }}</span><button class="icon-button" :aria-label="t('app.closeNotification')" @click="error = ''; success = ''"><Icon name="close" :size="15" /></button></div>
   </div>
   </UApp>
 </template>
