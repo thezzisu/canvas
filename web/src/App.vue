@@ -230,6 +230,7 @@ function cancelNotificationReveal() { notificationIntent++; notificationReveal.v
 function cancelCreatedReveal() { creationIntent++; pendingCreatedWindow.value = undefined }
 function creationNavigation(event: Event) {
   if (actionDialog.value && busy.value) return
+  navigationFit.value = undefined
   const control = event.target instanceof Element ? event.target.closest<HTMLElement>('.overview-create') : null
   if (control?.dataset.sourceId && creating.has(creationId(control.dataset.sourceId, control.dataset.spaceId)) &&
       (event.type === 'pointerdown' || (event instanceof KeyboardEvent && ['Enter', ' '].includes(event.key)))) return
@@ -341,6 +342,7 @@ function guardPageDrag(event: MouseEvent) {
   }
 }
 function fitViewport() {
+  navigationFit.value = undefined
   if (paging.value) { void fitPage(true); return }
   const target = fitTarget.value, frame = graphSurface.value
   const duration = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 200
@@ -366,8 +368,9 @@ async function navigateCard(node: Node) {
   cancelCreatedReveal()
   if (document.activeElement instanceof HTMLElement && document.activeElement.closest('.card-content')) document.activeElement.blur()
   // Blurring can remove a focus-exempt window from the filtered overview.
+  const fit = navigationFit.value = { canvasId, id: node.id, pending: true }
   await nextTick()
-  if (!isCurrentApi(context) || activeId.value !== canvasId || hasFocus.value) return
+  if (!isCurrentApi(context) || activeId.value !== canvasId || hasFocus.value || navigationFit.value !== fit) return
   const target = nodes.value.find(item => item.id === node.id && item.type === node.type)
   const frame = graphSurface.value
   if (!target || !frame?.clientWidth || !frame.clientHeight) return
@@ -375,13 +378,27 @@ async function navigateCard(node: Node) {
     if (target.type !== 'terminal') return
     selectPage(pages.value.find(page => page.id === `${target.data.sourceId}/${target.data.windowId}`))
     void fitPage(true)
-  } else {
-    void setViewport(pageViewport({ ...target.position, width: target.data.width, height: target.data.height },
-      { width: frame.clientWidth, height: frame.clientHeight }),
-    { duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 200, interpolate: 'linear', ease: value => 1 - (1 - value) ** 3 })
-  }
+  } else navigationFit.value = { ...fit, pending: false }
 }
 
+// Keep a navigation fit aligned while the terminal's first native grid settles.
+// Explicit user interaction releases it; ordinary output never moves the camera.
+const navigationFit = shallowRef<{ canvasId: string; id: string; pending: boolean }>()
+const navigationFitNode = computed(() => {
+  const fit = navigationFit.value
+  return fit && !fit.pending && fit.canvasId === activeId.value && !hasFocus.value && !paging.value
+    ? nodes.value.find(node => node.id === fit.id) : undefined
+})
+watch(() => {
+  const node = navigationFitNode.value
+  return node ? `${node.position.x}/${node.position.y}/${node.data.width}/${node.data.height}` : ''
+}, () => {
+  const target = navigationFitNode.value, frame = graphSurface.value
+  if (!target || !frame?.clientWidth || !frame.clientHeight) return
+  void setViewport(pageViewport({ ...target.position, width: target.data.width, height: target.data.height },
+    { width: frame.clientWidth, height: frame.clientHeight }),
+  { duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 200, interpolate: 'linear', ease: value => 1 - (1 - value) ** 3 })
+}, { flush: 'post' })
 
 const overviewSelected = useStorage<ProgramStatus[]>('canvas:overview:statuses', [...overviewStatuses])
 const overviewOrder = useStorage<OverviewOrder>('canvas:overview:order', 'native')
@@ -405,7 +422,7 @@ function cardForFocusedBody(active?: Element | null) {
   const id = body.closest<HTMLElement>('.vue-flow__node')?.dataset.id
   return nodes.value.find(node => node.id === id && ['terminal', 'note', 'file'].includes(node.type || ''))
 }
-function clearFitContext() { fittedFocusedCard.value = false; fitToolbarTarget.value = undefined }
+function clearFitContext() { fittedFocusedCard.value = false; fitToolbarTarget.value = undefined; navigationFit.value = undefined }
 function preserveFitTarget(event: FocusEvent) {
   const toolbar = fitToolbar.value
   if (!toolbar || !(event.relatedTarget instanceof Node) || !toolbar.contains(event.relatedTarget)) {
@@ -422,7 +439,7 @@ const fitTarget = computed(() => {
 })
 const fitFocusedCard = computed(() => !paging.value && !!fitTarget.value && !fittedFocusedCard.value)
 watch([() => fitTarget.value?.id, activeId, paging], () => { fittedFocusedCard.value = false }, { flush: 'sync' })
-watch([activeId, activeInstanceId, paging], clearFitContext, { flush: 'sync' })
+watch([activeId, activeInstanceId, paging, apiRevision], clearFitContext, { flush: 'sync' })
 const overviewInteraction = computed<OverviewInteraction | undefined>(() => {
   if (!isOverview.value) return
   if (pendingCreatedWindow.value) return pendingCreatedWindow.value
