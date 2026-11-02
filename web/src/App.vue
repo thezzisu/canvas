@@ -27,7 +27,7 @@ import { notificationTarget } from './notification-model'
 import { focusedCompletionStatus, projectFocusedResources, type WindowFocus, type FocusedStatus } from './completion-focus'
 import { canvasIndicators, needsAttention, windowVisualState } from './canvas-status'
 import { createLayoutSaves, type LayoutPatch } from './layout-saves'
-import { snapCardPosition, type CardBounds } from './card-alignment'
+import { resizeFromDelta, snapCardPosition, snapCardResize, type CardBounds } from './card-alignment'
 import { createPendingEdits, retargetNoteEdit, type NoteEdit } from './pending-edits'
 import { cameraFromViewport, parseCanvasLocation, recallFreeCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type CanvasLocation } from './canvas-location'
 import { useCanvasLocation } from './use-canvas-location'
@@ -82,7 +82,7 @@ import type { ProgramStatus } from '../../shared/status'
 import type { Canvas, CanvasNode, FileCanvasNode, FileData, NoteCanvasNode, NoteData, NotePatch, SharedState, Source, SourceResource, TerminalCanvasNode, TerminalData, WindowSize } from './types'
 
 const { t, n, locale } = useI18n()
-const { fitView, zoomIn, zoomOut, setViewport, getViewport, getNodesInitialized, ariaLiveMessage } = useVueFlow()
+const { fitView, zoomIn, zoomOut, setViewport, getViewport, getNodesInitialized, ariaLiveMessage, applyNodeChanges } = useVueFlow()
 const { hasSafeTop } = useDisplayCutout()
 const ViewportDiagnostics = defineAsyncComponent(() => import('./components/ViewportDiagnostics.vue'))
 const mobile = useMobileLayout()
@@ -245,9 +245,6 @@ function creationNavigation(event: Event) {
   if (!target || card?.dataset.sourceId !== target.sourceId || card?.dataset.windowId !== target.windowId) cancelNotificationReveal()
 }
 const focusedSize = reactive({ width: mobile.value ? visibleViewport.value.width : window.innerWidth / uiZoom.value - 32, height: mobile.value ? visibleViewport.value.height : window.innerHeight / uiZoom.value - 32 })
-type WindowGeometry = { ratio: number; insetX: number; insetY: number }
-const windowGeometry = reactive(new Map<string, WindowGeometry>())
-let geometryFrame = 0
 const saveState = ref<'' | 'saving' | 'saved' | 'saveFailed'>('')
 let refreshTimer: ReturnType<typeof setInterval>
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -540,32 +537,8 @@ const canvasCounts = computed(() => {
   return [windows && t('app.windowCount', windows), notes && t('app.noteCount', notes), files && t('app.fileCount', files)].filter(Boolean).join(' · ') || t('app.emptyCanvas')
 })
 
-function windowHeight(node: Pick<TerminalCanvasNode, 'sourceId' | 'windowId' | 'width' | 'height'>) {
-  const geometry = windowGeometry.get(`${node.sourceId}/${node.windowId}`)
-  return geometry ? (node.width - geometry.insetX) * geometry.ratio + geometry.insetY : node.height
-}
 function windowSize(node: Pick<TerminalCanvasNode, 'sourceId' | 'windowId'>): WindowSize {
   return windowSizes.value[`${node.sourceId}/${node.windowId}`] || { width: 480, height: 302 }
-}
-function recordGeometry(sourceId: string, windowId: string, ratio: number, insetX: number, insetY: number) {
-  if (!(ratio > 0) || !Number.isFinite(ratio)) return
-  const key = `${sourceId}/${windowId}`
-  const previous = windowGeometry.get(key)
-  if (previous && Math.abs(previous.ratio - ratio) < .00001 && previous.insetX === insetX && previous.insetY === insetY) return
-  windowGeometry.set(key, { ratio, insetX, insetY })
-  // This is view geometry only. Opening a canvas never edits its saved layout
-  // or changes the shared PTY's rows and columns.
-  cancelAnimationFrame(geometryFrame)
-  geometryFrame = requestAnimationFrame(() => {
-    if (layoutGesture) return
-    if (isOverview.value) rebuildNodes()
-    else nodes.value = nodes.value.map(node => {
-      if (node.type !== 'terminal') return node
-      const height = windowHeight(node.data)
-      return { ...node, data: { ...node.data, height }, style: { ...node.style, height: `${height}px` } }
-    })
-    if (pendingCreatedWindow.value) void nextTick().then(() => focusCreatedWindow())
-  })
 }
 
 function notify(message: string) { success.value = message }
@@ -590,22 +563,21 @@ function terminalData(node: TerminalCanvasNode, overview = false): TerminalData 
   } : undefined
   const visual = windowVisualState(found.source, found.window, freshStatuses.value)
   const closed = windowIsClosed(found.source, node.windowId, liveTerminalMetadata.value.get(`${node.sourceId}/${node.windowId}`))
-  return { ...node, zoomKey: sourceConfig ? terminalZoomKey(latestState.value?.instanceId || activeInstance.value.base, sourceConfig, node.windowId) : '', newTab, status: visual.status, statusFresh: visual.fresh, name: found.window?.name || cachedTerminalView(node.sourceId, node.windowId)?.name || t(closed ? 'app.closedWindow' : 'app.window'), subtitle: `${found.source?.name || sourceConfig?.name || t('app.unknownConnection')} / ${found.space?.name || t('app.space')}`, available: !!found.window && !found.source?.error, closed, sourceOffline: !!found.source?.error, panes: found.window?.panes || [], overview, focus: false, mobile: mobile.value, onAction: terminalAction, onResize: resizeNode, onLayoutStart: layoutStarted, onGeometry: recordGeometry }
+  return { ...node, zoomKey: sourceConfig ? terminalZoomKey(latestState.value?.instanceId || activeInstance.value.base, sourceConfig, node.windowId) : '', newTab, status: visual.status, statusFresh: visual.fresh, name: found.window?.name || cachedTerminalView(node.sourceId, node.windowId)?.name || t(closed ? 'app.closedWindow' : 'app.window'), subtitle: `${found.source?.name || sourceConfig?.name || t('app.unknownConnection')} / ${found.space?.name || t('app.space')}`, available: !!found.window && !found.source?.error, closed, sourceOffline: !!found.source?.error, panes: found.window?.panes || [], overview, focus: false, mobile: mobile.value, onAction: terminalAction, onResize: resizeNode, onResizeStart: resizeStarted }
 }
 function terminalFlowNode(node: TerminalCanvasNode, overview = false): Node {
   node = { ...node, ...windowSize(node) }
-  node.height = windowHeight(node)
   return { id: node.id, type: 'terminal', position: { x: node.x, y: node.y }, data: terminalData(node, overview), style: { width: `${node.width}px`, height: `${node.height}px` }, draggable: !overview && !mobile.value, selectable: !mobile.value, dragHandle: '.drag-handle' }
 }
 function noteData(node: NoteCanvasNode, focus = false): NoteData {
   const canvasId = activeId.value
-  return { ...node, zoomKey: cardZoomKey(latestState.value?.instanceId || activeInstance.value.base, node.id), mobile: mobile.value, focus, onResize: resizeNode, onLayoutStart: layoutStarted,
+  return { ...node, zoomKey: cardZoomKey(latestState.value?.instanceId || activeInstance.value.base, node.id), mobile: mobile.value, focus, onResize: resizeNode, onResizeStart: resizeStarted,
     onChange: (id, patch) => editNote(canvasId, id, patch), onFlush: () => void flushNotes(canvasId),
     onAction: (action, id) => { if (action === 'remove') removeNote(id); else cardAction(action, id) } }
 }
 function fileData(node: FileCanvasNode, focus = false): FileData {
   const { id: instanceId, base } = activeInstance.value, canvasId = activeId.value
-  return { ...node, zoomKey: cardZoomKey(latestState.value?.instanceId || base, node.id), instanceId, canvasId, mobile: mobile.value, focus, onResize: resizeNode, onLayoutStart: layoutStarted, onRemove: removeFile, onAction: cardAction,
+  return { ...node, zoomKey: cardZoomKey(latestState.value?.instanceId || base, node.id), instanceId, canvasId, mobile: mobile.value, focus, onResize: resizeNode, onResizeStart: resizeStarted, onRemove: removeFile, onAction: cardAction,
     canPersistView: () => activeInstance.value.id === instanceId && activeInstance.value.base === base &&
       !!canvases.value.find(canvas => canvas.id === canvasId)?.nodes.some(candidate => candidate.id === node.id && candidate.type === 'file') }
 }
@@ -644,7 +616,7 @@ function overviewNodes(): Node[] {
       if (!windows.length && !overviewCreation.value) return []
       const last = windows.at(-1)
       const cardWidth = last ? windowSize({ sourceId: source.id, windowId: last.id }).width : 480
-      const cardHeight = windows.length ? Math.max(...windows.map(window => windowHeight({ sourceId: source.id, windowId: window.id, ...windowSize({ sourceId: source.id, windowId: window.id }) }))) : 302
+      const cardHeight = windows.length ? Math.max(...windows.map(window => windowSize({ sourceId: source.id, windowId: window.id }).height)) : 302
       return [{ space: { ...space, windows }, cardWidth, cardHeight, height: 54 + cardHeight }]
     })
     if (!rows.length && !overviewCreation.value) continue
@@ -888,10 +860,10 @@ function focusNewNote(attempt = 0) {
 function focusCreatedWindow(attempt = 0, target = pendingCreatedWindow.value) {
   if (!target || target !== pendingCreatedWindow.value || target.canvasId !== activeId.value || !createdCameraReady) return
   const maximized = focused.value?.sourceId === target.sourceId && focused.value.windowId === target.windowId
-  if (!modalOpen.value && (maximized || windowGeometry.has(`${target.sourceId}/${target.windowId}`))) {
+  if (!modalOpen.value) {
     if (!maximized) {
       const page = pages.value.find(page => page.id === `${target.sourceId}/${target.windowId}`)
-      if (!page || Math.abs(page.height - windowHeight({ ...target, ...windowSize(target) })) > .02) {
+      if (!page || Math.abs(page.height - windowSize(target).height) > .02) {
         if (attempt < 30) requestAnimationFrame(() => focusCreatedWindow(attempt + 1, target))
         return
       }
@@ -1056,7 +1028,7 @@ function clearInstanceRuntime() {
   settings.value = null; fontRevision++; fontSignature = ''; latestState.value = undefined
   sources.value = []; polledResources.value = []; canvases.value = []; nodes.value = []; windowSizes.value = {}
   resourcesFresh.value = false; resourcesLoaded.value = false; loadFailure.value = undefined
-  overviewBackground.value = null; windowGeometry.clear(); resourceSignature = ''; resourceLayoutSignature = ''; resourceRequest = undefined
+  overviewBackground.value = null; resourceSignature = ''; resourceLayoutSignature = ''; resourceRequest = undefined
   currentPage.value = undefined; overviewPaged.value = false; preferredPageX.value = undefined
   pendingViewport = ''; viewportRequest++; cancelCreatedReveal(); cancelNotificationReveal(); lastOverviewInteraction = undefined
   layoutGesture = ''; saveState.value = ''; activeId.value = 'overview'; graphKey.value++
@@ -1154,7 +1126,7 @@ watch(freshStatuses, () => {
 watch(pageLayout, async () => { if (paging.value) { await nextTick(); await fitPage() } })
 watch(overviewInteraction, value => { if (value) lastOverviewInteraction = value; if (isOverview.value) rebuildNodes() })
 watch([overviewSelected, overviewOrder], async () => { preferredPageX.value = undefined; if (isOverview.value) { rebuildNodes(); await nextTick(); if (paging.value) await fitPage(); else void fitView({ padding: .14, maxZoom: 1, duration: 150 }) } })
-watch(activeId, async () => { if (!authenticated.value) return; scanTarget.value = null; preferredPageX.value = undefined; cancelCreatedReveal(); lastOverviewInteraction = undefined; overviewMenuOpen.value = false; layoutGesture = ''; focused.value = null; focusedCardId.value = ''; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
+watch(activeId, async () => { if (!authenticated.value) return; scanTarget.value = null; preferredPageX.value = undefined; cancelCreatedReveal(); lastOverviewInteraction = undefined; overviewMenuOpen.value = false; layoutGesture = ''; resizingCard = undefined; focused.value = null; focusedCardId.value = ''; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
 function switchCanvas(id: string) {
   if (notificationReveal.value?.canvasId !== id) cancelNotificationReveal()
   sidebarOpen.value = false
@@ -1654,7 +1626,34 @@ async function toggleSnap() {
   try { await write(`/api/canvases/${segment(canvas.id)}`, 'PATCH', { snapToGrid: !canvas.snapToGrid }); await syncState() }
   catch (reason) { showError(reason) }
 }
+let resizingCard: { origin: CardBounds; rawOrigin: CardBounds; raw: CardBounds; snapped: CardBounds } | undefined
 function layoutStarted() { if (!mobile.value) layoutGesture = activeId.value }
+function resizeStarted(id: string, bounds: Omit<CardBounds, 'id'>) {
+  layoutStarted()
+  const node = nodes.value.find(node => node.id === id)
+  const origin = node ? cardBounds(node) : undefined
+  resizingCard = origin ? { origin, rawOrigin: { id, ...bounds }, raw: { id, ...bounds }, snapped: origin } : undefined
+}
+function changeNodes(changes: NodeChange[]) {
+  if (resizingCard) {
+    const { origin, rawOrigin } = resizingCard
+    const dimensions = changes.find(change => change.type === 'dimensions' && change.id === origin.id && change.resizing && change.dimensions)
+    if (dimensions?.type === 'dimensions' && dimensions.dimensions) {
+      const position = changes.find(change => change.type === 'position' && change.id === origin.id)
+      const raw = resizingCard.raw = { ...resizingCard.raw, ...dimensions.dimensions, ...(position?.type === 'position' ? position.position : {}) }
+      const current = resizeFromDelta(origin, rawOrigin, raw)
+      const node = nodes.value.find(node => node.id === origin.id)
+      const rect = resizingCard.snapped = currentCanvas.value?.snapToGrid
+        ? snapCardResize(origin, current, nodes.value.map(cardBounds), getViewport().zoom,
+          node?.type === 'terminal' ? { width: 360, height: 220 } : { width: 240, height: 160 }) : current
+      changes = changes.filter(change => !(change.type === 'position' && change.id === origin.id))
+        .map(change => change === dimensions ? { ...dimensions, dimensions: { width: rect.width, height: rect.height } } : change)
+      changes.push({ id: origin.id, type: 'position', from: origin, position: { x: rect.x, y: rect.y } })
+    }
+  }
+  applyNodeChanges(changes)
+  announceNodeMove(changes)
+}
 function editLayout(id: string, patch: LayoutPatch) {
   const canvas = currentCanvas.value
   const node = canvas?.nodes.find(item => item.id === id)
@@ -1689,8 +1688,13 @@ function dragStopped(event: { node: Node; nodes?: Node[] }) {
 }
 function resizeNode(id: string, width: number, height: number, x?: number, y?: number) {
   if (mobile.value) return
-  layoutGesture = ''
   const node = currentCanvas.value?.nodes.find(item => item.id === id)
+  if (resizingCard?.origin.id === id) {
+    const rect = resizingCard.snapped
+    width = rect.width; height = rect.height; x = rect.x; y = rect.y
+  }
+  resizingCard = undefined
+  layoutGesture = ''
   if (node) {
     const size = { width, height: Math.max(160, Math.min(3000, height)) }
     if (isTerminalNode(node)) windowSizes.value[`${node.sourceId}/${node.windowId}`] = size
@@ -1799,7 +1803,7 @@ onMounted(async () => {
   else await activateInstance()
   refreshTimer = setInterval(() => { if (!document.hidden) void refreshResources(true) }, 2000)
 })
-onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('pointerdown', selectLogicalTerminal, true); window.removeEventListener('keydown', selectLogicalTerminal, true); document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload) })
+onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('pointerdown', selectLogicalTerminal, true); window.removeEventListener('keydown', selectLogicalTerminal, true); document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload) })
 </script>
 
 <template>
@@ -1871,7 +1875,7 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
         <img v-if="currentBackground && backgroundUrl" class="canvas-background" :src="backgroundUrl" :style="{ opacity: currentBackground.opacity }" alt="" aria-hidden="true" />
         <span id="canvas-card-select-help" hidden>{{ t('app.cardSelectHelp') }}</span>
         <span id="canvas-card-move-help" hidden>{{ t('app.cardMoveHelp') }}</span>
-        <VueFlow :style="{ '--card-resize-hit': `${8 / Math.min(getViewport().zoom, 1)}px` }" :snap-to-grid="false" v-if="nodes.length && !hasFocus" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && !mobile" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag="snapDraggedCards" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized" @nodes-change="announceNodeMove"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><template #node-create="nodeProps"><OverviewCreateNode v-bind="nodeProps" /></template><MiniMap v-if="showMinimap" :aria-label="t('app.windowNavigation')" @node-click="navigateMinimap" :node-class-name="node => node.type === 'terminal' ? `minimap-card minimap-window${node.data.statusFresh && needsAttention(node.data.status) ? ' minimap-pulse' : ''}${paging && currentPage?.id === `${node.data.sourceId}/${node.data.windowId}` ? ' minimap-current' : ''}` : node.type === 'note' || node.type === 'file' ? 'minimap-card' : 'minimap-decoration'" :pannable="!paging" :zoomable="!mobile && !paging" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? noteColor(node.data.color) : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
+        <VueFlow :style="{ '--card-resize-hit': `${8 / Math.min(getViewport().zoom, 1)}px` }" :snap-to-grid="false" :apply-default="false" v-if="nodes.length && !hasFocus" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && !mobile" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag="snapDraggedCards" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized" @nodes-change="changeNodes"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><template #node-create="nodeProps"><OverviewCreateNode v-bind="nodeProps" /></template><MiniMap v-if="showMinimap" :aria-label="t('app.windowNavigation')" @node-click="navigateMinimap" :node-class-name="node => node.type === 'terminal' ? `minimap-card minimap-window${node.data.statusFresh && needsAttention(node.data.status) ? ' minimap-pulse' : ''}${paging && currentPage?.id === `${node.data.sourceId}/${node.data.windowId}` ? ' minimap-current' : ''}` : node.type === 'note' || node.type === 'file' ? 'minimap-card' : 'minimap-decoration'" :pannable="!paging" :zoomable="!mobile && !paging" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? noteColor(node.data.color) : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
         <div v-if="workspacePending || !nodes.length && undiscoveredSources.length" class="workspace-status" :class="loadFailure ? 'workspace-error' : 'workspace-loading'" role="status">
           <template v-if="loadFailure"><span :title="loadFailure instanceof Error ? loadFailure.message : undefined">{{ t('app.loadFailed') }}</span><button class="button subtle" @click="load">{{ t('common.retry') }}</button></template>
           <template v-else><span class="spinner" />{{ t('common.loading') }}</template>

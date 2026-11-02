@@ -14,7 +14,7 @@ const props = defineProps<{
   disabled?: boolean
   modifiers: TerminalModifiers
   touchMode: TouchMode
-  readText(): string
+  readText(signal: AbortSignal): Promise<string>
   copyText(text?: string): boolean
 }>()
 const emit = defineEmits<{
@@ -30,6 +30,8 @@ const more = ref(false)
 const caps = ref(false)
 const sheet = ref<'select' | 'paste'>()
 const snapshot = ref('')
+const loadingText = ref(false), textFailed = ref(false)
+let textRequest: AbortController | undefined
 const draft = ref('')
 const copyResult = ref('')
 const selected = ref(false)
@@ -171,24 +173,44 @@ function toggleMore() { stopRepeat(); more.value = !more.value }
 function chooseMode(mode: TouchMode) { emit('mode', mode); more.value = false }
 function closeSheet() {
   if (!sheet.value) return
+  textRequest?.abort(); textRequest = undefined
   sheet.value = undefined
   copyResult.value = ''
   selected.value = false
   emit('mode', previousMode === 'select' ? 'scroll' : previousMode)
   emit('reading', false)
 }
-async function openSheet(kind: 'select' | 'paste') {
+async function loadText() {
+  textRequest?.abort()
+  const request = textRequest = new AbortController()
+  snapshot.value = ''; selected.value = false; loadingText.value = true; textFailed.value = false
+  try {
+    const text = await props.readText(request.signal)
+    if (request.signal.aborted) return
+    snapshot.value = text
+  } catch {
+    if (!request.signal.aborted) textFailed.value = true
+  } finally {
+    if (textRequest === request) {
+      loadingText.value = false
+      await nextTick()
+      if (!request.signal.aborted) textArea.value?.focus({ preventScroll: true })
+    }
+  }
+}
+function openSheet(kind: 'select' | 'paste') {
   stopRepeat()
   more.value = false
   previousMode = props.touchMode
   emit('reading', true)
   emit('mode', 'select')
-  snapshot.value = kind === 'select' ? props.readText() : ''
+  textRequest?.abort(); textRequest = undefined
+  snapshot.value = ''; loadingText.value = false; textFailed.value = false
   draft.value = ''
   copyResult.value = ''
   selected.value = false
   sheet.value = kind
-  if (kind === 'select') { await nextTick(); textArea.value?.focus({ preventScroll: true }) }
+  if (kind === 'select') void loadText()
 }
 function updateSelection() {
   const area = textArea.value
@@ -229,7 +251,7 @@ function visibilityChanged() { if (document.hidden) cancelPress() }
 watch(() => props.sessionKey, reset)
 watch(() => props.disabled, disabled => { if (disabled) reset() })
 onMounted(() => { window.addEventListener('blur', cancelPress); document.addEventListener('visibilitychange', visibilityChanged) })
-onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEventListener('blur', cancelPress); document.removeEventListener('visibilitychange', visibilityChanged) })
+onBeforeUnmount(() => { textRequest?.abort(); cancelPress(); clearTimeout(copyTimer); window.removeEventListener('blur', cancelPress); document.removeEventListener('visibilitychange', visibilityChanged) })
 </script>
 
 <template>
@@ -260,7 +282,11 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
     <div v-if="sheet" class="mobile-text-backdrop" @pointerdown.self="closeSheet">
       <section class="mobile-text-sheet" role="dialog" aria-modal="true" :aria-label="sheet === 'select' ? t('terminal.keyboard.selectText') : t('terminal.keyboard.pasteText')">
         <header><strong>{{ sheet === 'select' ? t('terminal.keyboard.selectText') : t('terminal.keyboard.pasteText') }}</strong><button type="button" :aria-label="t('common.close')" @pointerdown.prevent @click="closeSheet"><Icon name="close" :size="18" /></button></header>
-        <textarea v-if="sheet === 'select'" ref="textArea" :value="snapshot" readonly inputmode="none" :aria-label="t('terminal.keyboard.terminalText')" spellcheck="false" @select="updateSelection" @pointerup="updateSelection" @keyup="updateSelection" />
+        <div v-if="sheet === 'select' && (loadingText || textFailed)" class="mobile-text-status" :role="textFailed ? 'alert' : 'status'">
+          <template v-if="loadingText"><span class="spinner" />{{ t('common.loading') }}</template>
+          <template v-else><span>{{ t('panels.scan.incomplete') }}</span><button type="button" @click="loadText">{{ t('common.retry') }}</button></template>
+        </div>
+        <textarea v-else-if="sheet === 'select'" ref="textArea" :value="snapshot" readonly inputmode="none" :aria-label="t('terminal.keyboard.terminalText')" spellcheck="false" @select="updateSelection" @pointerup="updateSelection" @keyup="updateSelection" />
         <textarea v-else ref="textArea" v-model="draft" :aria-label="t('terminal.keyboard.textToPaste')" :placeholder="t('terminal.keyboard.longPressPaste')" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" @paste="pasteFiles" />
         <footer v-if="sheet === 'select'"><span role="status">{{ copyResult ? t(`terminal.clipboard.${copyResult}`) : '' }}</span><button type="button" :disabled="!selected" @pointerdown.prevent @click="copy(false)">{{ t('terminal.keyboard.copySelection') }}</button><button type="button" :disabled="!snapshot" @pointerdown.prevent @click="copy(true)">{{ t('terminal.keyboard.copyAll') }}</button></footer>
         <footer v-else><button type="button" :disabled="!draft || disabled" @pointerdown.prevent @click="pasteText">{{ t('terminal.keyboard.pasteIntoTerminal') }}</button></footer>
@@ -302,6 +328,7 @@ onBeforeUnmount(() => { cancelPress(); clearTimeout(copyTimer); window.removeEve
 .mobile-text-sheet{width:min(600px,100%);max-height:100%;min-height:0;height:min(520px,80%);display:flex;flex-direction:column;overflow:auto;overscroll-behavior:contain;border:1px solid #48515f;border-radius:9px;background:#20252d;box-shadow:0 16px 50px #0008}
 .mobile-text-sheet header{display:flex;align-items:center;justify-content:space-between;flex:0 0 48px;padding:0 6px 0 15px;border-bottom:1px solid #353e4b}
 .mobile-text-sheet strong{font-size:14px;font-weight:500}
+.mobile-text-status{display:flex;flex:1;align-items:center;justify-content:center;gap:8px;padding:12px;color:#a0adbf;font-size:13px}
 .mobile-text-sheet textarea{display:block;flex:1;min-height:0;resize:none;width:100%;padding:12px;margin:0;color:#d7dce5;border:0;border-radius:0;outline:none;box-shadow:none;background:#15191f;font-family:var(--content-font-family,monospace);font-feature-settings:var(--content-font-features,normal);font-size:16px;line-height:1.5;white-space:pre-wrap;overflow:auto;user-select:text;-webkit-user-select:text;touch-action:pan-y;-webkit-touch-callout:default}
 .mobile-text-sheet footer{display:flex;align-items:center;justify-content:flex-end;gap:5px;flex:0 0 52px;padding:2px 8px;border-top:1px solid #353e4b}
 .mobile-text-sheet footer>span{margin-right:auto;color:#a0b6a9;font-size:11px}

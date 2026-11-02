@@ -435,6 +435,35 @@ test('HTTP scans authenticate, verify regular file metadata and do not read byte
   assert.equal((await f.app.request(`http://canvas.test${opened.url}`, { headers: { Authorization: 'Bearer other-session' } })).status, 404)
 })
 
+test('HTTP window text authenticates and returns only pane text without file probing or stale partial output', async t => {
+  let probes = 0
+  const f = await fixture(t, undefined, async () => { probes++; return new Map() })
+  const endpoint = `/api/sources/${f.source.id}/spaces/space/windows/window/text`
+  const read = (session = 'first-session') => f.app.request(`http://canvas.test${endpoint}`, { headers: { Authorization: `Bearer ${session}` } })
+  assert.equal((await read('missing')).status, 401)
+  f.setContent([pane(['  program │─ text', '', ''], '/work', 'a'), pane(['second pane'], '/other', 'b')])
+  const response = await read()
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('cache-control'), 'no-store')
+  assert.deepEqual(await response.json(), { text: '  program │─ text\n\nsecond pane' })
+  assert.equal(probes, 0); assert.equal(f.reads(), 0)
+  f.setContent([{ ...pane(['partial']), incomplete: true }])
+  assert.equal((await read()).status, 503)
+  f.setContent(undefined)
+  assert.equal((await read()).status, 400)
+  assert.equal((await f.app.request(`http://canvas.test${endpoint.replace(f.source.id, randomUUID())}`, { headers: { Authorization: 'Bearer first-session' } })).status, 404)
+})
+
+test('window text rejects logout and changed source identity while its native read is pending', async t => {
+  const f = await fixture(t)
+  const loggedOut = f.service.read(f.source, 'space', 'window', 'first-session')
+  f.store.removeSession('first-session')
+  await assert.rejects(loggedOut, /Please sign in/u)
+  const changed = f.service.read(f.source, 'space', 'window', 'other-session')
+  f.store.put('source', { ...f.source, herdrSession: 'different' })
+  await assert.rejects(changed, /Connection changed/u)
+})
+
 test('custom-canvas opens add a persistent file beside the captured native window', async t => {
   const f = await fixture(t)
   await writeFile(join(f.root, 'report.txt'), 'card content')

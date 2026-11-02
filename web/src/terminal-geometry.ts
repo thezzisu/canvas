@@ -9,11 +9,6 @@ export function terminalBox(element: HTMLElement) {
     : { width: width + horizontal, height: height + vertical, contentWidth: width, contentHeight: height }
 }
 
-export function terminalInsets(card: HTMLElement, host: HTMLElement) {
-  const outer = terminalBox(card), content = terminalBox(host)
-  return { x: outer.width - content.contentWidth, y: outer.height - content.contentHeight }
-}
-
 export function fitTerminalGrid(available: { width: number; height: number }, rendered: { width: number; height: number; cols: number; rows: number }) {
   return {
     cols: Math.max(2, Math.min(500, Math.floor(available.width * rendered.cols / rendered.width))),

@@ -46,14 +46,20 @@ export class WindowContentService {
     for (const [controller, record] of this.scanning) if (!valid(record)) controller.abort()
   }
 
-  async scan(source: Source, spaceId: string, windowId: string, sessionId: string, signal = new AbortController().signal): Promise<WindowContentScan> {
+  async read(source: Source, spaceId: string, windowId: string, sessionId: string): Promise<NativeContentPane[]> {
     if (!this.options.store.hasSession(sessionId)) throw new Error('Please sign in')
     const sourceKey = sourceConnectionKey(source)
     const panes = await this.options.content(source, spaceId, windowId)
     const current = this.options.store.get<Source>('source', source.id)
-    if (!current || sourceConnectionKey(current) !== sourceKey) throw new Error('Connection changed; scan again')
+    if (!current || sourceConnectionKey(current) !== sourceKey) throw new Error('Connection changed; try again')
     if (!this.options.store.hasSession(sessionId)) throw new Error('Please sign in')
-    if (!panes) throw new Error('Open this window before scanning its content')
+    if (!panes) throw new Error('Open this window before reading its content')
+    return panes
+  }
+
+  async scan(source: Source, spaceId: string, windowId: string, sessionId: string, signal = new AbortController().signal): Promise<WindowContentScan> {
+    const sourceKey = sourceConnectionKey(source)
+    const panes = await this.read(source, spaceId, windowId, sessionId)
     const { references, ...candidates } = contentCandidates(panes)
     const scan = { id: randomUUID(), ...candidates }
     const allPaths = [...new Set([...scan.panes.flatMap(pane => pane.items.flatMap(item => item.kind === 'file' && item.path ? [item.path] : [])), ...references.values()])]

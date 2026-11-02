@@ -115,7 +115,7 @@ const size = computed(() => {
 </script>
 
 <template>
-  <NodeResizer v-if="!data.mobile && !data.focus" :node-id="id" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
+  <NodeResizer v-if="!data.mobile && !data.focus" :node-id="id" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="event => data.onResizeStart(id, event.params)" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
   <article class="file-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus, 'input-focused': contentActive }" :data-asset-id="data.assetId" :data-preview-kind="preview">
     <header ref="header" class="file-header drag-handle" :class="{ 'cutout-header': data.focus && data.mobile }" :data-cutout-position="data.focus && data.mobile && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus && data.mobile ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))`, '--cutout-controls': '264px' } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
       <span class="file-icon" :class="{ 'cutout-status': data.focus }"><Icon name="file" :size="13" /></span>

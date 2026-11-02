@@ -79,7 +79,7 @@ onBeforeUnmount(() => clearTimeout(copyTimer))
 </script>
 
 <template>
-  <NodeResizer v-if="!data.mobile && !data.focus" :node-id="id" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="data.onLayoutStart" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
+  <NodeResizer v-if="!data.mobile && !data.focus" :node-id="id" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="event => data.onResizeStart(id, event.params)" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
   <article class="note-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus, 'input-focused': contentActive }" :data-note-id="id" :style="{ '--note-color': noteColor(color), '--content-zoom': data.focus ? zoom / 100 : 1 }" @dragenter.capture="rejectNoteCardDrop" @dragover.capture="rejectNoteCardDrop" @drop.capture="rejectNoteCardDrop">
     <header ref="header" class="note-header drag-handle" :class="{ 'cutout-header': data.focus && data.mobile }" :data-cutout-position="data.focus && data.mobile && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus && data.mobile ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))`, '--cutout-controls': '264px' } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
       <div ref="colorPicker" class="note-color-picker nodrag" :class="{ 'cutout-status': data.focus }">

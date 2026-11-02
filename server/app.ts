@@ -226,6 +226,13 @@ export function createApp(
     const prepared = options.prepareDownload?.(c.req.param("ticket"), bearerToken(c.req.header("authorization")), context);
     return prepared ? c.body(null, 204) : c.json({ error: "Download expired" }, 404);
   });
+  app.get("/api/sources/:id/spaces/:space/windows/:window/text", async c => {
+    const source = store.get<Source>("source", c.req.param("id"));
+    if (!source || !options.windowContent) return c.json({ error: "Window not found" }, 404);
+    const panes = await options.windowContent.read(source, c.req.param("space"), c.req.param("window"), bearerToken(c.req.header("authorization")));
+    if (panes.some(pane => pane.incomplete)) return c.json({ error: "Some window content could not be read" }, 503);
+    return c.json({ text: panes.map(pane => pane.lines.join("\n").trimEnd()).filter(Boolean).join("\n\n") });
+  });
   app.post("/api/sources/:id/spaces/:space/windows/:window/scan", async c => {
     z.object({}).strict().parse(await c.req.json());
     const source = store.get<Source>("source", c.req.param("id"));

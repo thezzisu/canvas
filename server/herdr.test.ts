@@ -288,8 +288,9 @@ test("native herdr transport works with an unmodified server: split rendering, k
     const hardLine = ` ${hardWrapped.slice(0, -1)}`;
     const coloredPath = `./${'测'.repeat(19)}a(1).md`; // The first displayed row fills the 53-column native pane.
     const coloredLines = `Video (\x1b[32m${coloredPath.slice(0, -1)}\x1b[0m\r\n  \x1b[32md\x1b[0m)\r\n`;
+    const programDrawing = 'PROGRAM │─ BODY';
     const scanScript = join(root, 'scan-visible.py');
-    writeFileSync(scanScript, `import sys\nsys.stdout.write(${JSON.stringify(`\x1b[2J\x1b[H${wrappedPath}\r\n${wrappedUrl}\r\n${hardLine}\r\n  d\r\n${coloredLines}HARD_ONE\r\nHARD_TWO\r\nSCAN_DONE\r\n`)});sys.stdout.flush()\n`);
+    writeFileSync(scanScript, `import sys\nsys.stdout.write(${JSON.stringify(`${'SCROLLBACK\r\n'.repeat(80)}\x1b[2J\x1b[H${wrappedPath}\r\n${wrappedUrl}\r\n${hardLine}\r\n  d\r\n${coloredLines}HARD_ONE\r\nHARD_TWO\r\n${programDrawing}\r\nSCAN_DONE\r\n`)});sys.stdout.flush()\n`);
     terminal.write(`python3 '${scanScript}'\r`);
     await waitFor(() => screenText().includes('SCAN_DONE'), 'native scan fixture did not print');
     const beforeScan = snapshot();
@@ -304,6 +305,12 @@ test("native herdr transport works with an unmodified server: split rendering, k
           && contentCandidates([right]).panes.some(pane => pane.items.some(item => item.kind === 'file' && item.path?.endsWith(hardWrapped.slice(1))));
       } catch { return false; }
     }, 'native current visible read omitted fixture text or hard line breaks');
+    await waitFor(() => /[▐▕]/u.test(screenText()), 'native scrollbar fixture was not visible');
+    const cleanPanes = await terminal.content();
+    assert(cleanPanes?.find(item => item.id === nativePanes[1].pane_id)?.lines.includes(programDrawing), 'program-owned box-drawing characters are preserved');
+    const cleanText = cleanPanes!.flatMap(item => item.lines).join('\n');
+    assert(!/[┌┐└┘├┤┬┴┼▐▕]/u.test(cleanText), 'pane reads omit native frame, divider and scrollbar decoration');
+    assert(!/[│─]/u.test(cleanText.replace(programDrawing, '')), 'only the program contributes box-drawing characters');
     const afterScan = snapshot();
     assert.equal(afterScan.focused_tab_id, beforeScan.focused_tab_id);
     assert.equal(afterScan.focused_pane_id, beforeScan.focused_pane_id);

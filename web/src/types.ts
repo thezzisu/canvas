@@ -96,15 +96,14 @@ export interface TerminalData {
   newTab?: { pending(): boolean; create(): void }
   onAction: (action: string, id: string) => void
   onResize: (id: string, width: number, height: number, x?: number, y?: number) => void
-  onLayoutStart: () => void
-  onGeometry: (sourceId: string, windowId: string, ratio: number, insetX: number, insetY: number) => void
+  onResizeStart: (id: string, bounds: Omit<NodeLayout, 'id'>) => void
 }
 export interface NoteData extends NoteCanvasNode {
   zoomKey: string
   mobile?: boolean
   focus?: boolean
   onResize: (id: string, width: number, height: number, x?: number, y?: number) => void
-  onLayoutStart: () => void
+  onResizeStart: (id: string, bounds: Omit<NodeLayout, 'id'>) => void
   onChange: (id: string, patch: NotePatch) => void
   onFlush: () => void
   onAction: (action: string, id: string) => void
@@ -117,7 +116,7 @@ export interface FileData extends FileCanvasNode {
   mobile?: boolean
   focus?: boolean
   onResize: TerminalData['onResize']
-  onLayoutStart: () => void
+  onResizeStart: (id: string, bounds: Omit<NodeLayout, 'id'>) => void
   onRemove: (id: string) => void
   onAction?: (action: string, id: string) => void
 }

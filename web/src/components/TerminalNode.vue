@@ -15,7 +15,6 @@ import { isFileReference, readFileReference } from '../file-reference'
 import { copiedFile } from '../file-clipboard'
 import { cachedTerminalView, mountTerminal, type TerminalStatus } from '../terminals'
 import { emptyModifiers, type TerminalModifiers } from '../terminal-input'
-import { terminalInsets } from '../terminal-geometry'
 import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
 import { useDocumentFocus } from '../document-focus'
 import { useTerminalZoom } from '../terminal-zoom'
@@ -72,7 +71,6 @@ const liveTitle = computed(() => {
 const title = computed(() => [props.data.name, liveTitle.value, props.data.subtitle].filter(Boolean).join('\n'))
 let terminal: ReturnType<typeof mountTerminal> | undefined
 let ownedPresentation = false
-let resizeOrigin: { x: number; y: number } | undefined
 let previewTap: { id: number; x: number; y: number; at: number } | undefined
 let previewEligible = false
 function clearPreviewTap() { previewTap = undefined; previewEligible = false; document.removeEventListener('pointerdown', cancelMultiTap, true) }
@@ -106,7 +104,7 @@ function toggleKeyboard() {
   if (status.value.keyboardRequested) terminal?.blur()
   else terminal?.focus({ keyboard: true })
 }
-function readText() { return terminal?.selectionText() || terminal?.viewportText() || '' }
+function readText(signal: AbortSignal) { return terminal?.readText(signal) ?? Promise.reject(new Error(t('terminal.unavailable'))) }
 function copyText(text?: string) { return terminal?.copySelection(text) ?? false }
 function reading(active: boolean) { if (active) terminal?.blur() }
 function mobileKey(key: string, modifiers?: Partial<TerminalModifiers>) { terminal?.sendKey(key, modifiers) }
@@ -147,13 +145,6 @@ function mount() {
     ownedPresentation = props.data.focus && state.presentation?.owned === true
     status.value = state
     if (superseded) props.data.onAction('unfocus', props.id)
-  }, geometry => {
-    if (props.data.focus || maximizedElsewhere.value) return
-    const element = host.value
-    const card = element?.closest<HTMLElement>('.terminal-card')
-    if (!element || !card) return
-    const inset = terminalInsets(card, element)
-    props.data.onGeometry(props.data.sourceId, props.data.windowId, geometry.height / geometry.width, inset.x, inset.y)
   }, { magnified: props.data.focus, mobile: props.data.mobile, zoom: zoom.value, closed: !!props.data.closed })
   if (mobileFocus.value) { terminal?.setTouchMode('scroll'); terminal?.focus({ keyboard: false }) }
 }
@@ -179,26 +170,16 @@ const menu = computed<DropdownMenuItem[]>(() => [
   { label: t('common.settings'), icon: 'i-lucide-settings', onSelect: () => action('settings') },
   { label: t('app.closeWindow'), icon: 'i-lucide-trash', color: 'error', disabled: !props.data.available || closed.value, onSelect: () => action('close') },
 ])
-function resizeStarted(event: { params: { x: number; y: number } }) {
-  resizeOrigin = { x: event.params.x, y: event.params.y }
-  props.data.onLayoutStart()
+function resizeStarted(event: { params: { x: number; y: number; width: number; height: number } }) {
+  terminal?.setResizing(true)
+  props.data.onResizeStart(props.id, event.params)
 }
 async function resized(event: { params: { width: number; height: number; x: number; y: number } }) {
   if (props.data.overview || props.data.focus) return
   await nextTick()
-  const geometry = terminal?.resize()
-  let { width, height, x, y } = event.params
-  const element = host.value, card = element?.closest<HTMLElement>('.terminal-card')
-  if (geometry && element && card) {
-    const inset = terminalInsets(card, element)
-    const snappedWidth = geometry.width + inset.x
-    const snappedHeight = geometry.height + inset.y
-    // A left/top handle keeps the opposite edge anchored when snapping.
-    if (resizeOrigin && x !== resizeOrigin.x) x += width - snappedWidth
-    if (resizeOrigin && y !== resizeOrigin.y) y += height - snappedHeight
-    width = snappedWidth; height = snappedHeight
-  }
-  resizeOrigin = undefined
+  terminal?.setResizing(false)
+  terminal?.resize()
+  const { width, height, x, y } = event.params
   props.data.onResize(props.id, width, height, x, y)
 }
 </script>

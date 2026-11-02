@@ -6,7 +6,7 @@ import { metadataAfterPoll, type LiveWindowMetadata } from './live-resources'
 import { locale, t } from './i18n'
 import { Terminal } from '@xterm/xterm'
 import { terminalUnicodeAddon } from '../../shared/terminal-unicode'
-import { apiContext, apiFetch, apiUrl, isCurrentApi, uuid } from './api'
+import { api, apiContext, apiFetch, apiUrl, isCurrentApi, segment, uuid } from './api'
 import { clearDownloads, disconnectDownloads, receiveDownload } from './downloads'
 import { clearDirectories, receiveDirectory } from './directories'
 import { clearUrls, receiveUrl } from './urls'
@@ -47,7 +47,6 @@ export type TerminalStatus = {
   keyboardRequested?: boolean
   retryAttempt?: number
 }
-export interface TerminalGeometry { width: number; height: number }
 interface FocusResize { token: string; suspended: boolean; requested?: { cols: number; rows: number } }
 interface CompletionFrame { generation: number; focusedPaneId?: string; panes: Array<{ id: string; completion?: CompletionToken }> }
 interface Session {
@@ -86,6 +85,8 @@ interface Session {
   opened: boolean
   rendered?: RenderedTerminalGrid
   metrics?: RenderedTerminalGrid
+  cardFit?: { width: number; height: number; metrics: RenderedTerminalGrid }
+  resizing?: boolean
   parsedGrid?: { cols: number; rows: number }
   paintedGrid?: { cols: number; rows: number }
   resetPending?: boolean
@@ -93,7 +94,6 @@ interface Session {
   metadata?: WindowMetadata
   lastName?: string
   listeners: Set<(state: TerminalStatus) => void>
-  geometryListeners: Set<(geometry: TerminalGeometry) => void>
   resource: { sourceId: string; spaceId: string; windowId: string }
   uploads: TerminalUploads
   pastePreview?: () => void
@@ -354,6 +354,7 @@ function schedulePresentation(session: Session) {
       clearTimeout(session.resizeTimer)
       session.resizeTimer = setTimeout(() => { session.resizeTimer = undefined; updateFocusSize(session) }, 200)
     } else updateFocusSize(session)
+    if (!session.magnified) resize(session, false)
     present(session)
   })
 }
@@ -365,6 +366,7 @@ function disconnect(session: Session) {
   session.readGeneration = 0; session.readGesture = false
   session.connectionRevision++
   session.parsedGrid = undefined; session.paintedGrid = undefined; session.resetPending = false
+  session.cardFit = undefined
   session.connectionProbe?.abort(); session.connectionProbe = undefined
   endFocusSize(session)
   const socket = session.socket
@@ -515,6 +517,7 @@ async function connect(session: Session, probe: boolean) {
         else if (message.type === 'resize' && Number.isInteger(message.cols) && Number.isInteger(message.rows)) {
           if (session.term.cols !== message.cols || session.term.rows !== message.rows) {
             session.parsedGrid = undefined; session.paintedGrid = undefined
+            session.cardFit = undefined
           }
           session.term.resize(message.cols, message.rows)
           present(session)
@@ -549,7 +552,7 @@ function availableSize(host: HTMLElement) {
   const box = terminalBox(host)
   return { width: box.contentWidth, height: box.contentHeight }
 }
-function terminalGeometry(session: Session): TerminalGeometry | undefined {
+function terminalGeometry(session: Session) {
   const screen = session.term.element?.querySelector<HTMLElement>('.xterm-screen')
   if (!screen) return
   const { width, height } = terminalBox(screen)
@@ -564,9 +567,6 @@ function present(session: Session) {
   const available = availableSize(session.host)
   // xterm's scrollbar overlays the grid; it does not reserve a permanent gutter.
   const { width, height } = geometry
-  if (session.state.status === 'connected') {
-    for (const listener of session.geometryListeners) listener({ width, height })
-  }
   const requested = session.focusResize?.requested, painted = session.paintedGrid
   const desired = session.magnified ? proposedSize(session) : undefined
   // Keep the complete old frame fitted while the native resize is in flight.
@@ -575,7 +575,9 @@ function present(session: Session) {
     desired.cols === requested.cols && desired.rows === requested.rows &&
     painted.cols === requested.cols && painted.rows === requested.rows &&
     session.term.cols === requested.cols && session.term.rows === requested.rows
-  const scale = native ? 1 : session.magnified ? Math.min(available.width / width, available.height / height) : available.width / width
+  // A card can change aspect ratio while its shared native grid stays unchanged.
+  // Keep the whole frame visible until the native grid catches up.
+  const scale = native ? 1 : Math.min(session.magnified ? Infinity : 1, available.width / width, available.height / height)
   if (!(scale > 0)) return
   Object.assign(session.surface.style, { width: `${width}px`, height: `${height}px`, transform: native ? 'none' : `scale(${scale})` })
 }
@@ -617,17 +619,22 @@ function endFocusSize(session: Session) {
   if (session.socket?.readyState === WebSocket.OPEN) session.socket.send(JSON.stringify({ type: 'focus-resize-end', token: request.token }))
   setState(session, { ...session.state, focusResize: undefined })
 }
-function resize(session: Session) {
-  if (session.magnified || session.state.status !== 'connected' || (session.state.presentation?.maximized && !session.state.presentation.owned)) return
+function resize(session: Session, explicit = true) {
+  if (session.magnified || session.resizing || session.state.status !== 'connected' || session.state.presentation?.maximized) return
   const proposed = proposedSize(session)
-  if (!proposed || session.socket?.readyState !== WebSocket.OPEN) return
-  claimFocus(session)
+  if (!proposed || !session.host || !session.metrics || session.socket?.readyState !== WebSocket.OPEN) return
+  const available = availableSize(session.host), previous = session.cardFit
+  // Only the existing controller fits changed card geometry. A native grid
+  // change rechecks the frame; matching replies never send another resize.
+  if (!explicit && (session.state.readOnly || previous?.width === available.width && previous.height === available.height && previous.metrics === session.metrics)) return
+  session.cardFit = { ...available, metrics: session.metrics }
+  if (explicit) claimFocus(session)
   const { cols, rows } = proposed
   if (cols !== session.term.cols || rows !== session.term.rows) {
-    session.term.resize(cols, rows)
+    if (explicit) session.term.resize(cols, rows)
     session.socket.send(JSON.stringify({ type: 'resize', cols, rows }))
   }
-  present(session)
+  if (explicit) present(session)
   return terminalGeometry(session)
 }
 function claimFocus(session: Session) {
@@ -647,7 +654,7 @@ function sendTerminalData(session: Session, data: string) {
   session.term.input(data, true)
   return true
 }
-export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, onGeometry?: (geometry: TerminalGeometry) => void, options: { magnified?: boolean; mobile?: boolean; zoom?: number; closed?: boolean } = {}) {
+export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, options: { magnified?: boolean; mobile?: boolean; zoom?: number; closed?: boolean } = {}) {
   installTerminalEvents()
   const id = key(resource.sourceId, resource.spaceId, resource.windowId)
   let session = sessions.get(id)
@@ -677,7 +684,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     })
     session = { term, surface, uploads, opened: false, magnified: false, mobile: !!options.mobile, connectionRevision: 0,
       modifiers: emptyModifiers(), touchMode: 'scroll', keyboardRequested: false,
-      state: { status: 'connecting' }, listeners: new Set(), geometryListeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
+      state: { status: 'connecting' }, listeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
     const current = session
     current.reconnect = new TerminalReconnect({
       active: () => !!current.host?.isConnected && !document.hidden,
@@ -773,6 +780,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   session.viewVisible = true
   session.mobile = options.mobile === true
   session.magnified = options.magnified === true
+  session.resizing = false
   setTerminalZoom(session, options.zoom ?? 100)
   session.nativeKey = undefined
   session.term.options.disableStdin = !interactive(session) || options.closed === true
@@ -855,7 +863,6 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     !!session.host?.isConnected && interactive(session) && session.state.status === 'connected' && !session.state.readOnly &&
     !(session.state.presentation?.maximized && !session.state.presentation.owned))
   session.listeners.add(listener)
-  if (onGeometry) session.geometryListeners.add(onGeometry)
   if (options.closed) windowRemoved(session)
   listener(session.state)
   if (!options.closed && (!session.socket || session.socket.readyState === WebSocket.CLOSED))
@@ -914,11 +921,10 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       setState(current, { ...current.state, presentationCancelling: true })
       current.socket.send(JSON.stringify({ type: 'presentation-cancel', token: presentation.token, lease: presentation.lease }))
     },
-    selectionText() { return current.term.getSelection() },
-    viewportText() {
-      const buffer = current.term.buffer.active, lines: string[] = []
-      for (let row = buffer.viewportY; row < Math.min(buffer.length, buffer.viewportY + current.term.rows); row++) lines.push(buffer.getLine(row)?.translateToString(true) || '')
-      return lines.join('\n').trimEnd()
+    async readText(signal: AbortSignal) {
+      const { sourceId, spaceId, windowId } = current.resource
+      const result = await api<{ text: string }>(`/api/sources/${segment(sourceId)}/spaces/${segment(spaceId)}/windows/${segment(windowId)}/text`, { signal }, mountingContext)
+      return result.text
     },
     copySelection(text = current.term.getSelection()) { return current.clipboard?.copyText(text) ?? false },
     canPasteText,
@@ -929,6 +935,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     },
     setTouchMode(mode: TerminalTouchMode) { current.touchMode = mode; setModifiers(current); setState(current, { ...current.state, touchMode: mode }) },
     resize() { return resize(current) },
+    setResizing(value: boolean) { current.resizing = value },
     close() { if (current.host === host && isCurrentApi(mountingContext)) windowRemoved(current) },
     cancelUpload() { current.uploads.cancel() },
     reconnect() {
@@ -940,7 +947,6 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       observer.disconnect()
       intersection?.disconnect()
       current.listeners.delete(listener)
-      if (onGeometry) current.geometryListeners.delete(onGeometry)
       if (current.host === host) {
         current.pastePreview?.(); current.pastePreview = undefined
         endFocusSize(current)
