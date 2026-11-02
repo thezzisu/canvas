@@ -220,7 +220,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <div v-if="closed" class="terminal-closed" role="status">{{ t('terminal.closed') }}</div>
     <div v-else-if="!keepTerminal" class="terminal-unavailable"><Icon name="terminal" :size="28" /><strong>{{ t('terminal.unavailable') }}</strong></div>
     <div v-if="!closed && data.available && status.status === 'disconnected'" class="terminal-disconnected nodrag" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined"><span>{{ status.error || t('terminal.connection.disconnected') }}</span><button @click.stop="action('reconnect')"><Icon name="refresh" :size="13" />{{ t('terminal.connection.reconnect') }}</button></div>
-    <div v-if="!closed && keepTerminal && status.status === 'connecting'" class="terminal-loading nodrag" role="status"><span class="spinner" />{{ status.retryAttempt ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt }) : t('terminal.connection.connecting') }}</div>
+    <div v-if="!closed && keepTerminal && !maximizedElsewhere && (status.status === 'connecting' || status.status === 'connected' && !status.screenReady)" class="terminal-loading nodrag" :class="{ 'terminal-loading-initial': !status.screenReady }" role="status"><span class="spinner" />{{ status.retryAttempt ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt }) : t('common.loading') }}</div>
     <MobileKeyboard v-if="mobileFocus" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :read-text="readText" :copy-text="copyText" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @files="mobileFiles" @paste="mobilePaste" @paste-file="pasteFile" @reading="reading" />
   </article>
 </template>
@@ -237,6 +237,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-card.input-focused .terminal-name{color:#f4f6f9}
 .terminal-card.input-focused .terminal-live-title{color:#c4cbd5}
 .terminal-loading{background:#11131799;color:#b0b8c5}
+.terminal-loading-initial{z-index:12;background:#111317}
 .terminal-maximized{z-index:5;flex-direction:column;gap:10px}
 .terminal-maximized>button{padding:5px 9px;gap:5px;min-height:28px}
 .terminal-tab-name{overflow:hidden;text-overflow:ellipsis;min-width:0}

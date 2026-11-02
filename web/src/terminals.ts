@@ -34,6 +34,7 @@ import type { PaneAction, PaneContext } from '../../shared/pane-context'
 
 export type TerminalStatus = {
   status: 'connecting' | 'connected' | 'disconnected' | 'closed'
+  screenReady?: boolean
   error?: string
   readOnly?: boolean
   focusedPaneId?: string
@@ -93,6 +94,7 @@ interface Session {
   resizing?: boolean
   parsedGrid?: { cols: number; rows: number }
   paintedGrid?: { cols: number; rows: number }
+  initialFrame?: { cols: number; rows: number }
   resetPending?: boolean
   state: TerminalStatus
   metadata?: WindowMetadata
@@ -371,6 +373,7 @@ function disconnect(session: Session) {
   session.readGeneration = 0; session.readGesture = false
   session.connectionRevision++
   session.parsedGrid = undefined; session.paintedGrid = undefined; session.resetPending = false
+  session.initialFrame = undefined
   session.cardFit = undefined
   session.connectionProbe?.abort(); session.connectionProbe = undefined
   endFocusSize(session)
@@ -475,6 +478,7 @@ async function connect(session: Session, probe: boolean) {
         if (message.type === 'metadata' && isWindowMetadata(message.window) && message.window.id === session.resource.windowId) updateMetadata(session, message.window)
         else if (message.type === 'reset') {
           session.resetPending = true
+          session.initialFrame = undefined
           session.parsedCompletion = undefined; session.paintedCompletion = undefined; session.readCompletion = undefined
           session.parsedLayout = undefined; session.paintedLayout = undefined
           refreshReadFocus()
@@ -483,12 +487,14 @@ async function connect(session: Session, probe: boolean) {
           (!('completion' in pane) || pane.completion === undefined || isCompletionToken(pane.completion)))) {
           const frame: CompletionFrame = { generation: message.generation, layout: typeof message.layout === 'string' ? message.layout : undefined,
             focusedPaneId: typeof message.focusedPaneId === 'string' ? message.focusedPaneId : undefined, panes: message.panes }
+          const grid = { cols: session.term.cols, rows: session.term.rows }
           // This control frame follows the matching ANSI bytes. Queue behind their
           // parse, then request a real paint even when the result text is unchanged.
           session.term.write('', () => {
             if (session.socket !== socket || !isCurrentApi(context) || frame.generation !== (session.readGeneration || 0)) return
             session.parsedCompletion = frame
             session.parsedLayout = frame.layout
+            if (!session.state.screenReady && session.term.cols === grid.cols && session.term.rows === grid.rows) session.initialFrame = grid
             if (session.opened) session.term.refresh(0, session.term.rows - 1)
           })
         }
@@ -703,7 +709,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     })
     // Offscreen xterm buffers can resize before the DOM renderer catches up.
     // Keep each measured grid paired with the dimensions that actually painted it.
-    term.onRender(() => {
+    term.onRender(event => {
       if (current.parsedLayout) current.paintedLayout = current.parsedLayout
       if (current.parsedCompletion) { current.paintedCompletion = current.parsedCompletion; refreshReadFocus() }
       const grid = terminalGeometry(current)
@@ -715,6 +721,14 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       const previous = current.rendered
       const next = { ...grid, cols: term.cols, rows: term.rows }
       current.metrics = terminalMetrics(current.metrics, previous, next)
+      const initial = current.initialFrame
+      if (!current.state.screenReady && current.host?.isConnected && initial &&
+          initial.cols === term.cols && initial.rows === term.rows &&
+          parsed?.cols === term.cols && parsed.rows === term.rows && event.start === 0 && event.end === term.rows - 1) {
+        present(current)
+        current.initialFrame = undefined
+        setState(current, { ...current.state, screenReady: true })
+      }
       if (!frameReady && previous?.width === grid.width && previous.height === grid.height && previous.cols === term.cols && previous.rows === term.rows) return
       current.rendered = next
       present(current)

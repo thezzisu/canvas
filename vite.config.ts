@@ -17,7 +17,7 @@ export default defineConfig({
     this.emitFile({ type: 'asset', fileName: 'build-info.json', source: JSON.stringify(buildInfo) + '\n' })
     this.emitFile({ type: 'asset', ...notificationWorker })
   } }, contentFontsPlugin(), VitePWA(pwaOptions), vue(), VueI18nPlugin({ include: fileURLToPath(new URL('./web/src/locales/**', import.meta.url)) }), ui({ prose: true, router: false, colorMode: false, autoImport: false, components: false, dts: false,
-    icon: { clientBundle: { icons: ['lucide:x', 'lucide:chevron-down', 'lucide:check', 'lucide:copy', 'lucide:copy-check', 'lucide:qr-code', 'lucide:arrow-left', 'lucide:scan-qr-code', 'lucide:image', 'lucide:camera', 'lucide:camera-off'] } },
+    icon: { clientBundle: { scan: { globInclude: ['src/**/*.{vue,ts}'] } } },
     ui: { colors: { primary: 'amber', neutral: 'zinc' } },
   })],
   build: { outDir: '../dist/web', emptyOutDir: true, rolldownOptions: { output: { comments: { legal: true } } } },
