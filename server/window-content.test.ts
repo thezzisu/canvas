@@ -1,11 +1,12 @@
 import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { contentCandidates } from './content-candidates.ts'
+import { terminalCellWidth } from '../shared/terminal-unicode.ts'
 import { windowContent, readWindowContent, type NativeContentPane } from './herdr/content.ts'
 import type { ClientShellSnapshot, FrameData, PaneSurfaceFrame } from './herdr/wire.ts'
 import { readSourceFile, regularSourceFiles } from './source-file.ts'
@@ -97,7 +98,7 @@ test('native snapshot scan reads pane inner rectangles and their OSC 8 targets o
   const { surface, snapshot } = nativeFrame()
   const panes = windowContent(surface, snapshot, 'window')
   assert.equal(panes.length, 2)
-  assert.deepEqual(panes[0], { id: 'a', name: 'Left', cwd: '/one', lines: ['./left.txt', 'Open'], links: [{ label: 'Open', url: 'https://example.test/original' }] })
+  assert.deepEqual(panes[0], { id: 'a', name: 'Left', cwd: '/one', columns: 29, lines: ['./left.txt', 'Open'], links: [{ label: 'Open', url: 'https://example.test/original' }] })
   assert.equal(panes[1]!.cwd, undefined)
   assert(!JSON.stringify(panes).includes('/outside.txt'))
   assert(!JSON.stringify(panes).includes('/hidden'))
@@ -200,6 +201,70 @@ async function fixture(t: TestContext, readFileOverride?: WindowContentOptions['
   return { root, store, source, canvas, assets, downloads, service, app, call, scan, reads: () => reads,
     setContent: (value: NativeContentPane[] | undefined) => { content = value } }
 }
+
+
+test('full-width CJK path display joins a short extension tail and verifies the actual file', async t => {
+  const f = await fixture(t)
+  const relative = 'dist/AutoOps自动运维产品生产版功能说明_机器场景.md'
+  await mkdir(join(f.root, 'dist'))
+  await writeFile(join(f.root, relative), 'synthetic markdown')
+  const first = `  ${relative.slice(0, -1)}`
+  assert(terminalCellWidth(first) > first.length, 'fixture includes full-width Chinese cells')
+  f.setContent([{ ...pane([first, '  d'], f.root), columns: terminalCellWidth(first) }])
+  const scan = await f.scan()
+  assert.deepEqual(scan.panes[0]!.items.filter(item => item.kind === 'file').map(item => item.path), [join(f.root, relative)])
+  assert.equal(f.reads(), 0, 'scan validates metadata without reading file bytes')
+  f.setContent([{ ...pane([first.replace('AutoOps', 'Missing'), '  d'], f.root), columns: terminalCellWidth(first) }])
+  assert.deepEqual((await f.scan()).panes, [], 'a reconstructed path still requires an existing file')
+})
+
+test('Markdown display decoration is removed from wrapped paths without consuming another filename', async t => {
+  const f = await fixture(t)
+  await mkdir(join(f.root, 'docs'))
+  for (const name of ['引用说明.md', '加粗说明.md', 'list.md']) await writeFile(join(f.root, 'docs', name), 'synthetic')
+  const quoted = '> - `docs/引用说明.m'
+  const bold = '> **docs/加粗说明.m'
+  f.setContent([
+    { ...pane([quoted, '>   d`'], f.root, 'quote'), columns: terminalCellWidth(quoted) },
+    { ...pane([bold, '> d**'], f.root, 'bold'), columns: terminalCellWidth(bold) },
+    pane(['> 1. `docs/list.md`'], f.root, 'list'),
+  ])
+  const scan = await f.scan()
+  assert.deepEqual(scan.panes.map(group => group.items.filter(item => item.kind === 'file').map(item => item.path)), [
+    [join(f.root, 'docs/引用说明.md')], [join(f.root, 'docs/加粗说明.md')], [join(f.root, 'docs/list.md')],
+  ])
+  assert.equal(f.reads(), 0)
+})
+
+test('path reconstruction preserves real spaces and OSC 8 targets instead of compacting filenames', async t => {
+  const f = await fixture(t)
+  await mkdir(join(f.root, 'docs'))
+  for (const name of ['real name.md', 'realname.md', 'linked name.md', 'linkedname.md']) await writeFile(join(f.root, 'docs', name), 'synthetic')
+  const first = '> `docs/real name.m'
+  const content = { ...pane([first, '> d`'], f.root), columns: terminalCellWidth(first), links: [
+    { label: 'Linked file', url: `file://${f.root}/docs/linked%20name.md` },
+  ] }
+  f.setContent([content])
+  const scan = await f.scan()
+  assert.deepEqual(scan.panes[0]!.items.filter(item => item.kind === 'file').map(item => item.path), [
+    join(f.root, 'docs/linked name.md'), join(f.root, 'docs/real name.md'),
+  ])
+  assert.equal(f.reads(), 0)
+})
+
+test('width-based continuation remains bounded by pane, distinct filenames and scan capacity', () => {
+  const first = 'docs/report.m'
+  const paths = (groups: NativeContentPane[]) => contentCandidates(groups).panes.flatMap(group => group.items.flatMap(item => item.kind === 'file' ? [item.path] : []))
+  assert(!paths([{ ...pane([first, 'd'], '/work'), columns: 80 }]).includes('/work/docs/report.md'), 'short hard lines never join')
+  assert(!paths([{ ...pane([first.padEnd(80, ' '), 'd'], '/work'), columns: 80 }]).includes('/work/docs/report.md'), 'cell padding is not content reaching the edge')
+  assert(!paths([{ ...pane([first], '/work', 'left'), columns: terminalCellWidth(first) }, pane(['d'], '/work', 'right')]).includes('/work/docs/report.md'), 'panes never join')
+  assert(!paths([{ ...pane([first, 'other.md'], '/work'), columns: terminalCellWidth(first) }]).includes('/work/docs/report.mother.md'), 'another complete filename is not a continuation')
+  const overlong = 'd'.repeat(33)
+  assert(!paths([{ ...pane([first, overlong], '/work'), columns: terminalCellWidth(first) }]).includes(`/work/${first}${overlong}`), 'continuation length is bounded')
+  const capped = contentCandidates([{ ...pane([...Array.from({ length: 200 }, (_, i) => `/tmp/${i}.md`), first, 'd'], '/work'), columns: terminalCellWidth(first) }])
+  assert.equal(capped.panes.flatMap(group => group.items).length, 200)
+  assert.equal(capped.truncated, true)
+})
 
 test('HTTP scans authenticate, verify regular file metadata and do not read bytes or fetch links', async t => {
   const f = await fixture(t)

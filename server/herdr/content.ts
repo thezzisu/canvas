@@ -5,6 +5,7 @@ export interface NativeContentPane {
   id: string
   name: string
   cwd?: string
+  columns?: number
   incomplete?: boolean
   lines: string[]
   links: Array<{ label: string; url: string }>
@@ -41,7 +42,7 @@ function readPane(frame: FrameData, rect: SurfaceRect): Pick<NativeContentPane, 
 export function windowContent(surface: PaneSurfaceFrame, snapshot: ClientShellSnapshot, tabId: string): NativeContentPane[] {
   if (surface.popup) {
     const popup = surface.popup, rect = popupInnerRect(surface)
-    return rect ? [{ id: popup.terminal_id, name: clean(popup.title),
+    return rect ? [{ id: popup.terminal_id, name: clean(popup.title), columns: rect.width,
       ...readPane(popup.frame, { x: 0, y: 0, width: rect.width, height: rect.height }) }] : []
   }
   return surface.panes.flatMap(pane => {
@@ -49,7 +50,7 @@ export function windowContent(surface: PaneSurfaceFrame, snapshot: ClientShellSn
     if (!metadata) return []
     const cwd = validCwd(metadata.foreground_cwd) ? metadata.foreground_cwd : validCwd(metadata.cwd) ? metadata.cwd : undefined
     const name = typeof metadata.label === 'string' ? clean(metadata.label).slice(0, 200) : ''
-    return [{ id: pane.pane_id, name, ...(cwd ? { cwd } : {}), ...readPane(surface.frame, pane.inner_rect) }]
+    return [{ id: pane.pane_id, name, columns: pane.inner_rect.width, ...(cwd ? { cwd } : {}), ...readPane(surface.frame, pane.inner_rect) }]
   })
 }
 

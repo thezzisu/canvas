@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HerdrClientTransport } from "./herdr/client.ts";
 import { herdrApiRequest } from "./herdr/api.ts";
+import { contentCandidates } from "./content-candidates.ts";
 import headless from "@xterm/headless";
 import {
   createSpace,
@@ -283,8 +284,10 @@ test("native herdr transport works with an unmodified server: split rendering, k
     );
     const wrappedPath = `/tmp/${'soft-wrap-'.repeat(9)}visible.txt`;
     const wrappedUrl = `https://example.test/${'long-url-'.repeat(8)}page`;
+    const hardWrapped = `./${'说明'.repeat(12)}.md`;
+    const hardLine = ` ${hardWrapped.slice(0, -1)}`;
     const scanScript = join(root, 'scan-visible.py');
-    writeFileSync(scanScript, `import sys\nsys.stdout.write(${JSON.stringify(`\x1b[2J\x1b[H${wrappedPath}\r\n${wrappedUrl}\r\nHARD_ONE\r\nHARD_TWO\r\nSCAN_DONE\r\n`)});sys.stdout.flush()\n`);
+    writeFileSync(scanScript, `import sys\nsys.stdout.write(${JSON.stringify(`\x1b[2J\x1b[H${wrappedPath}\r\n${wrappedUrl}\r\n${hardLine}\r\n  d\r\nHARD_ONE\r\nHARD_TWO\r\nSCAN_DONE\r\n`)});sys.stdout.flush()\n`);
     terminal.write(`python3 '${scanScript}'\r`);
     await waitFor(() => screenText().includes('SCAN_DONE'), 'native scan fixture did not print');
     const beforeScan = snapshot();
@@ -293,7 +296,8 @@ test("native herdr transport works with an unmodified server: split rendering, k
         const scanned = await terminal!.content();
         const right = scanned?.find(item => item.id === nativePanes[1].pane_id);
         return !!right?.lines.join('').includes(wrappedPath) && right.lines.join('').includes(wrappedUrl)
-          && right.lines.includes('HARD_ONE') && right.lines.includes('HARD_TWO');
+          && right.lines.includes('HARD_ONE') && right.lines.includes('HARD_TWO')
+          && contentCandidates([right]).panes.some(pane => pane.items.some(item => item.kind === 'file' && item.path?.endsWith(hardWrapped.slice(1))));
       } catch { return false; }
     }, 'native current visible read omitted fixture text or hard line breaks');
     const afterScan = snapshot();
