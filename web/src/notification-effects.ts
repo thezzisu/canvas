@@ -59,10 +59,10 @@ export function isBadgeOwnerChange(event: StorageEvent) { return event.key === b
 
 /** Serialize each channel separately, so a muted tab cannot consume another's sound. */
 export async function deliverNotificationEffects(instance: string, event: CanvasNotification, options: {
-  title: string; body: string; url: string; quiet?: boolean; valid(): boolean
+  title: string; body: string; url: string; quiet?: boolean; suppressSystem?: boolean; valid(): boolean
 }) {
   const system = notificationSystemEnabled.value && typeof Notification !== 'undefined' && Notification.permission === 'granted'
-  const registration = system && !options.quiet ? await navigator.serviceWorker?.getRegistration().catch(() => undefined) : undefined
+  const registration = system && !options.quiet && !options.suppressSystem ? await navigator.serviceWorker?.getRegistration().catch(() => undefined) : undefined
   if (!options.valid() || !options.quiet && !canPlayNotificationSound() && !registration?.active) return
   await locked(lockKey(instance), async () => {
     if (!options.valid()) return
@@ -73,7 +73,8 @@ export async function deliverNotificationEffects(instance: string, event: Canvas
     const storedFocus = read(focusKey(instance))
     const focus: Focus | undefined = await ownerAlive(storedFocus?.owner) ? storedFocus : undefined
     if (!options.valid()) return
-    if (options.quiet || focus?.sourceId === event.sourceId && focus.windowId === event.windowId && (!event.paneId || event.paneId === focus.paneId)) record.quiet = true
+    const attended = focus?.sourceId === event.sourceId && focus.windowId === event.windowId && (!event.paneId || event.paneId === focus.paneId)
+    if (options.quiet || attended && event.kind !== 'done') record.quiet = true
     if (record.quiet) {
       localStorage.setItem(key, JSON.stringify({ events: recent.slice(-64), soundedAt: value?.soundedAt || 0 })); return
     }
@@ -83,7 +84,7 @@ export async function deliverNotificationEffects(instance: string, event: Canvas
       if (now - soundedAt >= 750) { playNotificationSound(event.kind); soundedAt = now }
       record.sound = true
     }
-    if (!record.system && options.valid() && notificationSystemEnabled.value && typeof Notification !== 'undefined' && Notification.permission === 'granted' && registration?.active) {
+    if (!record.system && !options.suppressSystem && !attended && options.valid() && notificationSystemEnabled.value && typeof Notification !== 'undefined' && Notification.permission === 'granted' && registration?.active) {
       try {
         await showSystemNotification(registration, options.title, {
           body: options.body,

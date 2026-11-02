@@ -1,3 +1,4 @@
+import type { CompletionReads } from './completion-reads.ts';
 import { Hono } from "hono";
 import { Readable } from "node:stream";
 import { bodyLimit } from "hono/body-limit";
@@ -89,6 +90,7 @@ export function createApp(
   account: Account,
   terminals: TerminalManager,
   options: {
+    completionReads?: CompletionReads;
     updateAccount?: (username: string, password?: string) => void;
     allowedOrigins?: ReadonlySet<string>;
     openDownload?: (ticket: string, sessionId: string) => Promise<DownloadResponse | undefined>;
@@ -403,7 +405,7 @@ export function createApp(
   app.get("/api/resources", async (c) =>
     c.json({
       sources: await Promise.all(
-        store.list<Source>("source").map((s) => providers.listResources(s)),
+        store.list<Source>("source").map(async (s) => { const resource = await providers.listResources(s); return options.completionReads?.projectResources(s, resource) || resource; }),
       ),
     }),
   );

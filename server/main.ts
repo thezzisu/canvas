@@ -9,6 +9,7 @@ import { WebSocketServer } from "ws";
 import { Store, sourceConnectionKey, type Source } from "./state.ts";
 import { createApp } from "./app.ts";
 import { AccountStore } from "./account.ts";
+import { CompletionReads } from "./completion-reads.ts";
 import { TerminalManager } from "./terminals.ts";
 import { allowedOrigin, parseAllowedOrigins } from "./auth.ts";
 import { authenticateWebSocket } from "./websocket-auth.ts";
@@ -33,7 +34,8 @@ const account = accounts.account;
 const store = new Store(join(dataDir, "canvas.db"));
 const urlForwards = new UrlForwardService(store);
 const assets = new AssetStore(dataDir, store);
-const terminals = new TerminalManager();
+const completionReads = new CompletionReads(store);
+const terminals = new TerminalManager(completionReads);
 const uploads = new UploadService(terminals);
 const helperBytes = readFileSync(new URL("../cli/canvas", import.meta.url));
 const socketSessions = new WeakMap<import("ws").WebSocket, string>();
@@ -61,6 +63,7 @@ const windowContent = new WindowContentService({
 });
 const allowedOrigins = parseAllowedOrigins(process.env.CANVAS_ALLOWED_ORIGINS);
 const app = createApp(store, account, terminals, {
+  completionReads,
   updateAccount: (username, password) => accounts.update(username, password),
   allowedOrigins,
   openDownload: (ticket, session) => downloads.open(ticket, session),

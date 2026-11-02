@@ -1,4 +1,6 @@
 import { shallowRef, watch } from 'vue'
+import { isCompletionToken, sameCompletion, type CompletionToken } from '../../shared/completion'
+import type { PaneFocus, WindowFocus } from './completion-focus'
 import { isWindowMetadata, type WindowMetadata } from '../../shared/window-metadata'
 import { metadataAfterPoll, type LiveWindowMetadata } from './live-resources'
 import { locale, t } from './i18n'
@@ -47,7 +49,13 @@ export type TerminalStatus = {
 }
 export interface TerminalGeometry { width: number; height: number }
 interface FocusResize { token: string; suspended: boolean; requested?: { cols: number; rows: number } }
+interface CompletionFrame { generation: number; focusedPaneId?: string; panes: Array<{ id: string; completion?: CompletionToken }> }
 interface Session {
+  readGeneration?: number
+  readGesture?: boolean
+  parsedCompletion?: CompletionFrame
+  paintedCompletion?: CompletionFrame
+  readCompletion?: { paneId: string; completion: CompletionToken }
   term: Terminal
   surface: HTMLDivElement
   host?: HTMLElement
@@ -93,11 +101,64 @@ interface Session {
   clipboard?: TerminalClipboard
 }
 const sessions = new Map<string, Session>()
+let logicalFocus: WindowFocus | undefined
+let readObserver: IntersectionObserver | undefined, readHost: HTMLElement | undefined, readVisible = false
+export const terminalReadFocus = shallowRef<PaneFocus>()
+
+/** Logical attention is independent of the DOM keyboard/input controller. */
+export function prepareTerminalReadFocus(focus: WindowFocus) {
+  for (const session of sessions.values()) if (session.resource.sourceId === focus.sourceId && session.resource.windowId === focus.windowId) {
+    if (session.state.status !== 'connected' || session.socket?.readyState !== WebSocket.OPEN) continue
+    session.readGeneration = (session.readGeneration || 0) + 1; session.readGesture = true
+    session.parsedCompletion = undefined; session.paintedCompletion = undefined; session.readCompletion = undefined
+  }
+  refreshReadFocus()
+}
+function finishTerminalReadGesture() {
+  for (const session of sessions.values()) if (session.readGesture) {
+    session.readGesture = false
+    if (session.socket?.readyState === WebSocket.OPEN) session.socket.send(JSON.stringify({ type: 'completion-fence', generation: session.readGeneration }))
+  }
+}
+export function setTerminalReadFocus(focus?: WindowFocus) {
+  logicalFocus = focus
+  refreshReadFocus()
+}
+function refreshReadFocus() {
+  const session = logicalFocus && [...sessions.values()].find(session => session.resource.sourceId === logicalFocus!.sourceId && session.resource.windowId === logicalFocus!.windowId && session.host?.isConnected)
+  const host = session?.host
+  if (host !== readHost) {
+    readObserver?.disconnect(); readHost = host; readVisible = false
+    if (host) {
+      readObserver ??= new IntersectionObserver(entries => {
+        const entry = entries.find(entry => entry.target === readHost)
+        if (entry) { readVisible = entry.isIntersecting; refreshReadFocus() }
+      })
+      readObserver.observe(host)
+    }
+  }
+  if (!session || !readVisible || document.hidden || !document.hasFocus() || session.viewVisible === false || !interactive(session) || session.state.status !== 'connected' || session.socket?.readyState !== WebSocket.OPEN ||
+      session.state.presentation?.maximized && (!session.state.presentation.owned || !session.magnified)) {
+    terminalReadFocus.value = undefined; return
+  }
+  const paneId = session.state.focusedPaneId
+  if (!paneId) { terminalReadFocus.value = undefined; return }
+  const painted = session.paintedCompletion?.focusedPaneId === paneId ? session.paintedCompletion.panes.find(pane => pane.id === paneId)?.completion : undefined
+  const next: PaneFocus = { ...logicalFocus!, paneId, ...(painted ? { painted } : {}) }
+  const previous = terminalReadFocus.value
+  if (!previous || previous.sourceId !== next.sourceId || previous.windowId !== next.windowId || previous.paneId !== next.paneId || !sameCompletion(previous.painted, next.painted)) terminalReadFocus.value = next
+  const current = session.metadata?.panes.find(pane => pane.id === paneId)
+  if (current?.status !== 'done' || !painted || !sameCompletion(current.completion, painted) ||
+      session.readCompletion?.paneId === paneId && sameCompletion(session.readCompletion.completion, painted)) return
+  session.readCompletion = { paneId, completion: painted }
+  session.socket.send(JSON.stringify({ type: 'completion-read', generation: session.readGeneration || 0, paneId, ...painted }))
+}
 export const liveTerminalMetadata = shallowRef<ReadonlyMap<string, LiveWindowMetadata>>(new Map())
 let metadataSources = new Set<string>()
 function updateMetadata(session: Session, metadata?: WindowMetadata) {
   if (metadata && !metadataSources.has(session.resource.sourceId)) return
   session.metadata = metadata
+  refreshReadFocus()
   if (metadata) session.lastName = metadata.name
   // A native window can move between spaces while its previous view retires.
   // Closing that view must not erase metadata from its replacement socket.
@@ -148,6 +209,7 @@ export function acknowledgeTerminalMetadata(started: ReadonlyMap<string, LiveWin
 function syncViewVisibility(session: Session) {
   if (session.state.status !== 'connected' || session.socket?.readyState !== WebSocket.OPEN) return
   const visible = !!session.host?.isConnected && session.viewVisible !== false && !document.hidden
+  refreshReadFocus()
   if (session.reportedVisible === visible) return
   session.reportedVisible = visible
   session.socket.send(JSON.stringify({ type: 'view-visible', visible }))
@@ -254,6 +316,8 @@ function installTerminalEvents() {
   document.addEventListener('drop', preventFileNavigation)
   document.addEventListener('visibilitychange', terminalVisibilityChanged)
   window.addEventListener('blur', releaseMouseOwner)
+  window.addEventListener('mouseup', finishTerminalReadGesture)
+  window.addEventListener('focus', finishTerminalReadGesture)
   terminalEventsInstalled = true
 }
 const key = (sourceId: string, spaceId: string, windowId: string) => `${sourceId}\u0000${spaceId}\u0000${windowId}`
@@ -262,6 +326,7 @@ function setState(session: Session, state: TerminalStatus) {
     keyboardRequested: session.keyboardRequested }
   session.keyboardLock?.refresh()
   session.listeners.forEach(listener => listener(next))
+  refreshReadFocus()
 }
 function interactive(session: Session) { return !session.mobile || session.magnified }
 function setModifiers(session: Session, modifiers: Partial<TerminalModifiers> = {}) {
@@ -296,6 +361,8 @@ function disconnect(session: Session) {
   session.pastePreview?.(); session.pastePreview = undefined
   updateMetadata(session)
   session.reportedVisible = undefined
+  session.parsedCompletion = undefined; session.paintedCompletion = undefined; session.readCompletion = undefined
+  session.readGeneration = 0; session.readGesture = false
   session.connectionRevision++
   session.parsedGrid = undefined; session.paintedGrid = undefined; session.resetPending = false
   session.connectionProbe?.abort(); session.connectionProbe = undefined
@@ -399,7 +466,22 @@ async function connect(session: Session, probe: boolean) {
         if (receiveDownload(socket, message, session.resource)) return
         if (receiveDirectory(socket, message) || receiveUrl(socket, message) || session.uploads.receive(message)) return
         if (message.type === 'metadata' && isWindowMetadata(message.window) && message.window.id === session.resource.windowId) updateMetadata(session, message.window)
-        else if (message.type === 'reset') session.resetPending = true
+        else if (message.type === 'reset') {
+          session.resetPending = true
+          session.parsedCompletion = undefined; session.paintedCompletion = undefined; session.readCompletion = undefined
+          refreshReadFocus()
+        }
+        else if (message.type === 'completion-frame' && Number.isSafeInteger(message.generation) && message.generation === (session.readGeneration || 0) && Array.isArray(message.panes) && message.panes.every((pane: unknown) => pane && typeof pane === 'object' && 'id' in pane && typeof pane.id === 'string' &&
+          (!('completion' in pane) || pane.completion === undefined || isCompletionToken(pane.completion)))) {
+          const frame: CompletionFrame = { generation: message.generation, focusedPaneId: typeof message.focusedPaneId === 'string' ? message.focusedPaneId : undefined, panes: message.panes }
+          // This control frame follows the matching ANSI bytes. Queue behind their
+          // parse, then request a real paint even when the result text is unchanged.
+          session.term.write('', () => {
+            if (session.socket !== socket || !isCurrentApi(context) || frame.generation !== (session.readGeneration || 0)) return
+            session.parsedCompletion = frame
+            if (session.opened) session.term.refresh(0, session.term.rows - 1)
+          })
+        }
         else if (message.type === 'pane-focus') setState(session, { ...session.state, focusedPaneId: typeof message.paneId === 'string' ? message.paneId : undefined })
         else if (message.type === 'presentation') {
           const revision = session.presentationRevision = (session.presentationRevision || 0) + 1
@@ -607,6 +689,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     // Offscreen xterm buffers can resize before the DOM renderer catches up.
     // Keep each measured grid paired with the dimensions that actually painted it.
     term.onRender(() => {
+      if (current.parsedCompletion) { current.paintedCompletion = current.parsedCompletion; refreshReadFocus() }
       const grid = terminalGeometry(current)
       if (!grid) return
       const parsed = current.parsedGrid, painted = current.paintedGrid
@@ -707,7 +790,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     }, { capture: true })
     session.term.textarea?.addEventListener('compositionstart', () => { current.nativeKey = undefined; setModifiers(current) })
     session.term.textarea?.addEventListener('blur', () => { current.nativeKey = undefined; setModifiers(current) })
-    session.removeTouch = bindTerminalTouch(session.surface, session.term, {
+    const removeTouch = bindTerminalTouch(session.surface, session.term, {
       active: () => current.mobile && current.magnified && current.state.status === 'connected' && !current.state.readOnly,
       mode: () => current.touchMode,
       focus: () => focusTerminal(current),
@@ -718,6 +801,14 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
         try { action() } finally { current.suppressInput = previous }
       },
     })
+    // The native touch handler releases its synthesized mouse input first.
+    session.surface.addEventListener('touchend', finishTerminalReadGesture)
+    session.surface.addEventListener('touchcancel', finishTerminalReadGesture)
+    session.removeTouch = () => {
+      removeTouch()
+      session!.surface.removeEventListener('touchend', finishTerminalReadGesture)
+      session!.surface.removeEventListener('touchcancel', finishTerminalReadGesture)
+    }
   }
   if (!session.mobile && session.keyboard) {
     session.keyboard.dispose(); session.keyboard = undefined
@@ -855,6 +946,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
         endFocusSize(current)
         if (current.mobile) current.keyboard?.blur()
         current.host = undefined
+        refreshReadFocus()
         syncViewVisibility(current)
         current.keyboardLock?.dispose(); current.keyboardLock = undefined
         current.magnified = false
@@ -866,6 +958,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   }
 }
 export function clearTerminals() {
+  logicalFocus = undefined; terminalReadFocus.value = undefined
+  readObserver?.disconnect(); readHost = undefined; readVisible = false
   liveTerminalMetadata.value = new Map()
   metadataSources.clear()
   clearDownloads()
@@ -890,6 +984,8 @@ export function clearTerminals() {
   document.removeEventListener('dragover', preventFileNavigation)
   document.removeEventListener('drop', preventFileNavigation)
   window.removeEventListener('blur', releaseMouseOwner)
+  window.removeEventListener('mouseup', finishTerminalReadGesture)
+  window.removeEventListener('focus', finishTerminalReadGesture)
   document.removeEventListener('visibilitychange', terminalVisibilityChanged)
   terminalEventsInstalled = false
   mouseOwner = undefined

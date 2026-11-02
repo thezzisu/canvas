@@ -1,5 +1,6 @@
 import type { GlobalSettings } from '../../shared/settings'
 import type { ProgramStatus } from '../../shared/status'
+import type { CompletionToken } from '../../shared/completion'
 export type { ProgramStatus } from '../../shared/status'
 
 export interface Source {
@@ -13,6 +14,7 @@ export interface Source {
   herdrSocket?: string
 }
 export interface PaneResource {
+  completion?: CompletionToken
   id: string
   name: string
   active: boolean

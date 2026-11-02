@@ -7,10 +7,13 @@ import { join } from "node:path";
 import type { Source } from "./state.ts";
 import { createHerdrClient, type HerdrClientTransport } from "./herdr/client.ts";
 import { discoverHerdrPython, herdrApiRequest, localHerdrSockets, parseHerdrSockets, validateHerdrLocation, type HerdrSockets } from "./herdr/api.ts";
+import type { CompletionToken } from '../shared/completion.ts';
 import { aggregateStatus, herdrStatus, type ProgramStatus } from "../shared/status.ts";
 
 export type { Source } from "./state.ts";
 export interface PaneResource {
+  stateSequence?: number;
+  completion?: CompletionToken;
   id: string;
   name: string;
   active: boolean;
@@ -571,6 +574,7 @@ async function herdrResources(source: Source, signal?: AbortSignal): Promise<Pic
   const response = await requestHerdr(source, "session.snapshot", {}, signal);
   const snapshot = response.snapshot as {
     version?: unknown;
+    agents?: Array<{ pane_id: string; state_change_seq?: number; completion_seq?: number; agent_status?: string }>;
     workspaces: Array<{ workspace_id: string; label: string }>;
     tabs: Array<{ workspace_id: string; tab_id: string; label: string; agent_status?: string }>;
     panes?: Array<{ tab_id: string; pane_id: string; label?: string; display_agent?: string; agent?: string; focused?: boolean; agent_status?: string; terminal_title_stripped?: string }>;
@@ -618,6 +622,7 @@ async function herdrResources(source: Source, signal?: AbortSignal): Promise<Pic
                     ? { agent: pane.display_agent || pane.agent }
                     : {}),
                   status: herdrStatus(pane.agent_status),
+                  ...(() => { const seq = snapshot.agents?.find(agent => agent.pane_id === pane.pane_id)?.state_change_seq; return Number.isSafeInteger(seq) && seq! >= 0 ? { stateSequence: seq } : {} })(),
                 }),
               );
             return {

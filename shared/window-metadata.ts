@@ -1,3 +1,4 @@
+import { isCompletionToken, type CompletionToken } from './completion.ts'
 import { statusPriority, type ProgramStatus } from './status.ts'
 
 export interface PaneMetadata {
@@ -7,8 +8,11 @@ export interface PaneMetadata {
   status: ProgramStatus
   agent?: string
   terminalTitle?: string
+  stateSequence?: number
+  completion?: CompletionToken
 }
 export interface WindowMetadata {
+  bootId?: string
   id: string
   name: string
   status: ProgramStatus
@@ -23,5 +27,7 @@ export function isWindowMetadata(value: unknown): value is WindowMetadata {
     && Array.isArray(window.panes) && window.panes.every(pane => pane && typeof pane.id === 'string'
       && typeof pane.name === 'string' && typeof pane.active === 'boolean' && status(pane.status)
       && (pane.agent === undefined || typeof pane.agent === 'string')
-      && (pane.terminalTitle === undefined || typeof pane.terminalTitle === 'string'))
+      && (pane.terminalTitle === undefined || typeof pane.terminalTitle === 'string')
+      && (pane.stateSequence === undefined || Number.isSafeInteger(pane.stateSequence) && pane.stateSequence >= 0)
+      && (pane.completion === undefined || isCompletionToken(pane.completion)))
 }

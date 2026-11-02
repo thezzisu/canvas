@@ -34,7 +34,7 @@ async function fixture(t: TestContext, options: { holdFocus?: boolean; badWelcom
     boot_id: boot, revision, focused_workspace_id: 'space', focused_tab_id: 'other', focused_pane_id: null,
     tabs: [{ tab_id: 'other', workspace_id: 'space', focused: true }], panes: [],
   })
-  const surface = (revision = 1, surfaceRevision = 1, text = 'READY', boot = 'boot', pane = 'pane') => {
+  const surface = (revision = 1, surfaceRevision = 1, text = 'READY', boot = 'boot', pane = 'pane', popup = false) => {
     const writer = new Writer().uint(13).string(boot).uint(revision).uint(surfaceRevision)
     writer.uint(8)
     for (let i = 0; i < 8; i++) writer.string(text[i] || ' ').uint(0).uint(0).uint(0).bool(false).byte(0)
@@ -42,7 +42,13 @@ async function fixture(t: TestContext, options: { holdFocus?: boolean; badWelcom
     writer.uint(1).string(pane).uint(surfaceRevision)
     for (let i = 0; i < 2; i++) writer.uint(0).uint(0).uint(8).uint(1)
     writer.byte(0).byte(0).bool(true).bool(false).bool(false).bool(false).uint(0).uint(0)
-    writer.uint(0).byte(0).uint(0).uint(0).uint(0) // splits, popup, graphics scene
+    writer.uint(0).byte(popup ? 1 : 0) // splits, optional popup
+    if (popup) {
+      writer.string('popup').string('Overlay').byte(0).byte(0).uint(8)
+      for (let i = 0; i < 8; i++) writer.string('X').uint(0).uint(0).uint(0).bool(false).byte(0)
+      writer.uint(8).uint(1).byte(0).uint(0).uint(0).bool(false).bool(false).uint(0).uint(0)
+    }
+    writer.uint(0).uint(0).uint(0) // graphics scene
     send(writer)
   }
   const response = (request = requests.at(-1)!, error?: string) => {
@@ -354,4 +360,90 @@ test('native metadata changes arrive independently of frames, deduplicate and re
   subscription.dispose(); snapshot(5, 'blocked')
   await until(() => late.at(-1)?.status === 'attention')
   assert.equal(updates.at(-1)?.status, 'idle')
+})
+
+test('completion companions identify idle work and frame fences follow the coherent output', async t => {
+  const f = await fixture(t), client = await f.connect()
+  t.after(() => client.kill())
+  const frames: WindowMetadata[] = [], metadata: WindowMetadata[] = [], order: string[] = []
+  client.onData(() => order.push('data'))
+  client.onFrame(frame => { frames.push(frame); order.push('frame') })
+  client.onMetadata(window => metadata.push(window))
+  await until(() => frames.length > 0)
+  const state = (revision: number, sequence: number, status = 'idle') => f.control('shell.snapshot.v1', {
+    boot_id: 'boot', revision, focused_workspace_id: 'space', focused_tab_id: 'target', focused_pane_id: 'pane',
+    tabs: [{ tab_id: 'target', workspace_id: 'space', focused: true }],
+    panes: [{ pane_id: 'pane', tab_id: 'target', workspace_id: 'space', focused: true, right_click_passthrough: false }],
+    agents: [{ pane_id: 'pane', agent_status: status, state_change_seq: sequence }],
+  })
+  f.control('endpoint.agent-completions.v1', { boot_id: 'boot', revision: 2, completions: { pane: 7 } })
+  state(2, 7)
+  await until(() => metadata.at(-1)?.panes[0]?.completion?.sequence === 7)
+  assert.equal(metadata.at(-1)?.status, 'done')
+  assert(!frames.at(-1)?.panes[0]?.completion, 'old visible frame cannot acknowledge new metadata')
+  order.length = 0; f.surface(2, 2, 'FINISHED')
+  await until(() => frames.at(-1)?.panes[0]?.completion?.sequence === 7)
+  assert.deepEqual(order, ['data', 'frame'])
+  f.control('endpoint.agent-completions.v1', { boot_id: 'boot', revision: 2, completions: { pane: 8 } })
+  state(3, 8)
+  await until(() => metadata.at(-1)?.panes[0]?.stateSequence === 8)
+  assert.equal(metadata.at(-1)?.panes[0]?.completion, undefined, 'stale companion cannot invent completion')
+  f.control('endpoint.agent-completions.v1', { boot_id: 'boot', revision: 4, completions: { pane: 9 } })
+  state(4, 9, 'working')
+  await until(() => metadata.at(-1)?.panes[0]?.stateSequence === 9)
+  assert.equal(metadata.at(-1)?.panes[0]?.completion, undefined, 'work never inherits an old unread marker')
+  state(5, 10)
+  await until(() => metadata.at(-1)?.panes[0]?.stateSequence === 10)
+  assert.equal(metadata.at(-1)?.panes[0]?.completion?.sequence, 10, 'observed work completion works without a companion-capable server')
+  state(6, 11, 'working')
+  await until(() => metadata.at(-1)?.panes[0]?.stateSequence === 11)
+  f.control('endpoint.agent-completions.v1', { boot_id: 'boot', revision: 7, completions: {} })
+  state(7, 12)
+  await until(() => metadata.at(-1)?.panes[0]?.stateSequence === 12)
+  assert.equal(metadata.at(-1)?.panes[0]?.completion, undefined, 'explicit completion evidence overrides observed-work fallback')
+  state(8, 13, 'done')
+  await until(() => metadata.at(-1)?.panes[0]?.completion?.sequence === 13)
+  state(9, 13, 'idle')
+  await until(() => metadata.at(-1)?.panes[0]?.stateSequence === 13)
+  await delay(10)
+  assert.equal(metadata.at(-1)?.panes[0]?.completion?.sequence, 13, 'old-server seen projection cannot clear Canvas completion')
+})
+
+test('a read fence ignores queued previous-pane frames and can repaint an unchanged current pane', async t => {
+  const f = await fixture(t), client = await f.connect()
+  t.after(() => client.kill())
+  const metadata: WindowMetadata[] = [], observed: WindowMetadata[] = []
+  client.onMetadata(value => metadata.push(value))
+  // No data consumer yet: initial and replacement output stay in the native queue.
+  f.snapshot(2, 'target', 'boot', 'replacement'); f.surface(2, 2, 'NEW', 'boot', 'replacement')
+  await until(() => metadata.at(-1)?.panes[0]?.id === 'replacement')
+  const fenced = client.completionFence()
+  await delay(0)
+  client.onFrame(frame => observed.push(frame))
+  client.onData(() => {})
+  const current = await fenced
+  assert.equal(current?.panes[0]?.id, 'replacement', 'queued old-pane frame cannot satisfy the new read fence')
+  assert(observed.some(frame => frame.panes[0]?.id === 'pane'), 'fixture exercised the older queued frame')
+  const repeated = await client.completionFence()
+  assert.equal(repeated?.panes[0]?.id, 'replacement', 'same-pane input does not need a PTY redraw to regain a fence')
+})
+
+
+test('native popup paint fences hide underlying panes without losing their completion metadata', async t => {
+  const f = await fixture(t), client = await f.connect()
+  t.after(() => client.kill())
+  client.onData(() => {})
+  const frames: WindowMetadata[] = [], metadata: WindowMetadata[] = []
+  client.onFrame(value => frames.push(value)); client.onMetadata(value => metadata.push(value))
+  f.control('endpoint.agent-completions.v1', { boot_id: 'boot', revision: 2, completions: { pane: 7 } })
+  f.control('shell.snapshot.v1', { boot_id: 'boot', revision: 2, focused_workspace_id: 'space', focused_tab_id: 'target', focused_pane_id: 'pane',
+    tabs: [{ tab_id: 'target', workspace_id: 'space', focused: true }],
+    panes: [{ pane_id: 'pane', tab_id: 'target', workspace_id: 'space', focused: true, right_click_passthrough: false }],
+    agents: [{ pane_id: 'pane', agent_status: 'idle', state_change_seq: 7 }] })
+  f.surface(2, 2, 'VISIBLE', 'boot', 'pane', true)
+  await until(() => frames.at(-1)?.panes.length === 0)
+  assert.equal(metadata.at(-1)?.panes[0]?.completion?.sequence, 7)
+  assert.deepEqual((await client.completionFence())?.panes, [], 'a fence for a popup cannot acknowledge the concealed pane')
+  f.surface(2, 3, 'RESTORE')
+  await until(() => frames.at(-1)?.panes[0]?.completion?.sequence === 7)
 })

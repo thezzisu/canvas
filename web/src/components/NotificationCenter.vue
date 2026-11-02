@@ -5,28 +5,31 @@ import { useI18n } from 'vue-i18n'
 import { useToast } from '@nuxt/ui/composables/useToast'
 import type { CanvasNotification } from '../../../shared/notification'
 import type { SourceResource } from '../types'
+import { sameCompletion } from '../../../shared/completion'
+import { samePane, type PaneFocus } from '../completion-focus'
 import { apiContext, isCurrentApi, uuid } from '../api'
-import { attentionSummary, faviconStatus, isCanvasNotification, notificationKey, notificationTarget } from '../notification-model'
+import { attentionSummary, faviconStatus, isCanvasNotification, notificationKey, notificationTarget, notificationCurrent } from '../notification-model'
 import { deliverNotificationEffects, holdNotificationOwner, isBadgeOwnerChange, syncNotificationFocus, updateNotificationBadge } from '../notification-effects'
 import { notificationSoundEnabled, refreshNotificationPermission, unlockNotificationSound } from '../notification-settings'
 import { statusColor } from '../status'
 import { formatCanvasLocation } from '../canvas-location'
 import canvasIcon from '../../public/icons/canvas.svg?raw'
 
-const props = defineProps<{ instanceId: string; backendId: string; resources: SourceResource[]; actionsAvailable: boolean; refresh(): Promise<void> }>()
+const props = defineProps<{ instanceId: string; backendId: string; resources: SourceResource[]; displayResources: SourceResource[]; focus?: PaneFocus; actionsAvailable: boolean; refresh(): Promise<void> }>()
 const emit = defineEmits<{ open: [event: CanvasNotification]; go: [event: CanvasNotification] }>()
 const { t } = useI18n()
 const toast = useToast(), context = apiContext()
 const owner = uuid(), toastPrefix = `notification:${context.revision}:${props.backendId}:`
 let releaseOwner = holdNotificationOwner(owner), pageActive = true
-const seen = new Set<string>(), active = new Map<string, CanvasNotification>()
-const pending = new Map<string, { event: CanvasNotification; expires: number }>()
+interface Notice { event: CanvasNotification; focus?: PaneFocus; dismissed?: boolean }
+const seen = new Set<string>(), active = new Map<string, Notice>()
+const pending = new Map<string, { event: CanvasNotification; expires: number; focus?: PaneFocus }>()
 let timer: ReturnType<typeof setTimeout> | undefined, disposed = false
-const summary = computed(() => attentionSummary(props.resources))
+const summary = computed(() => attentionSummary(props.displayResources))
 const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
 const originalIcon = `${import.meta.env.BASE_URL}icons/canvas.svg`
 const favicon = computed(() => {
-  const status = faviconStatus(props.resources)
+  const status = faviconStatus(props.displayResources)
   return status ? `data:image/svg+xml,${encodeURIComponent(canvasIcon.replace('</svg>',
     `<circle cx="51" cy="51" r="11" fill="${statusColor(status)}" stroke="#17191d" stroke-width="4"/></svg>`))}` : originalIcon
 })
@@ -37,26 +40,19 @@ onMounted(() => watch(favicon, value => {
 
 function current() { return !disposed && pageActive && isCurrentApi(context) }
 function syncFocus() {
-  const element = document.activeElement
-  const card = document.hasFocus() && !document.hidden && element?.matches('.xterm-helper-textarea, .terminal-mobile-input')
-    ? element.closest<HTMLElement>('.terminal-card') : undefined
-  const sourceId = card?.dataset.sourceId, windowId = card?.dataset.windowId
-  const window = props.resources.find(source => source.id === sourceId)?.spaces.flatMap(space => space.windows).find(window => window.id === windowId)
-  void syncNotificationFocus(props.backendId, owner, sourceId && windowId
-    ? { sourceId, windowId, paneId: window?.panes?.find(pane => pane.active)?.id } : undefined, current)
+  void syncNotificationFocus(props.backendId, owner, props.focus, current)
 }
 function interacting(event: CanvasNotification) {
-  if (!document.hasFocus() || document.hidden) return false
-  const element = document.activeElement
-  const card = element?.matches('.xterm-helper-textarea, .terminal-mobile-input') ? element.closest<HTMLElement>('.terminal-card') : undefined
-  if (card?.dataset.sourceId !== event.sourceId || card.dataset.windowId !== event.windowId) return false
-  return !event.paneId || notificationTarget(event, props.resources)?.pane?.active === true
+  const focus = props.focus
+  return !!focus && focus.sourceId === event.sourceId && focus.windowId === event.windowId && (!event.paneId || focus.paneId === event.paneId)
+}
+function noticeValid(notice: Notice) {
+  return current() && !notice.dismissed && notificationCurrent(notice.event, props.resources) &&
+    (notice.focus ? samePane(notice.focus, props.focus) : !interacting(notice.event))
 }
 function acceptsToast(id: string | number) {
-  const event = [...active.values()].find(event => `${toastPrefix}${event.id}` === id)
-  if (!event || !current() || interacting(event)) return false
-  const target = notificationTarget(event, props.resources)
-  return (target?.pane?.status || target?.window.status) === event.kind
+  const notice = [...active.values()].find(notice => `${toastPrefix}${notice.event.id}` === id)
+  return !!notice && noticeValid(notice)
 }
 function title(event: CanvasNotification) {
   const target = notificationTarget(event, props.resources)
@@ -67,25 +63,28 @@ function description(event: CanvasNotification) {
   const target = notificationTarget(event, props.resources)
   return [target ? [target.source.name, target.space.name, target.pane?.name].filter(Boolean).join(' / ') : undefined, event.body].filter(Boolean).join('\n')
 }
-function show(event: CanvasNotification) {
+function show(event: CanvasNotification, focus?: PaneFocus) {
   const important = event.kind === 'attention' || event.kind === 'done', key = notificationKey(event)
+  const previous = active.get(key)
+  if (important && previous?.event.kind === event.kind &&
+      (event.kind !== 'done' || sameCompletion(previous.event.completion, event.completion))) return
+  if (previous) toast.remove(`${toastPrefix}${previous.event.id}`)
+  const notice: Notice = { event, focus }
   if (important) {
-    if (active.get(key)?.kind === event.kind) return
-    const previous = active.get(key)
-    if (previous) toast.remove(`${toastPrefix}${previous.id}`)
-    active.set(key, event)
-    if (interacting(event)) {
+    active.set(key, notice)
+    if (event.kind !== 'done' && interacting(event)) {
+      notice.dismissed = true
       void deliverNotificationEffects(props.backendId, event, { title: '', body: '', url: '', quiet: true, valid: current })
       return
     }
   }
   const target = notificationTarget(event, props.resources)
   if (document.hasFocus() && !document.hidden) toast.add({
-    id: `${toastPrefix}${event.id}`, title: title(event), description: description(event),
+    id: `${toastPrefix}${event.id}`, title: title(event), description: focus ? undefined : description(event),
     color: event.kind === 'attention' ? 'error' : event.kind === 'done' ? 'success' : 'neutral',
-    class: `notice-${event.kind}`, duration: event.kind === 'attention' ? Infinity : important ? 15000 : 3500,
+    class: `notice-${event.kind}${focus ? ' notice-focused' : ''}`, duration: focus ? 3000 : event.kind === 'attention' ? Infinity : important ? 15000 : 3500,
     progress: false, type: important ? 'foreground' : 'background',
-    actions: target ? [
+    actions: !focus && target ? [
       { label: t('notifications.open'), color: 'neutral', variant: 'outline', get disabled() { return !props.actionsAvailable }, onClick: () => emit('open', event) },
       { label: t('notifications.go'), color: 'neutral', variant: 'outline', get disabled() { return !props.actionsAvailable }, onClick: () => emit('go', event) },
     ] : [],
@@ -94,24 +93,27 @@ function show(event: CanvasNotification) {
   const url = new URL(location.href)
   url.hash = formatCanvasLocation({ instance: props.instanceId, canvas: 'overview', view: 'paged', page: `${event.sourceId}/${event.windowId}` })
   void deliverNotificationEffects(props.backendId, event, {
-    title: title(event), body: description(event), url: url.href,
-    valid: () => current() && active.get(key) === event && !interacting(event),
+    title: title(event), body: description(event), url: url.href, suppressSystem: !!focus,
+    valid: () => active.get(key) === notice && noticeValid(notice),
   })
 }
 function reconcile() {
   clearTimeout(timer)
-  for (const [key, event] of active) {
-    const target = notificationTarget(event, props.resources)
-    if (!target || (target.pane?.status || target.window.status) !== event.kind) {
-      toast.remove(`${toastPrefix}${event.id}`); active.delete(key)
-    } else if (interacting(event)) toast.remove(`${toastPrefix}${event.id}`)
+  for (const [key, notice] of active) {
+    if (!notificationCurrent(notice.event, props.resources)) {
+      toast.remove(`${toastPrefix}${notice.event.id}`); active.delete(key)
+    } else if (!noticeValid(notice)) {
+      notice.dismissed = true
+      toast.remove(`${toastPrefix}${notice.event.id}`)
+    }
   }
   const now = Date.now()
   for (const [key, item] of pending) {
-    if (item.expires <= now) { pending.delete(key); continue }
+    if (item.expires <= now || item.focus && !samePane(item.focus, props.focus)) { pending.delete(key); continue }
     const target = notificationTarget(item.event, props.resources)
-    if (target && (target.pane?.status || target.window.status) === item.event.kind) {
-      pending.delete(key); show({ ...item.event, windowId: target.window.id, spaceId: target.space.id })
+    if (target && notificationCurrent(item.event, props.resources)) {
+      if (item.focus && item.event.completion && !sameCompletion(item.event.completion, props.focus?.painted)) continue
+      pending.delete(key); show({ ...item.event, windowId: target.window.id, spaceId: target.space.id }, item.focus)
     } else if (!props.resources.some(source => source.id === item.event.sourceId && source.status === 'online' && !source.error)) pending.delete(key)
   }
   if (pending.size) timer = setTimeout(reconcile, Math.max(1, Math.min(...[...pending.values()].map(item => item.expires)) - Date.now()))
@@ -122,13 +124,13 @@ function receive(value: unknown) {
   seen.add(value.id)
   if (seen.size > 256) seen.delete(seen.values().next().value!)
   if (value.kind === 'attention' || value.kind === 'done') {
-    pending.set(notificationKey(value), { event: value, expires: Date.now() + 3000 })
+    pending.set(notificationKey(value), { event: value, expires: Date.now() + 3000, ...(value.kind === 'done' && interacting(value) ? { focus: props.focus } : {}) })
     if (pending.size > 32) pending.delete(pending.keys().next().value!)
     reconcile()
     if (pending.size) void props.refresh()
   } else show(value)
 }
-watch(() => props.resources, () => { syncFocus(); reconcile() })
+watch([() => props.resources, () => props.focus], () => { syncFocus(); reconcile() }, { flush: 'sync' })
 
 function updateBadge() {
   void updateNotificationBadge(owner, summary.value.count, document.hasFocus() && !document.hidden)

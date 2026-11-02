@@ -377,6 +377,11 @@ export class HerdrInputRouter {
     this.selection = undefined; this.selectionRevision++;
     if (selected) this.options.onSelection?.(undefined);
   }
+  async settled() {
+    let pending
+    do { pending = this.queue; await pending } while (pending !== this.queue)
+  }
+  get focusSettled(): boolean { return !this.focus }
   /** Called after snapshot/surface changes, before rendering the next frame. */
   refresh() {
     if (this.disposed) return;

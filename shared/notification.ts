@@ -1,3 +1,4 @@
+import type { CompletionToken } from './completion.ts'
 export type NotificationKind = 'attention' | 'done' | 'update' | 'custom'
 
 /** A live herdr event; presentation and permission choices belong to the browser. */
@@ -14,4 +15,5 @@ export interface NativeNotification {
 export interface CanvasNotification extends NativeNotification {
   id: string
   sourceId: string
+  completion?: CompletionToken
 }

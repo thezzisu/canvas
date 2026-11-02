@@ -1,3 +1,5 @@
+import { CompletionReads } from './completion-reads.ts';
+import { sameCompletion, type CompletionToken } from '../shared/completion.ts';
 import headless from "@xterm/headless";
 import { terminalUnicodeAddon } from "../shared/terminal-unicode.ts";
 import serialize from "@xterm/addon-serialize";
@@ -33,6 +35,12 @@ class LiveTerminal {
   private presentationRevision = 0;
   private focusedPaneId?: string;
   private metadata?: WindowMetadata;
+  private rawMetadata?: WindowMetadata;
+  private frame?: WindowMetadata;
+  private sentFrames = new WeakMap<WebSocket, WindowMetadata>();
+  private readGenerations = new WeakMap<WebSocket, number>();
+  private pendingFences = new WeakMap<WebSocket, number>();
+  private readSubscription?: { dispose(): unknown };
   private cursorVisible = true;
   private cursorShape = 0;
   controller?: WebSocket;
@@ -56,6 +64,8 @@ class LiveTerminal {
     rows: number,
     readonly onClose: () => void,
     readonly proc: HerdrClientTransport,
+    readonly source: Source,
+    readonly reads?: CompletionReads,
   ) {
     this.cols = cols;
     this.rows = rows;
@@ -95,10 +105,19 @@ class LiveTerminal {
       this.focusedPaneId = paneId;
       for (const ws of this.clients) json(ws, { type: "pane-focus", paneId });
     });
+    this.readSubscription = reads?.onRead(sourceId => { if (sourceId === this.sourceId) this.publishMetadata(); });
     this.proc.onMetadata(metadata => {
       if (this.closed) return;
-      this.metadata = metadata;
-      for (const ws of this.clients) json(ws, { type: "metadata", window: metadata });
+      this.rawMetadata = metadata;
+      this.publishMetadata();
+    });
+    this.proc.onFrame(metadata => {
+      const recipients = [...this.clients].map(ws => ({ ws, generation: this.readGenerations.get(ws) || 0, blocked: this.pendingFences.has(ws) }));
+      this.queue = this.queue.then(() => {
+        if (this.closed) return;
+        this.frame = metadata;
+        for (const { ws, generation, blocked } of recipients) if (!blocked && generation === (this.readGenerations.get(ws) || 0) && this.canRender(ws)) this.publishFrame(ws);
+      }).catch(() => { void this.close(); });
     });
     this.proc.onData((data) => {
       if (this.closed) return;
@@ -138,6 +157,18 @@ class LiveTerminal {
         });
     });
     this.proc.onExit(event => void this.close(event.reason));
+  }
+  private publishMetadata() {
+    if (this.closed || !this.rawMetadata) return;
+    this.metadata = this.reads?.project(this.source, this.rawMetadata) || this.rawMetadata;
+    for (const ws of this.clients) json(ws, { type: 'metadata', window: this.metadata });
+  }
+  private publishFrame(ws: WebSocket) {
+    if (!this.frame || this.pendingFences.has(ws)) return;
+    const frame = this.reads?.project(this.source, this.frame) || this.frame;
+    this.sentFrames.set(ws, frame);
+    json(ws, { type: 'completion-frame', generation: this.readGenerations.get(ws) || 0, focusedPaneId: frame.panes.find(pane => pane.active)?.id,
+      panes: frame.panes.map(pane => ({ id: pane.id, ...(pane.completion ? { completion: pane.completion } : {}) })) });
   }
   private canRender(ws: WebSocket) {
     return !this.hidden.has(ws) && this.rendered.has(ws) &&
@@ -187,6 +218,7 @@ class LiveTerminal {
     ws.send(Buffer.from(this.serializer.serialize() + HERDR_MOUSE_ENCODING +
       `\x1b[${cursor.cursorY + 1};${cursor.cursorX + 1}H\x1b[${this.cursorShape} q\x1b[?25${this.cursorVisible ? 'h' : 'l'}`, "utf8"));
     this.rendered.add(ws);
+    this.sentFrames.delete(ws); this.publishFrame(ws);
     this.presentation(ws);
   }
   private resume() {
@@ -249,6 +281,28 @@ class LiveTerminal {
           else { this.hidden.add(ws); this.rendered.delete(ws); }
           return;
         }
+        if (msg.type === 'completion-fence') {
+          if (!Number.isSafeInteger(msg.generation) || msg.generation <= (this.readGenerations.get(ws) || 0)) return;
+          this.readGenerations.set(ws, msg.generation); this.pendingFences.set(ws, msg.generation); this.sentFrames.delete(ws);
+          void this.proc.completionFence().then(frame => {
+            if (!frame || this.closed || !this.clients.has(ws) || this.pendingFences.get(ws) !== msg.generation) return;
+            this.queue = this.queue.then(() => {
+              if (this.closed || this.pendingFences.get(ws) !== msg.generation) return;
+              this.pendingFences.delete(ws); this.frame = frame;
+              if (this.canRender(ws)) this.publishFrame(ws);
+            });
+          }).catch(() => {});
+          return;
+        }
+        if (msg.type === 'completion-read') {
+          const frame = this.sentFrames.get(ws);
+          const pane = frame?.panes.find(pane => pane.id === msg.paneId && pane.active);
+          const completion: CompletionToken = { bootId: msg.bootId, sequence: msg.sequence };
+          if (Number.isSafeInteger(msg.generation) && msg.generation === (this.readGenerations.get(ws) || 0) && !this.pendingFences.has(ws) &&
+              this.canRender(ws) && pane && pane.id === this.focusedPaneId && pane.completion && sameCompletion(pane.completion, completion))
+            this.reads?.acknowledge(this.source, frame!.id, pane.id, completion);
+          return;
+        }
         if (msg.type === "focus") {
           if (this.maximized && this.maximized.owner !== ws) return;
           this.controller = ws;
@@ -295,12 +349,15 @@ class LiveTerminal {
           typeof msg.data === "string" &&
           msg.data.length <= 64 * 1024 &&
           (msg.encoding === undefined || msg.encoding === "binary")
-        )
+        ) {
+          // Outer window focus reports cannot change the native pane or pixels.
+          if (msg.data !== '\x1b[I' && msg.data !== '\x1b[O') this.sentFrames.delete(ws);
           this.proc.write(
             msg.encoding === "binary"
               ? Buffer.from(msg.data, "latin1")
               : msg.data,
           );
+        }
         if (msg.type === "resize") this.geometry.persistent(size);
       } catch {
         /* Malformed messages cannot become terminal commands. */
@@ -343,6 +400,8 @@ class LiveTerminal {
   close(reason?: 'removed'): Promise<void> {
     if (this.closing) return this.closing;
     this.closed = true;
+    this.readSubscription?.dispose();
+    if (reason === 'removed') this.reads?.removeWindow(this.source, this.key.slice(this.sourceId.length + 1));
     clearTimeout(this.idle);
     // A native snapshot confirmed the tab is gone. Notify before asynchronous
     // viewport/tunnel cleanup so viewers never treat that cleanup as an outage.
@@ -377,9 +436,44 @@ export class TerminalManager {
   private readonly notificationListeners = new Set<(notification: CanvasNotification) => void>();
   private stopped = false;
   private closingSources = new Set<string>();
+  private pendingCompletions = new Map<string, { source: Source; notification: CanvasNotification; timer: ReturnType<typeof setTimeout> }>();
+  private deliveredCompletions = new Map<string, CompletionToken>();
+  private completionBoots = new Map<string, string>();
+  constructor(private readonly reads?: CompletionReads) {}
   onNotification(listener: (notification: CanvasNotification) => void) {
     this.notificationListeners.add(listener);
     return { dispose: () => { this.notificationListeners.delete(listener); } };
+  }
+  private observeCompletionSource(source: Source) {
+    const owner = [...this.live].find(terminal => !terminal.closed && terminal.sourceId === source.id && terminal.connectionKey === sourceConnectionKey(source));
+    const snapshot = owner?.proc.completionSnapshot();
+    if (owner && snapshot) {
+      this.reads?.observeSnapshot(source, snapshot.windows, snapshot.state, owner);
+      if (this.completionBoots.get(source.id) !== snapshot.state.bootId) {
+        this.completionBoots.set(source.id, snapshot.state.bootId);
+        for (const window of snapshot.windows) for (const pane of window.panes) {
+          const token = this.reads?.completion(source, pane.id)?.completion || pane.completion;
+          if (token) this.deliveredCompletions.set(`${source.id}/${pane.id}`, token);
+        }
+      }
+      this.flushCompletions(source.id);
+    } else if (!owner) { this.reads?.disconnected(source.id); this.completionBoots.delete(source.id); }
+  }
+  private publishNotification(notification: CanvasNotification) {
+    for (const listener of this.notificationListeners) listener(notification);
+  }
+  private flushCompletions(sourceId: string) {
+    if (!this.reads || this.stopped || this.closingSources.has(sourceId)) return;
+    for (const [key, pending] of this.pendingCompletions) {
+      if (pending.source.id !== sourceId) continue;
+      const completion = this.reads.completion(pending.source, pending.notification.paneId!);
+      if (!completion) continue;
+      if (sameCompletion(this.deliveredCompletions.get(key), completion.completion)) continue;
+      clearTimeout(pending.timer); this.pendingCompletions.delete(key);
+      this.deliveredCompletions.set(key, completion.completion);
+      if (this.deliveredCompletions.size > 1000) this.deliveredCompletions.delete(this.deliveredCompletions.keys().next().value!);
+      this.publishNotification({ ...pending.notification, windowId: completion.windowId, completion: completion.completion });
+    }
   }
   async connect(source: Source, target: TerminalTarget, ws: WebSocket) {
     if (this.stopped || this.closingSources.has(source.id))
@@ -402,18 +496,30 @@ export class TerminalManager {
             handle,
             cols,
             rows,
-            () => { this.entries.delete(key); this.live.delete(terminal); },
+            () => { this.entries.delete(key); this.live.delete(terminal); this.observeCompletionSource(source); },
             transport,
+            source, this.reads,
           );
           this.live.add(terminal);
+          transport.onSnapshot(() => {
+            const owner = [...this.live].find(candidate => !candidate.closed && candidate.sourceId === source.id && candidate.connectionKey === terminal.connectionKey);
+            if (owner === terminal) this.observeCompletionSource(source);
+          });
           transport.onNotification(notification => {
             if (this.stopped || this.closingSources.has(source.id) || terminal.closed) return;
             // Herdr broadcasts to every native shell. One existing endpoint owns
             // this connection's live intake; closing it naturally promotes the next.
             const owner = [...this.live].find(candidate => !candidate.closed && candidate.sourceId === source.id && candidate.connectionKey === terminal.connectionKey);
             if (owner !== terminal) return;
-            const event = { ...notification, id: randomUUID(), sourceId: source.id };
-            for (const listener of this.notificationListeners) listener(event);
+            const event: CanvasNotification = { ...notification, id: randomUUID(), sourceId: source.id };
+            if (notification.kind !== 'done' || !this.reads) { this.publishNotification(event); return; }
+            if (!notification.paneId) return;
+            const key = `${source.id}/${notification.paneId}`;
+            clearTimeout(this.pendingCompletions.get(key)?.timer);
+            const timer = setTimeout(() => this.pendingCompletions.delete(key), 1000);
+            timer.unref();
+            this.pendingCompletions.set(key, { source, notification: event, timer });
+            queueMicrotask(() => this.flushCompletions(source.id));
           });
           return terminal;
         } catch (error) {
@@ -456,6 +562,11 @@ export class TerminalManager {
   }
   async closeSource(sourceId: string) {
     this.closingSources.add(sourceId);
+    this.completionBoots.delete(sourceId);
+    for (const [key, pending] of this.pendingCompletions) if (pending.source.id === sourceId) {
+      clearTimeout(pending.timer); this.pendingCompletions.delete(key);
+    }
+    for (const key of this.deliveredCompletions.keys()) if (key.startsWith(`${sourceId}/`)) this.deliveredCompletions.delete(key);
     try {
       await Promise.all(
         [...this.entries.values()].map(async (p) => {
@@ -470,6 +581,8 @@ export class TerminalManager {
   async closeAll() {
     this.stopped = true;
     this.notificationListeners.clear();
+    for (const pending of this.pendingCompletions.values()) clearTimeout(pending.timer);
+    this.pendingCompletions.clear(); this.deliveredCompletions.clear(); this.completionBoots.clear();
     await Promise.all(
       [...this.entries.values()].map(async (p) =>
         (await p.catch(() => undefined))?.close(),

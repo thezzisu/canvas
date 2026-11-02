@@ -24,6 +24,7 @@ import { notificationPortal, notificationSurface } from './notification-surface'
 import { lastWindowCanvas, useWindowCanvasHistory } from './window-canvas'
 import type { CanvasNotification } from '../../shared/notification'
 import { notificationTarget } from './notification-model'
+import { focusedCompletionStatus, projectFocusedResources, type WindowFocus, type FocusedStatus } from './completion-focus'
 import { canvasIndicators, needsAttention, windowVisualState } from './canvas-status'
 import { createLayoutSaves, type LayoutPatch } from './layout-saves'
 import { createPendingEdits, retargetNoteEdit, type NoteEdit } from './pending-edits'
@@ -61,7 +62,7 @@ import { directoryRequest } from './directories'
 import { copiedFile } from './file-clipboard'
 import { urlRequest } from './urls'
 import { api, apiContext, apiRevision, apiUrl, isCurrentApi, requireCurrentApi, resetApiRequests, setSessionToken, ApiError, segment, uuid, write } from './api'
-import { acknowledgeTerminalMetadata, cachedTerminalView, clearTerminals, focusWindow, hasLiveTerminal, liveTerminalMetadata, pasteFileIntoWindow, retainTerminalMetadata, setContentFont } from './terminals'
+import { acknowledgeTerminalMetadata, cachedTerminalView, clearTerminals, focusWindow, hasLiveTerminal, liveTerminalMetadata, pasteFileIntoWindow, retainTerminalMetadata, setContentFont, setTerminalReadFocus, prepareTerminalReadFocus, terminalReadFocus } from './terminals'
 import { mergeLiveResources, windowIsClosed } from './live-resources'
 import { buildFontPresentation, ensureContentFont } from './fonts'
 import type { GlobalSettings } from '../../shared/settings'
@@ -116,7 +117,9 @@ const error = ref('')
 const success = ref('')
 const sources = ref<Source[]>([])
 const polledResources = ref<SourceResource[]>([])
-const resources = computed(() => mergeLiveResources(polledResources.value, liveTerminalMetadata.value))
+const rawResources = computed(() => mergeLiveResources(polledResources.value, liveTerminalMetadata.value))
+const focusedStatus = computed<FocusedStatus | undefined>(previous => focusedCompletionStatus(rawResources.value, terminalReadFocus.value, previous))
+const resources = computed(() => projectFocusedResources(rawResources.value, focusedStatus.value))
 const resourcesFresh = ref(false)
 const resourcesLoaded = ref(false)
 const loadFailure = shallowRef<unknown>()
@@ -216,6 +219,7 @@ function showWindowKeyboard() {
 const scanTarget = shallowRef<{ sourceId: string; spaceId: string; windowId: string; name: string } | null>(null)
 const notificationCenter = ref<InstanceType<typeof NotificationCenter>>()
 const focused = ref<TerminalCanvasNode | null>(null)
+const selectedTerminal = shallowRef<WindowFocus>()
 const focusedCardId = ref('')
 const hasFocus = computed(() => !!focused.value || !!focusedCardId.value)
 const creating = reactive(new Set<string>())
@@ -363,6 +367,7 @@ function navigateMinimap({ event, node }: NodeMouseEvent) {
 async function navigateCard(node: Node) {
   if (!['terminal', 'note', 'file'].includes(node.type || '') || hasFocus.value) return
   clearFitContext()
+  selectedTerminal.value = undefined
   const canvasId = activeId.value, context = apiContext()
   resetPagingFeedback()
   cancelCreatedReveal()
@@ -443,6 +448,7 @@ watch([activeId, activeInstanceId, paging, apiRevision], clearFitContext, { flus
 const overviewInteraction = computed<OverviewInteraction | undefined>(() => {
   if (!isOverview.value) return
   if (pendingCreatedWindow.value) return pendingCreatedWindow.value
+  if (selectedTerminal.value) return selectedTerminal.value
   if (notificationReveal.value?.canvasId === 'overview') return notificationReveal.value.target
   if (focused.value) return { sourceId: focused.value.sourceId, windowId: focused.value.windowId }
   const card = activeElement.value?.closest<HTMLElement>('.terminal-card')
@@ -485,6 +491,26 @@ watch([allWindows, existingAddWindows], () => {
   if (next.length !== selectedWindows.value.length || next.some((key, index) => selectedWindows.value[index] !== key)) selectedWindows.value = next
 })
 const modalOpen = computed(() => notificationSurface.value || richPasteRequest.value || sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || shareCard.value || windowMenu.value || backgroundCanvas.value || settingsDialog.value || accountDialog.value || scanTarget.value)
+const logicalWindowFocus = computed<WindowFocus | undefined>(() => {
+  if (!authenticated.value || !pageVisible.value || !windowFocused.value || modalOpen.value || directoryRequest.value || urlRequest.value || downloadPreview.value || sidebarOpen.value || sourcePanel.value || focusedCardId.value) return
+  return focused.value || selectedTerminal.value
+})
+watch(logicalWindowFocus, value => setTerminalReadFocus(value), { flush: 'sync' })
+watch([activeId, apiRevision], () => { selectedTerminal.value = undefined }, { flush: 'sync' })
+function selectLogicalTerminal(event: Event) {
+  if (!(event.target instanceof Element) || event instanceof PointerEvent && event.button !== 0) return
+  const card = event.target.closest<HTMLElement>('.terminal-card') ||
+    (event instanceof KeyboardEvent && ['Enter', ' '].includes(event.key) && event.target.matches('.vue-flow__node') ? event.target.querySelector<HTMLElement>('.terminal-card') : undefined)
+  if (card?.dataset.sourceId && card.dataset.windowId) {
+    if (card.classList.contains('terminal-mobile-preview') || card.dataset.presentation === 'paused' || card.dataset.connectionStatus === 'closed') return
+    const target = { sourceId: card.dataset.sourceId, windowId: card.dataset.windowId }
+    if (event instanceof PointerEvent && event.target.closest('.terminal-host')) prepareTerminalReadFocus(target)
+    selectedTerminal.value = target
+  } else if (event.target.closest('.note-card, .file-card, .vue-flow__pane, .empty-state') && !event.target.closest('.canvas-toolbar, .vue-flow__minimap')) {
+    selectedTerminal.value = undefined
+  }
+}
+
 usePointerDismiss(computed({
   get: () => sourcePanel.value && !modalOpen.value && !directoryRequest.value && !urlRequest.value && !downloadPreview.value,
   set: value => { sourcePanel.value = value },
@@ -1330,6 +1356,7 @@ function prepareNotificationAction() {
 }
 async function goToNotification(event: CanvasNotification) {
   if (!prepareNotificationAction()) return
+  selectedTerminal.value = undefined
   const target = notificationTarget(event, resources.value), source = sources.value.find(item => item.id === event.sourceId)
   if (!target || !source || !latestState.value) return
   const context = apiContext(), intent = ++notificationIntent
@@ -1373,7 +1400,7 @@ async function openNotification(event: CanvasNotification) {
     type: 'terminal', id: `notification:${event.sourceId}/${target.window.id}`,
     sourceId: event.sourceId, spaceId: target.space.id, windowId: target.window.id, x: 0, y: 0, ...size,
   }
-  sidebarOpen.value = false; sourcePanel.value = false; saveViewport(); focused.value = node
+  sidebarOpen.value = false; sourcePanel.value = false; saveViewport(); selectedTerminal.value = { sourceId: node.sourceId, windowId: node.windowId }; focused.value = node
 }
 function terminalAction(action: string, id: string) {
   const node = getCanvasNode(id) || focused.value
@@ -1382,7 +1409,7 @@ function terminalAction(action: string, id: string) {
   else if (action === 'remove') void removeNode(id)
   else if (action === 'focus') {
     if (paging.value) selectPage(pages.value.find(page => page.id === `${node.sourceId}/${node.windowId}`))
-    sidebarOpen.value = false; sourcePanel.value = false; windowResize(); saveViewport(); focused.value = node
+    sidebarOpen.value = false; sourcePanel.value = false; windowResize(); saveViewport(); selectedTerminal.value = { sourceId: node.sourceId, windowId: node.windowId }; focused.value = node
   }
   else if (action === 'unfocus') void closeFocus()
   else if (action === 'menu') windowMenu.value = { node, name: resourceFor(node).window?.name || t('app.window') }
@@ -1735,6 +1762,8 @@ setDownloadContext(resource => {
   return canvas && anchor ? { canvasId: canvas.id, anchorId: anchor.id } : undefined
 })
 onMounted(async () => {
+  window.addEventListener('pointerdown', selectLogicalTerminal, { capture: true, passive: true })
+  window.addEventListener('keydown', selectLogicalTerminal, { capture: true, passive: true })
   for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.addEventListener(event, creationNavigation, { capture: true, passive: true })
   window.addEventListener('canvas:unauthorized', unauthorized)
   window.addEventListener('canvas:session-changed', sessionChanged)
@@ -1749,13 +1778,13 @@ onMounted(async () => {
   else await activateInstance()
   refreshTimer = setInterval(() => { if (!document.hidden) void refreshResources(true) }, 2000)
 })
-onBeforeUnmount(() => { document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload) })
+onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('pointerdown', selectLogicalTerminal, true); window.removeEventListener('keydown', selectLogicalTerminal, true); document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); cancelAnimationFrame(geometryFrame); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload) })
 </script>
 
 <template>
   <UApp :locale="uiLocale" :portal="appElement || false" :toaster="{ portal: notificationPortal || false, position: 'bottom-right', max: 4, progress: false, ui: { viewport: 'canvas-notifications' } }">
   <NotificationCenter v-if="authenticated && latestState" :key="`${activeInstance.id}:${latestState.instanceId}`" ref="notificationCenter"
-    :instance-id="activeInstance.id" :backend-id="latestState.instanceId" :resources="resources" :refresh="() => refreshResources(true)" :actions-available="notificationActionsAvailable" @open="openNotification" @go="goToNotification" />
+    :instance-id="activeInstance.id" :backend-id="latestState.instanceId" :resources="rawResources" :display-resources="resources" :focus="terminalReadFocus" :refresh="() => refreshResources(true)" :actions-available="notificationActionsAvailable" @open="openNotification" @go="goToNotification" />
   <NotificationHost :portal="appElement" />
   <AppFeedback :error="error" :success="success" @dismiss="error = ''; success = ''" />
   <PwaUpdatePrompt />

@@ -1,3 +1,4 @@
+import { isCompletionToken, sameCompletion } from '../../shared/completion'
 import type { CanvasNotification } from '../../shared/notification'
 import { aggregateStatus, type ProgramStatus } from '../../shared/status'
 import type { SourceResource } from './types'
@@ -7,6 +8,7 @@ export function isCanvasNotification(value: unknown): value is CanvasNotificatio
   const event = value as CanvasNotification
   return typeof event.id === 'string' && typeof event.sourceId === 'string' && typeof event.title === 'string'
     && ['attention', 'done', 'update', 'custom'].includes(event.kind)
+    && (event.completion === undefined || isCompletionToken(event.completion))
     && ['body', 'agent', 'spaceId', 'windowId', 'paneId'].every(key => {
       const field = event[key as keyof CanvasNotification]
       return field === undefined || typeof field === 'string'
@@ -46,4 +48,13 @@ export function faviconStatus(resources: readonly SourceResource[]): ProgramStat
 export function notificationKey(event: CanvasNotification) {
   return event.paneId ? `${event.sourceId}/pane/${event.paneId}`
     : event.windowId ? `${event.sourceId}/window/${event.windowId}` : event.id
+}
+
+/** A completion remains the same event after its shared read state becomes Idle. */
+export function notificationCurrent(event: CanvasNotification, resources: readonly SourceResource[]): boolean {
+  const target = notificationTarget(event, resources)
+  if (!target) return false
+  return event.kind === 'done'
+    ? !!event.completion && sameCompletion(event.completion, target.pane?.completion) && ['done', 'idle'].includes(target.pane?.status || '')
+    : (target.pane?.status || target.window.status) === event.kind
 }

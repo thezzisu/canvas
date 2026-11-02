@@ -10,6 +10,8 @@ import type { WebSocket } from "ws";
 import headless from "@xterm/headless";
 import { terminalUnicodeAddon } from "../shared/terminal-unicode.ts";
 import { terminalInputChunks } from "../web/src/terminal-input-chunks.ts";
+import { Store } from "./state.ts";
+import { CompletionReads } from "./completion-reads.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createSpace, createWindow, listResources, shellQuote, type Source } from "./providers.ts";
 import type { CanvasNotification } from "../shared/notification.ts";
@@ -37,7 +39,7 @@ async function waitFor(check: () => boolean | Promise<boolean>, label: string) {
   assert.fail(label);
 }
 
-async function fixture(t: TestContext, probe = false, quietProbe = false) {
+async function fixture(t: TestContext, probe = false, quietProbe = false, completionReads = false) {
   const binary = process.env.CANVAS_TEST_HERDR_SERVER_BINARY;
   if (!binary) { t.skip("Set CANVAS_TEST_HERDR_SERVER_BINARY to an unmodified upstream server"); return; }
   const root = mkdtempSync(join(tmpdir(), "cv-terminal-"));
@@ -58,13 +60,17 @@ async function fixture(t: TestContext, probe = false, quietProbe = false) {
   const source: Source = { id: root, name: "Fixture", transport: "local", herdrSession: session,
     herdrSocket: join(config, "herdr/sessions", session, "herdr.sock") };
   const server = spawn(binary, ["--session", session, "server"], { env, stdio: "ignore" });
-  const manager = new TerminalManager();
+  const store = completionReads ? new Store(join(root, "canvas.db")) : undefined;
+  store?.put("source", source);
+  const reads = store ? new CompletionReads(store) : undefined;
+  const manager = new TerminalManager(reads);
   t.after(async () => {
     await manager.closeAll();
     try { execFileSync(binary, ["--session", session, "server", "stop"], { env, stdio: "ignore", timeout: 5000 }); } catch {}
     server.kill();
     if (server.exitCode === null && server.signalCode === null)
       await new Promise<void>(resolve => { server.once("exit", () => resolve()); setTimeout(() => { server.kill("SIGKILL"); resolve(); }, 1500).unref(); });
+    store?.close();
     rmSync(root, { recursive: true, force: true });
   });
   await waitFor(async () => (await listResources(source)).status === "online", "isolated herdr server did not start");
@@ -99,7 +105,7 @@ async function fixture(t: TestContext, probe = false, quietProbe = false) {
     }, 'native notification API remained rate-limited');
     return result!;
   };
-  return { root, bytes, manager, source, target, shellResult, assertSize, ready, text, reportAgent, notify };
+  return { root, bytes, manager, store, reads, source, target, shellResult, assertSize, ready, text, reportAgent, notify };
 }
 
 test('one existing native endpoint per source delivers live notifications across viewers, owner closure and reconnect', async t => {
@@ -140,7 +146,7 @@ test('one existing native endpoint per source delivers live notifications across
 });
 
 test('native agent metadata reaches both viewers and late joiners without resource polling or a second attachment', async t => {
-  const f = await fixture(t); if (!f) return;
+  const f = await fixture(t, false, false, true); if (!f) return;
   const notifications: CanvasNotification[] = [];
   f.manager.onNotification(value => notifications.push(value));
   const first = new Client(), second = new Client(), late = new Client();
@@ -165,6 +171,9 @@ test('native agent metadata reaches both viewers and late joiners without resour
   assert.equal(metadata(first).status, 'done', 'controller ownership incorrectly acknowledged native work');
   const started = performance.now();
   second.command({ type: 'input', data: '\x1b[I' });
+  second.command({ type: 'completion-fence', generation: 1 });
+  await waitFor(() => messages(second).some(message => message.type === 'completion-frame' && message.generation === 1 && message.panes.some((pane: { completion?: unknown }) => !!pane.completion)), 'completion frame before read');
+  second.command({ type: 'completion-read', generation: 1, paneId, ...metadata(second).panes.find((pane: { id: string }) => pane.id === paneId).completion });
   await waitFor(() => metadata(first)?.status === 'idle' && metadata(second)?.status === 'idle', 'native focus acknowledgement was not pushed');
   t.diagnostic(`Native done-to-idle metadata reached both viewers in ${Math.round(performance.now() - started)}ms without resource polling`);
   await f.manager.connect(f.source, f.target, late.socket);
@@ -325,7 +334,7 @@ test("one native window has one maximized view, pauses peers and restores comple
   assert.deepEqual(JSON.parse(resume[0] as string), { type: "reset" });
   assert.deepEqual(JSON.parse(resume[1] as string), { type: "resize", cols: 100, rows: 30 });
   assert.ok(Buffer.isBuffer(resume[2]) && resume[2].toString().includes("CURRENT_SCREEN"));
-  assert.deepEqual(JSON.parse(resume[3] as string), { type: "presentation", maximized: false, owned: false });
+  assert.deepEqual(JSON.parse(resume.find((data, index) => index > 2 && typeof data === "string" && JSON.parse(data).type === "presentation") as string), { type: "presentation", maximized: false, owned: false });
   await f.assertSize(second, 100, 30);
 
   second.command({ type: "focus-resize-begin", token: exitToken, cols: 150, rows: 45 });
@@ -419,7 +428,7 @@ test('visibility resumes and late viewers stay paused until maximized restoratio
     assert(reset >= 0);
     assert.deepEqual(JSON.parse(received[reset + 1] as string), { type: 'resize', cols: 100, rows: 30 });
     assert(Buffer.isBuffer(received[reset + 2]));
-    assert.deepEqual(JSON.parse(received[reset + 3] as string), { type: 'presentation', maximized: false, owned: false });
+    assert.deepEqual(JSON.parse(received.slice(reset + 3).find(data => typeof data === "string" && JSON.parse(data).type === "presentation") as string), { type: 'presentation', maximized: false, owned: false });
   }
   assert.equal(f.manager.entries.size, 1, 'restoration replaced the native attachment');
 });
@@ -640,4 +649,66 @@ test("hidden viewers stop binary traffic and resume an exact current screen with
   first.command({ type: 'focus-resize-end', token });
   await terminal.geometry.drain(); await terminal.queue;
   assert.equal(presentation(second).maximized, false, 'hidden peers missed lease state');
+});
+
+
+test('shared completion reads follow native frame fences and persist without controlling terminal input', async t => {
+  const f = await fixture(t, false, false, true); if (!f) return;
+  const first = new Client(), peer = new Client();
+  await f.manager.connect(f.source, f.target, first.socket);
+  await f.manager.connect(f.source, f.target, peer.socket);
+  await f.ready();
+  const resource = await listResources(f.source), paneId = resource.spaces.find(space => space.id === f.target.spaceId)!.windows[0]!.panes[0]!.id;
+  f.reportAgent(paneId, 'working');
+  await waitFor(() => messages(first).some(message => message.type === 'metadata' && message.window.panes.some((pane: { id: string; status: string }) => pane.id === paneId && pane.status === 'working')), 'working state arrives');
+  f.reportAgent(paneId, 'idle');
+  await waitFor(() => messages(peer).some(message => message.type === 'completion-frame' && message.panes.some((pane: { id: string; completion?: unknown }) => pane.id === paneId && pane.completion)), 'native completion fence arrives');
+  const frame = messages(peer).filter(message => message.type === 'completion-frame').at(-1);
+  const token = frame.panes.find((pane: { id: string }) => pane.id === paneId).completion;
+  assert(token);
+  assert.equal(messages(peer).filter(message => message.type === 'status').at(-1).readOnly, true);
+  peer.command({ type: 'completion-read', generation: 0, paneId, ...token, sequence: token.sequence + 1 });
+  assert.deepEqual(f.store!.get<{ read: unknown }>('completion-read', f.source.id)!.read, {}, 'a fabricated future sequence is rejected');
+  peer.command({ type: 'view-visible', visible: false });
+  peer.command({ type: 'completion-read', generation: 0, paneId, ...token });
+  assert.deepEqual(f.store!.get<{ read: unknown }>('completion-read', f.source.id)!.read, {}, 'hidden views cannot acknowledge');
+  peer.command({ type: 'view-visible', visible: true });
+  await waitFor(() => messages(peer).filter(message => message.type === 'completion-frame').length > 1, 'resumed view receives a new frame fence');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  peer.command({ type: 'completion-read', generation: 0, paneId, ...token });
+  await waitFor(() => messages(first).filter(message => message.type === 'metadata').at(-1)?.window.panes.find((pane: { id: string }) => pane.id === paneId)?.status === 'idle', 'other viewer observes shared acknowledgement');
+  const record = f.store!.get<{ read: Record<string, number> }>('completion-read', f.source.id)!;
+  assert.equal(record.read[paneId], token.sequence);
+  assert.equal(messages(peer).filter(message => message.type === 'status').at(-1).readOnly, true, 'viewing does not take input control');
+});
+
+test('initial completed panes remain unread without replaying notifications, then a new completion notifies once', async t => {
+  const f = await fixture(t, false, false, true); if (!f) return;
+  const resource = await listResources(f.source), paneId = resource.spaces.find(space => space.id === f.target.spaceId)!.windows[0]!.panes[0]!.id;
+  f.reportAgent(paneId, 'working'); f.reportAgent(paneId, 'idle');
+  const events: CanvasNotification[] = []; f.manager.onNotification(event => events.push(event));
+  const client = new Client(); await f.manager.connect(f.source, f.target, client.socket); await f.ready();
+  const current = () => messages(client).filter(message => message.type === 'metadata').at(-1)?.window.panes.find((pane: { id: string }) => pane.id === paneId);
+  await waitFor(() => !!current()?.completion, 'initial completion is represented');
+  assert.equal(current().status, 'done'); assert.equal(events.filter(event => event.kind === 'done').length, 0);
+  const initial = current().completion.sequence;
+  f.reportAgent(paneId, 'working');
+  await waitFor(() => current()?.status === 'working', 'new task starts');
+  f.reportAgent(paneId, 'idle');
+  await waitFor(() => events.some(event => event.kind === 'done' && event.completion && event.completion.sequence > initial), 'new completion has its own notification evidence');
+  assert.equal(events.filter(event => event.kind === 'done').length, 1);
+});
+
+
+test('passive browser focus reports preserve an already painted completion fence for header selection', async t => {
+  const f = await fixture(t, false, false, true); if (!f) return;
+  const client = new Client(); await f.manager.connect(f.source, f.target, client.socket); await f.ready();
+  const window = (await listResources(f.source)).spaces.find(space => space.id === f.target.spaceId)!.windows[0]!;
+  const paneId = window.panes[0]!.id;
+  f.reportAgent(paneId, 'working'); f.reportAgent(paneId, 'idle');
+  await waitFor(() => messages(client).some(message => message.type === 'completion-frame' && message.panes.some((pane: { completion?: unknown }) => !!pane.completion)), 'completed frame is painted');
+  const frame = messages(client).filter(message => message.type === 'completion-frame').at(-1);
+  client.command({ type: 'input', data: '\x1b[O' });
+  client.command({ type: 'completion-read', generation: frame.generation, paneId, ...frame.panes[0].completion });
+  await waitFor(() => f.store!.get<{ read: Record<string, number> }>('completion-read', f.source.id)?.read[paneId] === frame.panes[0].completion.sequence, 'header selection after browser blur can acknowledge the same frame');
 });
