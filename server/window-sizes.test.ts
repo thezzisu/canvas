@@ -27,8 +27,8 @@ test("terminal presentation dimensions are shared across canvases while position
   };
   const first = await create("First", [node("first")]);
   const second = await create("Second", [node("second"), { id: "note", type: "note", title: "Notes", content: "stay", color: "yellow", x: 5, y: 6, width: 300, height: 200 }]);
-  assert.equal(first.nodes[0]!.width, 1152);
-  assert.equal(second.nodes[0]!.height, 768);
+  assert.equal(first.nodes[0]!.width, 1090);
+  assert.equal(second.nodes[0]!.height, 672);
   const firstPath = `/api/canvases/${first.id}`, secondPath = `/api/canvases/${second.id}`;
   await request(`${firstPath}/layout`, "PATCH", { nodes: [{ id: "first", width: 720, height: 410 }] });
   await request(`${secondPath}/layout`, "PATCH", { nodes: [{ id: "second", x: 77, y: 88 }, { id: "note", width: 360 }] });
@@ -60,20 +60,20 @@ test("canonical window sizes persist across restarts and missing sizes stay at t
   let store = new Store(path);
   const sourceId = randomUUID(), windowId = "tab", key = `${sourceId}/${windowId}`;
   try {
-    assert.deepEqual(store.windowSize(sourceId, windowId), { width: 1152, height: 768 });
+    assert.deepEqual(store.windowSize(sourceId, windowId), { width: 1090, height: 672 });
     for (const [index, width] of [640, 800].entries()) {
       const id = randomUUID();
       store.put<Canvas>("canvas", { id, name: `Canvas ${index}`, nodes: [{ id: `node-${index}`, type: "terminal", sourceId, spaceId: "s", windowId, x: index * 100, y: 0, width, height: 420 }] });
     }
     store.close(); store = new Store(path);
     assert.equal(store.snapshot().windowSizes[key], undefined, "opening a store does not create dimensions from canvas references");
-    assert.ok(store.snapshot().canvases.every(canvas => canvas.nodes[0]!.width === 1152 && canvas.nodes[0]!.height === 768));
+    assert.ok(store.snapshot().canvases.every(canvas => canvas.nodes[0]!.width === 1090 && canvas.nodes[0]!.height === 672));
     store.setWindowSize(sourceId, windowId, { width: 700, height: 420 });
     store.close(); store = new Store(path);
     assert.deepEqual(store.snapshot().windowSizes[key], { width: 700, height: 420 });
     store.remove("source", sourceId);
     store.close(); store = new Store(path);
     assert.equal(store.snapshot().windowSizes[key], undefined, "orphan canvas refs recreated a removed source's size");
-    assert.deepEqual(store.windowSize(sourceId, windowId), { width: 1152, height: 768 });
+    assert.deepEqual(store.windowSize(sourceId, windowId), { width: 1090, height: 672 });
   } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
 });
