@@ -66,7 +66,7 @@ async function fixture(t: TestContext, options: { holdFocus?: boolean; badWelcom
         if (header.tag === 20) {
           assert.equal(header.string(), 'endpoint.hello.v1'); hello = JSON.parse(header.string())
           control('endpoint.welcome.v1', { generation: options.badWelcome ? 2 : 1, snapshot_codec: 'shell.snapshot.v1', surface_codec: 'shell.surface.v1',
-            input_codec: 'shell.input.semantic.v1', blob_codec: 'shell.blob.v1', methods: ['tab.focus', 'pane.focus', 'pane.scroll'] })
+            input_codec: 'shell.input.semantic.v1', blob_codec: 'shell.blob.v1', methods: ['tab.focus', 'pane.focus', 'pane.scroll', 'pane.rename', 'pane.split', 'pane.zoom', 'pane.close'] })
           if (options.missingTarget) removeTarget(1)
           else { snapshot(); surface() }
         } else if (header.tag === 15) {
@@ -309,11 +309,55 @@ test('clipboard messages reach the hosting terminal only and late focus response
   const f = await fixture(t, { holdFocus: true }), pending = f.connect()
   await until(() => f.requests.length === 1); f.response(); const client = await pending
   let output = ''; client.onData(data => output += data)
-  f.send(new Writer().uint(5).string(Buffer.from('copy 中文').toString('base64')))
+  const text = 'copy 中文 😀 literal \\u4e3a'
+  f.send(new Writer().uint(5).string(Buffer.from(text).toString('base64')))
   await until(() => output.includes('\x1b]52;c;'))
+  const encoded = /\x1b\]52;c;([^\x07]+)\x07/u.exec(output)![1]!
+  assert.equal(Buffer.from(encoded, 'base64').toString('utf8'), text, 'clipboard transport preserves Unicode and literal backslash escapes exactly')
   client.write('pending'); await until(() => f.requests.length === 2)
   client.kill(); const before = output; f.response(); await delay(20)
   assert.equal(output, before)
+})
+
+test('pane menu targets the rendered pane and maps only current native actions', async t => {
+  const f = await fixture(t), client = await f.connect()
+  t.after(() => client.kill())
+  const frames: WindowMetadata[] = []
+  client.onFrame(frame => frames.push(frame)); client.onData(() => {})
+  f.surface(1, 2)
+  await until(() => !!frames.at(-1)?.layout)
+  const point = { column: 2, row: 0, cols: 8, rows: 1, layout: frames.at(-1)!.layout! }
+  const context = client.paneContext(point)!
+  assert.deepEqual(context, { bootId: 'boot', paneId: 'pane', name: '' })
+  assert.equal(client.paneContext({ ...point, cols: 9 }), undefined)
+  assert.equal(client.paneContext({ ...point, column: 8 }), undefined)
+  f.surface(1, 3, 'CHANGED')
+  await until(() => frames.length > 1)
+  assert.equal(frames.at(-1)!.layout, point.layout, 'ordinary output keeps the same pane layout identity')
+  const initial = f.requests.length
+  await client.paneAction(context, { action: 'rename', name: ' 中文 name ' })
+  await client.paneAction(context, { action: 'rename', name: ' ' })
+  await client.paneAction(context, { action: 'split-right' })
+  await client.paneAction(context, { action: 'split-down' })
+  await client.paneAction(context, { action: 'zoom' })
+  assert.deepEqual(f.requests.slice(initial).map(({ method, params }) => ({ method, params })), [
+    { method: 'pane.rename', params: { pane_id: 'pane', label: '中文 name' } },
+    { method: 'pane.rename', params: { pane_id: 'pane', label: null } },
+    { method: 'pane.split', params: { target_pane_id: 'pane', direction: 'right', focus: true } },
+    { method: 'pane.split', params: { target_pane_id: 'pane', direction: 'down', focus: true } },
+    { method: 'pane.zoom', params: { pane_id: 'pane', mode: 'toggle' } },
+  ])
+  await assert.rejects(client.paneAction({ ...context, bootId: 'another' }, { action: 'close' }), /Pane changed/u)
+  f.snapshot(2, 'target', 'boot', 'replacement')
+  f.surface(2, 4, 'CHANGED', 'boot', 'replacement')
+  await until(() => frames.at(-1)?.layout !== point.layout)
+  assert.equal(client.paneContext(point), undefined, 'same-size pane topology changes invalidate old hit coordinates')
+  await assert.rejects(client.paneAction(context, { action: 'close' }), /Pane changed/u)
+  const fresh = client.paneContext({ ...point, layout: frames.at(-1)!.layout! })!
+  const freshPoint = { ...point, layout: frames.at(-1)!.layout! }
+  f.surface(2, 5, 'POPUP', 'boot', 'replacement', true)
+  await until(() => client.paneContext(freshPoint) === undefined)
+  await assert.rejects(client.paneAction(fresh, { action: 'close' }), /Pane changed/u)
 })
 
 test('a delayed independent selection read never holds the endpoint keyboard lane', async t => {

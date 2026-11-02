@@ -12,6 +12,8 @@ import { join } from "node:path";
 import type { HerdrClientTransport } from "./herdr/client.ts";
 import { herdrApiRequest } from "./herdr/api.ts";
 import { contentCandidates } from "./content-candidates.ts";
+import type { WindowMetadata } from '../shared/window-metadata.ts';
+import { terminalCellWidth } from '../shared/terminal-unicode.ts';
 import headless from "@xterm/headless";
 import {
   createSpace,
@@ -83,6 +85,7 @@ test("native herdr transport works with an unmodified server: split rendering, k
   let secondTerminal: HerdrClientTransport | undefined;
   let command: Awaited<ReturnType<typeof openTerminal>> | undefined;
   let secondCommand: Awaited<ReturnType<typeof openTerminal>> | undefined;
+  let frame: WindowMetadata | undefined;
   const screen = new headless.Terminal({
     cols: 90,
     rows: 25,
@@ -127,10 +130,10 @@ test("native herdr transport works with an unmodified server: split rendering, k
       return (
         top.startsWith("┌") &&
         top.endsWith("┐") &&
-        top.length === cols &&
+        terminalCellWidth(top) === cols &&
         bottom.startsWith("└") &&
         bottom.endsWith("┘") &&
-        bottom.length === cols
+        terminalCellWidth(bottom) === cols
       );
     }, "native tab frame did not reach every edge of the native viewport");
   };
@@ -219,6 +222,7 @@ test("native herdr transport works with an unmodified server: split rendering, k
     cli("tab", "focus", other.id);
     command = await openTerminal(source, space.id, window.id);
     terminal = await command.connect(90, 25);
+    terminal.onFrame(value => { frame = value; });
     terminal.onData((chunk) => {
       screen.write(chunk);
     });
@@ -316,6 +320,27 @@ test("native herdr transport works with an unmodified server: split rendering, k
     assert.equal(afterScan.focused_pane_id, beforeScan.focused_pane_id);
     assert.deepEqual(afterScan.panes.filter((p: { tab_id: string }) => p.tab_id === window.id).map((p: { scroll: unknown }) => p.scroll),
       beforeScan.panes.filter((p: { tab_id: string }) => p.tab_id === window.id).map((p: { scroll: unknown }) => p.scroll));
+    await waitFor(() => !!frame?.layout, 'pane layout marker was not published');
+    const menuPoint = { column: 4, row: 3, cols: 112, rows: 32, layout: frame!.layout! };
+    const target = terminal.paneContext(menuPoint)!;
+    assert.equal(target.paneId, nativePanes[0].pane_id);
+    assert.equal(terminal.paneContext({ ...menuPoint, column: 0 }), undefined, 'native borders are not pane content');
+    assert.equal(terminal.paneContext({ ...menuPoint, column: 54 }), undefined, 'native scrollbar gutter is not pane content');
+    await terminal.paneAction(target, { action: 'rename', name: 'Context 中文' });
+    await waitFor(() => snapshot().panes.find((p: { pane_id: string }) => p.pane_id === target.paneId)?.label === 'Context 中文', 'pane rename RPC did not apply');
+    await terminal.paneAction(target, { action: 'zoom' });
+    await waitFor(() => frame?.layout !== menuPoint.layout, 'pane zoom did not replace the layout token');
+    assert.equal(terminal.paneContext(menuPoint), undefined, 'same-size zoom rejects stale hit coordinates');
+    await terminal.paneAction(target, { action: 'zoom' });
+    await assertSplitGeometry(112, 32);
+    const countBefore = snapshot().panes.filter((p: { tab_id: string }) => p.tab_id === window.id).length;
+    await terminal.paneAction(target, { action: 'split-down' });
+    await waitFor(() => snapshot().panes.filter((p: { tab_id: string }) => p.tab_id === window.id).length === countBefore + 1, 'pane split RPC did not apply');
+    const createdPane = snapshot().panes.find((p: { tab_id: string; pane_id: string }) => p.tab_id === window.id && !nativePanes.some((original: { pane_id: string }) => original.pane_id === p.pane_id));
+    await waitFor(() => !!frame?.panes.some(pane => pane.id === createdPane.pane_id), 'new pane has not reached the client frame');
+    await terminal.paneAction({ ...target, paneId: createdPane.pane_id }, { action: 'close' });
+    await waitFor(() => !snapshot().panes.some((p: { pane_id: string }) => p.pane_id === createdPane.pane_id), 'pane close RPC did not apply');
+    await assert.rejects(terminal.paneAction({ ...target, bootId: 'another-boot' }, { action: 'close' }), /Pane changed/u);
     screen.resize(70, 18);
     terminal.resize(70, 18);
     await assertSplitGeometry(70, 18);

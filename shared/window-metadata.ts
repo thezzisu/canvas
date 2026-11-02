@@ -12,6 +12,7 @@ export interface PaneMetadata {
   completion?: CompletionToken
 }
 export interface WindowMetadata {
+  layout?: string
   bootId?: string
   id: string
   name: string
@@ -24,6 +25,7 @@ export function isWindowMetadata(value: unknown): value is WindowMetadata {
   const window = value as WindowMetadata
   const status = (value: unknown) => typeof value === 'string' && Object.hasOwn(statusPriority, value)
   return typeof window.id === 'string' && typeof window.name === 'string' && status(window.status)
+    && (window.layout === undefined || typeof window.layout === 'string' && window.layout.length <= 100)
     && Array.isArray(window.panes) && window.panes.every(pane => pane && typeof pane.id === 'string'
       && typeof pane.name === 'string' && typeof pane.active === 'boolean' && status(pane.status)
       && (pane.agent === undefined || typeof pane.agent === 'string')

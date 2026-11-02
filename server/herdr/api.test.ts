@@ -38,6 +38,7 @@ test("direct herdr JSON API handles fragmented responses, errors, bounds and tim
       if (request.method === "oversize") { socket.end("x".repeat(200)); return; }
       const response = request.method === "error" ? { id: request.id, error: { code: "invalid", message: "fixture error" } }
         : request.method === "wrong-id" ? { id: "another", result: {} } : { id: request.id, result: { marker: "中文", params: request.params } };
+      if (request.method === 'escaped') { socket.end(JSON.stringify(response).replace('中文', '\\u4e2d\\u6587') + '\n'); return; }
       const bytes = Buffer.from(JSON.stringify(response) + "\n"), split = bytes.indexOf(Buffer.from("中文")) + 1;
       socket.write(bytes.subarray(0, split)); setTimeout(() => socket.end(bytes.subarray(split)), 5);
     });
@@ -45,6 +46,7 @@ test("direct herdr JSON API handles fragmented responses, errors, bounds and tim
   const socketPath = join(root, "api.sock"); await new Promise<void>(resolve => server.listen(socketPath, resolve));
   t.after(async () => { for (const client of clients) client.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true }); });
   assert.deepEqual(await herdrApiRequest(socketPath, "read", { label: "name ' ; $()" }), { marker: "中文", params: { label: "name ' ; $()" } });
+  assert.deepEqual(await herdrApiRequest(socketPath, 'escaped', { literal: '\\u4e3a' }), { marker: '中文', params: { literal: '\\u4e3a' } });
   await assert.rejects(herdrApiRequest(socketPath, "error"), /fixture error/u);
   await assert.rejects(herdrApiRequest(socketPath, "wrong-id"), /Invalid herdr API response/u);
   await assert.rejects(herdrApiRequest(socketPath, "oversize", {}, { maxResponseBytes: 100 }), /too large/u);

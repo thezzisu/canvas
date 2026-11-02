@@ -532,6 +532,8 @@ export class HerdrInputRouter {
     const context = this.context();
     if (!context) return;
     const kind = event.kind;
+    // Right is a Canvas menu gesture, including its drag and release reports.
+    if (typeof kind === 'object' && Object.values(kind)[0] === 'Right') return;
     const up = kind === 'Release' || typeof kind === 'object' && 'Up' in kind;
     const drag = typeof kind === 'object' && 'Drag' in kind;
     const down = typeof kind === 'object' && 'Down' in kind;

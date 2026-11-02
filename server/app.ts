@@ -44,6 +44,11 @@ const nameSchema = z
 const sourceProbeSchema = z.object(sourceSchema.shape).omit({ id: true, name: true }).strict();
 const createWindowSchema = z.object({ name: z.string().trim().max(100).optional() }).strict();
 const createSpaceSchema = createWindowSchema.extend({ sourceSpaceId: z.string().min(1).max(100).optional() });
+const paneContextSchema = z.object({ bootId: z.string().min(1).max(4096), paneId: z.string().min(1).max(4096) }).strict();
+const paneActionSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('rename'), name: z.string().trim().max(200) }).strict(),
+  z.object({ action: z.enum(['split-right', 'split-down', 'zoom', 'close']) }).strict(),
+]);
 const opacitySchema = z.number().finite().min(0).max(1);
 const backgroundOpacitySchema = z.object({ opacity: opacitySchema }).strict();
 const nodeListSchema = z
@@ -232,6 +237,25 @@ export function createApp(
     const panes = await options.windowContent.read(source, c.req.param("space"), c.req.param("window"), bearerToken(c.req.header("authorization")));
     if (panes.some(pane => pane.incomplete)) return c.json({ error: "Some window content could not be read" }, 503);
     return c.json({ text: panes.map(pane => pane.lines.join("\n").trimEnd()).filter(Boolean).join("\n\n") });
+  });
+  app.post('/api/sources/:id/spaces/:space/windows/:window/pane-context', async c => {
+    const point = z.object({ column: z.number().int().min(0).max(4095), row: z.number().int().min(0).max(4095),
+      cols: z.number().int().min(1).max(4096), rows: z.number().int().min(1).max(4096), layout: z.string().uuid() }).strict().parse(await c.req.json());
+    const connection = source(c.req.param('id')), key = sourceConnectionKey(connection);
+    const target = await terminals.paneContext(connection, c.req.param('space'), c.req.param('window'), point);
+    if (!store.hasSession(bearerToken(c.req.header('authorization')))) return c.json({ error: 'Please sign in' }, 401);
+    if (sourceConnectionKey(source(connection.id)) !== key) return c.json({ error: 'Connection changed' }, 409);
+    return c.json({ pane: target || null });
+  });
+  app.post('/api/sources/:id/spaces/:space/windows/:window/pane-action', async c => {
+    const { pane, command } = z.object({ pane: paneContextSchema, command: paneActionSchema }).strict().parse(await c.req.json());
+    const connection = source(c.req.param('id')), key = sourceConnectionKey(connection), session = bearerToken(c.req.header('authorization'));
+    const authorized = () => {
+      const current = store.get<Source>('source', connection.id);
+      return store.hasSession(session) && !!current && sourceConnectionKey(current) === key;
+    };
+    await terminals.paneAction(connection, c.req.param('space'), c.req.param('window'), { ...pane, name: '' }, command, authorized);
+    return c.json({ ok: true });
   });
   app.post("/api/sources/:id/spaces/:space/windows/:window/scan", async c => {
     z.object({}).strict().parse(await c.req.json());

@@ -1,4 +1,5 @@
 import { CompletionReads } from './completion-reads.ts';
+import type { PaneAction, PaneContext, PanePoint } from '../shared/pane-context.ts';
 import { sameCompletion, type CompletionToken } from '../shared/completion.ts';
 import headless from "@xterm/headless";
 import { terminalUnicodeAddon } from "../shared/terminal-unicode.ts";
@@ -167,7 +168,7 @@ class LiveTerminal {
     if (!this.frame || this.pendingFences.has(ws)) return;
     const frame = this.reads?.project(this.source, this.frame) || this.frame;
     this.sentFrames.set(ws, frame);
-    json(ws, { type: 'completion-frame', generation: this.readGenerations.get(ws) || 0, focusedPaneId: frame.panes.find(pane => pane.active)?.id,
+    json(ws, { type: 'completion-frame', generation: this.readGenerations.get(ws) || 0, focusedPaneId: frame.panes.find(pane => pane.active)?.id, layout: frame.layout,
       panes: frame.panes.map(pane => ({ id: pane.id, ...(pane.completion ? { completion: pane.completion } : {}) })) });
   }
   private canRender(ws: WebSocket) {
@@ -554,6 +555,18 @@ export class TerminalManager {
     const terminal = await this.entries.get(`${source.id}/${windowId}`)?.catch(() => undefined);
     return terminal && !terminal.closed && terminal.clients.size && terminal.spaceId === spaceId
       && terminal.connectionKey === sourceConnectionKey(source) ? terminal.proc.content() : undefined;
+  }
+  private async paneClient(source: Source, spaceId: string, windowId: string) {
+    const terminal = await this.entries.get(`${source.id}/${windowId}`)?.catch(() => undefined);
+    if (!terminal || terminal.closed || !terminal.clients.size || terminal.spaceId !== spaceId ||
+        terminal.connectionKey !== sourceConnectionKey(source)) throw new Error('Open this window first');
+    return terminal.proc;
+  }
+  async paneContext(source: Source, spaceId: string, windowId: string, point: PanePoint) {
+    return (await this.paneClient(source, spaceId, windowId)).paneContext(point);
+  }
+  async paneAction(source: Source, spaceId: string, windowId: string, context: PaneContext, action: PaneAction, authorized: () => boolean) {
+    return (await this.paneClient(source, spaceId, windowId)).paneAction(context, action, authorized);
   }
   async captureFilePaste(sourceId: string, windowId: string, ws: WebSocket) {
     const pending = this.entries.get(`${sourceId}/${windowId}`);

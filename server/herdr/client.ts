@@ -7,6 +7,7 @@ import { readWindowContent, type NativeContentPane } from './content.ts'
 import { windowMetadata } from './metadata.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import type { NativeNotification } from '../../shared/notification.ts'
+import type { PaneAction, PaneContext, PanePoint } from '../../shared/pane-context.ts'
 
 export interface HerdrClientTransport {
   onData(listener: (data: string) => void): { dispose(): void }
@@ -19,6 +20,8 @@ export interface HerdrClientTransport {
   completionFence(): Promise<WindowMetadata | undefined>
   onExit(listener: (event: HerdrClientExit) => void): { dispose(): void }
   content(): Promise<NativeContentPane[] | undefined>
+  paneContext(point: PanePoint): PaneContext | undefined
+  paneAction(context: PaneContext, action: PaneAction, authorized?: () => boolean): Promise<unknown>
   write(data: string | Buffer): void
   resize(cols: number, rows: number): void
   pause(): void
@@ -78,6 +81,7 @@ class HerdrClient implements HerdrClientTransport {
   private surface?: PaneSurfaceFrame
   private renderedMetadata?: WindowMetadata
   private renderedContent?: { surface: PaneSurfaceFrame; snapshot: ClientShellSnapshot }
+  private layout = { signature: '', token: '' }
   private selection?: ScreenSelection
   private output: Array<{ data: string; frame?: WindowMetadata }> = []
   private outputBytes = 0
@@ -158,7 +162,7 @@ class HerdrClient implements HerdrClientTransport {
     } catch (error) { this.fail(error) }
   }
 
-  private request(method: string, params: Record<string, unknown>): Promise<unknown> {
+  private request(method: string, params: Record<string, unknown>, valid?: () => boolean): Promise<unknown> {
     if (method === 'pane.selection.read' && this.options.readSelection) {
       const boot = this.snapshot?.boot_id
       if (this.closed || !boot) return Promise.reject(new Error('Herdr endpoint connection is closed'))
@@ -172,6 +176,7 @@ class HerdrClient implements HerdrClientTransport {
     const boot = this.snapshot?.boot_id
     const result = this.requestLane.then(() => {
       if (boot !== this.snapshot?.boot_id) throw new Error('Herdr endpoint changed before request delivery')
+      if (valid && !valid()) throw new Error('Pane changed; open its menu again')
       return this.sendRequest(method, params)
     }).finally(() => { this.queuedRequests-- })
     this.requestLane = result.catch(() => {})
@@ -308,13 +313,16 @@ class HerdrClient implements HerdrClientTransport {
     this.input.refresh()
     const rendered = this.screen.render(surface, this.selection)
     this.renderedContent = { surface, snapshot: this.snapshot! }
+    const signature = JSON.stringify([surface.boot_id, this.options.tabId, surface.frame.width, surface.frame.height,
+      surface.panes.map(pane => [pane.pane_id, pane.inner_rect]), surface.popup?.terminal_id])
+    if (signature !== this.layout.signature) this.layout = { signature, token: randomUUID() }
     if (!this.initialized) {
       this.initialized = true
       clearTimeout(this.deadline)
       this.emit(INITIAL_MODES)
       this.resolve(this)
     }
-    this.renderedMetadata = surface.popup && this.metadata ? { ...this.metadata, panes: [] } : this.metadata
+    this.renderedMetadata = this.metadata ? { ...this.metadata, layout: this.layout.token, ...(surface.popup ? { panes: [] } : {}) } : undefined
     this.emit(rendered, !this.pendingInputBytes && !this.inputFocusPending && this.input.focusSettled ? this.renderedMetadata : undefined)
     this.flushInput()
   }
@@ -325,6 +333,27 @@ class HerdrClient implements HerdrClientTransport {
       params => this.options.readContent ? this.options.readContent(params) : Promise.reject(new Error('Pane read unavailable')))
     if (this.closed) return
     return panes
+  }
+  paneContext(point: PanePoint): PaneContext | undefined {
+    const rendered = this.renderedContent
+    if (this.closed || !rendered || point.layout !== this.layout.token || rendered.surface.popup || this.surface?.popup ||
+      point.cols !== rendered.surface.frame.width || point.rows !== rendered.surface.frame.height) return
+    const hit = rendered.surface.panes.find(pane => point.column >= pane.inner_rect.x && point.row >= pane.inner_rect.y &&
+      point.column < pane.inner_rect.x + pane.inner_rect.width && point.row < pane.inner_rect.y + pane.inner_rect.height)
+    const pane = hit && this.snapshot?.panes.find(pane => pane.pane_id === hit.pane_id && pane.tab_id === this.options.tabId)
+    if (!pane) return
+    return { bootId: rendered.snapshot.boot_id, paneId: pane.pane_id, name: typeof pane.label === 'string' ? pane.label : '' }
+  }
+  paneAction(context: PaneContext, action: PaneAction, authorized: () => boolean = () => true): Promise<unknown> {
+    const valid = () => authorized() && !this.closed && !this.surface?.popup && this.snapshot?.boot_id === context.bootId &&
+      !!this.snapshot.panes.some(pane => pane.pane_id === context.paneId && pane.tab_id === this.options.tabId)
+    if (!valid()) return Promise.reject(new Error('Pane changed; open its menu again'))
+    const pane_id = context.paneId
+    if (action.action === 'rename') return this.request('pane.rename', { pane_id, label: action.name.trim() || null }, valid)
+    if (action.action === 'split-right' || action.action === 'split-down')
+      return this.request('pane.split', { target_pane_id: pane_id, direction: action.action === 'split-right' ? 'right' : 'down', focus: true }, valid)
+    return this.request(action.action === 'zoom' ? 'pane.zoom' : 'pane.close',
+      action.action === 'zoom' ? { pane_id, mode: 'toggle' } : { pane_id }, valid)
   }
   private clipboard(data: string) {
     if (!this.initialized || data.length > 2 * 1024 * 1024 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) return

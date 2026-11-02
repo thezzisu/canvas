@@ -18,6 +18,7 @@ import { emptyModifiers, hasModifiers, modifiedText, terminalKey, terminalShortc
 import { terminalInputChunks } from './terminal-input-chunks'
 import { bindTerminalKeyboardLock } from './terminal-keyboard-lock'
 import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch'
+import { bindTerminalMouseDefaults } from './terminal-mouse-defaults'
 import { defaultContentFont, type ContentFontSettings } from '../../shared/settings'
 import { applyTerminalFontFeatures, type FontPresentation } from './fonts'
 import { bindMobileKeyboard } from './mobile-keyboard'
@@ -29,6 +30,7 @@ import { fitTerminalGrid, terminalBox, terminalMetrics, type RenderedTerminalGri
 import { TerminalReconnect, terminalInputHasFocus } from './terminal-reconnect'
 import { normalizeTerminalZoom } from './terminal-zoom'
 import type { SourceResource } from './types'
+import type { PaneAction, PaneContext } from '../../shared/pane-context'
 
 export type TerminalStatus = {
   status: 'connecting' | 'connected' | 'disconnected' | 'closed'
@@ -48,12 +50,14 @@ export type TerminalStatus = {
   retryAttempt?: number
 }
 interface FocusResize { token: string; suspended: boolean; requested?: { cols: number; rows: number } }
-interface CompletionFrame { generation: number; focusedPaneId?: string; panes: Array<{ id: string; completion?: CompletionToken }> }
+interface CompletionFrame { generation: number; layout?: string; focusedPaneId?: string; panes: Array<{ id: string; completion?: CompletionToken }> }
 interface Session {
   readGeneration?: number
   readGesture?: boolean
   parsedCompletion?: CompletionFrame
   paintedCompletion?: CompletionFrame
+  parsedLayout?: string
+  paintedLayout?: string
   readCompletion?: { paneId: string; completion: CompletionToken }
   term: Terminal
   surface: HTMLDivElement
@@ -293,9 +297,9 @@ function normalizeMouseCoordinates(event: MouseEvent) {
     : undefined
   if (event instanceof WheelEvent && pointed?.term.modes.mouseTrackingMode === 'none') return
   if (event.type === 'mousemove' && event.buttons === 0 && !pointed) mouseOwner = undefined
-  if (event.type === 'mousedown') mouseOwner = pointed
+  if (event.type === 'mousedown' && event.button !== 2) mouseOwner = pointed
   const session = event.type === 'mousemove' || event.type === 'mouseup' ? mouseOwner || pointed : pointed
-  if (event.type === 'mouseup') mouseOwner = undefined
+  if (event.type === 'mouseup' && event.button !== 2) mouseOwner = undefined
   const screen = session?.term.element?.querySelector<HTMLElement>('.xterm-screen')
   if (!screen?.isConnected) return
   const rect = screen.getBoundingClientRect()
@@ -363,6 +367,7 @@ function disconnect(session: Session) {
   updateMetadata(session)
   session.reportedVisible = undefined
   session.parsedCompletion = undefined; session.paintedCompletion = undefined; session.readCompletion = undefined
+  session.parsedLayout = undefined; session.paintedLayout = undefined
   session.readGeneration = 0; session.readGesture = false
   session.connectionRevision++
   session.parsedGrid = undefined; session.paintedGrid = undefined; session.resetPending = false
@@ -471,16 +476,19 @@ async function connect(session: Session, probe: boolean) {
         else if (message.type === 'reset') {
           session.resetPending = true
           session.parsedCompletion = undefined; session.paintedCompletion = undefined; session.readCompletion = undefined
+          session.parsedLayout = undefined; session.paintedLayout = undefined
           refreshReadFocus()
         }
         else if (message.type === 'completion-frame' && Number.isSafeInteger(message.generation) && message.generation === (session.readGeneration || 0) && Array.isArray(message.panes) && message.panes.every((pane: unknown) => pane && typeof pane === 'object' && 'id' in pane && typeof pane.id === 'string' &&
           (!('completion' in pane) || pane.completion === undefined || isCompletionToken(pane.completion)))) {
-          const frame: CompletionFrame = { generation: message.generation, focusedPaneId: typeof message.focusedPaneId === 'string' ? message.focusedPaneId : undefined, panes: message.panes }
+          const frame: CompletionFrame = { generation: message.generation, layout: typeof message.layout === 'string' ? message.layout : undefined,
+            focusedPaneId: typeof message.focusedPaneId === 'string' ? message.focusedPaneId : undefined, panes: message.panes }
           // This control frame follows the matching ANSI bytes. Queue behind their
           // parse, then request a real paint even when the result text is unchanged.
           session.term.write('', () => {
             if (session.socket !== socket || !isCurrentApi(context) || frame.generation !== (session.readGeneration || 0)) return
             session.parsedCompletion = frame
+            session.parsedLayout = frame.layout
             if (session.opened) session.term.refresh(0, session.term.rows - 1)
           })
         }
@@ -696,6 +704,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     // Offscreen xterm buffers can resize before the DOM renderer catches up.
     // Keep each measured grid paired with the dimensions that actually painted it.
     term.onRender(() => {
+      if (current.parsedLayout) current.paintedLayout = current.parsedLayout
       if (current.parsedCompletion) { current.paintedCompletion = current.parsedCompletion; refreshReadFocus() }
       const grid = terminalGeometry(current)
       if (!grid) return
@@ -798,6 +807,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     }, { capture: true })
     session.term.textarea?.addEventListener('compositionstart', () => { current.nativeKey = undefined; setModifiers(current) })
     session.term.textarea?.addEventListener('blur', () => { current.nativeKey = undefined; setModifiers(current) })
+    const removeMouseDefaults = bindTerminalMouseDefaults(session.surface, () => interactive(current) &&
+      current.state.status === 'connected' && current.term.modes.mouseTrackingMode !== 'none')
     const removeTouch = bindTerminalTouch(session.surface, session.term, {
       active: () => current.mobile && current.magnified && current.state.status === 'connected' && !current.state.readOnly,
       mode: () => current.touchMode,
@@ -813,6 +824,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     session.surface.addEventListener('touchend', finishTerminalReadGesture)
     session.surface.addEventListener('touchcancel', finishTerminalReadGesture)
     session.removeTouch = () => {
+      removeMouseDefaults()
       removeTouch()
       session!.surface.removeEventListener('touchend', finishTerminalReadGesture)
       session!.surface.removeEventListener('touchcancel', finishTerminalReadGesture)
@@ -872,6 +884,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   const mountingContext = apiContext()
   const canPasteText = () => isCurrentApi(mountingContext) && current.host === host && host.isConnected && interactive(current) && current.state.status === 'connected' && current.socket?.readyState === WebSocket.OPEN &&
     !(current.state.presentation?.maximized && (!current.state.presentation.owned || !current.magnified))
+  const windowPath = `/api/sources/${segment(resource.sourceId)}/spaces/${segment(resource.spaceId)}/windows/${segment(resource.windowId)}`
   const removeFileInput = bindFileInput(host, current.uploads, draggingFile => {
     if (current.host === host) setState(current, { ...current.state, draggingFile })
   }, data => {
@@ -905,6 +918,19 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   present(current)
   schedulePresentation(current)
   return {
+    async paneContext(x: number, y: number, signal: AbortSignal): Promise<PaneContext | null> {
+      const layout = current.paintedLayout
+      if (!canPasteText() || !layout) return null
+      const rect = current.term.element?.querySelector('.xterm-screen')?.getBoundingClientRect()
+      if (!rect?.width || !rect.height || x < rect.left || y < rect.top || x >= rect.right || y >= rect.bottom) return null
+      const point = { column: Math.floor((x - rect.left) * current.term.cols / rect.width),
+        row: Math.floor((y - rect.top) * current.term.rows / rect.height), cols: current.term.cols, rows: current.term.rows, layout }
+      return (await api<{ pane: PaneContext | null }>(`${windowPath}/pane-context`, { method: 'POST', body: JSON.stringify(point), signal }, mountingContext)).pane
+    },
+    async paneAction(pane: PaneContext, command: PaneAction) {
+      if (!canPasteText()) throw new Error(t('terminal.unavailable'))
+      await api(`${windowPath}/pane-action`, { method: 'POST', body: JSON.stringify({ pane: { paneId: pane.paneId, bootId: pane.bootId }, command }) }, mountingContext)
+    },
     focus(options: { keyboard?: boolean } = {}) { focusTerminal(current, options.keyboard) },
     blur() { if (current.mobile) current.keyboard?.blur(); else current.term.blur(); setModifiers(current) },
     setModifiers(modifiers: Partial<TerminalModifiers>) { setModifiers(current, modifiers) },

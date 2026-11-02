@@ -556,6 +556,23 @@ test("binary mouse coordinates and UTF-8 input pass through the native herdr cli
   assert.deepEqual(readFileSync(f.bytes).subarray(mouseBytes.length), Buffer.from("中文"));
 });
 
+test('native right-click cannot trigger application paste by default and explicit Unicode paste remains exact', async t => {
+  const f = await fixture(t, true, true); if (!f) return;
+  const client = new Client();
+  await f.manager.connect(f.source, f.target, client.socket);
+  await f.ready();
+  client.command({ type: 'input', data: '\x1b[<2;5;3M\x1b[<34;6;3M\x1b[<2;6;3m' });
+  const body = '合成剪贴板 😀 literal \\u4e3a\tsecond line\rnext';
+  const pasted = `\x1b[200~${body}\x1b[201~`;
+  client.command({ type: 'input', data: pasted });
+  await waitFor(() => existsSync(f.bytes) && readFileSync(f.bytes).length >= Buffer.byteLength(pasted), 'Unicode paste did not reach the isolated receiver');
+  assert.deepEqual(readFileSync(f.bytes), Buffer.from(pasted), 'default right-click adds no input, and paste neither escapes nor unescapes Unicode');
+  client.command({ type: 'input', data: '\x1b[<1;5;3M\x1b[<1;5;3m' });
+  const middle = Buffer.from('\x1b[M!%#\x1b[M#%#');
+  await waitFor(() => readFileSync(f.bytes).length >= Buffer.byteLength(pasted) + middle.length, 'native middle button did not reach the receiver');
+  assert.deepEqual(readFileSync(f.bytes), Buffer.concat([Buffer.from(pasted), middle]), 'middle input is one native press/release without a duplicate paste');
+});
+
 test("a 200000-code-unit note reaches the native pane intact in bounded chunks and one paste bracket pair", async t => {
   const f = await fixture(t, true, true); if (!f) return;
   const client = new Client();

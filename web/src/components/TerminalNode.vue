@@ -20,6 +20,8 @@ import { useDocumentFocus } from '../document-focus'
 import { useTerminalZoom } from '../terminal-zoom'
 import ContentZoom from './ContentZoom.vue'
 import CardHeaderActions from './CardHeaderActions.vue'
+import PaneContextMenu from './PaneContextMenu.vue'
+import type { PaneAction, PaneContext } from '../../../shared/pane-context'
 import { contentZoomMenu } from '../content-zoom-menu'
 import type { TerminalData } from '../types'
 const { t } = useI18n()
@@ -97,6 +99,7 @@ function previewClick(event: MouseEvent) {
 function contentPointerDown(event: PointerEvent) {
   if (mobilePreview.value || closed.value) return
   event.stopPropagation()
+  if (event.button === 2) return
   if (!props.data.mobile) terminal?.focus()
   else if (event.pointerType !== 'touch') terminal?.focus()
 }
@@ -105,6 +108,8 @@ function toggleKeyboard() {
   else terminal?.focus({ keyboard: true })
 }
 function readText(signal: AbortSignal) { return terminal?.readText(signal) ?? Promise.reject(new Error(t('terminal.unavailable'))) }
+function paneContext(x: number, y: number, signal: AbortSignal) { return terminal?.paneContext(x, y, signal) ?? Promise.resolve(null) }
+function paneAction(pane: PaneContext, command: PaneAction) { return terminal?.paneAction(pane, command) ?? Promise.reject(new Error(t('terminal.unavailable'))) }
 function copyText(text?: string) { return terminal?.copySelection(text) ?? false }
 function reading(active: boolean) { if (active) terminal?.blur() }
 function mobileKey(key: string, modifiers?: Partial<TerminalModifiers>) { terminal?.sendKey(key, modifiers) }
@@ -197,6 +202,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
       </CardHeaderActions>
     </header>
     <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || closed || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop />
+    <PaneContextMenu :host="host" :enabled="keepTerminal && !mobilePreview && !closed && !maximizedElsewhere && status.status === 'connected'" :lookup="paneContext" :action="paneAction" />
     <div v-if="mobilePreview && !closed" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: data.name })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
     <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">{{ t('terminal.upload.file') }}</div>
     <div v-if="noteDrag || fileDrag" class="terminal-file-drop terminal-note-drop" :class="{ 'note-drop-unavailable': !noteDropAvailable }" aria-hidden="true">{{ !noteDropAvailable ? noteDropLabel : fileDrag ? t(status.fileReading ? 'fileTransfer.preparing' : 'fileTransfer.drop') : noteDropLabel }}</div>
