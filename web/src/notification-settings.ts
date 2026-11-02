@@ -61,7 +61,7 @@ function playTone(context: AudioContext, kind: 'attention' | 'done', ended?: () 
   tone.frequency.setValueAtTime(kind === 'attention' ? 660 : 523.25, start)
   tone.frequency.setValueAtTime(kind === 'attention' ? 880 : 659.25, start + .11)
   gain.gain.setValueAtTime(0, start)
-  gain.gain.linearRampToValueAtTime(.08, start + .012)
+  gain.gain.linearRampToValueAtTime(.2, start + .012)
   gain.gain.linearRampToValueAtTime(0, start + .23)
   tone.connect(gain); gain.connect(context.destination)
   tone.onended = () => { tone.disconnect(); gain.disconnect(); ended?.() }
