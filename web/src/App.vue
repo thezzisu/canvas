@@ -2,7 +2,7 @@
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, shallowRef, watch } from 'vue'
 import { VueFlow, useVueFlow, type Node, type NodeChange, type NodePositionChange, type NodeMouseEvent } from '@vue-flow/core'
 import { useStorage, useTitle, watchDebounced } from '@vueuse/core'
-import { MiniMap } from '@vue-flow/minimap'
+import MiniMap from './components/CanvasMiniMap.vue'
 import UApp from '@nuxt/ui/components/App.vue'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import UModal from './components/CanvasModal.vue'
