@@ -735,6 +735,7 @@ function applySharedState(state: SharedState) {
   }).map(source => source.id)
   const sourceChanged = JSON.stringify(sources.value) !== JSON.stringify(state.sources)
   const previousNodes = JSON.stringify(currentCanvas.value?.nodes)
+  const focusedReference = currentCanvas.value?.nodes.some(node => node.id === focused.value?.id)
   const nextSizes = { ...state.windowSizes }
   for (const canvas of state.canvases) for (const [id, patch] of pendingLayouts.get(canvas.id) || []) {
     const node = canvas.nodes.find(item => item.id === id)
@@ -766,7 +767,7 @@ function applySharedState(state: SharedState) {
   if (restoring && (pendingLayouts.size || pendingNotes.size)) queueMicrotask(() => { void flushInstanceEdits() })
   if (!isOverview.value && !currentCanvas.value) navigation.fallback(activeInstance.value.id)
   else {
-    if (!isOverview.value && focused.value && !currentCanvas.value?.nodes.some(node => node.id === focused.value?.id)) void closeFocus()
+    if (!isOverview.value && focusedReference && focused.value && !currentCanvas.value?.nodes.some(node => node.id === focused.value?.id)) void closeFocus()
     if (!layoutGesture && (sizesChanged || previousNodes !== JSON.stringify(currentCanvas.value?.nodes))) rebuildNodes()
   }
   if (backgroundCanvas.value && backgroundCanvas.value.id !== 'overview' && !canvases.value.some(canvas => canvas.id === backgroundCanvas.value?.id)) backgroundCanvas.value = null
