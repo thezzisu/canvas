@@ -22,7 +22,7 @@ async function fixture(t: TestContext) {
   const registry = join(root, "bridges");
   await mkdir(registry, { mode: 0o700 });
   const nativeSocket = join(root, "herdr.sock");
-  const env = { PATH: process.env.PATH, LANG: "C.UTF-8", CANVAS_BRIDGE_REGISTRY_DIR: registry,
+  const env = { PATH: process.env.PATH, LANG: "C.UTF-8", CANVAS_HELPER_DIRECT: "1", CANVAS_BRIDGE_REGISTRY_DIR: registry,
     HERDR_SOCKET_PATH: nativeSocket, HERDR_PANE_ID: "w1:p2" };
   t.after(() => rm(root, { recursive: true, force: true }));
   const run = (path: string, extra: NodeJS.ProcessEnv = {}, timeouts?: { start: number; idle: number }, tty = false,
