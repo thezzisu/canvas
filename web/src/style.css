@@ -149,13 +149,9 @@ html{zoom:var(--ui-zoom)}#app{position:fixed;inset:0;width:auto;height:auto}.app
 .mobile-layout .card-focused .note-colors{left:4px;top:43px;gap:4px;padding:4px}
 .mobile-layout .card-focused .note-color-choice{width:36px;height:36px;border:8px solid #262b33}
 .card-focused .note-content{border-radius:0;padding-bottom:max(12px,var(--mobile-safe-bottom,0px));overscroll-behavior:contain}
-.card-action-menu{z-index:60;display:block;min-width:160px;padding:4px;border:1px solid #414854;border-radius:7px;background:#242930;box-shadow:0 8px 24px #0005}
-.card-action-menu [role=group]{display:flex;flex-direction:column}
-.card-action-menu :is([role=menuitem],[role=menuitemcheckbox]){display:flex;justify-content:flex-start;width:100%;height:auto;min-height:44px;padding:8px 10px;font-size:12px;border-radius:4px;color:#cbd2dd}
-.card-action-menu :is([role=menuitem],[role=menuitemcheckbox])[data-highlighted]{background:#ffffff09}
 
 
-.overview-display-trigger{position:relative}.overview-display-trigger>i{position:absolute;width:4px;height:4px;right:3px;top:3px;border-radius:50%;background:var(--accent)}.overview-display-menu{width:180px;padding:4px;border:1px solid #3a404a;border-radius:7px;background:#23272e;box-shadow:0 9px 25px #0005;z-index:60}.overview-display-item{align-items:center;min-height:30px;font-size:11px;color:#bdc5d0;padding:6px 9px;gap:9px}.overview-display-item[data-highlighted]{background:#ffffff08}.overview-display-leading{display:flex;align-items:center;justify-content:center;flex:0 0 12px;height:1em}.overview-display-label{display:flex;align-items:center;gap:9px;font-size:10px;color:#7f8b9b;padding:5px 9px}.mobile-layout .overview-display-trigger{width:40px;height:40px;flex:0 0 40px}.mobile-layout .overview-display-item{min-height:40px;font-size:13px}.overview-display-menu .program-dot{width:5px;height:5px}
+.overview-display-trigger{position:relative}.overview-display-trigger>i{position:absolute;width:4px;height:4px;right:3px;top:3px;border-radius:50%;background:var(--accent)}.overview-display-leading{display:flex;align-items:center;justify-content:center;flex:0 0 12px;height:1em}.mobile-layout .overview-display-trigger{width:40px;height:40px;flex:0 0 40px}.overview-display-menu .program-dot{width:5px;height:5px}
 
 .canvas-toolbar button:disabled{cursor:default;opacity:.3}
 

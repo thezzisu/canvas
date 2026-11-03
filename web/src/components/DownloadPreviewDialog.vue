@@ -125,7 +125,7 @@ onBeforeUnmount(() => request?.abort())
         <div class="download-preview-actions" :class="{ 'cutout-actions': mobileHeader && expanded }">
           <TextPreviewActions v-if="downloadPreview.preview === 'text' && !loading && !error && (!mobileHeader || markdown && !compact)" :filename="downloadPreview.filename" v-model:rendered="rendered" v-model:wrap="wrap" :hide-wrap="mobileHeader" />
           <UButton v-if="!mobileHeader || !markdown && !compact" type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-download" :aria-label="t('panels.file.download')" :title="t('panels.file.download')" @click="download"><Icon name="download" :size="16" /></UButton>
-          <UDropdownMenu v-if="mobileHeader" v-model:open="menuOpen" :modal="false" :items="menu" :portal="portal || false" :content="{ align: 'end', ...menuDismiss }" :ui="{ content: 'card-action-menu download-preview-menu' }">
+          <UDropdownMenu v-if="mobileHeader" v-model:open="menuOpen" :modal="false" :items="menu" :portal="portal || false" :content="{ align: 'end', ...menuDismiss }" :ui="{ content: 'card-action-menu download-preview-menu z-[90] min-w-[160px]' }">
             <UButton ref="menuTrigger" type="button" color="neutral" variant="ghost" class="download-preview-button" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></UButton>
           </UDropdownMenu>
           <UButton v-else type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-expand" :aria-label="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :title="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :aria-pressed="expanded" @click="expanded = !expanded"><Icon :name="expanded ? 'collapse' : 'expand'" :size="16" /></UButton>
@@ -164,7 +164,6 @@ onBeforeUnmount(() => request?.abort())
 .download-preview-actions{display:flex;flex:none;gap:0;align-items:center}
 .download-preview-button{position:static;flex:none;display:flex;align-items:center;justify-content:center;width:var(--header-action-size);min-width:var(--header-action-size);height:var(--header-action-size);padding:0;color:#93a1b4;border-radius:5px}
 .download-preview-button:hover{background:#ffffff08;color:#d4dfec}
-.card-action-menu.download-preview-menu{z-index:90}
 .download-preview-mobile .download-preview-header{--header-action-size:44px;padding:0}
 .download-preview-mobile .download-preview-title{padding-left:12px}
 .download-preview-modal{container-type:inline-size}

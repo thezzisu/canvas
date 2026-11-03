@@ -16,10 +16,13 @@ export function usePointerDismiss(open: Ref<boolean>, trigger: MaybeComputedElem
     open.value = false
   }, { capture: true, passive: true })
 
-  // Reka's bubble listener did not see this interaction. Do not return focus to
-  // the trigger after the user has already focused a terminal or another field.
-  return { onCloseAutoFocus(event: Event) {
-    if (pointerDismissed) event.preventDefault()
-    pointerDismissed = false
-  } }
+  return {
+    // Let Reka retain its own focus policy when its outside listener ran.
+    onInteractOutside() { pointerDismissed = false },
+    onCloseAutoFocus(event: Event) {
+      // Canvas gestures can stop the event before Reka's bubble listener.
+      if (pointerDismissed) event.preventDefault()
+      pointerDismissed = false
+    },
+  }
 }

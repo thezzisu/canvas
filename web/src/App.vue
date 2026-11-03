@@ -4,6 +4,7 @@ import { VueFlow, useVueFlow, type Node, type NodeChange, type NodePositionChang
 import { useStorage, useTitle, watchDebounced } from '@vueuse/core'
 import CanvasMiniMap from './components/CanvasMiniMap.vue'
 import UApp from '@nuxt/ui/components/App.vue'
+import UTheme from '@nuxt/ui/components/Theme.vue'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import UModal from './components/CanvasModal.vue'
 import { useToast } from '@nuxt/ui/composables/useToast'
@@ -169,6 +170,12 @@ const backgroundCanvas = ref<Canvas | null>(null)
 const settingsDialog = ref(false)
 const settingsDialogComponent = ref<InstanceType<typeof SettingsDialog>>()
 const accountDialog = ref(false)
+const accountMenuOpen = ref(false), accountTrigger = ref<HTMLButtonElement>()
+const accountMenuDismiss = usePointerDismiss(accountMenuOpen, accountTrigger)
+const accountMenu = computed<DropdownMenuItem[][]>(() => [
+  [{ label: t('account.title'), icon: 'i-lucide-user-round', onSelect: () => { accountDialog.value = true } }],
+  [{ label: t('app.signOut'), icon: 'i-lucide-log-out', color: 'error', onSelect: () => { void logout().catch(showError) } }],
+])
 const settings = ref<GlobalSettings | null>(null)
 const contentFontStyle = ref<Record<string, string>>({})
 const appliedContentFont = ref('')
@@ -236,8 +243,9 @@ let createdCameraReady = false
 let creationIntent = 0
 let lastOverviewInteraction: OverviewInteraction | undefined
 const notificationReveal = shallowRef<{ canvasId: string; target: OverviewInteraction; request?: typeof navigation.requested.value; pending: boolean }>()
+const notificationFocus = shallowRef<{ canvasId: string; sourceId: string; spaceId: string; windowId: string }>()
 let notificationIntent = 0
-function cancelNotificationReveal() { notificationIntent++; notificationReveal.value = undefined }
+function cancelNotificationReveal() { notificationIntent++; notificationReveal.value = undefined; notificationFocus.value = undefined }
 function cancelCreatedReveal() { creationIntent++; pendingCreatedWindow.value = undefined }
 function creationNavigation(event: Event) {
   if (actionDialog.value && busy.value) return
@@ -502,7 +510,7 @@ watch([allWindows, existingAddWindows], () => {
   const next = selectedAddWindows.value.map(item => item.key)
   if (next.length !== selectedWindows.value.length || next.some((key, index) => selectedWindows.value[index] !== key)) selectedWindows.value = next
 })
-const modalOpen = computed(() => notificationSurface.value || richPasteRequest.value || sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || shareCard.value || windowMenu.value || backgroundCanvas.value || settingsDialog.value || accountDialog.value || scanTarget.value)
+const modalOpen = computed(() => notificationSurface.value || richPasteRequest.value || sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || shareCard.value || windowMenu.value || backgroundCanvas.value || settingsDialog.value || accountDialog.value || accountMenuOpen.value || scanTarget.value)
 const logicalWindowFocus = computed<WindowFocus | undefined>(() => {
   if (!authenticated.value || !pageVisible.value || !windowFocused.value || modalOpen.value || directoryRequest.value || urlRequest.value || downloadPreview.value || sidebarOpen.value || sourcePanel.value || focusedCardId.value) return
   return focused.value || selectedTerminal.value
@@ -727,6 +735,7 @@ function applySharedState(state: SharedState) {
   }).map(source => source.id)
   const sourceChanged = JSON.stringify(sources.value) !== JSON.stringify(state.sources)
   const previousNodes = JSON.stringify(currentCanvas.value?.nodes)
+  const focusedReference = currentCanvas.value?.nodes.some(node => node.id === focused.value?.id)
   const nextSizes = { ...state.windowSizes }
   for (const canvas of state.canvases) for (const [id, patch] of pendingLayouts.get(canvas.id) || []) {
     const node = canvas.nodes.find(item => item.id === id)
@@ -758,7 +767,7 @@ function applySharedState(state: SharedState) {
   if (restoring && (pendingLayouts.size || pendingNotes.size)) queueMicrotask(() => { void flushInstanceEdits() })
   if (!isOverview.value && !currentCanvas.value) navigation.fallback(activeInstance.value.id)
   else {
-    if (!isOverview.value && focused.value && !currentCanvas.value?.nodes.some(node => node.id === focused.value?.id)) void closeFocus()
+    if (!isOverview.value && focusedReference && focused.value && !currentCanvas.value?.nodes.some(node => node.id === focused.value?.id)) void closeFocus()
     if (!layoutGesture && (sizesChanged || previousNodes !== JSON.stringify(currentCanvas.value?.nodes))) rebuildNodes()
   }
   if (backgroundCanvas.value && backgroundCanvas.value.id !== 'overview' && !canvases.value.some(canvas => canvas.id === backgroundCanvas.value?.id)) backgroundCanvas.value = null
@@ -812,7 +821,7 @@ async function applyRequestedLocation() {
   const requested = navigation.requested.value
   if (!requested || unknownInstance.value || requested.location.instance !== activeInstance.value.id || !authenticated.value || !latestState.value) return
   const location = resolveCanvasLocation(requested.location, canvases.value.map(canvas => canvas.id))
-  if (notificationReveal.value && requested !== notificationReveal.value.request) cancelNotificationReveal()
+  if (notificationFocus.value || notificationReveal.value && requested !== notificationReveal.value.request) cancelNotificationReveal()
   if (focusedCardId.value) void flushNotes(activeId.value)
   focused.value = null; focusedCardId.value = ''
   if (activeId.value !== location.canvas) {
@@ -1038,7 +1047,7 @@ function clearInstanceRuntime() {
   sourceDialog.value = false; sourcePanel.value = false; canvasDialog.value = false; actionDialog.value = null
   sourceDialogRevision++; canvasDialogRevision++; addDialogRevision++; pendingKeyboard = undefined
   addDialog.value = false; shareCard.value = undefined; windowMenu.value = null; backgroundCanvas.value = null; settingsDialog.value = false; accountDialog.value = false
-  sidebarOpen.value = false; overviewMenuOpen.value = false; canvasMenu.value = false
+  sidebarOpen.value = false; overviewMenuOpen.value = false; canvasMenu.value = false; accountMenuOpen.value = false
   settings.value = null; fontRevision++; fontSignature = ''; latestState.value = undefined
   sources.value = []; polledResources.value = []; canvases.value = []; nodes.value = []; windowSizes.value = {}
   resourcesFresh.value = false; resourcesLoaded.value = false; loadFailure.value = undefined
@@ -1341,12 +1350,19 @@ function prepareNotificationAction() {
   if (settingsDialog.value) settingsDialogComponent.value?.close()
   return true
 }
+// Logical focus already accounts for connection and visibility. Reuse its
+// readiness for delayed mounts; automatic reads still wait for painted output.
+watch([notificationFocus, terminalReadFocus], ([target, ready]) => {
+  if (!target || target.canvasId !== activeId.value || !ready || ready.sourceId !== target.sourceId || ready.windowId !== target.windowId) return
+  if (focusWindow(target.sourceId, target.spaceId, target.windowId, false)) notificationFocus.value = undefined
+}, { flush: 'post' })
 async function goToNotification(event: CanvasNotification) {
   if (!prepareNotificationAction()) return
+  cancelNotificationReveal()
   selectedTerminal.value = undefined
   const target = notificationTarget(event, resources.value), source = sources.value.find(item => item.id === event.sourceId)
   if (!target || !source || !latestState.value) return
-  const context = apiContext(), intent = ++notificationIntent
+  const context = apiContext(), intent = notificationIntent
   if (focusedCardId.value) await closeCardFocus()
   if (focused.value) await closeFocus()
   if (!isCurrentApi(context) || intent !== notificationIntent) return
@@ -1363,24 +1379,35 @@ async function goToNotification(event: CanvasNotification) {
     revealNotificationWindow()
   }
 }
-function revealNotificationWindow() {
+async function revealNotificationWindow() {
   const reveal = notificationReveal.value
   if (!reveal?.pending || reveal.canvasId !== activeId.value || pendingViewport || navigation.requested.value || hasFocus.value) return
   const target = nodes.value.find(node => node.type === 'terminal' && node.data.sourceId === reveal.target.sourceId && node.data.windowId === reveal.target.windowId)
   if (!target) { cancelNotificationReveal(); return }
   if (!getNodesInitialized.value.some(node => node.id === target.id)) return
-  notificationReveal.value = { ...reveal, pending: false }
-  void navigateCard(target)
+  const settled = notificationReveal.value = { ...reveal, pending: false }
+  if (mobile.value) {
+    const frame = graphSurface.value
+    if (!frame) return
+    // Save the final framing before maximization removes the canvas viewport.
+    await setViewport(pageViewport({ ...target.position, width: target.data.width, height: target.data.height },
+      { width: frame.clientWidth, height: frame.clientHeight }))
+  } else await navigateCard(target)
+  if (notificationReveal.value !== settled) return
+  selectedTerminal.value = reveal.target
+  notificationFocus.value = { canvasId: activeId.value, ...reveal.target, spaceId: target.data.spaceId }
+  // Touch cards stay read-only; the existing maximized view owns interaction.
+  if (mobile.value) terminalAction('focus', target.id)
 }
 async function openNotification(event: CanvasNotification) {
   if (!prepareNotificationAction()) return
   cancelNotificationReveal()
   const target = notificationTarget(event, resources.value)
   if (!target) return
-  const context = apiContext()
+  const context = apiContext(), intent = notificationIntent
   if (focusedCardId.value) await closeCardFocus()
   if (focused.value) await closeFocus()
-  if (!isCurrentApi(context)) return
+  if (!isCurrentApi(context) || intent !== notificationIntent) return
   const placed = currentCanvas.value?.nodes.find(node => isTerminalNode(node) && node.sourceId === event.sourceId && node.windowId === target.window.id)
   const size = windowSize({ sourceId: event.sourceId, windowId: target.window.id })
   const node: TerminalCanvasNode = placed && isTerminalNode(placed) ? placed : {
@@ -1388,6 +1415,7 @@ async function openNotification(event: CanvasNotification) {
     sourceId: event.sourceId, spaceId: target.space.id, windowId: target.window.id, x: 0, y: 0, ...size,
   }
   sidebarOpen.value = false; sourcePanel.value = false; saveViewport(); selectedTerminal.value = { sourceId: node.sourceId, windowId: node.windowId }; focused.value = node
+  notificationFocus.value = { canvasId: activeId.value, sourceId: node.sourceId, spaceId: node.spaceId, windowId: node.windowId }
 }
 function terminalAction(action: string, id: string) {
   const node = getCanvasNode(id) || focused.value
@@ -1825,6 +1853,7 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
 </script>
 
 <template>
+  <UTheme :ui="mobile ? { dropdownMenu: { item: 'min-h-[44px] items-center' }, contextMenu: { item: 'min-h-[44px] items-center' } } : undefined">
   <UApp :locale="uiLocale" :portal="appElement || false" :toaster="{ portal: notificationPortal || false, position: 'bottom-right', max: 4 + (removalUndo?.count || 0), progress: false, ui: { viewport: 'canvas-notifications' } }">
     <CardRemovalFeedback ref="removalUndo" :sync="syncState" :released="removalReleased" :error="showError" />
   <NotificationCenter v-if="authenticated && latestState" :key="`${activeInstance.id}:${latestState.instanceId}`" ref="notificationCenter"
@@ -1856,29 +1885,32 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
       <div class="brand"><span class="brand-symbol"><Icon name="canvas" :size="24" /></span><span class="brand-name">canvas</span><button v-if="sidebarDrawer" class="icon-button sidebar-close" :aria-label="t('app.closeCanvasList')" @click="sidebarOpen = false"><Icon name="close" :size="19" /></button></div>
       <div class="sidebar-navigation">
         <div class="sidebar-instance"><InstancePicker :portal="appElement" :before-change="beforeInstanceChange" :disabled="busy" /></div>
+        <div class="sidebar-divider" role="separator" />
         <div class="nav-section-label canvas-label"><span>{{ t('app.canvases') }}</span><button class="icon-button" :title="t('app.newCanvas')" :aria-label="t('app.newCanvas')" @click="openCanvasDialog()"><Icon name="plus" :size="16" /></button></div>
         <nav class="canvas-nav" :aria-label="t('app.canvases')">
           <CanvasNavItem :name="t('app.overview')" overview :active="isOverview" :indicator="indicators.overview" @select="switchCanvas('overview')" />
           <CanvasNavItem v-for="canvas in canvases" :key="canvas.id" :name="canvas.name" :active="activeId === canvas.id" :indicator="indicators[canvas.id]" @select="switchCanvas(canvas.id)" />
         </nav>
-        <div class="sidebar-divider" />
+        <div class="sidebar-divider" role="separator" />
         <div class="nav-section-label"><span>{{ t('app.connections') }}</span><button class="icon-button" :title="t('app.addConnection')" :aria-label="t('app.addConnection')" @click="openSource()"><Icon name="plus" :size="16" /></button></div>
         <div class="source-nav"><button v-for="source in sources" :key="source.id" class="source-nav-item" :title="`${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}${resources.find(item => item.id === source.id)?.serverVersion ? ` · herdr ${resources.find(item => item.id === source.id)!.serverVersion}` : ''}`" @click="sourcePanel = true; expandedSource = source.id"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}</span><span class="source-nav-status"><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : resources.find(item => item.id === source.id)?.status === 'online' ? 'connected' : ''" /></span></button><button v-if="latestState && !sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="16" /><span class="source-empty-label">{{ t('app.addConnection') }}</span></button></div>
       </div>
       <div class="sidebar-footer">
-        <button class="sidebar-account" :title="username" :aria-label="`${t('account.title')}: ${username}`" @click="accountDialog = true">
-          <span class="avatar" aria-hidden="true">{{ username.slice(0, 1).toUpperCase() || 'C' }}</span>
-          <span>{{ username }}<small>{{ t('app.onlineCount', onlineCount) }}</small></span>
-        </button>
+        <UDropdownMenu v-model:open="accountMenuOpen" :modal="false" :items="accountMenu" :portal="appElement || false"
+          :content="{ side: 'top', align: 'start', ...accountMenuDismiss }" :ui="{ content: 'z-[90] min-w-[160px]' }">
+          <button ref="accountTrigger" class="sidebar-account" :title="username" :aria-label="`${t('account.title')}: ${username}`">
+            <span class="avatar" aria-hidden="true">{{ username.slice(0, 1).toUpperCase() || 'C' }}</span>
+            <span>{{ username }}<small>{{ t('app.onlineCount', onlineCount) }}</small></span>
+          </button>
+        </UDropdownMenu>
         <button class="icon-button sidebar-settings" :title="t('common.settings')" :aria-label="t('common.settings')" :disabled="!settings" @click="openSettings"><Icon name="settings" :size="17" /></button>
-        <button class="icon-button" :title="t('app.signOut')" :aria-label="t('app.signOut')" @click="logout"><Icon name="logout" :size="17" /></button>
       </div>
     </aside>
     <main class="workspace" :inert="!!focusedCard || undefined" :aria-hidden="!!focusedCard || undefined">
       <header class="workspace-header">
         <div class="header-context"><button v-if="mobile" class="icon-button mobile-menu-trigger" :aria-label="t('app.openCanvasList')" aria-controls="canvas-sidebar" :aria-expanded="sidebarOpen" @click="sidebarOpen = !sidebarOpen"><Icon name="menu" :size="21" /></button><div class="breadcrumb"><h1 v-if="latestState" :title="currentName">{{ currentName }}</h1></div><span v-if="!workspacePending && !undiscoveredSources.length" class="header-counts">{{ canvasCounts }}</span><button class="icon-button refresh-button" :title="refreshedAt ? t('app.refreshUpdated', { time: refreshedTime }) : t('app.refresh')" :aria-label="t('app.refresh')" :disabled="loading || workspacePending" @click="refreshResources()"><Icon name="refresh" :size="14" :class="{ spinning: loading }" /></button></div>
         <div class="header-actions" :inert="workspacePending || undefined">
-          <UDropdownMenu v-if="isOverview" v-model:open="overviewMenuOpen" :modal="false" :items="overviewMenu" :portal="appElement || false" :content="{ align: 'end', ...overviewDismiss }" :ui="{ content: 'overview-display-menu', item: 'overview-display-item', label: 'overview-display-label' }">
+          <UDropdownMenu v-if="isOverview" v-model:open="overviewMenuOpen" :modal="false" :items="overviewMenu" :portal="appElement || false" :content="{ align: 'end', ...overviewDismiss }" :ui="{ content: 'overview-display-menu w-[180px] z-[60]' }">
             <button ref="overviewTrigger" class="icon-button overview-display-trigger" :class="{ active: overviewChanged }" :title="t('app.filterSort')" :aria-label="t('app.overviewFilterSort')"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg><i v-if="overviewChanged" /></button>
             <template #item-leading="{ item }"><span class="overview-display-leading" aria-hidden="true"><i v-if="item.status" class="program-dot" :style="{ '--program-color': statusColor(item.status) }" /></span></template>
           </UDropdownMenu>
@@ -1935,4 +1967,5 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
     </UModal>
   </div>
   </UApp>
+  </UTheme>
 </template>
