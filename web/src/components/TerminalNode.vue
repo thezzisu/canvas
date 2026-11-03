@@ -18,6 +18,8 @@ import { emptyModifiers, type TerminalModifiers } from '../terminal-input'
 import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
 import { useDocumentFocus } from '../document-focus'
 import { useTerminalZoom } from '../terminal-zoom'
+import { useTerminalSettings } from '../terminal-settings'
+import TerminalSettingsDialog from './TerminalSettingsDialog.vue'
 import ContentZoom from './ContentZoom.vue'
 import CardHeaderActions from './CardHeaderActions.vue'
 import PaneContextMenu from './PaneContextMenu.vue'
@@ -30,7 +32,10 @@ const host = ref<HTMLElement>()
 const header = ref<HTMLElement>()
 const headerCompact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined), undefined, () => props.data.overview ? 5 : 6)
 const compact = computed(() => !!props.data.mobile && props.data.focus && headerCompact.value)
-const zoom = useTerminalZoom(() => props.data.zoomKey)
+const zoom = useTerminalZoom(() => props.data.preferenceKey)
+const rightClickMode = useTerminalSettings(() => props.data.preferenceKey)
+const settingsOpen = ref(false)
+const portal = computed(() => host.value?.closest<HTMLElement>('.app-shell') || undefined)
 const status = ref<TerminalStatus>({ status: 'connecting' })
 const noteDrag = ref(false)
 const fileDrag = ref(false)
@@ -110,6 +115,7 @@ function toggleKeyboard() {
 function readText(signal: AbortSignal) { return terminal?.readText(signal) ?? Promise.reject(new Error(t('terminal.unavailable'))) }
 function paneContext(x: number, y: number, signal: AbortSignal) { return terminal?.paneContext(x, y, signal) ?? Promise.resolve(null) }
 function paneAction(pane: PaneContext, command: PaneAction) { return terminal?.paneAction(pane, command) ?? Promise.reject(new Error(t('terminal.unavailable'))) }
+function allowsContextMenu() { return terminal?.allowsContextMenu() ?? true }
 function copyText(text?: string) { return terminal?.copySelection(text) ?? false }
 function reading(active: boolean) { if (active) terminal?.blur() }
 function mobileKey(key: string, modifiers?: Partial<TerminalModifiers>) { terminal?.sendKey(key, modifiers) }
@@ -150,12 +156,13 @@ function mount() {
     ownedPresentation = props.data.focus && state.presentation?.owned === true
     status.value = state
     if (superseded) props.data.onAction('unfocus', props.id)
-  }, { magnified: props.data.focus, mobile: props.data.mobile, zoom: zoom.value, closed: !!props.data.closed })
+  }, { magnified: props.data.focus, mobile: props.data.mobile, zoom: zoom.value, closed: !!props.data.closed, rightClickMode: rightClickMode.value })
   if (mobileFocus.value) { terminal?.setTouchMode('scroll'); terminal?.focus({ keyboard: false }) }
 }
 onMounted(() => { mount(); document.addEventListener('dragend', clearNoteDrag); window.addEventListener('blur', clearNoteDrag) })
 watch(() => props.data.closed, value => { if (value) terminal?.close() })
 watch([zoom, () => props.data.focus], () => { terminal?.setZoom(zoom.value) })
+watch(rightClickMode, value => terminal?.setRightClickMode(value), { flush: 'sync' })
 watch([keepTerminal, () => props.data.mobile, () => props.data.focus], async () => { terminal?.dispose(); terminal = undefined; await nextTick(); mount() })
 onBeforeUnmount(() => { clearPreviewTap(); terminal?.dispose(); document.removeEventListener('dragend', clearNoteDrag); window.removeEventListener('blur', clearNoteDrag) })
 function action(name: string) {
@@ -172,7 +179,7 @@ const menu = computed<DropdownMenuItem[]>(() => [
   { label: t('panels.scan.title'), icon: 'i-lucide-scan-text', disabled: !keepTerminal.value || closed.value, onSelect: () => action('scan') },
   ...(copiedFile.value ? [{ label: t('fileTransfer.paste'), icon: 'i-lucide-clipboard', disabled: !noteDropAvailable.value || !!status.value.fileReading, onSelect: pasteFile }] : []),
   { label: t('app.renameWindow'), icon: 'i-lucide-pencil', disabled: !props.data.available || closed.value, onSelect: () => action('rename') },
-  { label: t('common.settings'), icon: 'i-lucide-settings', onSelect: () => action('settings') },
+  { label: t('terminal.settings.title'), icon: 'i-lucide-settings', onSelect: () => { settingsOpen.value = true } },
   { label: t('app.closeWindow'), icon: 'i-lucide-trash', color: 'error', disabled: !props.data.available || closed.value, onSelect: () => action('close') },
 ])
 function resizeStarted(event: { params: { x: number; y: number; width: number; height: number } }) {
@@ -202,7 +209,8 @@ async function resized(event: { params: { width: number; height: number; x: numb
       </CardHeaderActions>
     </header>
     <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || closed || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop />
-    <PaneContextMenu :host="host" :enabled="keepTerminal && !mobilePreview && !closed && !maximizedElsewhere && status.status === 'connected'" :lookup="paneContext" :action="paneAction" />
+    <PaneContextMenu :host="host" :enabled="keepTerminal && !mobilePreview && !closed && !maximizedElsewhere && status.status === 'connected'" :allows-menu="allowsContextMenu" :lookup="paneContext" :action="paneAction" />
+    <TerminalSettingsDialog v-model="rightClickMode" :open="settingsOpen" :portal="portal" @close="settingsOpen = false" />
     <div v-if="mobilePreview && !closed" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: data.name })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
     <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">{{ t('terminal.upload.file') }}</div>
     <div v-if="noteDrag || fileDrag" class="terminal-file-drop terminal-note-drop" :class="{ 'note-drop-unavailable': !noteDropAvailable }" aria-hidden="true">{{ !noteDropAvailable ? noteDropLabel : fileDrag ? t(status.fileReading ? 'fileTransfer.preparing' : 'fileTransfer.drop') : noteDropLabel }}</div>

@@ -18,7 +18,8 @@ import { emptyModifiers, hasModifiers, modifiedText, terminalKey, terminalShortc
 import { terminalInputChunks } from './terminal-input-chunks'
 import { bindTerminalKeyboardLock } from './terminal-keyboard-lock'
 import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch'
-import { bindTerminalMouseDefaults } from './terminal-mouse-defaults'
+import { bindTerminalMouseDefaults, rightMouseInput } from './terminal-mouse-defaults'
+import type { RightClickMode } from './terminal-settings'
 import { defaultContentFont, type ContentFontSettings } from '../../shared/settings'
 import { applyTerminalFontFeatures, type FontPresentation } from './fonts'
 import { bindMobileKeyboard } from './mobile-keyboard'
@@ -105,6 +106,8 @@ interface Session {
   pastePreview?: () => void
   fileRead?: AbortController
   clipboard?: TerminalClipboard
+  rightClickMode: RightClickMode
+  mouseDefaults?: ReturnType<typeof bindTerminalMouseDefaults>
 }
 const sessions = new Map<string, Session>()
 let logicalFocus: WindowFocus | undefined
@@ -290,6 +293,8 @@ export function terminalConsumesWheel(event: WheelEvent): boolean {
     !(session.state.presentation?.maximized && !session.state.presentation.owned))
 }
 function normalizeMouseCoordinates(event: MouseEvent) {
+  // Right uses its dedicated gesture owner and the screen's actual CSS rect.
+  if (event.type !== 'wheel' && (event.button === 2 || event.type === 'mousemove' && !!(event.buttons & 2))) return
   // Canvas gestures need screen coordinates; only native wheel reports need
   // conversion into the terminal's unscaled cell coordinate system.
   if (event instanceof WheelEvent && !terminalConsumesWheel(event)) return
@@ -668,7 +673,7 @@ function sendTerminalData(session: Session, data: string) {
   session.term.input(data, true)
   return true
 }
-export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, options: { magnified?: boolean; mobile?: boolean; zoom?: number; closed?: boolean } = {}) {
+export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, options: { magnified?: boolean; mobile?: boolean; zoom?: number; closed?: boolean; rightClickMode?: RightClickMode } = {}) {
   installTerminalEvents()
   const id = key(resource.sourceId, resource.spaceId, resource.windowId)
   let session = sessions.get(id)
@@ -697,7 +702,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       changed: upload => setState(session!, { ...session!.state, upload }),
     })
     session = { term, surface, uploads, opened: false, magnified: false, mobile: !!options.mobile, connectionRevision: 0,
-      modifiers: emptyModifiers(), touchMode: 'scroll', keyboardRequested: false,
+      modifiers: emptyModifiers(), touchMode: 'scroll', keyboardRequested: false, rightClickMode: options.rightClickMode || 'menu',
       state: { status: 'connecting' }, listeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
     const current = session
     current.reconnect = new TerminalReconnect({
@@ -799,11 +804,13 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   // Vue may mount a replacement host before disposing the old component. Only
   // the current host owns its presentation and temporary size request.
   if (session.host !== host) endFocusSize(session)
+  session.mouseDefaults?.dispose()
   session.host = host
   session.viewVisible = true
   session.mobile = options.mobile === true
   session.magnified = options.magnified === true
   session.resizing = false
+  session.rightClickMode = options.rightClickMode || 'menu'
   setTerminalZoom(session, options.zoom ?? 100)
   session.nativeKey = undefined
   session.term.options.disableStdin = !interactive(session) || options.closed === true
@@ -821,8 +828,6 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     }, { capture: true })
     session.term.textarea?.addEventListener('compositionstart', () => { current.nativeKey = undefined; setModifiers(current) })
     session.term.textarea?.addEventListener('blur', () => { current.nativeKey = undefined; setModifiers(current) })
-    const removeMouseDefaults = bindTerminalMouseDefaults(session.surface, () => interactive(current) &&
-      current.state.status === 'connected' && current.term.modes.mouseTrackingMode !== 'none')
     const removeTouch = bindTerminalTouch(session.surface, session.term, {
       active: () => current.mobile && current.magnified && current.state.status === 'connected' && !current.state.readOnly,
       mode: () => current.touchMode,
@@ -838,7 +843,6 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     session.surface.addEventListener('touchend', finishTerminalReadGesture)
     session.surface.addEventListener('touchcancel', finishTerminalReadGesture)
     session.removeTouch = () => {
-      removeMouseDefaults()
       removeTouch()
       session!.surface.removeEventListener('touchend', finishTerminalReadGesture)
       session!.surface.removeEventListener('touchcancel', finishTerminalReadGesture)
@@ -898,6 +902,17 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   const mountingContext = apiContext()
   const canPasteText = () => isCurrentApi(mountingContext) && current.host === host && host.isConnected && interactive(current) && current.state.status === 'connected' && current.socket?.readyState === WebSocket.OPEN &&
     !(current.state.presentation?.maximized && (!current.state.presentation.owned || !current.magnified))
+  const mouseDefaults = bindTerminalMouseDefaults(current.surface, canPasteText, () => current.rightClickMode, (event, action) => {
+    if (!canPasteText()) return false
+    const rect = current.term.element?.querySelector('.xterm-screen')?.getBoundingClientRect()
+    const data = rect && rightMouseInput(event, action, rect, current.term.cols, current.term.rows)
+    if (!data) return false
+    if (action === 'down') focusTerminal(current)
+    if (current.state.readOnly) return false
+    current.term.input(data, true)
+    return true
+  })
+  current.mouseDefaults = mouseDefaults
   const windowPath = `/api/sources/${segment(resource.sourceId)}/spaces/${segment(resource.spaceId)}/windows/${segment(resource.windowId)}`
   const removeFileInput = bindFileInput(host, current.uploads, draggingFile => {
     if (current.host === host) setState(current, { ...current.state, draggingFile })
@@ -932,6 +947,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   present(current)
   schedulePresentation(current)
   return {
+    setRightClickMode(mode: RightClickMode) { if (current.host === host && isCurrentApi(mountingContext)) current.rightClickMode = mode },
+    allowsContextMenu() { return current.mouseDefaults?.allowsContextMenu() ?? true },
     async paneContext(x: number, y: number, signal: AbortSignal): Promise<PaneContext | null> {
       const layout = current.paintedLayout
       if (!canPasteText() || !layout) return null
@@ -983,6 +1000,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       current.reconnect?.restart()
     },
     dispose() {
+      mouseDefaults.dispose()
+      if (current.mouseDefaults === mouseDefaults) current.mouseDefaults = undefined
       removeFileInput()
       observer.disconnect()
       intersection?.disconnect()
@@ -1015,6 +1034,7 @@ export function clearTerminals() {
     session.fileRead?.abort(); session.fileRead = undefined
     session.uploads.clear()
     session.keyboardLock?.dispose()
+    session.mouseDefaults?.dispose()
     session.removeTouch?.()
     session.removeFontFeatures?.()
     session.keyboard?.dispose()

@@ -38,7 +38,7 @@ import { subscribeState } from './state-events'
 import { retainBackgrounds, useBackgroundUrl } from './backgrounds'
 import { pruneFileViews } from './file-view'
 import { cardZoomKey, pruneCardZooms } from './card-zoom'
-import { pruneTerminalZooms, terminalZoomKey } from './terminal-zoom'
+import { pruneTerminalPreferences, terminalIdentityKey } from './terminal-identity'
 import Icon from './components/Icon.vue'
 import TerminalNode from './components/TerminalNode.vue'
 import NoteNode from './components/NoteNode.vue'
@@ -461,7 +461,7 @@ useWindowCanvasHistory(() => {
   if (!source || !windowId || !latestState.value) return
   // A notification may open an overlay on a canvas that has no reference to it.
   if (!isOverview.value && !currentCanvas.value?.nodes.some(node => node.type === 'terminal' && node.sourceId === sourceId && node.windowId === windowId)) return
-  return terminalZoomKey(latestState.value.instanceId, source, windowId)
+  return terminalIdentityKey(latestState.value.instanceId, source, windowId)
 }, () => activeId.value, activeElement)
 const visibleOverview = computed(() => overviewResources(resources.value, overviewSelected.value, overviewOrder.value, overviewInteraction.value))
 const visibleOverviewCount = computed(() => visibleOverview.value.reduce((total, source) => total + source.spaces.reduce((sum, space) => sum + space.windows.length, 0), 0))
@@ -564,7 +564,7 @@ function terminalData(node: TerminalCanvasNode, overview = false): TerminalData 
   } : undefined
   const visual = windowVisualState(found.source, found.window, freshStatuses.value)
   const closed = windowIsClosed(found.source, node.windowId, liveTerminalMetadata.value.get(`${node.sourceId}/${node.windowId}`))
-  return { ...node, zoomKey: sourceConfig ? terminalZoomKey(latestState.value?.instanceId || activeInstance.value.base, sourceConfig, node.windowId) : '', newTab, status: visual.status, statusFresh: visual.fresh, name: found.window?.name || cachedTerminalView(node.sourceId, node.windowId)?.name || t(closed ? 'app.closedWindow' : 'app.window'), subtitle: `${found.source?.name || sourceConfig?.name || t('app.unknownConnection')} / ${found.space?.name || t('app.space')}`, available: !!found.window && !found.source?.error, closed, sourceOffline: !!found.source?.error, panes: found.window?.panes || [], overview, focus: false, mobile: mobile.value, onAction: terminalAction, onResize: resizeNode, onResizeStart: resizeStarted }
+  return { ...node, preferenceKey: sourceConfig ? terminalIdentityKey(latestState.value?.instanceId || activeInstance.value.base, sourceConfig, node.windowId) : '', newTab, status: visual.status, statusFresh: visual.fresh, name: found.window?.name || cachedTerminalView(node.sourceId, node.windowId)?.name || t(closed ? 'app.closedWindow' : 'app.window'), subtitle: `${found.source?.name || sourceConfig?.name || t('app.unknownConnection')} / ${found.space?.name || t('app.space')}`, available: !!found.window && !found.source?.error, closed, sourceOffline: !!found.source?.error, panes: found.window?.panes || [], overview, focus: false, mobile: mobile.value, onAction: terminalAction, onResize: resizeNode, onResizeStart: resizeStarted }
 }
 function terminalFlowNode(node: TerminalCanvasNode, overview = false): Node {
   node = { ...node, ...windowSize(node) }
@@ -706,7 +706,7 @@ function applySharedState(state: SharedState) {
   latestState.value = state
   pruneFileViews(activeInstance.value.id, state.canvases)
   pruneCardZooms(state.instanceId, state.canvases)
-  pruneTerminalZooms(state.instanceId, state.sources, [])
+  pruneTerminalPreferences(state.instanceId, state.sources, [])
   retainBackgrounds([state.overviewBackground, ...state.canvases.map(canvas => canvas.background)].flatMap(background => background ? [background.url] : []))
   applySettings(state.settings)
   const changedConnections = sources.value.filter(previous => {
@@ -944,7 +944,7 @@ async function refreshResources(silent = false): Promise<void> {
           return windows.length ? [{ ...space, windows }] : []
         }),
       } : source)
-      pruneTerminalZooms(latestState.value!.instanceId, sources.value, body.sources)
+      pruneTerminalPreferences(latestState.value!.instanceId, sources.value, body.sources)
       resourcesFresh.value = true; resourcesLoaded.value = true; loadFailure.value = undefined
       polledResources.value = body.sources
       acknowledgeTerminalMetadata(metadataAtStart, body.sources)
@@ -1338,7 +1338,7 @@ async function goToNotification(event: CanvasNotification) {
   if (focused.value) await closeFocus()
   if (!isCurrentApi(context) || intent !== notificationIntent) return
   const windowId = target.window.id
-  const canvasId = lastWindowCanvas(terminalZoomKey(latestState.value.instanceId, source, windowId), event.sourceId, windowId, canvases.value)
+  const canvasId = lastWindowCanvas(terminalIdentityKey(latestState.value.instanceId, source, windowId), event.sourceId, windowId, canvases.value)
   notificationReveal.value = { canvasId, target: { sourceId: event.sourceId, windowId }, pending: true }
   sourcePanel.value = false; sidebarOpen.value = false
   switchCanvas(canvasId)
@@ -1383,7 +1383,6 @@ function terminalAction(action: string, id: string) {
   else if (action === 'remove') void removeNode(id)
   else if (action === 'rename' || action === 'close') windowAction(node, action)
   else if (action === 'scan') scanWindowContent(node, resourceFor(node).window?.name || t('app.window'))
-  else if (action === 'settings') openSettings()
   else if (action === 'focus') {
     if (paging.value) selectPage(pages.value.find(page => page.id === `${node.sourceId}/${node.windowId}`))
     sidebarOpen.value = false; sourcePanel.value = false; windowResize(); saveViewport(); selectedTerminal.value = { sourceId: node.sourceId, windowId: node.windowId }; focused.value = node

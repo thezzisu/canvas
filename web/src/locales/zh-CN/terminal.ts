@@ -2,6 +2,7 @@ export default {
   richPaste: { title: '粘贴预览', body: '正文', attachments: '附件', markdown: 'Markdown', plain: '纯文本', links: 'Markdown 链接', paths: '路径', skip: '跳过', paste: '粘贴', missing: '部分附件无法读取，请选择跳过后粘贴文字。', tooLarge: '剪贴板内容过大，请分段粘贴。' },
   closed: '已关闭',
   zoom: { title: '终端缩放' },
+  settings: { title: '终端设置', rightClick: '右键行为', paneMenu: '窗格菜单', sendToTerminal: '发送给终端' },
   paneMenu: { rename: '重命名窗格', splitRight: '向右分屏', splitDown: '向下分屏', zoom: '缩放窗格', close: '关闭窗格', name: '窗格名称', closeConfirm: '关闭此窗格及其中运行的进程？', failed: '窗格操作失败', unavailable: '窗格不可用' },
   status: {
     error: '错误', attention: '待处理', working: '运行中', done: '已完成', idle: '空闲', unknown: '未报告状态',
