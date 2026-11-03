@@ -1,6 +1,7 @@
 import test, { type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { createServer, type Socket } from 'node:net'
 import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -8,8 +9,9 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createApp } from './app.ts'
 import { Store, noteNodeSchema, type Canvas, type Source, type TerminalNode } from './state.ts'
-import type { TerminalManager } from './terminals.ts'
-import { closeProviderConnections, createSpace, createWindow, listResources } from './providers.ts'
+import type { WebSocket } from 'ws'
+import { TerminalManager } from './terminals.ts'
+import { closeProviderConnections, closeWindow, createSpace, createWindow, listResources } from './providers.ts'
 
 async function fixture(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'canvas-close-'))
@@ -20,7 +22,7 @@ async function fixture(t: TestContext) {
     { workspace_id: 'space', tab_id: 'sibling', label: 'Sibling' },
     { workspace_id: 'other', tab_id: 'kept', label: 'Kept' },
   ]
-  let fail = false, failDiscovery = false, hold: Promise<void> | undefined, notifyStarted: (() => void) | undefined
+  let fail = false, failDiscovery = false, lastPane = true, hold: Promise<void> | undefined, notifyStarted: (() => void) | undefined
   const native = createServer(socket => {
     sockets.add(socket); socket.on('close', () => sockets.delete(socket))
     let text = ''
@@ -56,6 +58,15 @@ async function fixture(t: TestContext) {
   const otherSource = store.put<Source>('source', { ...source, id: randomUUID(), name: 'Another connection' })
   const app = createApp(store, { username: 'fixture', passwordHash: 'unused' }, {
     closeAll: async () => {}, closeSource: async () => {}, onNotification: () => ({ dispose() {} }),
+    async paneAction(_source: Source, _spaceId: string, windowId: string, _pane: unknown, command: { action: string }, authorized: () => boolean) {
+      if (!authorized()) throw new Error('Pane changed')
+      requests.push(`pane.${command.action}`); notifyStarted?.(); await hold
+      if (fail) throw new Error('Close refused')
+      if (command.action === 'close' && lastPane) {
+        const index = tabs.findIndex(tab => tab.tab_id === windowId)
+        if (index >= 0) tabs.splice(index, 1)
+      }
+    },
   } as unknown as TerminalManager)
   store.addSession('fixture')
   const headers = { Authorization: 'Bearer fixture', 'Content-Type': 'application/json' }
@@ -63,6 +74,9 @@ async function fixture(t: TestContext) {
     method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
   const close = (window = 'closed') => request(`/api/sources/${source.id}/spaces/space/windows/${window}`, 'DELETE')
+  const closePane = () => request(`/api/sources/${source.id}/spaces/space/windows/closed/pane-action`, 'POST', {
+    pane: { bootId: 'fixture', paneId: 'pane' }, command: { action: 'close' },
+  })
   const node = (id: string, windowId: string, sourceId = source.id, spaceId = 'space'): TerminalNode =>
     ({ id, type: 'terminal', sourceId, spaceId, windowId, x: 0, y: 0, width: 480, height: 302 })
   const note = noteNodeSchema.parse({ id: randomUUID(), type: 'note', title: 'Note', content: 'Keep', color: 'yellow', x: 10, y: 20, width: 320, height: 240 })
@@ -76,7 +90,8 @@ async function fixture(t: TestContext) {
     await Promise.all([new Promise<void>(resolve => native.close(() => resolve())), new Promise<void>(resolve => client.close(() => resolve()))])
     store.close(); await rm(directory, { recursive: true, force: true })
   })
-  return { store, source, otherSource, app, a, b, node, requests, tabs, request, close,
+  return { store, source, otherSource, app, a, b, node, requests, tabs, request, close, closePane,
+    keepOtherPane() { lastPane = false },
     reject() { fail = true },
     rejectDiscovery() { failDiscovery = true },
     hold() {
@@ -123,6 +138,53 @@ test('failed and unauthorized native closes preserve references and sizes', asyn
   f.reject(); assert.equal((await f.close()).status, 400)
   assert.deepEqual(f.store.snapshot(), before)
   assert(f.tabs.some(tab => tab.tab_id === 'closed'))
+})
+
+test('closing the last pane through Canvas removes every window reference and shared size', async t => {
+  const f = await fixture(t), revision = f.store.revision
+  assert.equal((await f.closePane()).status, 200)
+  assert.equal(f.store.revision, revision + 1)
+  assert.deepEqual(f.store.list<Canvas>('canvas').flatMap(canvas => canvas.nodes.map(node => node.id)), ['a-kept', f.a.nodes[2]!.id, 'b-foreign'])
+  assert.equal(f.store.snapshot().windowSizes[`${f.source.id}/closed`], undefined)
+  assert.deepEqual(f.requests, ['pane.close', 'session.snapshot'])
+})
+
+test('closing one of several panes preserves its window references and size', async t => {
+  const f = await fixture(t), before = f.store.snapshot()
+  f.keepOtherPane()
+  assert.equal((await f.closePane()).status, 200)
+  assert.deepEqual(f.store.snapshot(), before)
+})
+
+test('a failed or unauthorized pane close and unavailable discovery never remove references', async t => {
+  for (const failure of ['close', 'discovery']) {
+    const f = await fixture(t), before = f.store.snapshot()
+    assert.equal((await f.app.request(`http://localhost/api/sources/${f.source.id}/spaces/space/windows/closed/pane-action`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pane: { bootId: 'fixture', paneId: 'pane' }, command: { action: 'close' } }),
+    })).status, 401)
+    assert.deepEqual(f.requests, [])
+    if (failure === 'close') f.reject(); else f.rejectDiscovery()
+    assert.equal((await f.closePane()).status, failure === 'close' ? 400 : 200)
+    assert.deepEqual(f.store.snapshot(), before)
+  }
+})
+
+test('an endpoint edit during pane closure cannot remove replacement references', async t => {
+  const f = await fixture(t), gate = f.hold(), pending = f.closePane()
+  await gate.started
+  f.store.put('source', { ...f.source, herdrSocket: join('/replacement', 'herdr.sock') })
+  const before = f.store.snapshot()
+  gate.release(); assert.equal((await pending).status, 200)
+  assert.deepEqual(f.store.snapshot(), before)
+})
+
+test('external closure remains a discoverable closed placeholder without deleting references', async t => {
+  const f = await fixture(t), before = f.store.snapshot()
+  await closeWindow(f.source, 'space', 'closed')
+  const resources = await listResources(f.source)
+  assert.equal(resources.status, 'online')
+  assert(resources.spaces.every(space => space.windows.every(window => window.id !== 'closed')))
+  assert.deepEqual(f.store.snapshot(), before)
 })
 
 test('an endpoint edit during native close cannot remove references for its replacement', async t => {
@@ -184,7 +246,7 @@ test('reference cleanup rolls back every canvas and size when a write fails', as
   assert.deepEqual(f.store.snapshot(), before)
 })
 
-test('official herdr closure removes all canvas references while leaving another native window alive', async t => {
+test('official herdr window and final-pane closes remove references while nonfinal and external closes preserve them', async t => {
   const binary = process.env.CANVAS_TEST_HERDR_SERVER_BINARY
   if (!binary) { t.skip('Set CANVAS_TEST_HERDR_SERVER_BINARY to an unmodified upstream server'); return }
   const directory = await mkdtemp(join(tmpdir(), 'canvas-close-native-')), config = join(directory, 'config')
@@ -193,9 +255,11 @@ test('official herdr closure removes all canvas references while leaving another
   const env = { PATH: process.env.PATH, HOME: directory, USER: 'fixture', LANG: 'C.UTF-8', XDG_CONFIG_HOME: config, XDG_STATE_HOME: join(directory, 'state') }
   const native = spawn(binary, ['--session', 'close-reference', 'server'], { env, stdio: 'ignore' })
   const store = new Store(join(directory, 'canvas.db'))
+  const manager = new TerminalManager()
   const source = store.put<Source>('source', { id: randomUUID(), name: 'Isolated native', transport: 'local',
     herdrSocket: join(config, 'herdr/sessions/close-reference/herdr.sock') })
   t.after(async () => {
+    await manager.closeAll()
     await closeProviderConnections(source.id)
     if (native.exitCode === null && native.signalCode === null) {
       const done = new Promise<void>(resolve => native.once('exit', () => resolve()))
@@ -213,7 +277,7 @@ test('official herdr closure removes all canvas references while leaving another
     type: 'terminal', x: 0, y: 0, width: 480, height: 302 })
   store.put<Canvas>('canvas', { id: randomUUID(), name: 'One', nodes: [node('one', space.windowId), node('kept', other.windowId)] })
   store.put<Canvas>('canvas', { id: randomUUID(), name: 'Two', nodes: [node('two', space.windowId)] })
-  const app = createApp(store, { username: 'fixture', passwordHash: 'unused' }, {} as TerminalManager)
+  const app = createApp(store, { username: 'fixture', passwordHash: 'unused' }, manager)
   store.addSession('fixture')
   const close = await app.request(`http://localhost/api/sources/${source.id}/spaces/${space.spaceId}/windows/${space.windowId}`, {
     method: 'DELETE', headers: { Authorization: 'Bearer fixture', 'Content-Type': 'application/json' },
@@ -223,4 +287,34 @@ test('official herdr closure removes all canvas references while leaving another
   const snapshot = await listResources(source)
   assert(snapshot.spaces.some(space => space.windows.some(window => window.id === other.windowId)))
   assert(snapshot.spaces.every(group => group.windows.every(window => window.id !== space.windowId)))
+
+  const external = await createWindow(source, space.spaceId, 'External close')
+  const secondCanvas = store.list<Canvas>('canvas').find(canvas => canvas.name === 'Two')!
+  store.put('canvas', { ...secondCanvas, nodes: [node('also-kept', other.windowId), node('external', external.windowId)] })
+  store.setWindowSize(source.id, other.windowId, { width: 900, height: 600 })
+  const beforeExternal = store.snapshot()
+  await closeWindow(source, space.spaceId, external.windowId)
+  assert.deepEqual(store.snapshot(), beforeExternal, 'external closure preserves the neutral Closed placeholder')
+
+  const client = new EventEmitter() as EventEmitter & { readyState: number; bufferedAmount: number; send(data: unknown): void; close(): void }
+  client.readyState = 1; client.bufferedAmount = 0; client.send = () => {}; client.close = () => { client.readyState = 3; client.emit('close') }
+  await manager.connect(source, { sourceId: source.id, spaceId: space.spaceId, windowId: other.windowId }, client as unknown as WebSocket)
+  const terminal = (await manager.entries.get(`${source.id}/${other.windowId}`))!
+  const metadata = terminal.proc.completionSnapshot()!
+  const pane = { bootId: metadata.state.bootId, paneId: metadata.windows.find(window => window.id === other.windowId)!.panes[0]!.id }
+  const action = (command: { action: string }) => app.request(`http://localhost/api/sources/${source.id}/spaces/${space.spaceId}/windows/${other.windowId}/pane-action`, {
+    method: 'POST', headers: { Authorization: 'Bearer fixture', 'Content-Type': 'application/json' }, body: JSON.stringify({ pane, command }),
+  })
+  assert.equal((await action({ action: 'split-right' })).status, 200)
+  const beforePaneClose = store.snapshot()
+  const closeOne = await action({ action: 'close' })
+  assert.equal(closeOne.status, 200, await closeOne.text())
+  assert.deepEqual(store.snapshot(), beforePaneClose, 'closing a nonfinal pane keeps the window')
+  const remaining = (await listResources(source)).spaces.flatMap(space => space.windows).find(window => window.id === other.windowId)!
+  pane.paneId = remaining.panes![0]!.id
+  const lastPaneClose = await action({ action: 'close' })
+  assert.equal(lastPaneClose.status, 200, await lastPaneClose.text())
+  assert(store.list<Canvas>('canvas').every(canvas => !canvas.nodes.some(node => node.type === 'terminal' && node.windowId === other.windowId)), 'closing the last pane removes its window references')
+  assert.equal(store.snapshot().windowSizes[`${source.id}/${other.windowId}`], undefined)
+  assert(store.list<Canvas>('canvas').some(canvas => canvas.nodes.some(node => node.id === 'external')), 'explicit close never prunes an externally closed sibling')
 })

@@ -66,6 +66,7 @@ interface Session {
   host?: HTMLElement
   viewVisible?: boolean
   reportedVisible?: boolean
+  reportedFocused?: boolean
   magnified: boolean
   mobile: boolean
   modifiers: TerminalModifiers
@@ -113,6 +114,7 @@ const sessions = new Map<string, Session>()
 let logicalFocus: WindowFocus | undefined
 let readObserver: IntersectionObserver | undefined, readHost: HTMLElement | undefined, readVisible = false
 export const terminalReadFocus = shallowRef<PaneFocus>()
+watch(terminalReadFocus, () => { for (const session of sessions.values()) reportViewState(session) }, { flush: 'sync' })
 
 /** Logical attention is independent of the DOM keyboard/input controller. */
 export function prepareTerminalReadFocus(focus: WindowFocus) {
@@ -216,12 +218,18 @@ export function acknowledgeTerminalMetadata(started: ReadonlyMap<string, LiveWin
   }
 }
 function syncViewVisibility(session: Session) {
+  refreshReadFocus()
+  reportViewState(session)
+}
+function reportViewState(session: Session) {
   if (session.state.status !== 'connected' || session.socket?.readyState !== WebSocket.OPEN) return
   const visible = !!session.host?.isConnected && session.viewVisible !== false && !document.hidden
-  refreshReadFocus()
-  if (session.reportedVisible === visible) return
+  const focus = terminalReadFocus.value
+  const focused = visible && !!focus && focus.sourceId === session.resource.sourceId && focus.windowId === session.resource.windowId
+  if (session.reportedVisible === visible && session.reportedFocused === focused) return
   session.reportedVisible = visible
-  session.socket.send(JSON.stringify({ type: 'view-visible', visible }))
+  session.reportedFocused = focused
+  session.socket.send(JSON.stringify({ type: 'view-visible', visible, focused }))
 }
 function acceptsFile(session: Session) {
   return interactive(session) && session.state.status === 'connected' && session.socket?.readyState === WebSocket.OPEN &&
@@ -373,6 +381,7 @@ function disconnect(session: Session) {
   session.pastePreview?.(); session.pastePreview = undefined
   updateMetadata(session)
   session.reportedVisible = undefined
+  session.reportedFocused = undefined
   session.parsedCompletion = undefined; session.paintedCompletion = undefined; session.readCompletion = undefined
   session.parsedLayout = undefined; session.paintedLayout = undefined
   session.readGeneration = 0; session.readGesture = false

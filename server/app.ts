@@ -254,7 +254,13 @@ export function createApp(
       const current = store.get<Source>('source', connection.id);
       return store.hasSession(session) && !!current && sourceConnectionKey(current) === key;
     };
-    await terminals.paneAction(connection, c.req.param('space'), c.req.param('window'), { ...pane, name: '' }, command, authorized);
+    const windowId = c.req.param('window');
+    await terminals.paneAction(connection, c.req.param('space'), windowId, { ...pane, name: '' }, command, authorized);
+    if (command.action === 'close') {
+      const after = await providers.listResources(connection);
+      if (after.status === 'online' && !after.spaces.some(space => space.windows.some(window => window.id === windowId)))
+        store.removeWindowReferences(connection, [windowId]);
+    }
     return c.json({ ok: true });
   });
   app.post("/api/sources/:id/spaces/:space/windows/:window/scan", async c => {

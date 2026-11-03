@@ -10,7 +10,7 @@ import type { WebSocket } from "ws";
 import headless from "@xterm/headless";
 import { terminalUnicodeAddon } from "../shared/terminal-unicode.ts";
 import { terminalInputChunks } from "../web/src/terminal-input-chunks.ts";
-import { Store } from "./state.ts";
+import { Store, type Canvas, type TerminalNode } from "./state.ts";
 import { CompletionReads } from "./completion-reads.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createSpace, createWindow, listResources, shellQuote, type Source } from "./providers.ts";
@@ -63,7 +63,7 @@ async function fixture(t: TestContext, probe = false, quietProbe = false, comple
   const store = completionReads ? new Store(join(root, "canvas.db")) : undefined;
   store?.put("source", source);
   const reads = store ? new CompletionReads(store) : undefined;
-  const manager = new TerminalManager(reads);
+  const manager = new TerminalManager(reads, (source, windowId) => store?.removeWindowReferences(source, [windowId]));
   t.after(async () => {
     await manager.closeAll();
     try { execFileSync(binary, ["--session", session, "server", "stop"], { env, stdio: "ignore", timeout: 5000 }); } catch {}
@@ -245,6 +245,78 @@ test('clean transport detachment remains reconnectable while its native tab exis
   await f.ready();
   assert.equal(messages(second).filter(message => message.type === 'status').at(-1)?.status, 'connected');
   assert.equal(f.manager.entries.size, 1);
+});
+
+function addWindowReferences(store: Store, sourceId: string, spaceId: string, windowId: string) {
+  const node: TerminalNode = { id: 'first', type: 'terminal', sourceId, spaceId, windowId, x: 0, y: 0, width: 900, height: 600 };
+  store.put<Canvas>('canvas', { id: randomUUID(), name: 'First', nodes: [node] });
+  store.put<Canvas>('canvas', { id: randomUUID(), name: 'Second', nodes: [{ ...node, id: 'second' }] });
+  store.setWindowSize(sourceId, windowId, { width: 900, height: 600 });
+}
+
+test('a confirmed exit during logical Canvas focus removes every reference for EOF, exit and an external close', async t => {
+  for (const method of ['eof', 'exit', 'external']) await t.test(method, async t => {
+    const f = await fixture(t, false, false, true); if (!f) return;
+    addWindowReferences(f.store!, f.source.id, f.target.spaceId, f.target.windowId);
+    const controller = new Client(), focusedPeer = new Client();
+    await f.manager.connect(f.source, f.target, controller.socket);
+    await f.manager.connect(f.source, f.target, focusedPeer.socket);
+    await f.ready();
+    focusedPeer.command({ type: 'view-visible', visible: true, focused: true });
+    assert.equal((await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!.controller, controller.socket, 'logical focus must not take input ownership');
+    if (method === 'external') await herdrApiRequest(f.source.herdrSocket!, 'tab.close', { tab_id: f.target.windowId });
+    else controller.command({ type: 'input', data: method === 'eof' ? '\x04' : 'exit\r' });
+    await waitFor(() => controller.readyState === 3 && focusedPeer.readyState === 3, 'native exit did not reach both clients');
+    assert(f.store!.list<Canvas>('canvas').every(canvas => canvas.nodes.length === 0));
+    assert.equal(f.store!.snapshot().windowSizes[`${f.source.id}/${f.target.windowId}`], undefined);
+  });
+});
+
+test('unfocused, hidden, covered and disconnected viewers preserve confirmed closed-window references', async t => {
+  for (const mode of ['controller-only', 'deselected', 'hidden', 'covered', 'disconnected', 'malformed']) await t.test(mode, async t => {
+    const f = await fixture(t, false, false, true); if (!f) return;
+    addWindowReferences(f.store!, f.source.id, f.target.spaceId, f.target.windowId);
+    const controller = new Client(), peer = new Client();
+    await f.manager.connect(f.source, f.target, controller.socket);
+    await f.manager.connect(f.source, f.target, peer.socket);
+    await f.ready();
+    if (mode !== 'controller-only') peer.command({ type: 'view-visible', visible: true, focused: mode === 'malformed' ? 'true' : true });
+    if (mode === 'deselected') peer.command({ type: 'view-visible', visible: true, focused: false });
+    if (mode === 'hidden') peer.command({ type: 'view-visible', visible: false, focused: true });
+    if (mode === 'covered') {
+      controller.command({ type: 'focus-resize-begin', token: randomUUID(), cols: 130, rows: 40 });
+      await waitFor(() => size(controller)?.cols === 130, 'maximized owner did not settle');
+    }
+    if (mode === 'disconnected') {
+      peer.close();
+      peer.command({ type: 'view-visible', visible: true, focused: true });
+    }
+    const before = f.store!.snapshot();
+    controller.command({ type: 'input', data: 'exit\r' });
+    await waitFor(() => controller.readyState === 3, 'native exit did not reach remaining viewer');
+    assert.deepEqual(f.store!.snapshot().canvases, before.canvases);
+    assert.deepEqual(f.store!.snapshot().windowSizes, before.windowSizes);
+  });
+});
+
+test('focus never cleans references after endpoint replacement or an unconfirmed transport closure', async t => {
+  for (const mode of ['replacement', 'transport']) await t.test(mode, async t => {
+    const f = await fixture(t, false, false, true); if (!f) return;
+    addWindowReferences(f.store!, f.source.id, f.target.spaceId, f.target.windowId);
+    const client = new Client();
+    await f.manager.connect(f.source, f.target, client.socket);
+    await f.ready();
+    client.command({ type: 'view-visible', visible: true, focused: true });
+    const terminal = (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!;
+    if (mode === 'replacement') f.store!.put('source', { ...f.source, herdrSocket: '/replacement/herdr.sock' });
+    const before = f.store!.snapshot();
+    if (mode === 'replacement') await herdrApiRequest(f.source.herdrSocket!, 'tab.close', { tab_id: f.target.windowId });
+    else terminal.proc.kill();
+    await waitFor(() => client.readyState === 3, 'transport did not finish');
+    assert.deepEqual(f.store!.snapshot().canvases, before.canvases);
+    assert.deepEqual(f.store!.snapshot().windowSizes, before.windowSizes);
+    assert.equal(messages(client).at(-1)?.status, mode === 'replacement' ? 'removed' : 'closed');
+  });
 });
 
 test("file downloads require explicit interaction and never follow passive controller fallback", async t => {
