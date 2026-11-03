@@ -128,14 +128,33 @@ test('official core provider retains Canvas window, pane, input, geometry, statu
   assert.equal(new Set((await layout.snapshot()).terminals.filter(item => item.state === 'live').map(item => item.address)).size, 2)
   screen.resize(110, 32); client.resize(110, 32)
   await until(async () => (await records()).filter(item => item.kind === 'size').some(item => (item.cols || 0) >= 50 && item.rows === 32), 'core pane grids did not follow resized split geometry')
+  const floating = await rpc.call<{ address: string }>('terminal.run', { argv: [], cwd: root, keep: true, no_parent: true, wait: false })
+  const floatingLayout = await layout.snapshot(), floatingTab = floatingLayout.document.spaces.find(space => space.id === created.spaceId)!.tabs.find(tab => tab.id === created.windowId)!
+  floatingTab.root.floating = [{ id: 'floating-fixture', edge: 'bottom', content: { terminal: floating.address } }]
+  await rpc.call('doc.set', { name: 'herdr-app', value: floatingLayout.document, version: floatingLayout.documentVersion })
+  await until(async () => (await client.content())?.some(pane => pane.id === 'floating-fixture' && pane.lines.some(line => line.includes('CORE_NATIVE_FIXTURE'))) === true,
+    'a native floating terminal was not attached and painted')
+  assert(frame?.layout)
+  const floatingContext = client.paneContext({ column: 55, row: 24, cols: 110, rows: 32, layout: frame.layout })
+  assert.equal(floatingContext?.paneId, 'floating-fixture', 'visible floating pane owns the covered split position')
+  const beforeFloatingClick = (await records()).length
+  client.write('\x1b[<0;56;25M\x1b[<0;56;25m')
+  await until(async () => (await records()).slice(beforeFloatingClick).some(record => record.kind === 'input' && record.terminal === floating.address), 'click over the covered native divider did not reach its floating terminal')
+  assert((await records()).slice(beforeFloatingClick).filter(record => record.kind === 'input').every(record => record.terminal === floating.address), 'floating click never reaches a covered terminal')
+  await client.paneAction(floatingContext!, { action: 'close' })
+  await until(async () => !(await client.content())?.some(pane => pane.id === 'floating-fixture'), 'closing a floating pane did not restore the underlying layout')
   const snapshot = await layout.snapshot()
   const originalPids = snapshot.terminals.filter(item => item.state === 'live').map(item => item.pid)
   client.kill(); await handle.cleanup()
   const cloned: Source = { ...source, id: 'core-native-clone' }
   const cloneHandle = await openTerminal(cloned, created.spaceId, created.windowId); handles.push(cloneHandle)
-  const cloneClient = await cloneHandle.connect(110, 32); clients.push(cloneClient)
+  const cloneClient = await cloneHandle.connect(2, 32); clients.push(cloneClient)
   const cloneScreen = new headless.Terminal({ cols: 110, rows: 32, allowProposedApi: true }); t.after(() => cloneScreen.dispose())
   cloneClient.onData(data => cloneScreen.write(data))
+  await until(async () => (await cloneClient.content())?.length === 1, 'the narrow initial view should expose one pane')
+  cloneClient.resize(110, 32)
+  await until(async () => (await cloneClient.content())?.filter(pane => pane.lines.some(line => line.includes('CORE_NATIVE_FIXTURE'))).length === 2,
+    'expanding the initial narrow viewport must attach and paint both panes without another layout event')
   await until(() => Array.from({ length: cloneScreen.buffer.active.length }, (_, i) => cloneScreen.buffer.active.getLine(i)?.translateToString(true) || '').join('\n').includes('CORE_NATIVE_FIXTURE'), 'a fresh source connection did not reattach the existing layout')
   assert.deepEqual((await layout.snapshot()).terminals.filter(item => item.state === 'live').map(item => item.pid), originalPids, 'reattach preserves native programs')
   let cloneExit = false; cloneClient.onExit(() => { cloneExit = true })

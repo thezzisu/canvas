@@ -159,7 +159,7 @@ export function coreWindowMetadata(snapshot: CoreSnapshot, tabId: string, focuse
       active: pane.id === (focusedPane || all[0]?.id), status,
       ...(pane.terminal ? { terminalId: pane.terminal } : {}),
       ...(terminal?.status?.app ? { agent: terminal.status.app } : {}),
-      ...(terminal?.title ? { terminalTitle: terminal.title } : {}), stateSequence: turn,
+      terminalTitle: terminal?.title || '', stateSequence: turn,
       ...((status === 'done' || status === 'idle') && turn > 0 ? { completion: { bootId: snapshot.coreId, sequence: turn } } : {}) }
   })
   return { id: tab.id, name: tab.name || String(space!.tabs.indexOf(tab) + 1), bootId: snapshot.coreId, readAuthority: 'native', panes: metadata, status: aggregateStatus(metadata.map(pane => pane.status)) }

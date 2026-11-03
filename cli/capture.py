@@ -23,7 +23,7 @@ class CaptureError(Exception):
 
 
 def send(connection, value):
-    connection.sendall((json.dumps(value, separators=(",", ":")) + "\n").encode())
+    connection.sendall((json.dumps(value, separators=(",", ":"), ensure_ascii=False) + "\n").encode())
 
 
 def line(connection, timeout=30):
@@ -54,55 +54,6 @@ def port_open(port):
             return True
     except OSError:
         return False
-
-
-def descendants(parent):
-    """Resolve only process IDs and parents, never process environments."""
-    parents = {}
-    for entry in Path("/proc").iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            value = (entry / "stat").read_text()
-            parents[int(entry.name)] = int(value[value.rfind(")") + 2:].split()[1])
-        except (OSError, ValueError, IndexError):
-            continue
-    owned = {parent}
-    changed = True
-    while changed:
-        next_owned = {pid for pid, ppid in parents.items() if ppid in owned}
-        changed = not next_owned.issubset(owned)
-        owned.update(next_owned)
-    return owned
-
-
-def owned_listeners(parent):
-    """Only the launched command's listeners may become capture targets."""
-    owned = set()
-    for pid in descendants(parent):
-        try:
-            for descriptor in (Path("/proc") / str(pid) / "fd").iterdir():
-                try:
-                    owned.add(os.readlink(descriptor))
-                except OSError:
-                    pass
-        except OSError:
-            continue
-    ports = set()
-    for table in ["tcp", "tcp6"]:
-        try:
-            rows = (Path("/proc/net") / table).read_text().splitlines()[1:]
-        except OSError:
-            continue
-        for row in rows:
-            fields = row.split()
-            if len(fields) <= 9:
-                continue
-            address, port_hex = fields[1].rsplit(":", 1)
-            reaches_loopback = address in ("0100007F", "00000000") if table == "tcp" else address in ("0" * 32, "0000000000000000FFFF00000100007F")
-            if reaches_loopback and fields[3] == "0A" and "socket:[" + fields[9] + "]" in owned:
-                ports.add(int(port_hex, 16))
-    return ports
 
 
 def available_port():
@@ -176,7 +127,7 @@ def bootstrap_file(filename, public_url, port):
         if fd is not None:
             os.close(fd)
     url = value.get("launchUrl", value.get("url")) if isinstance(value, dict) else None
-    if not isinstance(url, str) or len(url) > 16384 or any(ord(c) <= 32 or ord(c) == 127 for c in url):
+    if not isinstance(url, str) or len(url.encode("utf-8")) > 16384 or any(ord(c) <= 32 or ord(c) == 127 for c in url):
         raise CaptureError("invalid application bootstrap URL")
     try:
         parsed, public = urlsplit(url), urlsplit(public_url)
@@ -198,24 +149,17 @@ def terminate(child):
     except ProcessLookupError:
         child.wait(timeout=5)
         return
-    # A shell/npm wrapper can exit before its server. Wait for the owned group,
-    # not just its leader; zombies have exited and need no further signal.
-    def group_running():
-        for entry in Path("/proc").iterdir():
-            if not entry.name.isdigit():
-                continue
-            try:
-                value = (entry / "stat").read_text()
-                fields = value[value.rfind(")") + 2:].split()
-                if int(fields[2]) == child.pid and fields[0] != "Z":
-                    return True
-            except (OSError, ValueError, IndexError):
-                continue
-        return False
+    # The process group, not the launcher PID, owns wrapper descendants.
+    # Reap the direct child while waiting; group probes work on POSIX hosts.
     deadline = time.monotonic() + 5
-    while group_running() and time.monotonic() < deadline:
+    while time.monotonic() < deadline:
+        child.poll()
+        try:
+            os.killpg(child.pid, 0)
+        except ProcessLookupError:
+            break
         time.sleep(0.05)
-    if group_running():
+    else:
         try:
             os.killpg(child.pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -228,12 +172,12 @@ def main():
         "PORT and CANVAS_CAPTURE_PORT are provided to the command. Command arguments are passed unchanged. "
         "Use -c 'python3 -m http.server \"$PORT\"' for explicit shell expansion. "
         "Only --env values expand named variables; $$ means a literal $. Options must precede the command.")
-    parser.add_argument("--port", type=int, help="use this loopback port instead of automatic detection")
+    parser.add_argument("--port", type=int, help="use this loopback port instead of assigning PORT")
     parser.add_argument("--title", help="application title shown on the terminal")
-    parser.add_argument("--bootstrap-file", "--ready-file", dest="bootstrap_file", help="private auth/bootstrap JSON containing launchUrl or url (not a readiness probe)")
+    parser.add_argument("--bootstrap-file", help="private auth/bootstrap JSON containing launchUrl or url (not a readiness probe)")
     parser.add_argument("--ready", choices=["http", "tcp"], default="http", help="HTTP response (default) or TCP listener readiness")
     parser.add_argument("--probe", help="HTTP path that must return 2xx before capture, e.g. /health")
-    parser.add_argument("--probe-command", help="explicit shell readiness command; exit 0 means ready, with PORT set to the detected listener")
+    parser.add_argument("--probe-command", help="explicit shell readiness command; exit 0 means ready, with PORT set to the selected port")
     parser.add_argument("--env", action="append", default=[], metavar="NAME=VALUE", help="child-only environment override; named variables expand after PORT injection")
     parser.add_argument("-c", "--shell", help="run this explicit shell script instead of a command")
     parser.add_argument("--timeout", type=float, default=120, help="startup deadline in seconds")
@@ -259,11 +203,9 @@ def main():
         if not separator or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
             parser.error("--env requires NAME=VALUE")
         overrides.append((name, value))
-    if not sys.platform.startswith("linux"):
-        raise CaptureError("this capture preview requires Linux listener ownership checks")
     if args.port is not None and port_open(args.port):
         raise CaptureError("capture port is already in use; the command was not started")
-    candidate = args.port or available_port()
+    port = args.port or available_port()
 
     # Load the shipped helper definitions without invoking its executable entry.
     helper = runpy.run_path(str(Path(__file__).with_name("canvas")))
@@ -291,7 +233,7 @@ def main():
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.connect(entry["socket"])
             send(connection, {"version": 1, "secret": entry["secret"], "nativeSocket": native_socket, "paneId": pane,
-                              "kind": "capture", "port": args.port or 0, "title": (args.title or Path(command[0]).name)[:120]})
+                              "kind": "capture", "port": port, "title": (args.title or Path(command[0]).name)[:120]})
             response = line(connection)
             public_url = response.get("publicUrl")
             if response.get("ok") is not True or response.get("state") != "prepared" or not isinstance(public_url, str):
@@ -302,13 +244,16 @@ def main():
             environment = dict(os.environ)
             environment["CANVAS_CAPTURE_PUBLIC_URL"] = public_url
             environment["CANVAS_CAPTURE_HOST"] = public.netloc
-            environment["PORT"] = environment["CANVAS_CAPTURE_PORT"] = str(candidate)
+            environment["PORT"] = environment["CANVAS_CAPTURE_PORT"] = str(port)
             for name, value in overrides:
                 environment[name] = expand(value, environment)
+            if environment["PORT"] != str(port) or environment["CANVAS_CAPTURE_PORT"] != str(port):
+                raise CaptureError("use --port to change the capture port")
+            if requested_signal[0]:
+                return 128 + requested_signal[0]
             child = subprocess.Popen(command, env=environment, start_new_session=True)
             deadline = time.monotonic() + args.timeout
             ready_url = False
-            selected_port = None
             while child.poll() is None and not requested_signal[0]:
                 if select.select([connection], [], [], 0)[0]:
                     value = line(connection, 1)
@@ -316,36 +261,23 @@ def main():
                         terminate(child)
                         return 0
                     raise CaptureError("capture bridge rejected startup")
-                ports = owned_listeners(child.pid)
-                preferred = args.port or (candidate if candidate in ports else None)
-                ports = {preferred} & ports if preferred else ports
-                statuses = {}
-                if not preferred and len(ports) > 1:
-                    if args.ready == "tcp" or args.probe_command or len(ports) > 32:
-                        raise CaptureError("command opened multiple loopback ports; select one with --port")
-                    statuses = {port: probe_http(port, args.probe or "/", public, deadline) for port in sorted(ports)}
-                    ports = {port for port, status in statuses.items() if status is not None}
-                    if len(ports) > 1:
-                        raise CaptureError("command opened multiple HTTP ports; select one with --port")
-                if len(ports) == 1:
-                    selected_port = next(iter(ports))
-                    if args.probe_command:
-                        ready = probe_command(args.probe_command, environment, selected_port, deadline)
-                    elif args.ready == "tcp":
-                        ready = port_open(selected_port)
-                    else:
-                        status = statuses.get(selected_port) or probe_http(selected_port, args.probe or "/", public, deadline)
-                        ready = status is not None and (200 <= status < 300 if args.probe else 200 <= status < 500)
-                    if ready and time.monotonic() < deadline and selected_port in owned_listeners(child.pid):
-                        ready_url = bootstrap_file(args.bootstrap_file, public_url, selected_port)
-                        if ready_url is not False:
-                            break
+                if args.probe_command:
+                    ready = probe_command(args.probe_command, environment, port, deadline)
+                elif args.ready == "tcp":
+                    ready = port_open(port)
+                else:
+                    status = probe_http(port, args.probe or "/", public, deadline)
+                    ready = status is not None and (200 <= status < 300 if args.probe else 200 <= status < 500)
+                if ready and time.monotonic() < deadline:
+                    ready_url = bootstrap_file(args.bootstrap_file, public_url, port)
+                    if ready_url is not False:
+                        break
                 if time.monotonic() >= deadline:
-                    raise CaptureError("command did not expose a ready owned loopback service before the startup deadline")
+                    raise CaptureError("command did not become ready on PORT before the startup deadline; use PORT or specify --port")
                 time.sleep(0.1)
             if child.poll() is not None or requested_signal[0]:
                 return child.returncode if child.returncode is not None and child.returncode >= 0 else 128 + (requested_signal[0] or -child.returncode)
-            send(connection, {"action": "ready", "port": selected_port, **({"bootstrapUrl": ready_url} if ready_url else {})})
+            send(connection, {"action": "ready", **({"bootstrapUrl": ready_url} if ready_url else {})})
             response = line(connection)
             if response.get("ok") is not True or response.get("state") != "ready":
                 raise CaptureError("Canvas could not display this captured application")
@@ -357,7 +289,9 @@ def main():
                         terminate(child)
                         return 0
                     raise CaptureError("capture bridge closed the application view")
-            result = child.wait(timeout=5)
+            if requested_signal[0]:
+                return 128 + requested_signal[0]
+            result = child.returncode
             return result if result >= 0 else 128 - result
     finally:
         if child is not None:
@@ -367,7 +301,10 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (CaptureError, OSError, ValueError, subprocess.SubprocessError) as error:
-        # Never include ready-file contents or credential-bearing URLs.
+    except subprocess.SubprocessError:
+        print("canvas: capture process did not stop within the cleanup deadline", file=sys.stderr)
+        sys.exit(1)
+    except (CaptureError, OSError, ValueError) as error:
+        # Never include bootstrap-file contents or credential-bearing URLs.
         print("canvas: " + str(error), file=sys.stderr)
         sys.exit(1)

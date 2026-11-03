@@ -35,7 +35,7 @@ async function fixture(t: TestContext) {
     if (url.pathname === '/authenticated' && !req.headers.cookie?.split('; ').includes('session=application-only')) {
       res.writeHead(401).end('Application authentication required'); return
     }
-    if (req.url?.startsWith('/mounted-redirect?')) { res.writeHead(302, { Location: req.url.slice('/mounted-redirect?'.length) }).end(); return }
+    if (req.url?.startsWith('/mounted-redirect?')) { res.writeHead(302, { Location: decodeURIComponent(req.url.slice('/mounted-redirect?'.length)) }).end(); return }
     res.writeHead(200, { 'Content-Type': 'text/html', 'Content-Security-Policy': "default-src 'self'", 'X-Frame-Options': 'SAMEORIGIN' })
     res.end('<title>Captured fixture</title>')
   })
@@ -95,6 +95,13 @@ test('capture authenticates without browser cookies, preserves app frame policy 
   assert.equal(f.received.at(-1)!.headers.cookie, undefined, 'another capture cannot inherit credentials or import them from browser cookies')
   const redirect = await fetch(lease.publicUrl + 'mounted-redirect?' + prepared.pathname + 'next', { redirect: 'manual' })
   assert.equal(redirect.headers.get('location'), lease.publicUrl + 'next', 'already-prefixed redirects do not leak the upstream loopback origin')
+  for (const host of ['localhost', '127.0.0.1']) {
+    const redirect = await fetch(lease.publicUrl + 'mounted-redirect?' + encodeURIComponent(`http://${host}:${f.target.port}/next?q=1`), { redirect: 'manual' })
+    assert.equal(redirect.headers.get('location'), lease.publicUrl + 'next?q=1', 'same-service redirects remain on the public capture mount')
+  }
+  const external = 'https://external.example/help'
+  assert.equal((await fetch(lease.publicUrl + 'mounted-redirect?' + encodeURIComponent(external), { redirect: 'manual' })).headers.get('location'), external)
+  await assert.rejects(lease.ready(f.target.base + '/?q=' + '中'.repeat(6000)), /Invalid application bootstrap URL/u)
   await assert.rejects(lease.ready('http://127.0.0.1:1/login'), /does not match/u)
 })
 
@@ -132,16 +139,16 @@ test('only the owning session stops a capture and revocation also closes a pendi
   lease.close(); assert.equal(ended, 1)
 })
 
-test('auto-port capture prepares its public mount before startup and binds only the reported source port', async t => {
+test('capture fixes its source port before startup and exposes it only after readiness', async t => {
   const f = await fixture(t)
-  const lease = f.service.prepareCapture(f.source, { publicBase: f.base, windowId: 'window', paneId: 'pane', port: 0, session: 'first' })
+  const options = { publicBase: f.base, windowId: 'window', paneId: 'pane', session: 'first' }
+  for (const port of [0, -1, 65536, 1.5]) assert.throws(() => f.service.prepareCapture(f.source, { ...options, port }), /port must be/u)
+  const lease = f.service.prepareCapture(f.source, { ...options, port: f.target.port })
   assert.equal((await fetch(lease.publicUrl)).status, 404)
-  await assert.rejects(lease.ready(), /listening port/u)
-  assert.equal((await fetch(lease.publicUrl)).status, 404, 'an undiscovered service is never exposed')
-  const presentation = await lease.ready(undefined, f.target.port)
-  assert.equal(presentation.url, lease.publicUrl, 'the launch URL remains stable when the command selects its port')
+  const presentation = await lease.ready()
+  assert.equal(presentation.url, lease.publicUrl, 'the prepared launch URL remains stable')
   assert.equal(await (await fetch(lease.publicUrl)).text(), '<title>Captured fixture</title>')
-  await assert.rejects(lease.ready(undefined, f.target.port === 65535 ? 65534 : f.target.port + 1), /cannot change/u)
+  await assert.rejects(lease.ready('http://127.0.0.1:1/'), /does not match/u)
   assert.equal(await (await fetch(lease.publicUrl)).text(), '<title>Captured fixture</title>', 'a later ready message cannot redirect the proxy to another listener')
 })
 

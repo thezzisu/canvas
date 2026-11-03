@@ -183,7 +183,8 @@ export async function prepareLoopback(source: Source, host: string, port: number
     throw new Error("Invalid loopback endpoint");
   validateSource(source);
   if (source.transport === "local") return { hostname: host, close: async () => {} };
-  const key = `web:${socketTunnelIdentity(source, [host, String(port)])}`;
+  // Capture and URL previews own independent lifetimes, even at one endpoint.
+  const key = `web:${socketTunnelIdentity(source, [host, String(port)])}:${randomUUID()}`;
   const tunnel = await ensureSocketTunnel({ sourceId: `web:${source.id}`, key,
     sshArgs: sshOptions(source), env: commandEnvironment(), discover: async () => ({}),
     tcp: { "web.sock": { host, port } } });

@@ -36,48 +36,25 @@ server's machine. SSH accepts an alias, `user@host`, or `ssh://user@host:port` a
 uses key authentication. Select the existing herdr session; an absolute API socket
 path can override discovery. Canvas connects directly to herdr sockets.
 
-For verified Herdr TUI 0.9.3/0.9.5, both sockets belong to the same server:
-`herdr.sock` speaks the newline JSON API, while `herdr-client.sock` speaks
-the binary native-client protocol used by the official TUI. Canvas implements
-that client protocol itself and starts no TUI client process. Its current
-adapter also uses the JSON API for resource discovery, operations and native
-text reads, so it connects to both listeners. One configured API socket path
-derives the client-protocol path automatically; the JSON listener cannot be
-upgraded into a terminal attach stream. Core exposes its API and attach streams
-through one framed socket.
+Choose **Herdr TUI** for 0.9.x sessions, or **Herdr Core / App** for
+herdr-core 0.1.17 and herdr-app 0.1.12 layouts. Canvas implements both clients;
+no TUI or desktop app process needs to remain open. TUI uses its API and native
+client sockets. Core uses one framed socket and shares Spaces, Tabs, splits and
+completion-read labels with the desktop app. Ungrouped terminals appear under
+Terminals; desktop mods are not rendered.
 
-Choose **Herdr TUI** for existing 0.9.x sessions, or **Herdr Core / App** for
-herdr-core 0.1.17 and the shared layouts used by herdr-app 0.1.12. Core connects
-directly to the selected running Unix socket; the desktop app can be closed.
-Canvas reads and edits that core's shared Spaces, Tabs and terminal splits.
-Ungrouped core terminals appear under Terminals. Existing TUI connections retain
-their protocol and identities. Selecting another runtime does not migrate sessions.
+Core discovery uses `HC_SOCKET`, its configuration and runtime directories.
+An explicit socket path overrides discovery. Reading Core TOML requires
+Python 3.11+; explicit paths work with Python 3.8+. Configure a separate Canvas
+SSH connection for each remote core; relay hosts are not treated as local files.
 
-Core discovery follows `HC_SOCKET`, its configuration and runtime directories;
-an explicit socket path overrides discovery. Reading a Core TOML configuration
-requires Python 3.11+, while explicit paths work with Python 3.8+. Use a separate
-Canvas SSH connection for each remote core. Machines relayed through another
-core are not implicitly treated as files or terminals on that core's host.
-
-Core persists terminal status, turns and labels in its server registry. OSC
-7501 is the source of status updates; programs that do not report it remain
-unreported. Core completion reads use the shared `herdr.seen` labels, including
-changes from the desktop app. View focus and pane zoom remain local to Canvas.
-When a core restart reuses the live holder, terminal facts survive with the
-running program. A replacement shell has no old program status even though its
-terminal address, turn and labels can survive. Old TUI session saves persist
-layout, cwd, names and agent resume information, but do not persist the live
-agent status or completion sequences. Canvas retains its own TUI read records
-only while the native boot identity still matches. Neither event stream is a
-durable event log; reconnecting takes a fresh snapshot.
-If a slow connection causes core to replace queued output with a repaint that
-skips completed turns, Canvas keeps the completion unread until reconnecting;
-terminal input and output continue. Core's stream has no turn identifier for
-that replacement paint, so Canvas cannot safely acknowledge unseen results.
-Terminal panes are rendered in Canvas; desktop mods have an unavailable-content
-placeholder. Core 0.1.17 omits historical OSC 8 link targets from initial paints;
-live links and visible filesystem paths remain available to the scanner. Terminal
-graphics depend on Canvas's renderer and do not reproduce every GPUI feature.
+Core status comes from program-reported OSC 7501; unreported programs stay
+unknown. Completion reads use native `turn` and `herdr.seen` labels. TUI reads
+remain bound to the server boot identity. Reconnection refreshes native state;
+replacement shells do not inherit old program status. Core initial paints omit
+historical OSC 8 links; live links and visible paths can still be scanned. If Core
+skips a completion's output under backpressure, Canvas keeps it unread until a
+new connection provides a complete paint.
 
 The overview groups windows by connection and Space. Agent-state filters, native
 or status ordering, a minimap and optional one-window-at-a-time navigation help
@@ -129,104 +106,52 @@ forwarded applications must support the provided subpath.
 
 ## Capture a terminal application (experimental)
 
-On Linux, the npm CLI can start a trusted Web application inside a connected,
-single-pane terminal and show its UI in that same Canvas card:
+The npm CLI can run a trusted Web application in a connected single-pane terminal
+and display it in that Canvas card:
 
 ```sh
-canvas capture python3 -m http.server 0
 canvas capture npm start
-```
-
-Canvas injects an available candidate port as `PORT` and `CANVAS_CAPTURE_PORT`.
-Applications that honor `PORT` can start without a fixed port in the command.
-When an application chooses its own port, such as Python's default 8000, Canvas
-discovers the loopback listener owned by this command. It does not scan or attach
-to unrelated services. If multiple eligible HTTP listeners remain, specify
-`--port` to choose one. Also specify a port for apps that open multiple services
-at different stages; an early HTTP service can otherwise be selected first.
-An application's fixed-port conflict still needs fixing;
-injecting `PORT` cannot change an app that ignores it.
-Python accepts port `0` to bind an available port itself, so the example above
-avoids conflicts with a pre-existing server on 8000. Without `0`, its normal
-default still works when 8000 is free.
-
-Use the child shell when a program takes its port as an argument, or give the
-app a different environment variable:
-
-```sh
 canvas capture -c 'python3 -m http.server "$PORT" --bind 127.0.0.1'
 canvas capture --env APP_PORT='$PORT' node app.js
 canvas capture --port 5173 npm run dev -- --port 5173
 ```
 
-Ordinary command arguments are passed directly, without shell evaluation or
-variable expansion. `-c` explicitly selects `/bin/sh`; its variables expand in the
-child environment, after Canvas supplies the port. Repeat `--env NAME=VALUE` for
-child-only settings; values can refer to inherited or injected named variables.
-The parent shell is unchanged. Do not print sensitive environment values.
+Canvas assigns a candidate port and injects `PORT` / `CANVAS_CAPTURE_PORT`.
+The command must listen there; use `--port` for applications with a fixed port.
+Occupied explicit ports fail before startup. Port selection is not a reservation
+for the child and readiness does not prove listener ownership; the command must
+honor this contract. Canvas does not discover other listeners or parse stdout.
+Ordinary arguments pass unchanged; `-c` explicitly enables shell expansion.
+`--env` expands named variables only in the child environment.
 
-Capture works through the selected Canvas instance's existing public address,
-including its reverse-proxy prefix. One public domain and port can serve Canvas
-and its captured apps; no additional public listener, application domain or
-capture-specific public-base setting is needed. For example, an instance at
-`https://workbench.example/canvas/` hosts an app beneath
-`/canvas/api/capture/<id>/`. The proxy strips `/canvas` and sends
-`X-Forwarded-Prefix: /canvas` for both HTTP and WebSocket requests, as it does for
-the ordinary Canvas API. Its private upstream Host need not be public.
-When that Host differs from the browser origin, configure the existing
-`CANVAS_ALLOWED_ORIGINS` as for ordinary Canvas connections.
+Default readiness accepts HTTP 200–499 and waits through startup errors.
+Use `--probe /health` for a 2xx health endpoint, `--ready tcp` for a listener,
+or `--probe-command '…'` for a bounded command returning zero. `--timeout`
+bounds startup. Apps with a private login URL can write `launchUrl` or `url`
+to a private `--bootstrap-file`; this is optional authentication bootstrap.
 
-The authenticated browser supplies its selected instance base to its terminal
-connection. Canvas validates that mount and uses it only for app presentation;
-forwarding still targets the source machine's declared loopback port. Independent
-frontends and multiple instances keep their own addresses. This mode is for
-explicitly trusted applications. Same-origin app scripts can read and change the
-Canvas DOM and local storage, including the signed-in Canvas bearer token, and can
-act with that account's access to connected machines. A malicious captured app
-can take over the Canvas session. Cookie paths and iframe navigation restrictions
-do not isolate it. Use capture only for commands and applications you trust.
+Apps must support the forwarded subpath. `CANVAS_CAPTURE_PUBLIC_URL` and
+`CANVAS_CAPTURE_HOST` supply it before startup. HTTP/WebSocket traffic uses
+the selected instance's existing proxy prefix; there is no HTML/JavaScript
+rewriting. Server-managed application cookies stay in a per-capture memory jar,
+so an ingress may strip browser cookies. Apps requiring `document.cookie`
+need their own adapter.
 
-Application authentication cookies are held in this capture's temporary server
-cookie jar and supplied to its upstream HTTP/WebSocket requests. No application
-cookie is installed in the browser, and incoming browser cookies and Canvas
-authorization are never forwarded to the app. This works with an ingress that
-clears Cookie headers. Revocation clears the jar. Apps that require JavaScript
-to read or write `document.cookie` need a separate adapter; this mode supports
-server-managed cookie authentication such as DeepSeek Harness.
-The capture URL grants temporary access to that authenticated application session;
-keep it private and do not share it or write it to logs.
+**Capture runs explicitly trusted code.** Its iframe shares the backend origin;
+on a same-origin Canvas frontend, app scripts can access Canvas DOM, stored
+tokens and account permissions. This is not an isolation boundary. The capture
+URL grants temporary access to the application session; keep it and bootstrap
+files private.
 
-With an explicit `--port`, Capture rejects an occupied port before starting the
-command. Otherwise it supplies an OS-selected candidate port, then confirms the
-command owns the selected listener; choosing a candidate is not an atomic port
-reservation for the child. The app must support the generated subpath;
-`CANVAS_CAPTURE_PUBLIC_URL` and `CANVAS_CAPTURE_HOST` are passed to the command
-for its public-URL configuration. There is no generic HTML/JavaScript rewriting.
-The default readiness check waits for an owned listener that responds to HTTP
-(200–499; startup errors such as 503 keep waiting). No ready file is needed.
-Choose `--ready tcp` for a TCP-only signal, `--probe /health` for an HTTP endpoint
-that must return 2xx, or `--probe-command '...'` for a bounded shell check whose
-exit code must be zero. The probe receives the selected port in its environment.
-`--timeout` bounds startup; failure preserves the terminal output and stops the
-owned command.
-
-Applications with a private login bootstrap, such as DeepSeek Harness, can use
-`--bootstrap-file /private/bootstrap.json` (`--ready-file` is an alias). The
-command writes a private JSON object containing `launchUrl` (or `url`); this
-supplies the authenticated first URL in addition to the normal readiness check.
-It is not the generic ready signal. Do not print login URLs or store the file
-in your project. `CANVAS_CAPTURE_PUBLIC_URL` and `CANVAS_CAPTURE_HOST` are also
-available before the command starts, so apps can configure their basepath.
-
-The terminal remains connected. **Return to terminal** leaves the app running;
-**Open app** returns to it; **Stop app** stops this capture's owned process group.
-Command exit, bridge loss, logout or connection changes revoke the proxy. Capture
-is temporary: browser refresh and other devices do not replay the app view.
-The first prototype requires a single pane at registration and does not support
-later pane-layout changes. The Python-only helper installed on SSH hosts does
-not yet include capture; the npm CLI must be available on the command's machine.
-This does not replace the existing file/URL preview or the `canvas serve` backend
-command.
+Return/Open switches between terminal and application without stopping it.
+Maximize/restore remounts the embedded page; keep application drafts in the app's
+own storage. The selected terminal/app view survives that transition.
+Stop terminates the launched process group; command exit, bridge loss, logout
+or connection changes revoke access. Capture is temporary and single-pane;
+refresh, other devices and later pane-layout changes do not restore the app.
+The npm CLI must be installed on the command's machine; the Python-only remote
+`open` helper does not include capture. POSIX process groups are required;
+native Windows is outside this release.
 
 ## Configuration
 

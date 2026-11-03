@@ -1,10 +1,14 @@
 import { shallowReactive } from 'vue'
 import { apiUrl } from './api'
 
-export interface CapturedApp { id: string; url: string; title: string; paneId: string }
+export interface CapturedApp { id: string; url: string; title: string; paneId: string; visible: boolean }
 const captures = shallowReactive(new Map<string, CapturedApp>())
 const key = (sourceId: string, windowId: string) => `${sourceId}/${windowId}`
 export function capturedApp(sourceId: string, windowId: string): CapturedApp | undefined { return captures.get(key(sourceId, windowId)) }
+export function setCaptureVisible(sourceId: string, windowId: string, visible: boolean) {
+  const current = capturedApp(sourceId, windowId)
+  if (current && current.visible !== visible) captures.set(key(sourceId, windowId), { ...current, visible })
+}
 export function receiveCapture(sourceId: string, windowId: string, message: Record<string, unknown>): boolean {
   if (message.type === 'capture-ended') {
     if (captures.get(key(sourceId, windowId))?.id === message.id) captures.delete(key(sourceId, windowId))
@@ -19,7 +23,9 @@ export function receiveCapture(sourceId: string, windowId: string, message: Reco
     const url = new URL(message.url, expected)
     if (url.origin !== expected.origin || !url.pathname.startsWith(expected.pathname)
       || url.username || url.password || !['http:', 'https:'].includes(url.protocol)) return true
-    captures.set(key(sourceId, windowId), { id: message.id, url: url.href, title: message.title.slice(0, 120), paneId: message.paneId })
+    const previous = capturedApp(sourceId, windowId)
+    captures.set(key(sourceId, windowId), { id: message.id, url: url.href, title: message.title.slice(0, 120), paneId: message.paneId,
+      visible: previous?.id === message.id ? previous.visible : true })
   } catch { /* Invalid capture messages never become iframe addresses. */ }
   return true
 }

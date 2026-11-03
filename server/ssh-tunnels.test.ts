@@ -5,6 +5,7 @@ import { mkdtemp, writeFile, readFile, stat, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { closeSocketTunnels, ensureSocketTunnel } from "./ssh-tunnels.ts";
+import { prepareLoopback, type Source } from "./providers.ts";
 
 async function waitFor<T>(
   action: () => Promise<T>,
@@ -246,6 +247,30 @@ test("SSH TCP loopback forwarding uses a private Unix listener and rejects arbit
     await tunnel.close(); await ipv6.close();
     await assert.rejects(stat(dirname(tunnel.sockets["web.sock"]!)), { code: "ENOENT" });
   } finally {
+    await setup.close(); await new Promise<void>(resolve => target.close(() => resolve()));
+  }
+});
+
+test('independent web leases to the same SSH endpoint survive each other closing', async () => {
+  const setup = await fixture(), previousPath = process.env.PATH;
+  const source: Source = { id: 'web-lease-test', name: 'Fixture', transport: 'ssh', target: 'example.test' };
+  const target = createServer(socket => socket.on('data', bytes => socket.write(bytes)));
+  await new Promise<void>(resolve => target.listen(0, '127.0.0.1', resolve));
+  const address = target.address(); assert(address && typeof address !== 'string');
+  try {
+    process.env.PATH = setup.root;
+    const [capture, preview] = await Promise.all([prepareLoopback(source, '127.0.0.1', address.port), prepareLoopback(source, '127.0.0.1', address.port)]);
+    assert(capture.socketPath && preview.socketPath);
+    assert.notEqual(capture.socketPath, preview.socketPath);
+    assert.equal(await echo(capture.socketPath, 'capture'), 'capture');
+    assert.equal(await echo(preview.socketPath, 'preview'), 'preview');
+    await capture.close();
+    await assert.rejects(echo(capture.socketPath, 'closed'));
+    assert.equal(await echo(preview.socketPath, 'still active'), 'still active');
+    await closeSocketTunnels(`web:${source.id}`);
+    await assert.rejects(echo(preview.socketPath, 'source closed'));
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
     await setup.close(); await new Promise<void>(resolve => target.close(() => resolve()));
   }
 });

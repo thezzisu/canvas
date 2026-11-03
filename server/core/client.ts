@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import headless, { type IBufferCell } from '@xterm/headless'
-import { terminalUnicodeAddon } from '../../shared/terminal-unicode.ts'
-import type { CompletionToken } from '../../shared/completion.ts'
+import { terminalCellWidth, terminalUnicodeAddon } from '../../shared/terminal-unicode.ts'
+import { sameCompletion, type CompletionToken } from '../../shared/completion.ts'
 import type { PaneAction, PaneContext, PanePoint } from '../../shared/pane-context.ts'
 import type { NativeNotification } from '../../shared/notification.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
@@ -9,7 +9,7 @@ import { HerdrInputRouter } from '../herdr/input.ts'
 import { HerdrScreen, type ScreenSelection } from '../herdr/screen.ts'
 import { windowContent, type NativeContentPane } from '../herdr/content.ts'
 import type { HerdrClientExit, HerdrClientTransport } from '../herdr/client.ts'
-import type { CellData, ClientMessage, ClientShellSnapshot, FrameData, PaneSurfaceFrame, PaneSurfacePane } from '../herdr/wire.ts'
+import type { CellData, ClientMessage, ClientShellSnapshot, FrameData, PaneSurfaceFrame, PaneSurfacePane, PaneSurfaceSplit } from '../herdr/wire.ts'
 import { coreInput, type CoreInputModes } from './input.ts'
 import { CoreLayout, coreWindowMetadata, panes, projectTab, type CoreSnapshot, type CoreTab, type CoreTerminal } from './layout.ts'
 import { CoreRpc, type CoreNotification, type CoreStream } from './rpc.ts'
@@ -40,6 +40,21 @@ function cellData(cell?: IBufferCell): CellData {
     modifier: (cell.isBold() ? 1 : 0) | (cell.isDim() ? 2 : 0) | (cell.isItalic() ? 4 : 0) | (cell.isUnderline() ? 8 : 0)
       | (cell.isBlink() ? 16 : 0) | (cell.isInverse() ? 64 : 0) | (cell.isInvisible() ? 128 : 0) | (cell.isStrikethrough() ? 256 : 0),
     skip: cell.getWidth() === 0, hyperlink: null }
+}
+/** Dividers keep their original resize axis, but only exposed cells accept hits. */
+function visibleSplits(split: PaneSurfaceSplit, owners: Int32Array, cols: number): PaneSurfaceSplit[] {
+  const rect = split.hit_rect, vertical = rect.width === 1, length = vertical ? rect.height : rect.width
+  const result: PaneSurfaceSplit[] = []
+  let start = -1
+  for (let offset = 0; offset <= length; offset++) {
+    const visible = offset < length && owners[(rect.y + (vertical ? offset : 0)) * cols + rect.x + (vertical ? 0 : offset)] === 0
+    if (visible && start < 0) start = offset
+    if (!visible && start >= 0) {
+      result.push({ ...split, hit_rect: vertical ? { ...rect, y: rect.y + start, height: offset - start } : { ...rect, x: rect.x + start, width: offset - start } })
+      start = -1
+    }
+  }
+  return result
 }
 interface CorePane {
   id: string
@@ -82,7 +97,7 @@ class CoreWindowClient implements HerdrClientTransport {
   private shell?: ClientShellSnapshot
   private metadata?: WindowMetadata
   private renderedMetadata?: WindowMetadata
-  private renderedContent?: { surface: PaneSurfaceFrame; shell: ClientShellSnapshot }
+  private renderedContent?: { surface: PaneSurfaceFrame; shell: ClientShellSnapshot; owners: Int32Array; layers: string[] }
   private layoutToken = { signature: '', token: '' }
   private readonly screen = new HerdrScreen()
   private readonly attached = new Map<string, CorePane>()
@@ -155,6 +170,7 @@ class CoreWindowClient implements HerdrClientTransport {
 
   private async replace(state: CoreSnapshot): Promise<void> {
     if (this.closed) return
+    if (this.state?.coreId === state.coreId && state.documentVersion < this.state.documentVersion) return
     let tab: CoreTab
     try { tab = this.options.layout.findWindow(state, this.options.spaceId, this.options.tabId) }
     catch { this.finish({ exitCode: 0, reason: 'removed' }); return }
@@ -267,7 +283,7 @@ class CoreWindowClient implements HerdrClientTransport {
         const at = field.indexOf('='); return at < 0 ? [] : [[field.slice(0, at), field.slice(at + 1)] as [string, string]]
       }))
       const word = fields.get('state')
-      if (fields.get('id') || !word) return true
+      if (fields.get('id') || !['idle', 'working', 'done', 'blocked', 'error', 'clear'].includes(word || '')) return true
       // The attach reply seeds its turn. Its first report is a replay of that
       // snapshot, not another transition; subsequent reports are live bytes.
       if (pane.rootReport && pane.parsedState === 'working' && word !== 'working') pane.parsedTurn++
@@ -323,10 +339,10 @@ class CoreWindowClient implements HerdrClientTransport {
     for (const listener of this.notificationListeners) listener(notification)
   }
 
-  private refresh(): Promise<void> {
-    const next = this.refreshQueue.then(async () => { if (!this.closed) await this.replace(await this.options.layout.snapshot()) })
+  private refresh(snapshot?: () => CoreSnapshot): Promise<void> {
+    const next = this.refreshQueue.then(async () => { if (!this.closed) await this.replace(snapshot ? snapshot() : await this.options.layout.snapshot()) })
     this.refreshQueue = next.catch(() => this.finish({ exitCode: 1 }))
-    return next
+    return this.refreshQueue
   }
 
   private updateMetadata() {
@@ -342,13 +358,22 @@ class CoreWindowClient implements HerdrClientTransport {
       this.renderScheduled = false
       if (this.closed || this.paused || !this.state || !this.tab || [...this.attached.values()].some(pane => !pane.ready)) return
       const projection = projectTab(this.tab, this.cols, this.rows, this.zoomed)
+      if (projection.panes.some(pane => pane.terminal && !this.attached.has(pane.id))) return
       const frame: FrameData = { cells: Array.from({ length: this.cols * this.rows }, () => blank()), width: this.cols, height: this.rows, cursor: null, hyperlinks: [], graphics: Buffer.alloc(0) }
-      const surfacePanes: PaneSurfacePane[] = []
-      for (const projected of projection.panes) {
+      const surfacePanes: PaneSurfacePane[] = [], owners = new Int32Array(frame.cells.length), layers = projection.panes.map(pane => pane.id)
+      for (const split of projection.splits) {
+        const area = split.hit_rect
+        for (let y = area.y; y < area.y + area.height; y++) for (let x = area.x; x < area.x + area.width; x++) frame.cells[y * this.cols + x] = blank(split.direction === 'Horizontal' ? '│' : '─')
+      }
+      for (const [index, projected] of projection.panes.entries()) {
         const rect = projected.rect, pane = this.attached.get(projected.id), terminal = this.state.terminals.find(terminal => terminal.address === projected.terminal)
+        for (let y = rect.y; y < rect.y + rect.height; y++) for (let x = rect.x; x < rect.x + rect.width; x++) owners[y * this.cols + x] = index + 1
         if (!pane) {
           const message = projected.unsupported ? `[${projected.unsupported}]` : '[Terminal unavailable]'
+          for (let y = rect.y; y < rect.y + rect.height; y++) for (let x = rect.x; x < rect.x + rect.width; x++) frame.cells[y * this.cols + x] = blank()
           for (let x = 0; x < Math.min(rect.width, message.length); x++) frame.cells[rect.y * this.cols + rect.x + x] = blank(message[x])
+          surfacePanes.push({ pane_id: projected.id, content_revision: 0, rect, inner_rect: rect, scrollbar_rect: null, scroll: null,
+            focused: false, mouse_reporting: false, sgr_pixel_mouse: false, alternate_screen_active: false, pixel_width: 0, pixel_height: 0 })
           continue
         }
         const emulator = pane.emulator, buffer = emulator.buffer.active
@@ -377,28 +402,61 @@ class CoreWindowClient implements HerdrClientTransport {
         if (focused && pane.scroll === 0 && buffer.cursorX < rect.width && buffer.cursorY < rect.height) frame.cursor = {
           x: rect.x + buffer.cursorX, y: rect.y + buffer.cursorY, visible: pane.cursorVisible && terminal?.state === 'live', shape: pane.cursorShape }
       }
-      for (const split of projection.splits) {
-        const area = split.hit_rect
-        for (let y = area.y; y < area.y + area.height; y++) for (let x = area.x; x < area.x + area.width; x++) frame.cells[y * this.cols + x] = blank(split.direction === 'Horizontal' ? '│' : '─')
+      // A wide glyph is indivisible. Do not let a covered lead/continuation
+      // make the renderer skip a different pane's first visible cell.
+      for (let y = 0; y < this.rows; y++) {
+        let continuation = 0, owner = 0
+        for (let x = 0; x < this.cols; x++) {
+          const index = y * this.cols + x, cell = frame.cells[index]!
+          if (cell.skip) {
+            if (continuation && owners[index] === owner) continuation--
+            else { frame.cells[index] = blank(); continuation = 0 }
+            continue
+          }
+          const width = terminalCellWidth(cell.symbol)
+          owner = owners[index]!
+          continuation = Math.max(0, width - 1)
+          if (x + width > this.cols || width > 1 && owners[index + width - 1] !== owner) {
+            frame.cells[index] = blank(); continuation = 0
+          }
+        }
       }
+      const visible = new Set(owners)
+      if (frame.cursor && owners[frame.cursor.y * this.cols + frame.cursor.x] !== layers.indexOf(this.focused || '') + 1) frame.cursor = null
+      surfacePanes.reverse() // Native input/context hit tests visit the topmost pane first.
+      const splits = projection.splits.flatMap(split => visibleSplits(split, owners, this.cols))
       const signature = JSON.stringify([this.state.coreId, this.options.tabId, this.cols, this.rows, surfacePanes.map(pane => [pane.pane_id, pane.inner_rect])])
       if (signature !== this.layoutToken.signature) this.layoutToken = { signature, token: randomUUID() }
       const shell: ClientShellSnapshot = { boot_id: this.state.coreId, revision: ++this.revision, focused_workspace_id: this.options.spaceId,
         focused_tab_id: this.options.tabId, focused_pane_id: this.focused || null,
         tabs: [{ tab_id: this.options.tabId, workspace_id: this.options.spaceId, focused: true }],
         panes: surfacePanes.map(pane => ({ pane_id: pane.pane_id, tab_id: this.options.tabId, workspace_id: this.options.spaceId, focused: pane.focused,
-          right_click_passthrough: false, label: this.metadata?.panes.find(item => item.id === pane.pane_id)?.name || '' })) }
+          right_click_passthrough: false, label: this.metadata?.panes.find(item => item.id === pane.pane_id)?.name || '',
+          foreground_cwd: this.state!.terminals.find(terminal => terminal.address === this.attached.get(pane.pane_id)?.address)?.foreground?.cwd,
+          cwd: this.state!.terminals.find(terminal => terminal.address === this.attached.get(pane.pane_id)?.address)?.cwd })) }
       const surface: PaneSurfaceFrame = { boot_id: this.state.coreId, projection_revision: shell.revision, surface_revision: shell.revision,
-        frame, panes: surfacePanes, splits: projection.splits, popup: null }
+        frame, panes: surfacePanes, splits, popup: null }
       this.shell = shell; this.surface = surface; this.input.refresh()
-      this.renderedContent = { surface, shell }
+      this.renderedContent = { surface, shell, owners, layers }
       this.renderedMetadata = this.metadata ? { ...this.metadata, layout: this.layoutToken.token, panes: this.metadata.panes.map(metadata => {
-        const pane = this.attached.get(metadata.id)
-        if (!metadata.completion || pane && this.completionPainted(pane, metadata.completion)) return metadata
+        const pane = this.attached.get(metadata.id), owner = layers.indexOf(metadata.id) + 1
+        if (!metadata.completion || pane && owner > 0 && visible.has(owner) && this.completionPainted(pane, metadata.completion)) return metadata
         const { completion: _completion, ...pending } = metadata
         return pending
       }) } : undefined
-      this.emit(this.screen.render(surface, this.selection), this.renderedMetadata)
+      let display = surface
+      const selection = this.selection, selected = selection && surfacePanes.find(pane => pane.pane_id === selection.pane_id)
+      if (selection && selected) {
+        const rect = selected.inner_rect, owner = layers.indexOf(selected.pane_id) + 1, cells = frame.cells.slice()
+        const at = (point: { row: number; col: number }) => Math.max(0, Math.min(rect.height - 1, point.row)) * rect.width + Math.max(0, Math.min(rect.width - 1, point.col))
+        const start = Math.min(at(selection.anchor), at(selection.cursor)), end = Math.max(at(selection.anchor), at(selection.cursor))
+        for (let offset = start; offset <= end; offset++) {
+          const index = (rect.y + Math.floor(offset / rect.width)) * this.cols + rect.x + offset % rect.width
+          if (owners[index] === owner) cells[index] = { ...cells[index]!, modifier: cells[index]!.modifier ^ 64 }
+        }
+        display = { ...surface, frame: { ...frame, cells } }
+      }
+      this.emit(this.screen.render(display), this.renderedMetadata)
     })
   }
 
@@ -463,6 +521,8 @@ class CoreWindowClient implements HerdrClientTransport {
     let start = point(anchor), end = point(cursor)
     if (start.row > end.row || start.row === end.row && start.col > end.col) [start, end] = [end, start]
     if ((end.row - start.row + 1) * pane.emulator.cols > 1_000_000) throw new Error('Selection is too large')
+    const rendered = this.renderedContent, rect = rendered?.surface.panes.find(item => item.pane_id === pane.id)?.inner_rect
+    const top = Math.max(0, pane.emulator.buffer.active.baseY - pane.scroll), owner = (rendered?.layers.indexOf(pane.id) ?? -1) + 1
     let text = ''
     for (let row = start.row; row <= end.row; row++) {
       const line = pane.emulator.buffer.active.getLine(row)
@@ -470,7 +530,11 @@ class CoreWindowClient implements HerdrClientTransport {
       for (let col = row === start.row ? start.col : 0; col <= (row === end.row ? end.col : pane.emulator.cols - 1); col++) {
         const cell = line?.getCell(col)
         if (cell?.getWidth() === 0) continue
-        part += cell?.isInvisible() ? ' '.repeat(cell.getWidth()) : cell?.getChars() || ' '
+        let covered = false
+        if (rendered && rect && row >= top && row < top + rect.height) for (let offset = 0; offset < (cell?.getWidth() || 1); offset++) {
+          if (col + offset >= rect.width || rendered.owners[(rect.y + row - top) * rendered.surface.frame.width + rect.x + col + offset] !== owner) { covered = true; break }
+        }
+        part += covered || cell?.isInvisible() ? ' '.repeat(cell?.getWidth() || 1) : cell?.getChars() || ' '
       }
       if (row > start.row && !line?.isWrapped) text += '\n'
       text += part.trimEnd()
@@ -482,10 +546,17 @@ class CoreWindowClient implements HerdrClientTransport {
     await this.parseQueue
     const rendered = this.renderedContent
     if (this.closed || !rendered || !this.state) return
-    return windowContent(rendered.surface, rendered.shell, this.options.tabId).map(pane => {
-      const address = this.attached.get(pane.id)?.address, terminal = this.state!.terminals.find(terminal => terminal.address === address)
-      const cwd = terminal?.foreground?.cwd || terminal?.cwd
-      return { ...pane, ...(typeof cwd === 'string' && cwd.startsWith('/') ? { cwd } : {}) }
+    const { surface, shell, owners, layers } = rendered
+    return surface.panes.toReversed().flatMap(pane => {
+      const owner = layers.indexOf(pane.pane_id) + 1, rect = pane.inner_rect
+      if (!this.attached.has(pane.pane_id) || !owners.includes(owner)) return []
+      const cells = Array.from({ length: rect.width * rect.height }, (_, index) => {
+        const at = (rect.y + Math.floor(index / rect.width)) * surface.frame.width + rect.x + index % rect.width
+        return owners[at] === owner ? surface.frame.cells[at]! : blank()
+      })
+      const local = { x: 0, y: 0, width: rect.width, height: rect.height }
+      return windowContent({ ...surface, frame: { ...surface.frame, width: rect.width, height: rect.height, cells, cursor: null },
+        panes: [{ ...pane, rect: local, inner_rect: local }], splits: [] }, shell, this.options.tabId)
     })
   }
   paneContext(point: PanePoint): PaneContext | undefined {
@@ -518,7 +589,8 @@ class CoreWindowClient implements HerdrClientTransport {
     const address = panes(this.tab).find(pane => pane.id === paneId)?.terminal
     const terminal = this.state.terminals.find(terminal => terminal.address === address)
     const pane = this.attached.get(paneId)
-    if (!address || terminal?.turn !== completion.sequence || !pane || !this.completionPainted(pane, completion)) return
+    if (!address || terminal?.turn !== completion.sequence || !pane || !this.completionPainted(pane, completion)
+      || !sameCompletion(this.renderedMetadata?.panes.find(value => value.id === paneId)?.completion, completion)) return
     await this.options.layout.markSeen(address, completion.sequence)
     await this.refresh()
   }
@@ -556,7 +628,9 @@ class CoreWindowClient implements HerdrClientTransport {
     dimensions(cols, rows)
     if (this.closed || this.cols === cols && this.rows === rows) return
     this.cols = cols; this.rows = rows; this.selection = undefined
-    this.resizeStreams()
+    // A wider projection may expose panes omitted from the previous viewport.
+    // Reconcile their streams using current local state, without another RPC.
+    if (this.state) void this.refresh(() => this.state!)
   }
   pause() { this.paused = true }
   resume() { if (!this.closed) { this.paused = false; this.render(); this.scheduleFlush() } }

@@ -46,7 +46,7 @@ const socketCaptureBases = new WeakMap<import("ws").WebSocket, string>();
 const downloads = new OpenDownloadService({
   capture: async (source, windowId, paneId, header, socket, recipient) => {
     const publicBase = socketCaptureBases.get(recipient.socket);
-    if (!publicBase || !Number.isInteger(header.port) || Number(header.port) < 0 || Number(header.port) > 65535
+    if (!publicBase || !Number.isInteger(header.port) || Number(header.port) < 1 || Number(header.port) > 65535
       || typeof header.title !== 'string' || header.title.length > 120) {
       socket.end(JSON.stringify({ ok: false, reason: 'capture-unavailable' }) + '\n'); return;
     }
@@ -60,15 +60,15 @@ const downloads = new OpenDownloadService({
     let pending = Buffer.alloc(0), ready = false;
     socket.on('data', chunk => {
       pending = Buffer.concat([pending, Buffer.from(chunk)]);
-      if (pending.length > 16 * 1024) { socket.destroy(); return }
+      if (pending.length > 32 * 1024) { socket.destroy(); return }
       const newline = pending.indexOf(10);
       if (newline < 0) return;
       try {
         const value = JSON.parse(pending.subarray(0, newline).toString('utf8')); pending = pending.subarray(newline + 1);
-        if (ready || value.action !== 'ready' || pending.length || value.port !== undefined && !Number.isInteger(value.port)) { socket.destroy(); return }
+        if (ready || value.action !== 'ready' || pending.length || value.port !== undefined) { socket.destroy(); return }
         ready = true;
         if (!recipient.isCurrent()) { socket.destroy(); return }
-        void lease.ready(typeof value.bootstrapUrl === 'string' ? value.bootstrapUrl : undefined, value.port).then(presentation => {
+        void lease.ready(typeof value.bootstrapUrl === 'string' ? value.bootstrapUrl : undefined).then(presentation => {
           if (socket.destroyed || !recipient.isCurrent()) { lease.close(); return }
           recipient.socket.send(JSON.stringify(presentation));
           socket.write(JSON.stringify({ ok: true, state: 'ready' }) + '\n');

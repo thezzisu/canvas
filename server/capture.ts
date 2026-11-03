@@ -23,7 +23,6 @@ export interface CapturePreparation {
   windowId: string
   paneId: string
   session: string
-  /** Zero prepares the presentation before the command's port is discovered. */
   port: number
   title?: string
   onStop?(): void
@@ -32,7 +31,7 @@ export interface CapturePreparation {
 export interface CaptureLease {
   id: string
   publicUrl: string
-  ready(bootstrapUrl?: string, port?: number): Promise<CapturePresentation>
+  ready(bootstrapUrl?: string): Promise<CapturePresentation>
   close(): void
 }
 interface Capture extends CapturePreparation {
@@ -83,7 +82,7 @@ export class CaptureService {
     if (this.closed || !this.store.hasSession(options.session)) throw new Error('Please sign in')
     const current = this.store.get<Source>('source', source.id)
     if (!current || sourceConnectionKey(current) !== sourceConnectionKey(source)) throw new Error('Connection changed')
-    if (!Number.isInteger(options.port) || options.port < 0 || options.port > 65535) throw new Error('Capture port must be zero for discovery or between 1 and 65535')
+    if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) throw new Error('Capture port must be between 1 and 65535')
     if (!options.windowId || !options.paneId || options.windowId.length > 4096 || options.paneId.length > 4096) throw new Error('Capture terminal identity is invalid')
     if (this.captures.size >= 32) throw new Error('At most 32 captured applications are supported')
     const publicBase = new URL(normalizeCapturePublicBase(options.publicBase))
@@ -93,11 +92,8 @@ export class CaptureService {
     const capture: Capture = { ...options, title, id, source: { ...source }, sourceKey: sourceConnectionKey(source), publicUrl, ready: false,
       cookies: new Map(), connections: new Set() }
     this.captures.set(id, capture)
-    return { id, publicUrl: publicUrl.href, ready: async (bootstrapUrl, port = capture.port) => {
+    return { id, publicUrl: publicUrl.href, ready: async bootstrapUrl => {
       if (!this.valid(capture)) throw new Error('Capture expired')
-      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('The command has not reported a listening port')
-      if (capture.port && capture.port !== port) throw new Error('Capture port cannot change after selection')
-      capture.port = port
       const url = this.bootstrap(capture, bootstrapUrl)
       // Open only this source's declared loopback service; no browser-host or
       // arbitrary origin input becomes a connection target.
@@ -110,7 +106,7 @@ export class CaptureService {
   }
   private bootstrap(capture: Capture, value?: string): string {
     if (!value) return capture.publicUrl.href
-    if (value.length > 16384 || /[\x00-\x20\x7f]/u.test(value)) throw new Error('Invalid application bootstrap URL')
+    if (Buffer.byteLength(value) > 16384 || /[\x00-\x20\x7f]/u.test(value)) throw new Error('Invalid application bootstrap URL')
     const url = new URL(value)
     if (url.username || url.password || !['http:', 'https:'].includes(url.protocol)) throw new Error('Invalid application bootstrap URL')
     if (url.origin === capture.publicUrl.origin && url.pathname.startsWith(capture.publicUrl.pathname)) return url.href
@@ -221,7 +217,8 @@ export class CaptureService {
       try {
         const upstream = new URL(`http://127.0.0.1:${capture.port}`)
         const location = new URL(headers.location, upstream.origin + path)
-        if (location.origin === upstream.origin || location.origin === capture.publicUrl.origin) {
+        const local = location.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(location.hostname) && Number(location.port || 80) === capture.port
+        if (local || location.origin === capture.publicUrl.origin) {
           result.location = location.pathname.startsWith(capture.publicUrl.pathname) ? capture.publicUrl.origin + location.pathname + location.search + location.hash
             : capture.publicUrl.origin + capture.publicUrl.pathname.replace(/\/$/u, '') + location.pathname + location.search + location.hash
         }
