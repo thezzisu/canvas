@@ -81,7 +81,11 @@ test('file references retain the original bytes until the last canvas reference 
   assert.deepEqual(await readFile(join(f.directory, 'files', asset.id)), bytes)
   assert.equal(f.store.canvasView(f.store.get<Canvas>('canvas', f.b.id)!).nodes.find(node => node.type === 'file')!.asset.id, asset.id)
   const served = await f.request(`/api/files/${asset.id}`); assert.equal(served.status, 200); assert.deepEqual(Buffer.from(await served.arrayBuffer()), bytes)
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
   await f.request(`/api/canvases/${f.b.id}/nodes/${file.id}`, 'DELETE')
+  assert.deepEqual(await readFile(join(f.directory, 'files', asset.id)), bytes, 'last reference remains available for its undo grace period')
+  t.mock.timers.tick(5000)
+  t.mock.timers.reset()
   const deadline = Date.now() + 2000
   while (await stat(join(f.directory, 'files', asset.id)).catch(() => undefined)) {
     assert(Date.now() < deadline, 'last-reference cleanup removes file bytes')

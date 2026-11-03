@@ -12,6 +12,7 @@ import { attentionSummary, faviconStatus, isCanvasNotification, notificationKey,
 import { deliverNotificationEffects, holdNotificationOwner, isBadgeOwnerChange, syncNotificationFocus, updateNotificationBadge } from '../notification-effects'
 import { notificationSoundEnabled, refreshNotificationPermission, unlockNotificationSound } from '../notification-settings'
 import { statusColor } from '../status'
+import { toastAction } from '../toast'
 import { formatCanvasLocation } from '../canvas-location'
 import canvasIcon from '../../public/icons/canvas.svg?raw'
 
@@ -83,10 +84,10 @@ function show(event: CanvasNotification, focus?: PaneFocus) {
     id: `${toastPrefix}${event.id}`, title: title(event), description: focus ? undefined : description(event),
     color: event.kind === 'attention' ? 'error' : event.kind === 'done' ? 'success' : 'neutral',
     class: `notice-${event.kind}${focus ? ' notice-focused' : ''}`, duration: focus ? 3000 : event.kind === 'attention' ? Infinity : important ? 15000 : 3500,
-    progress: false, type: important ? 'foreground' : 'background',
+    type: important ? 'foreground' : 'background',
     actions: !focus && target ? [
-      { label: t('notifications.open'), color: 'neutral', variant: 'outline', get disabled() { return !props.actionsAvailable }, onClick: () => emit('open', event) },
-      { label: t('notifications.go'), color: 'neutral', variant: 'outline', get disabled() { return !props.actionsAvailable }, onClick: () => emit('go', event) },
+      { ...toastAction, label: t('notifications.open'), get disabled() { return !props.actionsAvailable }, onClick: () => emit('open', event) },
+      { ...toastAction, label: t('notifications.go'), get disabled() { return !props.actionsAvailable }, onClick: () => emit('go', event) },
     ] : [],
   })
   if (!important) return
@@ -170,7 +171,3 @@ defineExpose({ receive, acceptsToast })
 </script>
 
 <template><span hidden /></template>
-
-<style>
-.notice-attention{--ui-error:#f38ba8}.notice-done{--ui-success:#94e2d5}
-</style>

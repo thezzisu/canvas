@@ -23,3 +23,17 @@ test('tri-state bulk selection modifies only eligible visible keys and preserves
   assert.deepEqual(updatePickerSelection(['outside', 'first'], keys, true), ['outside', 'first', 'second'])
   assert.deepEqual(updatePickerSelection(['outside', 'first'], keys, false), ['outside'])
 })
+
+test('window search includes the displayed active terminal title and follows title changes', () => {
+  const sources = [{ id: 'source', name: 'Machine', transport: 'local' as const }]
+  const window = { id: 'tab', name: '3', panes: [
+    { id: 'first', name: '1', active: false, status: 'idle' as const, terminalTitle: 'Hidden task' },
+    { id: 'second', name: '2', active: true, status: 'working' as const, terminalTitle: '分析 Canvas' },
+  ] }
+  const resources = [{ id: 'source', name: 'Machine', status: 'online', spaces: [{ id: 'space', name: 'Work', windows: [window] }] }]
+  assert.equal(pickerGroups(sources, resources, '分析 canvas', new Set())[0]?.eligible[0], 'source/space/tab')
+  assert.equal(pickerGroups(sources, resources, 'hidden task', new Set()).length, 0)
+  window.panes[1]!.terminalTitle = 'Next task'
+  assert.equal(pickerGroups(sources, resources, '分析 canvas', new Set()).length, 0)
+  assert.deepEqual(pickerGroups(sources, resources, 'NEXT TASK', new Set(['source/tab']))[0]?.eligible, [])
+})

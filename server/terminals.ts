@@ -32,6 +32,7 @@ class LiveTerminal {
   clients = new Set<WebSocket>();
   private rendered = new Set<WebSocket>();
   private hidden = new Set<WebSocket>();
+  private focused = new Set<WebSocket>();
   private maximized?: { owner: WebSocket; token: string; lease: number; releasing?: boolean };
   private presentationRevision = 0;
   private focusedPaneId?: string;
@@ -67,6 +68,7 @@ class LiveTerminal {
     readonly proc: HerdrClientTransport,
     readonly source: Source,
     readonly reads?: CompletionReads,
+    readonly onFocusedRemove?: () => void,
   ) {
     this.cols = cols;
     this.rows = rows;
@@ -180,16 +182,18 @@ class LiveTerminal {
     return ws && ws === this.controller && ws.readyState === 1 && this.clients.has(ws) &&
       (!this.maximized || this.maximized.owner === ws) ? ws : undefined;
   }
-  captureFilePaste(ws: WebSocket): ((text: string, signal: AbortSignal) => Promise<void>) | undefined {
+  captureFilePaste(ws: WebSocket): ((texts: readonly string[], signal: AbortSignal) => Promise<void>) | undefined {
     if (this.closed || this.controller !== ws || !this.clients.has(ws) ||
         ws.readyState !== 1 || (this.maximized && this.maximized.owner !== ws)) return;
     // A file drop authorizes this window at its start. Canvas navigation and
     // native pane selection do not redirect its eventual paste.
-    return async (text: string, signal: AbortSignal) => {
+    return async (texts: readonly string[], signal: AbortSignal) => {
       await this.queue;
       signal.throwIfAborted();
       if (this.closed) throw new Error("目标窗口已关闭");
-      this.proc.write(this.emulator.modes.bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text);
+      // Each file is one paste event for agents; spaces outside the brackets
+      // keep ordinary shell arguments separate. Commit the completed batch once.
+      this.proc.write(texts.map(text => this.emulator.modes.bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text).join(' '));
     };
   }
   private presentation(ws: WebSocket) {
@@ -277,6 +281,8 @@ class LiveTerminal {
       try {
         const msg = JSON.parse(data.toString());
         if (msg.type === "view-visible" && typeof msg.visible === "boolean") {
+          if (msg.visible && msg.focused === true) this.focused.add(ws);
+          else if (!msg.visible || msg.focused === false) this.focused.delete(ws);
           if (msg.visible === !this.hidden.has(ws)) return;
           if (msg.visible) { this.hidden.delete(ws); this.resume(); }
           else { this.hidden.add(ws); this.rendered.delete(ws); }
@@ -369,6 +375,7 @@ class LiveTerminal {
     ws.once("close", () => {
       this.clients.delete(ws);
       this.hidden.delete(ws);
+      this.focused.delete(ws);
       if (this.downloadController === ws) this.downloadController = undefined;
       this.rendered.delete(ws);
       if (this.closed) return;
@@ -402,9 +409,11 @@ class LiveTerminal {
   }
   close(reason?: 'removed'): Promise<void> {
     if (this.closing) return this.closing;
+    const focused = reason === 'removed' && [...this.focused].some(ws => ws.readyState === 1 && this.clients.has(ws) && this.canRender(ws));
     this.closed = true;
     this.readSubscription?.dispose();
     if (reason === 'removed') this.reads?.removeWindow(this.source, this.key.slice(this.sourceId.length + 1));
+    if (focused) this.onFocusedRemove?.();
     clearTimeout(this.idle);
     // A native snapshot confirmed the tab is gone. Notify before asynchronous
     // viewport/tunnel cleanup so viewers never treat that cleanup as an outage.
@@ -421,6 +430,7 @@ class LiveTerminal {
       }
       this.clients.clear();
       this.hidden.clear();
+      this.focused.clear();
       this.rendered.clear();
       this.maximized = undefined;
       try {
@@ -442,7 +452,7 @@ export class TerminalManager {
   private pendingCompletions = new Map<string, { source: Source; notification: CanvasNotification; timer: ReturnType<typeof setTimeout> }>();
   private deliveredCompletions = new Map<string, CompletionToken>();
   private completionBoots = new Map<string, string>();
-  constructor(private readonly reads?: CompletionReads) {}
+  constructor(private readonly reads?: CompletionReads, private readonly onFocusedWindowRemoved?: (source: Source, windowId: string) => void) {}
   onNotification(listener: (notification: CanvasNotification) => void) {
     this.notificationListeners.add(listener);
     return { dispose: () => { this.notificationListeners.delete(listener); } };
@@ -501,7 +511,7 @@ export class TerminalManager {
             rows,
             () => { this.entries.delete(key); this.live.delete(terminal); this.observeCompletionSource(source); },
             transport,
-            source, this.reads,
+            source, this.reads, () => this.onFocusedWindowRemoved?.(source, target.windowId),
           );
           this.live.add(terminal);
           transport.onSnapshot(() => {

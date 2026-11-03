@@ -16,6 +16,7 @@ import '@vue-flow/node-resizer/dist/style.css'
 import '@xterm/xterm/css/xterm.css'
 import './style.css'
 import './card-presentation.css'
+import './sidebar.css'
 
 document.documentElement.classList.add('dark')
 initializeViewportPolicy()

@@ -254,7 +254,13 @@ export function createApp(
       const current = store.get<Source>('source', connection.id);
       return store.hasSession(session) && !!current && sourceConnectionKey(current) === key;
     };
-    await terminals.paneAction(connection, c.req.param('space'), c.req.param('window'), { ...pane, name: '' }, command, authorized);
+    const windowId = c.req.param('window');
+    await terminals.paneAction(connection, c.req.param('space'), windowId, { ...pane, name: '' }, command, authorized);
+    if (command.action === 'close') {
+      const after = await providers.listResources(connection);
+      if (after.status === 'online' && !after.spaces.some(space => space.windows.some(window => window.id === windowId)))
+        store.removeWindowReferences(connection, [windowId]);
+    }
     return c.json({ ok: true });
   });
   app.post("/api/sources/:id/spaces/:space/windows/:window/scan", async c => {
@@ -590,12 +596,13 @@ export function createApp(
     const id = c.req.param("id");
     if (id === "overview")
       return c.json({ error: "Overview is read-only" }, 403);
-    const canvas = store.get<Canvas>("canvas", id);
-    if (!canvas) return c.json({ error: "Canvas not found" }, 404);
-    canvas.nodes = canvas.nodes.filter(
-      (node) => node.id !== c.req.param("node"),
-    );
-    return c.json(store.canvasView(store.put("canvas", canvas)));
+    const result = store.removeCard(id, c.req.param('node'), bearerToken(c.req.header('authorization')));
+    return result ? c.json({ canvas: store.canvasView(result.canvas), undo: result.undo }) : c.json({ error: 'Canvas not found' }, 404);
+  });
+  app.post('/api/canvases/:id/removals/:token/undo', async c => {
+    z.object({}).strict().parse(await c.req.json());
+    const canvas = store.restoreCard(c.req.param('id'), c.req.param('token'), bearerToken(c.req.header('authorization')));
+    return canvas ? c.json(store.canvasView(canvas)) : c.json({ error: 'Undo expired or unavailable' }, 404);
   });
   app.put("/api/canvases/:id/background", async (c) => {
     const id = c.req.param("id");

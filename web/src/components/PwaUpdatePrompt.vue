@@ -3,6 +3,7 @@ import { onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast, type Toast } from '@nuxt/ui/composables/useToast'
 import { updateAvailable, updateDismissed, pwaBusy, pwaFailure, applyPwaUpdate } from '../pwa'
+import { toastAction } from '../toast'
 const { t, locale } = useI18n(), toast = useToast()
 let current: Toast | undefined
 watch([updateAvailable, updateDismissed, pwaBusy, pwaFailure, locale], () => {
@@ -11,10 +12,9 @@ watch([updateAvailable, updateDismissed, pwaBusy, pwaFailure, locale], () => {
     return
   }
   const notice = { title: t(pwaFailure.value ? 'settings.pwaFailed' : 'settings.updateReady'),
-    color: 'neutral', duration: Infinity, progress: false, type: 'background', class: 'pwa-update-prompt',
-    actions: [{ label: t('settings.updateApp'), color: 'neutral', variant: 'outline',
+    color: 'neutral', duration: Infinity, type: 'background', class: 'pwa-update-prompt',
+    actions: [{ ...toastAction, label: t('settings.updateApp'),
       loading: pwaBusy.value, closeOnClick: false, onClick: applyPwaUpdate }],
-    close: { 'aria-label': t('common.close') },
   } satisfies Partial<Toast>
   if (current) { toast.update(current.id, notice); return }
   const entry = toast.add({ ...notice,

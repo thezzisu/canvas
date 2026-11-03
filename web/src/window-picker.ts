@@ -1,4 +1,5 @@
 import type { Source, SourceResource, WindowResource } from './types'
+import { windowLabel } from './window-title'
 
 export interface PickerWindow extends WindowResource { key: string; added: boolean }
 export interface PickerSpace { id: string; name: string; windows: PickerWindow[]; eligible: string[] }
@@ -9,7 +10,7 @@ export function pickerGroups(sources: readonly Source[], resources: readonly Sou
   return sources.flatMap(source => {
     const resource = resources.find(item => item.id === source.id)
     const spaces = (resource?.spaces || []).flatMap(space => {
-      const windows = space.windows.filter(window => `${source.name} ${space.name} ${window.name}`.toLocaleLowerCase().includes(search))
+      const windows = space.windows.filter(window => `${source.name} ${space.name} ${windowLabel(window)}`.toLocaleLowerCase().includes(search))
         .map(window => ({ ...window, key: `${source.id}/${space.id}/${window.id}`, added: existing.has(`${source.id}/${window.id}`) }))
       return windows.length ? [{ id: space.id, name: space.name, windows, eligible: windows.filter(window => !window.added).map(window => window.key) }] : []
     })

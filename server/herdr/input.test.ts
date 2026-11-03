@@ -218,23 +218,20 @@ test('application mouse coordinates are pane-local and captured through cross-pa
   ]); f.router.dispose();
 });
 
-test('right-click stays client-owned for every modifier and native pane preference', async () => {
-  const f = fixture(); f.panes[1]!.mouse_reporting = true;
-  f.router.write(mouse(2, 23, 3) + mouse(34, 24, 3) + mouse(2, 24, 3, true)); await f.router.drain();
-  assert.deepEqual(f.inputs(), []); assert.deepEqual(f.requests, []);
-  f.snapshot.panes[1]!.right_click_passthrough = true;
-  for (const modifiers of [0, 4, 8, 16, 12, 20, 24, 28]) {
-    f.router.write(mouse(2 + modifiers, 23, 3) + mouse(34 + modifiers, 24, 3) + mouse(2 + modifiers, 23, 3, true));
-    await f.router.drain();
+test('explicit right input is pane-local and independent of herdr client menu preferences', async () => {
+  for (const passthrough of [false, true]) {
+    const f = fixture(); f.panes[1]!.mouse_reporting = true;
+    f.snapshot.panes[1]!.right_click_passthrough = passthrough;
+    f.router.write(mouse(30, 23, 3) + mouse(62, 0, 11) + mouse(30, 0, 11, true)); await f.router.drain();
+    assert.deepEqual(f.inputs().flatMap(input => { assert.equal(input.pane_id, 'b'); return input.events }).map(event => {
+      assert.ok('Mouse' in event); return [event.Mouse.kind, event.Mouse.modifiers, event.Mouse.position];
+    }), [
+      [{ Down: 'Right' }, 7, { Cell: { column: 2, row: 2 } }],
+      [{ Drag: 'Right' }, 7, { Cell: { column: 0, row: 9 } }],
+      [{ Up: 'Right' }, 7, { Cell: { column: 0, row: 9 } }],
+    ]);
+    f.router.dispose();
   }
-  assert.deepEqual(f.inputs(), [], 'Shift, Alt and Ctrl combinations never bypass the client menu');
-  assert.deepEqual(f.requests, [], 'opening a client menu does not move native focus');
-  f.messages.length = 0;
-  f.snapshot.panes[1]!.right_click_passthrough = false;
-  f.router.write(mouse(1, 23, 3) + mouse(1, 23, 3, true)); await f.router.drain();
-  assert.deepEqual(f.inputs().flatMap(input => input.events).map(event => { assert.ok('Mouse' in event); return event.Mouse.kind; }),
-    [{ Down: 'Middle' }, { Up: 'Middle' }], 'middle mouse remains native input');
-  f.router.dispose();
 });
 
 test('losing focus releases held native mouse before focus notification', async () => {

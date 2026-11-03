@@ -9,6 +9,7 @@ import { defaultSettings, type GlobalSettings } from "../shared/settings.ts";
 import { defaultWindowSize } from "../shared/window-size.ts";
 import { settingsPatchSchema } from "./settings.ts";
 import { getMimeType } from "hono/utils/mime";
+import { CARD_REMOVAL_UNDO_MS, type CardRemovalUndo } from '../shared/card-removal.ts';
 
 export const sourceSchema = z
   .object({
@@ -108,6 +109,10 @@ export type CanvasView = Omit<Canvas, "nodes"> & {
   background: CanvasBackground | null;
 };
 export type WindowSize = { width: number; height: number };
+interface RemovedCard {
+  canvasId: string; node: CanvasNode; index: number; sessionId: string; expiresAt: number;
+  sourceKey?: string; restored: boolean; timer: ReturnType<typeof setTimeout>;
+}
 export type SharedState = {
   settings: GlobalSettings;
   instanceId: string;
@@ -121,6 +126,7 @@ export class Store extends EventEmitter {
   db: DatabaseSync;
   readonly instanceId = randomUUID();
   revision = 0;
+  private removals = new Map<string, RemovedCard>();
   constructor(path: string) {
     super();
     this.setMaxListeners(0);
@@ -163,6 +169,8 @@ export class Store extends EventEmitter {
         "INSERT INTO documents(kind,id,body) VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body",
       )
       .run(kind, result.id, JSON.stringify(result));
+    if (kind === 'source') this.cancelRemovals(item => item.node.type === 'terminal' && item.node.sourceId === result.id &&
+      item.sourceKey !== sourceConnectionKey(result as unknown as Source));
     this.changed();
     return result;
   }
@@ -173,6 +181,7 @@ export class Store extends EventEmitter {
     this.db
       .prepare("DELETE FROM documents WHERE kind=? AND id=?")
       .run(kind, id);
+    this.cancelRemovals(item => kind === 'canvas' && item.canvasId === id || kind === 'source' && item.node.type === 'terminal' && item.node.sourceId === id);
     this.changed();
   }
   /** Publish all references of successfully closed native windows as one change. */
@@ -195,7 +204,64 @@ export class Store extends EventEmitter {
       for (const windowId of closed) changed = !!removeSize.run(`${source.id}/${windowId}`).changes || changed;
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    this.cancelRemovals(item => item.node.type === 'terminal' && item.node.sourceId === source.id && closed.has(item.node.windowId));
     if (changed) this.changed();
+  }
+  private cancelRemovals(matches: (item: RemovedCard) => boolean): boolean {
+    let releasedFile = false;
+    for (const [token, item] of this.removals) if (matches(item)) {
+      clearTimeout(item.timer); this.removals.delete(token);
+      releasedFile ||= !item.restored && item.node.type === 'file';
+    }
+    return releasedFile;
+  }
+  removeCard(canvasId: string, nodeId: string, sessionId: string): { canvas: Canvas; undo: CardRemovalUndo | null } | undefined {
+    if (canvasId === 'overview' || !this.hasSession(sessionId)) return;
+    const canvas = this.get<Canvas>('canvas', canvasId);
+    if (!canvas) return;
+    const index = canvas.nodes.findIndex(node => node.id === nodeId);
+    if (index < 0) return { canvas, undo: null };
+    const node = canvas.nodes[index]!, token = randomUUID(), expiresAt = Date.now() + CARD_REMOVAL_UNDO_MS;
+    const source = node.type === 'terminal' ? this.get<Source>('source', node.sourceId) : undefined;
+    const timer = setTimeout(() => {
+      const item = this.removals.get(token);
+      if (!item) return;
+      this.removals.delete(token);
+      if (!item.restored && item.node.type === 'file') this.changed();
+    }, CARD_REMOVAL_UNDO_MS);
+    timer.unref();
+    this.removals.set(token, { canvasId, node, index, sessionId, expiresAt, timer, restored: false,
+      ...(source ? { sourceKey: sourceConnectionKey(source) } : {}) });
+    canvas.nodes.splice(index, 1);
+    try { this.put('canvas', canvas); }
+    catch (error) { clearTimeout(timer); this.removals.delete(token); throw error; }
+    return { canvas, undo: { token, remainingMs: Math.max(0, expiresAt - Date.now()) } };
+  }
+  restoreCard(canvasId: string, token: string, sessionId: string): Canvas | undefined {
+    const item = this.removals.get(token);
+    if (!item || item.canvasId !== canvasId || item.sessionId !== sessionId || item.expiresAt <= Date.now() || !this.hasSession(sessionId)) return;
+    const canvas = this.get<Canvas>('canvas', canvasId);
+    if (!canvas || canvasId === 'overview') return;
+    if (item.restored) return canvas;
+    const node = item.node;
+    if (node.type === 'terminal') {
+      const source = this.get<Source>('source', node.sourceId);
+      if (!source || sourceConnectionKey(source) !== item.sourceKey) return;
+    } else if (node.type === 'file' && !this.fileAsset(node.assetId)) return;
+    const collision = canvas.nodes.find(current => current.id === node.id);
+    if (collision && (collision.type !== node.type || node.type === 'file' && collision.type === 'file' && collision.assetId !== node.assetId ||
+      node.type === 'terminal' && collision.type === 'terminal' && (collision.sourceId !== node.sourceId || collision.windowId !== node.windowId))) return;
+    const existing = canvas.nodes.some(current => current.id === node.id ||
+      node.type === 'file' && current.type === 'file' && current.assetId === node.assetId ||
+      node.type === 'terminal' && current.type === 'terminal' && current.sourceId === node.sourceId && current.windowId === node.windowId);
+    if (!existing) {
+      if (canvas.nodes.length >= 500) throw new Error('Canvas contains too many items');
+      canvas.nodes.splice(Math.min(item.index, canvas.nodes.length), 0, this.normalizeNodes([node])[0]!);
+      this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?").run(JSON.stringify(canvas), canvasId);
+    }
+    item.restored = true;
+    if (!existing) this.changed();
+    return canvas;
   }
   private changed() {
     this.revision++;
@@ -298,6 +364,7 @@ export class Store extends EventEmitter {
       }
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    for (const item of this.removals.values()) if (item.node.type === 'note' && item.node.id === nodeId) Object.assign(item.node, patch);
     this.changed();
     return selected;
   }
@@ -388,6 +455,7 @@ export class Store extends EventEmitter {
   }
 
   fileAssetReferenced(id: string): boolean {
+    if ([...this.removals.values()].some(item => !item.restored && item.expiresAt > Date.now() && item.node.type === 'file' && item.node.assetId === id)) return true;
     const canvases = this.db.prepare("SELECT body FROM documents WHERE kind='canvas'").all()
       .map(row => JSON.parse(String(row.body)) as Canvas);
     return canvases.some(canvas => canvas.nodes.some(node => node.type === "file" && node.assetId === id));
@@ -437,13 +505,16 @@ export class Store extends EventEmitter {
   }
   removeSession(id: string) {
     this.db.prepare("DELETE FROM sessions WHERE id=?").run(id);
+    if (this.cancelRemovals(item => item.sessionId === id)) this.changed();
     this.emit("sessions");
   }
   removeOtherSessions(id: string) {
     this.db.prepare('DELETE FROM sessions WHERE id != ?').run(id);
+    if (this.cancelRemovals(item => item.sessionId !== id)) this.changed();
     this.emit('sessions');
   }
   close() {
+    this.cancelRemovals(() => true);
     this.emit("close");
     this.removeAllListeners();
     this.db.close();

@@ -1,4 +1,5 @@
 export default {
+  cardRemoved: 'Removed {name}', undoRemoval: 'Undo', undoUnavailable: 'This removal can no longer be undone.',
   addContent: 'Add content', uploadFile: 'Upload file',
   "previousWindow": "Previous window",
   "previousSpace": "Previous space",
@@ -39,9 +40,6 @@ export default {
   "deleteCanvasDescription": "Delete this canvas and its notes. Terminal windows will keep running.",
   "removeConnection": "Remove connection",
   "removeConnectionDescription": "Remove this connection. Sessions will keep running.",
-  "deleteFile": "Delete file",
-  "deleteFileDescription": "Remove this file from the canvas.",
-  "deleteNote": "Delete note",
   "username": "Username",
   "passwordLabel": "Password",
   "signingIn": "Signing in…",
@@ -108,7 +106,6 @@ export default {
   "searchPlaceholder": "Search connections, spaces or windows…",
   "noAvailableWindows": "No available windows",
   "addToOtherCanvas": "Add to another canvas",
-  "closeNotification": "Dismiss notification",
   "filteredWindows": "{visible} / {total} windows",
   "windowCount": "{count} window | {count} windows",
   "connectionCount": "{count} connection | {count} connections",

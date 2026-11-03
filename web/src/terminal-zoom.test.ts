@@ -1,7 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { effectScope, ref } from 'vue'
-import { normalizeTerminalZoom, pruneTerminalZooms, terminalZoomKey, terminalZoomStorageKey, useTerminalZoom } from './terminal-zoom.ts'
+import { normalizeTerminalZoom, terminalZoomStorageKey, useTerminalZoom } from './terminal-zoom.ts'
+import { pruneTerminalPreferences, terminalIdentityKey } from './terminal-identity.ts'
 import type { Source, SourceResource } from './types.ts'
 
 const source: Source = { id: 'connection', name: 'Connection', transport: 'ssh', target: 'host', herdrSession: 'main' }
@@ -15,16 +16,16 @@ function storage(): Storage {
 }
 
 test('concurrent views of different native tabs update isolated scalar keys and survive reopening', () => {
-  const store = storage(), scope = effectScope(), firstKey = terminalZoomKey('backend', source, 'tab1'), secondKey = terminalZoomKey('backend', source, 'tab2')
+  const store = storage(), scope = effectScope(), firstKey = terminalIdentityKey('backend', source, 'tab1'), secondKey = terminalIdentityKey('backend', source, 'tab2')
   const { first, second } = scope.run(() => ({ first: useTerminalZoom(() => firstKey, store), second: useTerminalZoom(() => secondKey, store) }))!
   first.value = 140; second.value = 80; first.value = 150
   assert.equal(store.getItem(terminalZoomStorageKey(firstKey)), '150')
   assert.equal(store.getItem(terminalZoomStorageKey(secondKey)), '80')
   const reopened = scope.run(() => useTerminalZoom(() => secondKey, store))!
   assert.equal(reopened.value, 80)
-  assert.equal(terminalZoomKey('backend', { ...source, name: 'Renamed' }, 'tab1'), firstKey)
-  for (const key of [terminalZoomKey('other-backend', source, 'tab1'), terminalZoomKey('backend', { ...source, id: 'other' }, 'tab1'),
-    terminalZoomKey('backend', source, 'new-tab'), terminalZoomKey('backend', { ...source, target: 'other-host' }, 'tab1')])
+  assert.equal(terminalIdentityKey('backend', { ...source, name: 'Renamed' }, 'tab1'), firstKey)
+  for (const key of [terminalIdentityKey('other-backend', source, 'tab1'), terminalIdentityKey('backend', { ...source, id: 'other' }, 'tab1'),
+    terminalIdentityKey('backend', source, 'new-tab'), terminalIdentityKey('backend', { ...source, target: 'other-host' }, 'tab1')])
     assert.equal(scope.run(() => useTerminalZoom(() => key, store))!.value, 100)
   first.value = 100
   assert.equal(store.getItem(terminalZoomStorageKey(firstKey)), null)
@@ -33,27 +34,30 @@ test('concurrent views of different native tabs update isolated scalar keys and 
 })
 
 test('changing connection identity retires the previous binding without writing its value into the new key', () => {
-  const store = storage(), scope = effectScope(), first = terminalZoomKey('backend', source, 'tab1'), second = terminalZoomKey('backend', { ...source, target: 'other' }, 'tab1')
-  const key = ref(first), zoom = scope.run(() => useTerminalZoom(() => key.value, store))!
-  zoom.value = 140; key.value = second
-  assert.equal(zoom.value, 100); assert.equal(store.getItem(terminalZoomStorageKey(second)), null)
-  zoom.value = 80
-  assert.equal(store.getItem(terminalZoomStorageKey(first)), '140')
-  assert.equal(store.getItem(terminalZoomStorageKey(second)), '80')
-  scope.stop()
+  for (const next of [{ ...source, target: 'other' }, { ...source, provider: 'core' as const }]) {
+    const store = storage(), scope = effectScope(), first = terminalIdentityKey('backend', source, 'tab1'), second = terminalIdentityKey('backend', next, 'tab1')
+    const key = ref(first), zoom = scope.run(() => useTerminalZoom(() => key.value, store))!
+    zoom.value = 140; key.value = second
+    assert.equal(zoom.value, 100); assert.equal(store.getItem(terminalZoomStorageKey(second)), null)
+    zoom.value = 80; key.value = first
+    assert.equal(zoom.value, 140, 'returning to the original runtime restores its own preference')
+    assert.equal(store.getItem(terminalZoomStorageKey(first)), '140')
+    assert.equal(store.getItem(terminalZoomStorageKey(second)), '80')
+    scope.stop()
+  }
 })
 
 test('successful online discovery deletes only closed tab keys while offline or missing discovery preserves them', () => {
-  const store = storage(), keep = terminalZoomStorageKey(terminalZoomKey('backend', source, 'keep')), closed = terminalZoomStorageKey(terminalZoomKey('backend', source, 'closed'))
-  const other = terminalZoomStorageKey(terminalZoomKey('other-backend', source, 'closed'))
+  const store = storage(), keep = terminalZoomStorageKey(terminalIdentityKey('backend', source, 'keep')), closed = terminalZoomStorageKey(terminalIdentityKey('backend', source, 'closed'))
+  const other = terminalZoomStorageKey(terminalIdentityKey('other-backend', source, 'closed'))
   for (const key of [keep, closed, other]) store.setItem(key, '140')
   for (const discovered of [[], resources([], 'offline'), resources([], 'online', 'Unavailable')]) {
-    pruneTerminalZooms('backend', [source], discovered, store); assert.equal(store.length, 3)
+    pruneTerminalPreferences('backend', [source], discovered, store); assert.equal(store.length, 3)
   }
   store.setItem(keep, '160') // A peer writes while another view still has an older local value.
-  pruneTerminalZooms('backend', [source], resources(['keep']), store)
+  pruneTerminalPreferences('backend', [source], resources(['keep']), store)
   assert.equal(store.getItem(keep), '160'); assert.equal(store.getItem(closed), null); assert.equal(store.getItem(other), '140')
-  pruneTerminalZooms('backend', [{ ...source, herdrSession: 'different' }], [], store)
+  pruneTerminalPreferences('backend', [{ ...source, herdrSession: 'different' }], [], store)
   assert.equal(store.getItem(keep), null); assert.equal(store.getItem(other), '140')
 })
 
@@ -62,8 +66,3 @@ test('invalid browser values default without accepting unbounded or nonfinite fo
   assert.equal(normalizeTerminalZoom(50), 50); assert.equal(normalizeTerminalZoom(200), 200)
   assert.equal(normalizeTerminalZoom(125.4), 125)
 })
-
-test('switching between TUI and Core isolates the native window preference', () => {
-  assert.notEqual(terminalZoomKey('backend', source, 'tab1'), terminalZoomKey('backend', { ...source, provider: 'core' }, 'tab1'));
-  assert.equal(terminalZoomKey('backend', source, 'tab1'), terminalZoomKey('backend', { ...source, provider: 'tui' }, 'tab1'));
-});

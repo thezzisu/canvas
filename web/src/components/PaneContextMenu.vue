@@ -13,6 +13,7 @@ import { apiContext, isCurrentApi } from '../api'
 import type { PaneAction, PaneContext } from '../../../shared/pane-context'
 
 const props = defineProps<{ host?: HTMLElement; enabled: boolean;
+  allowsMenu(): boolean;
   lookup(x: number, y: number, signal: AbortSignal): Promise<PaneContext | null>;
   action(pane: PaneContext, command: PaneAction): Promise<void> }>()
 const { t } = useI18n(), toast = useToast(), form = useId()
@@ -41,6 +42,7 @@ async function lookup() {
 function show(event: MouseEvent) {
   if (!props.enabled) return
   event.preventDefault(); event.stopImmediatePropagation()
+  if (!props.allowsMenu()) return
   if (busy.value) return
   point.value = { x: event.clientX, y: event.clientY }
   open.value = true

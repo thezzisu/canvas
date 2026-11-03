@@ -239,6 +239,26 @@ test('passive focus loss never focuses a tab and remains ordered behind already 
   assert.deepEqual(f.focuses, [false, false, false])
 })
 
+test('a frame held behind browser focus is published when input settles without new native output', async t => {
+  const f = await fixture(t, { holdFocus: true }), pending = f.connect()
+  await until(() => f.requests.length === 1); f.response(); const client = await pending
+  t.after(() => client.kill())
+  const frames: WindowMetadata[] = []; let output = ''
+  client.onData(data => { output += data }); client.onFrame(frame => frames.push(frame))
+  await until(() => frames.length > 0)
+  const initial = frames.length
+  client.write('\x1b[I')
+  await until(() => f.requests.length === 2)
+  f.snapshot(2); f.surface(2, 2, 'SIZED')
+  await until(() => output.includes('S'))
+  assert.equal(frames.length, initial, 'completion cannot overtake the pending input focus barrier')
+  f.response()
+  await until(() => f.focuses.includes(true))
+  await until(() => frames.length > initial)
+  assert.equal(frames.at(-1)?.panes[0]?.id, 'pane')
+  assert.equal(f.requests.length, 2, 'releasing the frame does not issue another native focus request')
+})
+
 test('native client rejects incomplete handshakes and closes malformed established streams', async t => {
   for (const options of [{ badWelcome: true }, { closeEarly: true }, { holdFocus: true }]) {
     const f = await fixture(t, options)

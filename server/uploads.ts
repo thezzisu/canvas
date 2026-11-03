@@ -25,7 +25,7 @@ interface Batch {
   files: InboxFile[]; parts?: PastePart[]; tokens: string[]; paths: string[]; next: number; busy: boolean;
   completedBytes: number; transferred: number; total: number;
   controller: AbortController; timer?: ReturnType<typeof setTimeout>; lastProgress: number;
-  paste(text: string, signal: AbortSignal): Promise<void>;
+  paste(texts: readonly string[], signal: AbortSignal): Promise<void>;
 }
 
 export class UploadService {
@@ -155,9 +155,9 @@ export class UploadService {
         const native = await this.options.resources(batch.source);
         if (!native.spaces.some(space => space.windows.some(window => window.id === batch.windowId))) throw new Error("目标窗口已关闭");
         if (this.batches.get(batch.key) !== batch) return 409;
-        const text = batch.parts ? renderPasteParts(batch.parts, batch.paths) : batch.paths.map(shellQuote).join(" ");
-        if (Buffer.byteLength(text) > MAX_TERMINAL_PASTE_BYTES) throw new Error("粘贴内容过长");
-        await batch.paste(text, batch.controller.signal);
+        const texts = batch.parts ? [renderPasteParts(batch.parts, batch.paths)] : batch.paths.map(shellQuote);
+        if (texts.reduce((size, text) => size + Buffer.byteLength(text), texts.length - 1) > MAX_TERMINAL_PASTE_BYTES) throw new Error("粘贴内容过长");
+        await batch.paste(texts, batch.controller.signal);
         this.removeBatch(batch);
         this.progress(batch, "completed");
       } else this.progress(batch, "uploading");

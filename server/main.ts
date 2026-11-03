@@ -38,7 +38,7 @@ const urlForwards = new UrlForwardService(store);
 const captures = new CaptureService(store);
 const assets = new AssetStore(dataDir, store);
 const completionReads = new CompletionReads(store);
-const terminals = new TerminalManager(completionReads);
+const terminals = new TerminalManager(completionReads, (source, windowId) => store.removeWindowReferences(source, [windowId]));
 const uploads = new UploadService(terminals);
 const helperBytes = readFileSync(new URL("../cli/canvas", import.meta.url));
 const socketSessions = new WeakMap<import("ws").WebSocket, string>();

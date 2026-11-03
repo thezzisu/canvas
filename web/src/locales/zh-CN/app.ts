@@ -1,4 +1,5 @@
 export default {
+  cardRemoved: '已移除 {name}', undoRemoval: '撤销', undoUnavailable: '已无法撤销此次移除。',
   addContent: '添加内容', uploadFile: '上传文件',
   "previousWindow": "上一个窗口",
   "previousSpace": "上一个 Space",
@@ -39,9 +40,6 @@ export default {
   "deleteCanvasDescription": "删除画布及便签，保留终端窗口。",
   "removeConnection": "移除连接",
   "removeConnectionDescription": "移除连接，保留运行中的会话。",
-  "deleteFile": "删除文件",
-  "deleteFileDescription": "文件将从画布中移除。",
-  "deleteNote": "删除便签",
   "username": "用户名",
   "passwordLabel": "密码",
   "signingIn": "登录中…",
@@ -108,7 +106,6 @@ export default {
   "searchPlaceholder": "搜索连接、Space 或窗口…",
   "noAvailableWindows": "暂无可用窗口",
   "addToOtherCanvas": "加入其他画布",
-  "closeNotification": "关闭通知",
   "filteredWindows": "{visible} / {total} 个窗口",
   "windowCount": "{count} 个窗口",
   "connectionCount": "{count} 个连接",

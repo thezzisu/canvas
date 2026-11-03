@@ -6,6 +6,8 @@ import type { Source, SourceResource } from '../types'
 import { pickerChecked, pickerGroups, updatePickerSelection } from '../window-picker'
 import { statusColor } from '../status'
 import Icon from './Icon.vue'
+import WindowTitle from './WindowTitle.vue'
+import { windowLabel } from '../window-title'
 
 const props = defineProps<{ resources: SourceResource[]; sources: Source[]; query: string; selected: string[]; existing: Set<string> }>()
 const emit = defineEmits<{ 'update:selected': [value: string[]] }>()
@@ -40,9 +42,9 @@ const checkboxUi = { root: 'picker-checkbox', base: 'picker-checkbox-base' }
           <Icon name="layers" :size="13" /><strong :title="space.name">{{ space.name }}</strong><span class="picker-count">{{ n(space.windows.length) }}</span>
         </summary>
         <label v-for="window in space.windows" :key="window.key" class="picker-window-row" :class="{ added: window.added }">
-          <UCheckbox :model-value="!window.added && selected.has(window.key)" :disabled="window.added" :aria-label="window.name" :ui="checkboxUi" @update:model-value="toggle([window.key], $event)" />
+          <UCheckbox :model-value="!window.added && selected.has(window.key)" :disabled="window.added" :aria-label="windowLabel(window)" :ui="checkboxUi" @update:model-value="toggle([window.key], $event)" />
           <span class="program-dot" :style="{ '--program-color': statusColor(window.status) }" />
-          <span class="picker-window-name" :title="window.name">{{ window.name }}</span><span v-if="window.added" class="picker-added">{{ t('windowPicker.added') }}</span>
+          <WindowTitle class="picker-window-name" :window="window" /><span v-if="window.added" class="picker-added">{{ t('windowPicker.added') }}</span>
         </label>
       </details>
     </details>
@@ -63,6 +65,7 @@ const checkboxUi = { root: 'picker-checkbox', base: 'picker-checkbox-base' }
 .picker-count{margin-left:auto;color:#6f7f94;font-size:10px;font-variant-numeric:tabular-nums;flex:none}
 .picker-window-row{display:flex;align-items:center;gap:9px;min-height:34px;margin:0;padding:6px 12px 6px 62px;color:#b9c3d2;cursor:pointer}
 .picker-window-row:hover:not(.added){background:#ffffff04}.picker-window-row.added{color:#68778b;cursor:default}
+.picker-window-row.added{--window-title-color:currentColor}
 .picker-window-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
 .picker-added{flex:none;color:#728296;font-size:10px}.picker-checkbox{display:flex;align-items:center;flex:none}
 .picker-checkbox-base{width:15px;height:15px;border-radius:3px;padding:0;gap:0}.picker-checkbox-base:disabled{cursor:default}.picker-empty{padding:28px 16px;text-align:center;color:#7d8a9d;font-size:12px}
