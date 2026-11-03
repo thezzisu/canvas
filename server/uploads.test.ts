@@ -36,6 +36,7 @@ function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; b
   const socket = new FakeSocket(), other = new FakeSocket();
   const files = new Map<string, Buffer>(), removed: Array<{ sourceId: string; paths: string[] }> = [];
   const pasted: Array<{ sourceId: string; windowId: string; text: string }> = [];
+  const pasteCalls: string[][] = [];
   const captures: Array<{ sourceId: string; windowId: string; socket: WebSocket }> = [];
   const windows = new Set(["window-a", "window-b"]);
   let serial = 0, pasteFails = false, canCapture = true;
@@ -63,11 +64,12 @@ function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; b
       await options.capture?.();
       captures.push({ sourceId, windowId, socket });
       if (!canCapture) return undefined;
-      return async (text: string, signal: AbortSignal) => {
+      return async (texts: readonly string[], signal: AbortSignal) => {
         await options.beforePaste?.();
         signal.throwIfAborted();
         if (pasteFails) throw new Error("目标窗口已关闭");
-        pasted.push({ sourceId, windowId, text });
+        pasteCalls.push([...texts]);
+        pasted.push(...texts.map(text => ({ sourceId, windowId, text })));
       };
     },
   } as unknown as TerminalManager;
@@ -88,11 +90,11 @@ function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; b
     assert(ready, "upload batch did not become ready");
     return (ready.urls as string[]).map(url => url.split("/").at(-1)!);
   };
-  return { source, service, socket, other, files, removed, pasted, captures, windows, begin,
+  return { source, service, socket, other, files, removed, pasted, pasteCalls, captures, windows, begin,
     setPasteFailure: () => { pasteFails = true; }, disableCapture: () => { canCapture = false; } };
 }
 
-test("multi-file batches preserve order and paste quoted paths once into the captured window without Enter", async t => {
+test("multi-file batches preserve order and paste each quoted path separately only after all uploads succeed", async t => {
   const f = fixture(t);
   const names = ["风景 O'Brian.png", "second file.txt", "empty"];
   const contents = [Buffer.from([0, 255, 128, 1]), Buffer.from("second"), Buffer.alloc(0)];
@@ -106,9 +108,9 @@ test("multi-file batches preserve order and paste quoted paths once into the cap
   const paths = [...f.files.keys()];
   assert.deepEqual(paths.map(path => path.slice(path.indexOf("_") + 1)), names);
   assert.deepEqual([...f.files.values()], contents);
-  assert.deepEqual(f.pasted, [{ sourceId: f.source.id, windowId: "window-a", text: paths.map(shellQuote).join(" ") }]);
-  assert(!f.pasted[0]!.text.includes("\n"));
-  assert(!f.pasted[0]!.text.includes("\r"));
+  assert.deepEqual(f.pasted, paths.map(path => ({ sourceId: f.source.id, windowId: "window-a", text: shellQuote(path) })));
+  assert.deepEqual(f.pasteCalls, [paths.map(shellQuote)], 'the complete ordered batch is submitted once');
+  assert(f.pasted.every(item => !/[\r\n]/u.test(item.text)));
   assert.equal(f.captures.length, 1);
   const completed = f.socket.messages.find(message => message.state === "completed")!;
   assert.deepEqual(completed.paths, paths);
@@ -133,6 +135,7 @@ test("confirmed rich paste inserts the complete rendered content only after the 
   assert.equal(await pending, 204);
   const text = renderPasteParts(parts, [...f.files.keys()]);
   assert.deepEqual(f.pasted, [{ sourceId: f.source.id, windowId: "window-a", text }]);
+  assert.deepEqual(f.pasteCalls, [[text]], 'mixed text and attachments remain one atomic paste');
   assert(!text.endsWith("\n"), "completion must not submit the terminal input");
 });
 
@@ -199,7 +202,7 @@ test("upload tokens reject other sessions, out-of-order writes and replays", asy
   assert.equal(await f.service.receive(tokens[0]!, "session-a", uploadRequest(Buffer.from("a"))), 204);
   assert.equal(await f.service.receive(tokens[0]!, "session-a", uploadRequest(Buffer.from("a"))), 404);
   assert.equal(await f.service.receive(tokens[1]!, "session-a", uploadRequest(Buffer.from("b"))), 204);
-  assert.equal(f.pasted.length, 1);
+  assert.equal(f.pasted.length, 2);
 });
 
 test("progress only advances after the writer confirms bytes, and duplicate batches cannot overlap a window", async t => {
@@ -391,10 +394,11 @@ test("late writer progress cannot revive a cancelled upload", async t => {
 test('real native terminal receives no upload paths until the whole batch succeeds, and failed later files retain earlier bytes', async t => {
   const binary = process.env.CANVAS_TEST_HERDR_SERVER_BINARY;
   if (!binary) { t.skip('Set CANVAS_TEST_HERDR_SERVER_BINARY for an isolated official server'); return; }
+  for (const bracketed of [false, true]) await t.test(bracketed ? 'agent paste events' : 'ordinary shell spacing', async t => {
   const root = mkdtempSync(join(tmpdir(), 'cv-upload-batch-')), config = join(root, 'config');
   const input = join(root, 'input.bin'), receiver = join(root, 'receiver');
   mkdirSync(join(config, 'herdr'), { recursive: true });
-  writeFileSync(receiver, `#!/usr/bin/python3\nimport os,tty\ntty.setraw(0)\nprint('UPLOAD_READY',flush=True)\nwith open(${JSON.stringify(input)},'ab',buffering=0) as output:\n while True:\n  data=os.read(0,4096)\n  if not data:break\n  output.write(data)\n`, { mode: 0o700 });
+  writeFileSync(receiver, `#!/usr/bin/python3\nimport os,tty\ntty.setraw(0)\nprint('${bracketed ? '\\x1b[?2004h' : ''}UPLOAD_READY',flush=True)\nwith open(${JSON.stringify(input)},'ab',buffering=0) as output:\n while True:\n  data=os.read(0,4096)\n  if not data:break\n  output.write(data)\n`, { mode: 0o700 });
   writeFileSync(join(config, 'herdr/config.toml'), `onboarding=false\n[terminal]\ndefault_shell=${JSON.stringify(receiver)}\nshell_mode="non_login"\n`);
   const env = { PATH: process.env.PATH, HOME: root, XDG_CONFIG_HOME: config, XDG_STATE_HOME: join(root, 'state'), LANG: 'C.UTF-8' };
   const source: Source = { id: randomUUID(), name: 'Native fixture', transport: 'local',
@@ -455,9 +459,11 @@ test('real native terminal receives no upload paths until the whole batch succee
   await waitFor(() => writes === 2, 'Last file is in progress');
   assert.deepEqual(actualInput(), baseline, 'No path was inserted while any file was incomplete');
   writing.resolve(); assert.equal(await last, 204);
-  const inserted = Buffer.from(files.map(shellQuote).join(' '));
+  const paste = (text: string) => bracketed ? `\x1b[200~${text}\x1b[201~` : text;
+  const inserted = Buffer.from(files.map(path => paste(shellQuote(path))).join(' '));
   await waitFor(() => actualInput().length === baseline.length + inserted.length, 'The complete batch reaches native input');
   assert.deepEqual(actualInput(), Buffer.concat([baseline, inserted]));
+  if (bracketed) assert.equal(actualInput().subarray(baseline.length).toString().split('\x1b[200~').length - 1, files.length, 'one native paste operation per uploaded path');
   assert(!inserted.includes(10) && !inserted.includes(13));
   const richParts: PastePart[] = ["Image: ", { file: 0, format: "markdown", image: true, label: "图.png" },
     " File: ", { file: 1, format: "path" }, " Done."];
@@ -465,7 +471,7 @@ test('real native terminal receives no upload paths until the whole batch succee
   assert.equal(await service.receive(rich[0]!, 'session', uploadRequest(Buffer.from('png'))), 204);
   assert.deepEqual(actualInput(), richBaseline, 'Rich text also waits until every attachment succeeds');
   assert.equal(await service.receive(rich[1]!, 'session', uploadRequest(Buffer.from('pdf'))), 204);
-  const richInserted = Buffer.from(renderPasteParts(richParts, files.slice(-2)));
+  const richInserted = Buffer.from(paste(renderPasteParts(richParts, files.slice(-2))));
   await waitFor(() => actualInput().length === richBaseline.length + richInserted.length, 'Rich content reaches the original native input');
   assert.deepEqual(actualInput(), Buffer.concat([richBaseline, richInserted]));
   const failed = await start('failure', ['retained.txt', 'broken.txt']);
@@ -483,4 +489,5 @@ test('real native terminal receives no upload paths until the whole batch succee
   assert.equal(await service.receive(closing[1]!, 'session', uploadRequest(Buffer.from('new'))), 404);
   assert.equal(readFileSync(closedPath, 'utf8'), 'yes');
   assert.deepEqual(actualInput(), beforeClose, 'Closing native window inserts no upload paths');
+  });
 });
