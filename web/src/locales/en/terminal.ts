@@ -1,5 +1,5 @@
 export default {
-  capture: { terminal: 'Return to terminal', app: 'Open app', stop: 'Stop app', separateOrigin: 'Use a separate frontend origin for captured apps' },
+  capture: { terminal: 'Return to terminal', app: 'Open app', stop: 'Stop app' },
   richPaste: { title: 'Paste preview', body: 'Text', attachments: 'Attachments', markdown: 'Markdown', plain: 'Plain text', links: 'Markdown links', paths: 'Paths', skip: 'Skip', paste: 'Paste', missing: 'Some attachments cannot be read. Choose Skip to paste the text.', tooLarge: 'Clipboard content is too large. Paste a smaller selection.' },
   closed: 'Closed',
   zoom: { title: 'Terminal zoom' },

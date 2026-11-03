@@ -31,9 +31,8 @@ const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial
 const host = ref<HTMLElement>()
 const header = ref<HTMLElement>()
 const app = computed(() => capturedApp(props.data.sourceId, props.data.windowId))
-const appEnabled = computed(() => !!app.value && new URL(app.value.url).origin !== window.location.origin)
 const appVisible = ref(false)
-const showApp = computed(() => appVisible.value && appEnabled.value && !mobilePreview.value && !closed.value && !maximizedElsewhere.value && status.value.status === 'connected')
+const showApp = computed(() => appVisible.value && !!app.value && !mobilePreview.value && !closed.value && !maximizedElsewhere.value && status.value.status === 'connected')
 function returnToTerminal() { appVisible.value = false; nextTick(() => terminal?.focus({ keyboard: false })) }
 const stoppingAppId = ref('')
 const stoppingApp = computed(() => stoppingAppId.value === app.value?.id)
@@ -227,12 +226,11 @@ async function resized(event: { params: { width: number; height: number; x: numb
     </header>
     <div v-if="app && !mobilePreview" class="capture-toolbar nodrag nopan" @pointerdown.stop @mousedown.stop>
       <span class="capture-title">{{ app.title }}</span>
-      <span v-if="!appEnabled" role="status">{{ t('terminal.capture.separateOrigin') }}</span>
-      <button v-else type="button" @click="showApp ? returnToTerminal() : appVisible = true">{{ showApp ? t('terminal.capture.terminal') : t('terminal.capture.app') }}</button>
+      <button type="button" @click="showApp ? returnToTerminal() : appVisible = true">{{ showApp ? t('terminal.capture.terminal') : t('terminal.capture.app') }}</button>
       <span v-if="captureError" role="alert">{{ captureError }}</span>
       <button type="button" :disabled="stoppingApp" @click="stopCapturedApp">{{ t('terminal.capture.stop') }}</button>
     </div>
-    <div v-if="appEnabled && app && !mobilePreview" v-show="showApp" class="capture-body nodrag nopan nowheel" @pointerdown.stop @mousedown.stop @wheel.stop>
+    <div v-if="app && !mobilePreview" v-show="showApp" class="capture-body nodrag nopan nowheel" @pointerdown.stop @mousedown.stop @wheel.stop>
       <iframe :key="app.id" :src="app.url" :title="app.title" class="capture-frame" sandbox="allow-scripts allow-forms allow-same-origin allow-downloads" referrerpolicy="no-referrer" />
     </div>
     <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || closed || showApp || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop />

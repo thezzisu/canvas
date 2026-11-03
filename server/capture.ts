@@ -18,6 +18,8 @@ export interface CapturePresentation {
   title: string
 }
 export interface CapturePreparation {
+  /** Exact browser API base bound to the authenticated terminal connection. */
+  publicBase: string
   windowId: string
   paneId: string
   session: string
@@ -40,29 +42,38 @@ interface Capture extends CapturePreparation {
   ready: boolean
   endpoint?: ReturnType<typeof prepareLoopback>
   closing?: Promise<void>
-  cookies: Map<string, string>
+  cookies: Map<string, AppCookie>
   connections: Set<() => void>
 }
+interface AppCookie { name: string; value: string; path: string; expires?: number; secure: boolean }
 export interface CaptureOptions {
-  /** Public backend base, including any reverse-proxy mount. No inferred Host. */
-  publicBase: string
   prepare?: typeof prepareLoopback
 }
 
+/** Canonical presentation URL only; this value never selects the source target. */
+export function normalizeCapturePublicBase(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 2048 || /[\s\\?#]/u.test(value)) throw new Error('Capture public base must be a canonical HTTP(S) API base')
+  let url: URL
+  try { url = new URL(value) } catch { throw new Error('Capture public base must be a canonical HTTP(S) API base') }
+  const canonical = value.endsWith('/') ? value : value + '/'
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash
+    || (url.href !== canonical && url.href + '/' !== canonical)
+    || (url.pathname !== '/' && !/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\/?$/u.test(url.pathname)))
+    throw new Error('Capture public base must be a canonical HTTP(S) API base')
+  return canonical
+}
+
 /** Explicitly trusted commands, bound to a live source/account lease.
- * Applications retain their own cookies and frame policy. This is not the
- * opaque preview proxy and must be embedded from a different frontend origin.
+ * Application cookies stay in a per-capture memory jar; ingress proxies may
+ * strip all browser cookies. Applications retain their frame policy. This is not the
+ * opaque preview sandbox: a same-origin captured application is trusted code.
  */
 export class CaptureService {
   private readonly captures = new Map<string, Capture>()
-  private readonly publicBase: URL
   private readonly prepare: typeof prepareLoopback
   private closed = false
   private timer: ReturnType<typeof setInterval>
-  constructor(private readonly store: Store, options: CaptureOptions) {
-    this.publicBase = new URL(options.publicBase.endsWith('/') ? options.publicBase : options.publicBase + '/')
-    if (!['http:', 'https:'].includes(this.publicBase.protocol) || this.publicBase.username || this.publicBase.password || this.publicBase.search || this.publicBase.hash)
-      throw new Error('Capture public base must be an HTTP(S) backend URL')
+  constructor(private readonly store: Store, options: CaptureOptions = {}) {
     this.prepare = options.prepare || prepareLoopback
     store.on('sessions', this.prune); store.on('change', this.prune)
     this.timer = setInterval(this.prune, 1000); this.timer.unref()
@@ -74,8 +85,9 @@ export class CaptureService {
     if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) throw new Error('Capture port must be between 1 and 65535')
     if (!options.windowId || !options.paneId || options.windowId.length > 4096 || options.paneId.length > 4096) throw new Error('Capture terminal identity is invalid')
     if (this.captures.size >= 32) throw new Error('At most 32 captured applications are supported')
+    const publicBase = new URL(normalizeCapturePublicBase(options.publicBase))
     const id = randomBytes(32).toString('base64url')
-    const publicUrl = new URL(this.publicBase.pathname.replace(/\/$/u, '') + PREFIX + id + '/', this.publicBase)
+    const publicUrl = new URL(publicBase.pathname.replace(/\/$/u, '') + PREFIX + id + '/', publicBase)
     const title = (options.title || 'Application').replace(/[\x00-\x1f\x7f]/gu, '').slice(0, 160)
     const capture: Capture = { ...options, title, id, source: { ...source }, sourceKey: sourceConnectionKey(source), publicUrl, ready: false,
       cookies: new Map(), connections: new Set() }
@@ -113,6 +125,7 @@ export class CaptureService {
     if (this.captures.get(capture.id) === capture) this.captures.delete(capture.id)
     for (const cancel of capture.connections) cancel()
     capture.connections.clear()
+    capture.cookies.clear()
     capture.ready = false
     capture.onEnded?.({ type: 'capture-ended', id: capture.id, windowId: capture.windowId, paneId: capture.paneId })
     capture.closing = (capture.endpoint || Promise.resolve(undefined)).then(endpoint => endpoint?.close(), () => {}).catch(() => {})
@@ -138,7 +151,43 @@ export class CaptureService {
     if (!capture || !capture.ready || !this.valid(capture)) return
     return { capture, path: (match![2] || '/') + url.search }
   }
-  private requestHeaders(request: IncomingMessage, capture: Capture, upgrade = false): OutgoingHttpHeaders {
+  private logicalPath(capture: Capture, path: string): string {
+    return capture.publicUrl.pathname.slice(0, -1) + path.split('?')[0]
+  }
+  private pruneCookies(capture: Capture): void {
+    const now = Date.now()
+    for (const [key, cookie] of capture.cookies) if (cookie.expires !== undefined && cookie.expires <= now) capture.cookies.delete(key)
+  }
+  private rememberCookies(lines: string[], capture: Capture, path: string): void {
+    if (!this.valid(capture)) return
+    this.pruneCookies(capture)
+    const requestPath = this.logicalPath(capture, path), mount = capture.publicUrl.pathname.slice(0, -1)
+    for (const line of lines) {
+      if (line.length > 16384) continue
+      const parts = line.split(';'), at = parts[0]!.indexOf('='), name = parts[0]!.slice(0, at).trim()
+      if (at < 1 || !cookieName.test(name)) continue
+      const value = parts[0]!.slice(at + 1).trim()
+      if (/[\x00-\x20\x7f]/u.test(value)) continue
+      const attributes = new Map(parts.slice(1).map(part => {
+        const at = part.indexOf('=')
+        return at < 0 ? [part.trim().toLowerCase(), ''] : [part.slice(0, at).trim().toLowerCase(), part.slice(at + 1).trim()]
+      }))
+      const declaredPath = attributes.get('path')
+      // Apps may issue an upstream-relative Path or their public forwarded
+      // prefix. Match both against the browser's logical public request path.
+      const cookiePath = declaredPath?.startsWith('/')
+        ? (declaredPath === mount || declaredPath.startsWith(mount + '/') ? declaredPath : mount + declaredPath)
+        : requestPath.slice(0, requestPath.lastIndexOf('/')) || '/'
+      const maxAge = attributes.get('max-age')
+      let expires = attributes.has('expires') ? Date.parse(attributes.get('expires')!) : undefined
+      if (maxAge !== undefined && /^-?\d+$/u.test(maxAge)) expires = Date.now() + Number(maxAge) * 1000
+      const key = name + '\n' + cookiePath
+      if (expires !== undefined && expires <= Date.now()) { capture.cookies.delete(key); continue }
+      if (capture.cookies.size >= 64 && !capture.cookies.has(key)) continue
+      capture.cookies.set(key, { name, value, path: cookiePath, expires: Number.isNaN(expires) ? undefined : expires, secure: attributes.has('secure') })
+    }
+  }
+  private requestHeaders(request: IncomingMessage, capture: Capture, path: string, upgrade = false): OutgoingHttpHeaders {
     const headers: OutgoingHttpHeaders = {}
     const blocked = new Set([...hop, ...String(request.headers.connection || '').toLowerCase().split(/\s*,\s*/u),
       'cookie', 'authorization', 'host', 'origin', 'referer', 'forwarded'])
@@ -148,14 +197,13 @@ export class CaptureService {
     if (request.headers.origin) headers.origin = capture.publicUrl.origin
     headers['x-forwarded-prefix'] = capture.publicUrl.pathname.replace(/\/$/u, '')
     headers['x-forwarded-proto'] = capture.publicUrl.protocol.slice(0, -1)
-    // Browser cookie paths/names are scoped per capture. Only cookies issued by
-    // this captured application are restored to its upstream names.
-    const cookies: string[] = []
-    for (const part of String(request.headers.cookie || '').split(';')) {
-      const at = part.indexOf('='), name = part.slice(0, at).trim()
-      const upstreamName = capture.cookies.get(name)
-      if (at > 0 && upstreamName) cookies.push(upstreamName + '=' + part.slice(at + 1).trim())
-    }
+    // Never trust or require browser Cookie headers. Only this capture's own
+    // upstream responses can populate its temporary application credentials.
+    this.pruneCookies(capture)
+    const logicalPath = this.logicalPath(capture, path)
+    const cookies = [...capture.cookies.values()].filter(cookie => (!cookie.secure || capture.publicUrl.protocol === 'https:')
+      && (logicalPath === cookie.path || logicalPath.startsWith(cookie.path) && (cookie.path.endsWith('/') || logicalPath[cookie.path.length] === '/')))
+      .sort((a, b) => b.path.length - a.path.length).map(cookie => cookie.name + '=' + cookie.value)
     if (cookies.length) headers.cookie = cookies.join('; ')
     if (upgrade) { headers.connection = 'Upgrade'; headers.upgrade = 'websocket' }
     return headers
@@ -164,19 +212,7 @@ export class CaptureService {
     const result: OutgoingHttpHeaders = {}
     const blocked = new Set([...hop, ...String(headers.connection || '').toLowerCase().split(/\s*,\s*/u), 'set-cookie', 'clear-site-data', 'service-worker-allowed'])
     for (const [name, value] of Object.entries(headers)) if (!blocked.has(name)) result[name] = value
-    const rewritten: string[] = []
-    for (const line of headers['set-cookie'] || []) {
-      if (line.length > 16384) continue
-      const parts = line.split(';'), at = parts[0]!.indexOf('='), originalName = parts[0]!.slice(0, at).trim()
-      if (at < 1 || !cookieName.test(originalName)) continue
-      const browserName = `cvcap-${capture.id}-${Buffer.from(originalName).toString('base64url')}`
-      if (capture.cookies.size >= 64 && !capture.cookies.has(browserName)) continue
-      capture.cookies.set(browserName, originalName)
-      const attributes = parts.slice(1).filter(part => !/^\s*(?:domain|path|secure)(?:\s*=|\s*$)/iu.test(part))
-      rewritten.push(browserName + parts[0]!.slice(at) + '; Path=' + capture.publicUrl.pathname +
-        attributes.map(part => ';' + part).join('') + (capture.publicUrl.protocol === 'https:' ? '; Secure' : ''))
-    }
-    if (rewritten.length) result['set-cookie'] = rewritten
+    this.rememberCookies(headers['set-cookie'] || [], capture, path)
     if (headers.location) {
       try {
         const upstream = new URL(`http://127.0.0.1:${capture.port}`)
@@ -207,7 +243,7 @@ export class CaptureService {
     void capture.endpoint!.then(transport => {
       if (response.destroyed || !this.valid(capture)) return cancel()
       const upstream = httpRequest({ ...transport, port: capture.port, method: request.method, path,
-        headers: this.requestHeaders(request, capture), timeout: 30_000 }, incoming => {
+        headers: this.requestHeaders(request, capture, path), timeout: 30_000 }, incoming => {
         // The startup timeout must not terminate a healthy idle SSE stream.
         upstream.setTimeout(0)
         response.writeHead(incoming.statusCode || 502, this.responseHeaders(incoming.headers, capture, path))
@@ -233,7 +269,7 @@ export class CaptureService {
     socket.once('close', () => { capture.connections.delete(cancel); upstreamSocket?.destroy() })
     void capture.endpoint!.then(transport => {
       if (socket.destroyed || !this.valid(capture)) return cancel()
-      const upstream = httpRequest({ ...transport, port: capture.port, path, headers: this.requestHeaders(request, capture, true), timeout: 10_000 })
+      const upstream = httpRequest({ ...transport, port: capture.port, path, headers: this.requestHeaders(request, capture, path, true), timeout: 10_000 })
       socket.once('close', () => upstream.destroy())
       upstream.once('upgrade', (response, peer, remaining) => {
         upstream.setTimeout(0); peer.setTimeout(0)

@@ -136,13 +136,34 @@ single-pane terminal and show its UI in that same Canvas card:
 canvas capture --port 5173 --title "My app" -- npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-Enable this prototype on the backend with
-`CANVAS_CAPTURE_PUBLIC_BASE=https://backend.example/canvas` (the public backend
-base, including any proxy prefix). Serve the Canvas frontend from a different
-origin and allow that frontend through `CANVAS_ALLOWED_ORIGINS`. Separate loopback
-ports are sufficient for local experiments. The bundled same-origin frontend
-does not enable the iframe. This mode is for explicitly trusted applications;
-captured apps share the backend origin and are not isolated from each other.
+Capture works through the selected Canvas instance's existing public address,
+including its reverse-proxy prefix. One public domain and port can serve Canvas
+and its captured apps; no additional public listener, application domain or
+capture-specific public-base setting is needed. For example, an instance at
+`https://workbench.example/canvas/` hosts an app beneath
+`/canvas/api/capture/<id>/`. The proxy strips `/canvas` and sends
+`X-Forwarded-Prefix: /canvas` for both HTTP and WebSocket requests, as it does for
+the ordinary Canvas API. Its private upstream Host need not be public.
+When that Host differs from the browser origin, configure the existing
+`CANVAS_ALLOWED_ORIGINS` as for ordinary Canvas connections.
+
+The authenticated browser supplies its selected instance base to its terminal
+connection. Canvas validates that mount and uses it only for app presentation;
+forwarding still targets the source machine's declared loopback port. Independent
+frontends and multiple instances keep their own addresses. This mode is for
+explicitly trusted applications: a same-origin app has the same DOM/storage
+authority as Canvas, and cookie paths do not isolate it. The iframe's navigation
+restrictions are not a security boundary between the app and Canvas.
+
+Application authentication cookies are held in this capture's temporary server
+cookie jar and supplied to its upstream HTTP/WebSocket requests. No application
+cookie is installed in the browser, and incoming browser cookies and Canvas
+authorization are never forwarded to the app. This works with an ingress that
+clears Cookie headers. Revocation clears the jar. Apps that require JavaScript
+to read or write `document.cookie` need a separate adapter; this mode supports
+server-managed cookie authentication such as DeepSeek Harness.
+The capture URL grants temporary access to that authenticated application session;
+keep it private and do not share it or write it to logs.
 
 Capture rejects an occupied port before starting the command, then waits for
 that command's loopback listener. The app must support the generated subpath;

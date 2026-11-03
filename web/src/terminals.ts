@@ -452,6 +452,7 @@ async function connect(session: Session, probe: boolean) {
   }
   if (session.connectionRevision !== revision || !session.host?.isConnected || document.hidden) return
   const url = apiUrl('/api/terminal', context)
+  url.searchParams.set('apiBase', context.base)
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   for (const [name, value] of Object.entries(session.resource)) url.searchParams.set(name, value)
   const socket = new WebSocket(url)

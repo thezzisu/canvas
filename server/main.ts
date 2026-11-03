@@ -28,27 +28,29 @@ import { vscodeDirectoryUri } from "./editor-links.ts";
 import { WindowContentService } from "./window-content.ts";
 import { UrlForwardService } from "./url-forward.ts";
 import { CaptureService } from './capture.ts';
+import { captureAddress } from './capture-address.ts';
 const dataDir =
   process.env.CANVAS_DATA_DIR ?? join(homedir(), ".local/share/canvas");
 const accounts = new AccountStore(dataDir);
 const account = accounts.account;
 const store = new Store(join(dataDir, "canvas.db"));
 const urlForwards = new UrlForwardService(store);
-const captures = process.env.CANVAS_CAPTURE_PUBLIC_BASE
-  ? new CaptureService(store, { publicBase: process.env.CANVAS_CAPTURE_PUBLIC_BASE }) : undefined;
+const captures = new CaptureService(store);
 const assets = new AssetStore(dataDir, store);
 const completionReads = new CompletionReads(store);
 const terminals = new TerminalManager(completionReads);
 const uploads = new UploadService(terminals);
 const helperBytes = readFileSync(new URL("../cli/canvas", import.meta.url));
 const socketSessions = new WeakMap<import("ws").WebSocket, string>();
+const socketCaptureBases = new WeakMap<import("ws").WebSocket, string>();
 const downloads = new OpenDownloadService({
   capture: async (source, windowId, paneId, header, socket, recipient) => {
-    if (!captures || !Number.isInteger(header.port) || Number(header.port) < 1 || Number(header.port) > 65535
+    const publicBase = socketCaptureBases.get(recipient.socket);
+    if (!publicBase || !Number.isInteger(header.port) || Number(header.port) < 1 || Number(header.port) > 65535
       || typeof header.title !== 'string' || header.title.length > 120) {
       socket.end(JSON.stringify({ ok: false, reason: 'capture-unavailable' }) + '\n'); return;
     }
-    const lease = captures.prepareCapture(source, { windowId, paneId, session: recipient.sessionId, port: Number(header.port), title: header.title,
+    const lease = captures.prepareCapture(source, { windowId, paneId, session: recipient.sessionId, publicBase, port: Number(header.port), title: header.title,
       onStop: () => { if (!socket.destroyed) socket.write(JSON.stringify({ action: 'stop' }) + '\n') },
       onEnded: message => { if (recipient.socket.readyState === 1) recipient.socket.send(JSON.stringify(message)); socket.destroy() },
     });
@@ -104,7 +106,7 @@ const app = createApp(store, account, terminals, {
   allowedOrigins,
   openDownload: (ticket, session) => downloads.open(ticket, session),
   prepareDownload: (ticket, session, context) => downloads.prepare(ticket, session, context),
-  closeOpenBridge: (sourceId) => { uploads.closeSource(sourceId); windowContent.closeSource(sourceId); urlForwards.closeSource(sourceId); captures?.closeSource(sourceId); return downloads.closeSource(sourceId); },
+  closeOpenBridge: (sourceId) => { uploads.closeSource(sourceId); windowContent.closeSource(sourceId); urlForwards.closeSource(sourceId); captures.closeSource(sourceId); return downloads.closeSource(sourceId); },
   assets,
   uploads,
   windowContent,
@@ -113,7 +115,7 @@ const app = createApp(store, account, terminals, {
 app.post('/api/captured-apps/:id/stop', c => {
   const session = bearerToken(c.req.header('authorization'));
   if (!store.hasSession(session)) return c.json({ error: 'Please sign in' }, 401);
-  return captures?.stop(c.req.param('id'), session) ? c.json({ ok: true }) : c.json({ error: 'Captured application unavailable' }, 404);
+  return captures.stop(c.req.param('id'), session) ? c.json({ ok: true }) : c.json({ error: 'Captured application unavailable' }, 404);
 });
 app.get("/api/*", (c) => c.json({ error: "Not found" }, 404));
 app.use("*", async (c, next) => {
@@ -152,7 +154,7 @@ const upgrade = (request: import("node:http").IncomingMessage, socket: import("n
     socket.destroy();
     return;
   }
-  if (captures?.handleUpgrade(request, socket, head) || urlForwards.handleUpgrade(request, socket, head)) return;
+  if (captures.handleUpgrade(request, socket, head) || urlForwards.handleUpgrade(request, socket, head)) return;
   const origin = request.headers.origin;
   if (!origin || !allowedOrigin(origin, `http://${request.headers.host}`, allowedOrigins)) {
     socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
@@ -179,12 +181,16 @@ const upgrade = (request: import("node:http").IncomingMessage, socket: import("n
     return;
   }
   wss.handleUpgrade(request, socket, head, (ws) => authenticateWebSocket(ws, token => store.hasSession(token), token => {
+    let captureBase: string | undefined;
+    try { captureBase = captureAddress(url, request.headers['x-forwarded-prefix']); }
+    catch { ws.close(1008, 'Invalid Canvas API base'); return; }
     const current = store.get<Source>("source", sourceId);
     if (!current || sourceConnectionKey(current) !== sourceConnectionKey(source)) {
       ws.close(1008, "Connection changed");
       return;
     }
     socketSessions.set(ws, token);
+    if (captureBase) socketCaptureBases.set(ws, captureBase);
     ws.once("close", () => uploads.disconnected(ws));
     ws.on("message", (bytes, binary) => {
       if (binary || Buffer.byteLength(bytes.toString()) > 128 * 1024) return;
@@ -229,7 +235,7 @@ const servers = hosts.map(host => {
     if (request.headers['x-forwarded-prefix'] && !request.url?.startsWith('/api/')) {
       response.writeHead(404).end('Not found'); return;
     }
-    if (!captures?.handle(request, response) && !urlForwards.handle(request, response)) void requestListener(request, response);
+    if (!captures.handle(request, response) && !urlForwards.handle(request, response)) void requestListener(request, response);
   });
   server.on("upgrade", upgrade);
   server.listen(port, host, () => console.log(`Canvas listening on http://${host.includes(":") ? `[${host}]` : host}:${port}`));
@@ -240,7 +246,7 @@ async function stop() {
   stopping = true;
   clearInterval(heartbeat);
   windowContent.close();
-  await captures?.close();
+  await captures.close();
   await urlForwards.close();
   await uploads.closeAll();
   await terminals.closeAll();
