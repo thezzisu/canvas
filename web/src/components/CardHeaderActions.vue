@@ -18,7 +18,7 @@ const portal = computed(() => trigger.value?.closest<HTMLElement>('.app-shell') 
   <div class="card-header-actions nodrag nopan" @pointerdown.stop @click.stop @dblclick.stop>
     <slot v-if="!compact" />
     <button v-if="!compact" type="button" class="card-header-action card-add" :title="addLabel" :aria-label="addLabel" @click="emit('add')"><Icon name="layers" :size="15" /></button>
-    <UDropdownMenu v-model:open="open" :modal="false" :items="items" :portal="portal" :content="{ side: 'bottom', align: 'end', ...dismiss }" :ui="{ content: 'card-action-menu' }">
+    <UDropdownMenu v-model:open="open" :modal="false" :items="items" :portal="portal" :content="{ side: 'bottom', align: 'end', ...dismiss }" :ui="{ content: 'card-action-menu z-[60] min-w-[160px]' }">
       <button ref="trigger" type="button" class="card-header-action card-more" :aria-label="moreLabel || t('common.more')" :title="moreLabel || t('common.more')"><Icon name="more" :size="15" /></button>
     </UDropdownMenu>
     <button type="button" class="card-header-action card-maximize" :disabled="disabled" :title="expanded ? restoreLabel || t('common.returnToCanvas') : maximizeLabel || t('common.maximize')" :aria-label="expanded ? restoreLabel || t('common.returnToCanvas') : maximizeLabel || t('common.maximize')" @click="emit('toggle')"><Icon :name="expanded ? 'collapse' : 'expand'" :size="15" /></button>
