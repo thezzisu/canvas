@@ -577,10 +577,14 @@ async function herdrResources(source: Source, signal?: AbortSignal): Promise<Pic
     agents?: Array<{ pane_id: string; state_change_seq?: number; completion_seq?: number; agent_status?: string }>;
     workspaces: Array<{ workspace_id: string; label: string }>;
     tabs: Array<{ workspace_id: string; tab_id: string; label: string; agent_status?: string }>;
+    layouts?: Array<{ tab_id: string; focused_pane_id: string }>;
     panes?: Array<{ tab_id: string; pane_id: string; label?: string; display_agent?: string; agent?: string; focused?: boolean; agent_status?: string; terminal_title_stripped?: string }>;
   };
   if (!snapshot || !Array.isArray(snapshot.workspaces) || !Array.isArray(snapshot.tabs))
     throw new Error("Unexpected herdr snapshot response");
+  // PaneInfo.focused is global; layouts retain each tab's selected pane.
+  const focusedPanes = new Map((Array.isArray(snapshot.layouts) ? snapshot.layouts : [])
+    .map(layout => [layout.tab_id, layout.focused_pane_id]));
   const spaces = snapshot.workspaces.map(
     (workspace: { workspace_id: string; label: string }) => ({
       id: workspace.workspace_id,
@@ -615,7 +619,7 @@ async function herdrResources(source: Source, signal?: AbortSignal): Promise<Pic
                     pane.display_agent ||
                     pane.agent ||
                     String(index + 1),
-                  active: pane.focused === true,
+                  active: focusedPanes.get(tab.tab_id) === pane.pane_id,
                   terminalTitle: typeof pane.terminal_title_stripped === "string"
                     ? Array.from(pane.terminal_title_stripped.replace(/[\x00-\x1f\x7f-\x9f]/gu, "").trim()).slice(0, 1024).join("") : "",
                   ...(pane.display_agent || pane.agent

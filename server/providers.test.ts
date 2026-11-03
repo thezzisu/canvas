@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createConnection, createServer } from "node:net";
 import {
   existsSync,
@@ -17,7 +17,10 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { herdrApiRequest } from "./herdr/api.ts";
 import {
+  createSpace,
+  createWindow,
   listResources,
   probeSource,
   openTerminal,
@@ -73,6 +76,103 @@ test("SSH file commands preserve exact arguments without allocating a terminal",
   assert.deepEqual(JSON.parse(execFileSync("/bin/sh", ["-c", command.args.at(-1)!], {
     encoding: "utf8", env: { PATH: process.env.PATH },
   })), values);
+});
+
+test('discovery selects each tab\'s remembered pane rather than global focus or the first title', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'canvas-tab-titles-'));
+  const source: Source = { id: randomUUID(), name: 'Titles', transport: 'local', herdrSocket: join(root, 'herdr.sock') };
+  const requests: string[] = [];
+  const snapshot = {
+    workspaces: [{ workspace_id: 'space', label: 'Space' }],
+    tabs: ['single', 'split', 'foreground'].map((tab_id, index) => ({ workspace_id: 'space', tab_id, label: String(index + 1) })),
+    layouts: [{ tab_id: 'single', focused_pane_id: 'only' }, { tab_id: 'split', focused_pane_id: 'second' }, { tab_id: 'foreground', focused_pane_id: 'current' }],
+    panes: [
+      { tab_id: 'single', pane_id: 'only', focused: false, terminal_title_stripped: 'Background shell' },
+      { tab_id: 'split', pane_id: 'first', focused: false, terminal_title_stripped: 'Different task' },
+      { tab_id: 'split', pane_id: 'second', focused: false, terminal_title_stripped: 'Selected task' },
+      { tab_id: 'foreground', pane_id: 'current', focused: true, terminal_title_stripped: 'Foreground shell' },
+    ],
+  };
+  const api = createServer(socket => {
+    let input = '';
+    socket.on('data', chunk => {
+      input += chunk.toString(); if (!input.includes('\n')) return;
+      const request = JSON.parse(input.split('\n')[0]!); requests.push(request.method);
+      socket.end(JSON.stringify({ id: request.id, result: { snapshot } }) + '\n');
+    });
+  });
+  let attaches = 0;
+  const endpoint = createServer(socket => { attaches++; socket.destroy(); });
+  await Promise.all([new Promise<void>(resolve => api.listen(source.herdrSocket, resolve)),
+    new Promise<void>(resolve => endpoint.listen(join(root, 'herdr-client.sock'), resolve))]);
+  t.after(async () => {
+    await closeProviderConnections(source.id);
+    await Promise.all([api, endpoint].map(server => new Promise<void>(resolve => server.close(() => resolve()))));
+    rmSync(root, { recursive: true, force: true });
+  });
+  const windows = async () => (await listResources(source)).spaces[0]!.windows;
+  assert.deepEqual((await windows()).map(window => window.panes.find(pane => pane.active)?.terminalTitle), ['Background shell', 'Selected task', 'Foreground shell']);
+  snapshot.panes[2]!.terminal_title_stripped = '';
+  const cleared = (await windows())[1]!;
+  assert.equal(cleared.panes.find(pane => pane.active)?.id, 'second');
+  assert.equal(cleared.panes.find(pane => pane.active)?.terminalTitle, '', 'clearing a title never borrows another pane\'s title');
+  snapshot.layouts[1]!.focused_pane_id = 'first';
+  assert.equal((await windows())[1]!.panes.find(pane => pane.active)?.terminalTitle, 'Different task');
+  snapshot.layouts[1]!.focused_pane_id = 'missing';
+  assert.equal((await windows())[1]!.panes.some(pane => pane.active), false, 'invalid layout identity cannot guess a title');
+  assert(requests.every(method => method === 'session.snapshot'));
+  assert.equal(attaches, 0, 'title discovery never attaches or changes native focus');
+});
+
+test('official herdr preserves inactive single and split tab titles without attaching a Canvas terminal', async t => {
+  const binary = process.env.CANVAS_TEST_HERDR_SERVER_BINARY;
+  if (!binary) { t.skip('Set CANVAS_TEST_HERDR_SERVER_BINARY to an unmodified upstream server'); return; }
+  const root = mkdtempSync(join(tmpdir(), 'canvas-title-native-')), config = join(root, 'config');
+  mkdirSync(join(config, 'herdr'), { recursive: true });
+  writeFileSync(join(config, 'herdr/config.toml'), 'onboarding=false\n[terminal]\ndefault_shell="/bin/sh"\nshell_mode="non_login"\n');
+  const env = { PATH: process.env.PATH, HOME: root, USER: 'fixture', SHELL: '/bin/sh', TERM: 'xterm-256color', LANG: 'C.UTF-8',
+    XDG_CONFIG_HOME: config, XDG_STATE_HOME: join(root, 'state') };
+  const native = spawn(binary, ['--session', 'titles', 'server'], { env, stdio: 'ignore' });
+  const source: Source = { id: randomUUID(), name: 'Isolated titles', transport: 'local', herdrSocket: join(config, 'herdr/sessions/titles/herdr.sock') };
+  t.after(async () => {
+    await closeProviderConnections(source.id);
+    if (native.exitCode === null && native.signalCode === null) {
+      const ended = new Promise<void>(resolve => native.once('exit', () => resolve()));
+      native.kill(); const timer = setTimeout(() => native.kill('SIGKILL'), 3000); await ended; clearTimeout(timer);
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+  const until = async (check: () => Promise<boolean>, message: string) => {
+    const deadline = Date.now() + 10000;
+    while (!await check()) { assert(Date.now() < deadline && native.exitCode === null, message); await new Promise(resolve => setTimeout(resolve, 25)); }
+  };
+  await until(async () => (await listResources(source)).status === 'online', 'isolated official herdr did not start');
+  const space = await createSpace(source, 'Titles'), split = await createWindow(source, space.spaceId, '2'), foreground = await createWindow(source, space.spaceId, '3');
+  const snapshot = async () => (await herdrApiRequest(source.herdrSocket!, 'session.snapshot')).snapshot as {
+    focused_tab_id: string; focused_pane_id: string; panes: Array<{ pane_id: string; tab_id: string; focused: boolean; terminal_title_stripped?: string }>;
+  };
+  const first = await snapshot(), only = first.panes.find(pane => pane.tab_id === space.windowId)!, left = first.panes.find(pane => pane.tab_id === split.windowId)!;
+  await herdrApiRequest(source.herdrSocket!, 'pane.split', { target_pane_id: left.pane_id, direction: 'right', focus: false });
+  const right = (await snapshot()).panes.find(pane => pane.tab_id === split.windowId && pane.pane_id !== left.pane_id)!;
+  const setTitle = (paneId: string, title: string) => herdrApiRequest(source.herdrSocket!, 'pane.send_text', {
+    pane_id: paneId, text: `printf '\\033]0;${title}\\007'\r`,
+  });
+  for (const [paneId, title] of [[only.pane_id, 'Single task'], [left.pane_id, 'Left task'], [right.pane_id, 'Right task']]) await setTitle(paneId!, title!);
+  await until(async () => (await snapshot()).panes.find(pane => pane.pane_id === right.pane_id)?.terminal_title_stripped === 'Right task', 'native OSC titles did not arrive');
+  await herdrApiRequest(source.herdrSocket!, 'pane.focus', { pane_id: right.pane_id });
+  await herdrApiRequest(source.herdrSocket!, 'tab.focus', { tab_id: foreground.windowId });
+  const before = await snapshot();
+  assert(before.panes.filter(pane => [space.windowId, split.windowId].includes(pane.tab_id)).every(pane => !pane.focused), 'inactive API panes reproduce the missing-title condition');
+  const windows = (await listResources(source)).spaces.find(item => item.id === space.spaceId)!.windows;
+  assert.equal(windows.find(window => window.id === space.windowId)!.panes.find(pane => pane.active)?.terminalTitle, 'Single task');
+  assert.equal(windows.find(window => window.id === split.windowId)!.panes.find(pane => pane.active)?.terminalTitle, 'Right task');
+  const after = await snapshot();
+  assert.equal(after.focused_tab_id, before.focused_tab_id);
+  assert.equal(after.focused_pane_id, before.focused_pane_id);
+  await setTitle(right.pane_id, '');
+  await until(async () => !(await snapshot()).panes.find(pane => pane.pane_id === right.pane_id)?.terminal_title_stripped, 'native title did not clear');
+  const cleared = (await listResources(source)).spaces.find(item => item.id === space.spaceId)!.windows.find(window => window.id === split.windowId)!;
+  assert.equal(cleared.panes.find(pane => pane.active)?.terminalTitle, '');
 });
 
 async function helperFixture(t: import('node:test').TestContext) {
@@ -181,6 +281,7 @@ test("SSH herdr discovers native sockets and shares direct API forwarding withou
       const request = JSON.parse(input.split("\n")[0]!);
       assert.equal(request.method, "session.snapshot");
       socket.end(JSON.stringify({ id: request.id, result: { snapshot: { version: "0.9.5-remote.fixture", protocol: 888, workspaces: [{ workspace_id: "space", label: "Space" }], tabs: [{ workspace_id: "space", tab_id: "tab", label: "Window" }],
+        layouts: [{ tab_id: "tab", focused_pane_id: "pane" }],
         panes: [{ pane_id: "pane", tab_id: "tab", terminal_title_stripped: " \x1b\x07" + "中🙂".repeat(600) + "\x9f " }] } } }) + "\n");
     });
   });
@@ -260,6 +361,7 @@ process.on('SIGTERM',()=>{ for(const socket of sockets) socket.destroy(); for(co
     assert.equal(discovered.serverVersion, "0.9.5-remote.fixture", "SSH reports the remote server identity through its forwarded API socket");
     const window = discovered.spaces[0]!.windows[0]!;
     assert.equal(window.id, "tab");
+    assert.equal(window.panes[0]?.active, true, 'SSH discovery uses the tab layout even when no pane is globally focused');
     assert.equal(window.panes[0]?.terminalTitle, "中🙂".repeat(512), "pane title strips controls and bounds Unicode codepoints without splitting emoji");
     await second.cleanup(); second = undefined;
     assert.equal((await listResources(source)).status, "online");
