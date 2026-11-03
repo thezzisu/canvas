@@ -36,6 +36,16 @@ server's machine. SSH accepts an alias, `user@host`, or `ssh://user@host:port` a
 uses key authentication. Select the existing herdr session; an absolute API socket
 path can override discovery. Canvas connects directly to herdr sockets.
 
+For verified Herdr TUI 0.9.3/0.9.5, both sockets belong to the same server:
+`herdr.sock` speaks the newline JSON API, while `herdr-client.sock` speaks
+the binary native-client protocol used by the official TUI. Canvas implements
+that client protocol itself and starts no TUI client process. Its current
+adapter also uses the JSON API for resource discovery, operations and native
+text reads, so it connects to both listeners. One configured API socket path
+derives the client-protocol path automatically; the JSON listener cannot be
+upgraded into a terminal attach stream. Core exposes its API and attach streams
+through one framed socket.
+
 Choose **Herdr TUI** for existing 0.9.x sessions, or **Herdr Core / App** for
 herdr-core 0.1.17 and the shared layouts used by herdr-app 0.1.12. Core connects
 directly to the selected running Unix socket; the desktop app can be closed.
@@ -49,9 +59,17 @@ requires Python 3.11+, while explicit paths work with Python 3.8+. Use a separat
 Canvas SSH connection for each remote core. Machines relayed through another
 core are not implicitly treated as files or terminals on that core's host.
 
-Core agent status comes from OSC 7501; programs that do not report it remain
+Core persists terminal status, turns and labels in its server registry. OSC
+7501 is the source of status updates; programs that do not report it remain
 unreported. Core completion reads use the shared `herdr.seen` labels, including
 changes from the desktop app. View focus and pane zoom remain local to Canvas.
+When a core restart reuses the live holder, terminal facts survive with the
+running program. A replacement shell has no old program status even though its
+terminal address, turn and labels can survive. Old TUI session saves persist
+layout, cwd, names and agent resume information, but do not persist the live
+agent status or completion sequences. Canvas retains its own TUI read records
+only while the native boot identity still matches. Neither event stream is a
+durable event log; reconnecting takes a fresh snapshot.
 If a slow connection causes core to replace queued output with a repaint that
 skips completed turns, Canvas keeps the completion unread until reconnecting;
 terminal input and output continue. Core's stream has no turn identifier for

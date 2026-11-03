@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
 
 export interface HerdrLocation { herdrSocket?: string; herdrSession?: string }
+/** Two listeners of one upstream server; `client` is its native-client endpoint. */
 export interface HerdrSockets { api: string; client: string }
 
 export function validateHerdrLocation(location: HerdrLocation): void {
