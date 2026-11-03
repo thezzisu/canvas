@@ -529,7 +529,7 @@ watch(navigation.requested, request => {
 }, { flush: 'sync' })
 function selectLogicalTerminal(event: Event) {
   if (!(event.target instanceof Element) || event instanceof PointerEvent && event.button !== 0) return
-  if (event.target.closest('.card-header-actions, .capture-toolbar, [role="menu"]')) return
+  if (event.target.closest('.card-header-actions, [role="menu"]')) return
   const card = event.target.closest<HTMLElement>('.terminal-card') ||
     (event instanceof KeyboardEvent && ['Enter', ' '].includes(event.key) && event.target.matches('.vue-flow__node') ? event.target.querySelector<HTMLElement>('.terminal-card') : undefined)
   if (card?.dataset.sourceId && card.dataset.windowId) {
