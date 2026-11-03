@@ -92,7 +92,7 @@ const items = computed<DropdownMenuItem[][]>(() => [
       <span class="instance-menu-label"><span>{{ item.label }}</span><small v-if="item.server" class="instance-version" :class="{ stale: !item.server.fresh }" :title="`${t('instances.serverVersion')}: ${item.server.build.version}${item.server.build.revision ? ` · ${item.server.build.revision}` : ''}${!item.server.fresh ? ` · ${t('instances.lastSeen')}` : ''}`">{{ buildLabel(item.server.build) }}<span v-if="!item.server.fresh"> · {{ t('instances.lastSeen') }}</span></small></span>
     </template>
     <button ref="menuTrigger" type="button" class="instance-trigger" :disabled="disabled || working" :aria-busy="working" :title="activeInstance.base" :aria-label="`${t('instances.instance')}: ${activeInstance.name}`">
-      <Icon name="server" :size="15" /><span>{{ activeInstance.name }}</span><Icon name="down" :size="12" />
+      <Icon name="server" :size="16" /><span>{{ activeInstance.name }}</span><Icon name="down" :size="12" />
     </button>
   </UDropdownMenu>
   <UModal v-model:open="open" :portal="portal || false" :title="t(draft.id ? 'instances.edit' : 'instances.add')"
