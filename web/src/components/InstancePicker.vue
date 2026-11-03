@@ -18,6 +18,7 @@ import { usePointerDismiss } from '../pointer-dismiss'
 const props = defineProps<{ portal?: HTMLElement; beforeChange?: () => Promise<boolean>; disabled?: boolean }>()
 const emit = defineEmits<{ connect: [] }>()
 const { t } = useI18n()
+const currentBuild = computed(() => instanceBuild(activeInstance.value))
 const open = ref(false), working = ref(false), error = ref('')
 const scanning = ref(false), scanned = ref<InstanceLink>()
 const menuOpen = ref(false), menuTrigger = ref<HTMLButtonElement>()
@@ -92,7 +93,9 @@ const items = computed<DropdownMenuItem[][]>(() => [
       <span class="instance-menu-label"><span>{{ item.label }}</span><small v-if="item.server" class="instance-version" :class="{ stale: !item.server.fresh }" :title="`${t('instances.serverVersion')}: ${item.server.build.version}${item.server.build.revision ? ` · ${item.server.build.revision}` : ''}${!item.server.fresh ? ` · ${t('instances.lastSeen')}` : ''}`">{{ buildLabel(item.server.build) }}<span v-if="!item.server.fresh"> · {{ t('instances.lastSeen') }}</span></small></span>
     </template>
     <button ref="menuTrigger" type="button" class="instance-trigger" :disabled="disabled || working" :aria-busy="working" :title="activeInstance.base" :aria-label="`${t('instances.instance')}: ${activeInstance.name}`">
-      <Icon name="server" :size="16" /><span>{{ activeInstance.name }}</span><Icon name="down" :size="12" />
+      <Icon name="server" :size="16" />
+      <span class="instance-trigger-label"><span class="instance-trigger-name">{{ activeInstance.name }}</span><small v-if="currentBuild" class="instance-trigger-version" :title="`${t('instances.serverVersion')}: ${currentBuild.build.version}${currentBuild.fresh ? '' : ` · ${t('instances.lastSeen')}`}`">{{ currentBuild.build.version }}</small></span>
+      <Icon name="down" :size="12" />
     </button>
   </UDropdownMenu>
   <UModal v-model:open="open" :portal="portal || false" :title="t(draft.id ? 'instances.edit' : 'instances.add')"
@@ -113,6 +116,9 @@ const items = computed<DropdownMenuItem[][]>(() => [
 <style>
 .instance-trigger{display:flex;align-items:center;gap:7px;min-width:0;width:100%;padding:8px 3px;color:#aeb9c7;text-align:left;font-size:11px}
 .instance-trigger>span{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.instance-trigger-label{display:flex;align-items:center;gap:4px;line-height:1.4}
+.instance-trigger-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.instance-trigger-version{flex:none;max-width:50%;overflow:hidden;text-overflow:ellipsis;color:#7d899a;font-size:9px;line-height:1.4;font-variant-numeric:tabular-nums}
 .instance-trigger>svg{flex:none;color:#7f8da0}.instance-trigger:hover{color:#e1d1c2}
 .instance-menu{min-width:min(200px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px));max-width:min(320px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px));z-index:90}
 .instance-menu [data-disabled]{cursor:not-allowed}
