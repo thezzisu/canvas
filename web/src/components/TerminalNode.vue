@@ -238,7 +238,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
       <span v-if="captureError" class="capture-error" role="alert" :title="captureError">{{ captureError }}</span>
       <UButton type="button" color="neutral" variant="ghost" :size="mobileFocus ? 'sm' : 'xs'" :ui="{ base: mobileFocus ? 'min-h-[44px]' : undefined }" :loading="stoppingApp" :disabled="stoppingApp" @click="stopCapturedApp">{{ t('terminal.capture.stop') }}</UButton>
     </div>
-    <div v-if="app && !mobilePreview" v-show="showApp" class="capture-body nodrag nopan nowheel" @pointerdown.stop @mousedown.stop @wheel.stop>
+    <div v-if="app && !mobilePreview" v-show="showApp" class="capture-body card-content nodrag nopan nowheel" @pointerdown.stop @mousedown.stop @wheel.stop>
       <iframe :key="app.id" :src="app.url" :title="app.title" class="capture-frame" sandbox="allow-scripts allow-forms allow-same-origin allow-downloads" referrerpolicy="no-referrer" />
     </div>
     <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || closed || showApp || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop />

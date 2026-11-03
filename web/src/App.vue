@@ -512,7 +512,7 @@ watch([allWindows, existingAddWindows], () => {
 })
 const modalOpen = computed(() => notificationSurface.value || richPasteRequest.value || sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || shareCard.value || windowMenu.value || backgroundCanvas.value || settingsDialog.value || accountDialog.value || accountMenuOpen.value || scanTarget.value)
 const logicalWindowFocus = computed<WindowFocus | undefined>(() => {
-  if (!authenticated.value || !pageVisible.value || !windowFocused.value || modalOpen.value || directoryRequest.value || urlRequest.value || downloadPreview.value || sidebarOpen.value || sourcePanel.value || focusedCardId.value) return
+  if (!authenticated.value || !pageVisible.value || !windowFocused.value || modalOpen.value || activeElement.value?.closest('[role="menu"]') || directoryRequest.value || urlRequest.value || downloadPreview.value || sidebarOpen.value || sourcePanel.value || focusedCardId.value) return
   return focused.value || selectedTerminal.value
 })
 watch(logicalWindowFocus, value => setTerminalReadFocus(value), { flush: 'sync' })
@@ -529,6 +529,7 @@ watch(navigation.requested, request => {
 }, { flush: 'sync' })
 function selectLogicalTerminal(event: Event) {
   if (!(event.target instanceof Element) || event instanceof PointerEvent && event.button !== 0) return
+  if (event.target.closest('.card-header-actions, .capture-toolbar, [role="menu"]')) return
   const card = event.target.closest<HTMLElement>('.terminal-card') ||
     (event instanceof KeyboardEvent && ['Enter', ' '].includes(event.key) && event.target.matches('.vue-flow__node') ? event.target.querySelector<HTMLElement>('.terminal-card') : undefined)
   if (card?.dataset.sourceId && card.dataset.windowId) {
@@ -1163,12 +1164,10 @@ watch(activeId, async () => { if (!authenticated.value) return; scanTarget.value
 function switchCanvas(id: string) {
   if (notificationReveal.value?.canvasId !== id) cancelNotificationReveal()
   clearContentFocus(); cancelCreatedReveal()
+  if (focused.value) void closeFocus()
+  if (focusedCardId.value) void closeCardFocus()
   sidebarOpen.value = false
-  if (id === activeId.value && !unknownInstance.value && !navigation.requested.value) {
-    if (focused.value) void closeFocus()
-    if (focusedCardId.value) void closeCardFocus()
-    return
-  }
+  if (id === activeId.value && !unknownInstance.value && !navigation.requested.value) return
   void flushNotes(activeId.value); saveViewport(); navigation.visit(activeInstance.value.id, id)
 }
 function backgroundSaved(_updated: Canvas) { void syncState().catch(showError) }
@@ -1447,9 +1446,10 @@ function terminalAction(action: string, id: string) {
 }
 async function closeFocus() {
   const context = apiContext(), canvasId = activeId.value
+  focused.value = null
   clearContentFocus()
   if (document.activeElement instanceof HTMLElement && focusViewportElement.value?.contains(document.activeElement)) document.activeElement.blur()
-  focused.value = null; graphKey.value++
+  graphKey.value++
   await nextTick()
   if (!isCurrentApi(context) || activeId.value !== canvasId || hasFocus.value) return
   await restoreViewport()
