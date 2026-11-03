@@ -47,6 +47,7 @@ export interface OpenDownloadOptions {
   readTemporary(id: string, range?: { start: number; end: number }): Promise<{ body: Readable; asset: FileAsset } | undefined>;
   directoryUri?(source: Source, path: string): Promise<string>;
   openUrl?(source: Source, url: string, sessionId: string): Promise<OpenedUrl> | OpenedUrl;
+  capture?(source: Source, windowId: string, paneId: string, header: Record<string, unknown>, socket: Socket, recipient: DownloadRecipient): Promise<void>;
   prepare(source: Source, localSocket: string): Promise<PreparedOpenBridge>;
   publishRemote?(source: Source, record: RegistryRecord): Promise<() => Promise<void>>;
   installHelper?(source: Source): Promise<void>;
@@ -294,14 +295,15 @@ export class OpenDownloadService {
         typeof header.paneId !== "string" || !header.paneId || header.paneId.length > 256) {
       socket.end(rejected); return;
     }
+    const isCapture = header.kind === 'capture';
     const isDirectory = header.kind === "directory", isUrl = header.kind === "url";
     let path: string | undefined;
     if (isDirectory || isUrl) {
       try { path = isUrl ? webUrl(header.url).href : directoryPath(header.path); }
       catch { socket.end(rejected); return; }
       if (header.size !== undefined || header.filename !== undefined) { socket.end(rejected); return; }
-    } else if (header.kind !== "file" ||
-        !Number.isSafeInteger(header.size) || (header.size as number) < 0 || !safeFilename(header.filename)) {
+    } else if (!isCapture && (header.kind !== "file" ||
+        !Number.isSafeInteger(header.size) || (header.size as number) < 0 || !safeFilename(header.filename))) {
       socket.end(rejected); return;
     }
     const bridge = this.bridges.get(source.id);
@@ -319,6 +321,15 @@ export class OpenDownloadService {
     if (socket.destroyed) return;
     if (!recipient || !recipient.isCurrent() || recipient.socket.readyState !== 1 || !recipient.sessionId) {
       socket.end(jsonLine({ ok: false, reason: "not-attached" })); return;
+    }
+    if (isCapture) {
+      if (matches[0]!.panes.length !== 1 || !this.options.capture) {
+        socket.end(jsonLine({ ok: false, reason: 'capture-requires-single-pane' })); return;
+      }
+      const release = this.retainSource(source.id);
+      socket.once('close', release);
+      await this.options.capture(source, windowId, header.paneId as string, header, socket, recipient);
+      return;
     }
     if (isDirectory || isUrl) {
       await this.sendReference(source, path!, socket, recipient, isUrl ? "url" : "directory");

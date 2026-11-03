@@ -13,6 +13,8 @@ import { needsAttention } from '../canvas-status'
 import { claimNoteDrop, readNoteTransfer } from '../note-transfer'
 import { isFileReference, readFileReference } from '../file-reference'
 import { copiedFile } from '../file-clipboard'
+import { capturedApp } from '../capture'
+import { api } from '../api'
 import { cachedTerminalView, mountTerminal, type TerminalStatus } from '../terminals'
 import { emptyModifiers, type TerminalModifiers } from '../terminal-input'
 import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
@@ -28,6 +30,25 @@ const { t } = useI18n()
 const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>>()
 const host = ref<HTMLElement>()
 const header = ref<HTMLElement>()
+const app = computed(() => capturedApp(props.data.sourceId, props.data.windowId))
+const appEnabled = computed(() => !!app.value && new URL(app.value.url).origin !== window.location.origin)
+const appVisible = ref(false)
+const showApp = computed(() => appVisible.value && appEnabled.value && !mobilePreview.value && !closed.value && !maximizedElsewhere.value && status.value.status === 'connected')
+function returnToTerminal() { appVisible.value = false; nextTick(() => terminal?.focus({ keyboard: false })) }
+const stoppingAppId = ref('')
+const stoppingApp = computed(() => stoppingAppId.value === app.value?.id)
+const captureError = ref('')
+async function stopCapturedApp() {
+  const current = app.value
+  if (!current || stoppingApp.value) return
+  stoppingAppId.value = current.id; captureError.value = ''
+  try {
+    await api(`/api/captured-apps/${current.id}/stop`, { method: 'POST', body: '{}' })
+    if (app.value === current) returnToTerminal()
+  } catch (error) {
+    if (app.value === current) captureError.value = error instanceof Error ? error.message : String(error)
+  } finally { if (stoppingAppId.value === current.id) stoppingAppId.value = '' }
+}
 const headerCompact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined), undefined, () => props.data.overview ? 5 : 6)
 const compact = computed(() => !!props.data.mobile && props.data.focus && headerCompact.value)
 const zoom = useTerminalZoom(() => props.data.zoomKey)
@@ -72,6 +93,8 @@ const liveTitle = computed(() => {
 })
 const title = computed(() => [props.data.name, liveTitle.value, props.data.subtitle].filter(Boolean).join('\n'))
 let terminal: ReturnType<typeof mountTerminal> | undefined
+watch(() => app.value?.id, id => { appVisible.value = !!id; captureError.value = '' }, { immediate: true })
+watch(showApp, value => terminal?.setAppShowing(value))
 let ownedPresentation = false
 let previewTap: { id: number; x: number; y: number; at: number } | undefined
 let previewEligible = false
@@ -151,7 +174,8 @@ function mount() {
     status.value = state
     if (superseded) props.data.onAction('unfocus', props.id)
   }, { magnified: props.data.focus, mobile: props.data.mobile, zoom: zoom.value, closed: !!props.data.closed })
-  if (mobileFocus.value) { terminal?.setTouchMode('scroll'); terminal?.focus({ keyboard: false }) }
+  terminal?.setAppShowing(showApp.value)
+  if (mobileFocus.value && !showApp.value) { terminal?.setTouchMode('scroll'); terminal?.focus({ keyboard: false }) }
 }
 onMounted(() => { mount(); document.addEventListener('dragend', clearNoteDrag); window.addEventListener('blur', clearNoteDrag) })
 watch(() => props.data.closed, value => { if (value) terminal?.close() })
@@ -190,7 +214,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
 </script>
 <template>
   <NodeResizer v-if="!data.mobile && !data.overview && !data.focus && !maximizedElsewhere" :min-width="360" :min-height="220" :max-width="4000" :max-height="3000" @resize-start="resizeStarted" @resize-end="resized" />
-  <article tabindex="-1" class="terminal-card" :class="[{ selected, unavailable: !closed && !keepTerminal, focused: data.focus, 'input-focused': inputFocused, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview, closed }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="closed ? 'closed' : keepTerminal ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :data-input-focused="inputFocused" :data-note-drop="noteDrag ? noteDropAvailable ? 'ready' : 'unavailable' : undefined" @dragenter.capture="noteDragOver" @dragover.capture="noteDragOver" @dragleave="noteDragLeave" @drop.capture="dropNote" :style="{ '--program-color': statusColor(frameStatus), width: dimensions || mobileFocus ? '100%' : `${data.width}px`, height: dimensions || mobileFocus ? '100%' : `${data.height}px` }" :aria-label="`${data.name} · ${data.subtitle}`">
+  <article tabindex="-1" class="terminal-card" :class="[{ selected, unavailable: !closed && !keepTerminal, focused: data.focus, 'input-focused': inputFocused, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview, closed }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="closed ? 'closed' : keepTerminal ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :data-content-mode="showApp ? 'app' : 'terminal'" :data-input-focused="inputFocused" :data-note-drop="noteDrag ? noteDropAvailable ? 'ready' : 'unavailable' : undefined" @dragenter.capture="noteDragOver" @dragover.capture="noteDragOver" @dragleave="noteDragLeave" @drop.capture="dropNote" :style="{ '--program-color': statusColor(frameStatus), width: dimensions || mobileFocus ? '100%' : `${data.width}px`, height: dimensions || mobileFocus ? '100%' : `${data.height}px` }" :aria-label="`${data.name} · ${data.subtitle}`">
     <header ref="header" class="terminal-header drag-handle" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :class="{ 'cutout-header': mobileFocus }" :data-cutout-position="mobileFocus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="mobileFocus ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))`, '--cutout-controls': data.overview ? '176px' : '264px' } : undefined">
       <PaneIndicators :panes="data.panes" :status="data.status" :available="keepTerminal" :connection="closed ? 'closed' : status.status" :error="status.error" :read-only="status.readOnly" :pulse="statusPulse" />
       <span class="terminal-name" :class="{ 'cutout-title': mobileFocus }" :title="title"><span class="terminal-tab-name">{{ data.name }}</span><span v-if="liveTitle" class="terminal-live-title">{{ liveTitle }}</span></span>
@@ -201,8 +225,18 @@ async function resized(event: { params: { width: number; height: number; x: numb
         <ContentZoom v-if="data.focus" v-model="zoom" :mobile="data.mobile" :disabled="!data.available" :label="t('terminal.zoom.title')" />
       </CardHeaderActions>
     </header>
-    <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || closed || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop />
-    <PaneContextMenu :host="host" :enabled="keepTerminal && !mobilePreview && !closed && !maximizedElsewhere && status.status === 'connected'" :lookup="paneContext" :action="paneAction" />
+    <div v-if="app && !mobilePreview" class="capture-toolbar nodrag nopan" @pointerdown.stop @mousedown.stop>
+      <span class="capture-title">{{ app.title }}</span>
+      <span v-if="!appEnabled" role="status">{{ t('terminal.capture.separateOrigin') }}</span>
+      <button v-else type="button" @click="showApp ? returnToTerminal() : appVisible = true">{{ showApp ? t('terminal.capture.terminal') : t('terminal.capture.app') }}</button>
+      <span v-if="captureError" role="alert">{{ captureError }}</span>
+      <button type="button" :disabled="stoppingApp" @click="stopCapturedApp">{{ t('terminal.capture.stop') }}</button>
+    </div>
+    <div v-if="appEnabled && app && !mobilePreview" v-show="showApp" class="capture-body nodrag nopan nowheel" @pointerdown.stop @mousedown.stop @wheel.stop>
+      <iframe :key="app.id" :src="app.url" :title="app.title" class="capture-frame" sandbox="allow-scripts allow-forms allow-same-origin allow-downloads" referrerpolicy="no-referrer" />
+    </div>
+    <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || closed || showApp || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop />
+    <PaneContextMenu :host="host" :enabled="!showApp && keepTerminal && !mobilePreview && !closed && !maximizedElsewhere && status.status === 'connected'" :lookup="paneContext" :action="paneAction" />
     <div v-if="mobilePreview && !closed" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: data.name })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
     <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">{{ t('terminal.upload.file') }}</div>
     <div v-if="noteDrag || fileDrag" class="terminal-file-drop terminal-note-drop" :class="{ 'note-drop-unavailable': !noteDropAvailable }" aria-hidden="true">{{ !noteDropAvailable ? noteDropLabel : fileDrag ? t(status.fileReading ? 'fileTransfer.preparing' : 'fileTransfer.drop') : noteDropLabel }}</div>
@@ -221,7 +255,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <div v-else-if="!keepTerminal" class="terminal-unavailable"><Icon name="terminal" :size="28" /><strong>{{ t('terminal.unavailable') }}</strong></div>
     <div v-if="!closed && data.available && status.status === 'disconnected'" class="terminal-disconnected nodrag" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined"><span>{{ status.error || t('terminal.connection.disconnected') }}</span><button @click.stop="action('reconnect')"><Icon name="refresh" :size="13" />{{ t('terminal.connection.reconnect') }}</button></div>
     <div v-if="!closed && keepTerminal && !maximizedElsewhere && (status.status === 'connecting' || status.status === 'connected' && !status.screenReady)" class="terminal-loading nodrag" :class="{ 'terminal-loading-initial': !status.screenReady }" role="status"><span class="spinner" />{{ status.retryAttempt ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt }) : t('common.loading') }}</div>
-    <MobileKeyboard v-if="mobileFocus" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :read-text="readText" :copy-text="copyText" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @files="mobileFiles" @paste="mobilePaste" @paste-file="pasteFile" @reading="reading" />
+    <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :read-text="readText" :copy-text="copyText" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @files="mobileFiles" @paste="mobilePaste" @paste-file="pasteFile" @reading="reading" />
   </article>
 </template>
 
@@ -274,4 +308,8 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-mobile.focused .terminal-upload{bottom:calc(55px + var(--mobile-safe-bottom,0px))}
 .terminal-mobile.focused .terminal-copy-notice{bottom:calc(57px + var(--mobile-safe-bottom,0px))}
 .terminal-mobile.focused .terminal-disconnected{bottom:calc(49px + var(--mobile-safe-bottom,0px))}
+</style>
+
+<style scoped>
+.capture-toolbar{position:absolute;z-index:6;top:30px;left:0;right:0;height:34px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#252a33;color:#d5d7dd;font-size:12px}.capture-title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.capture-toolbar button{padding:3px 8px;border:1px solid #566172;border-radius:4px;color:inherit;background:#303744;cursor:pointer}.capture-body{position:absolute;z-index:5;inset:64px 0 0;background:#fff}.capture-frame{display:block;width:100%;height:100%;border:0}.terminal-mobile.focused .capture-toolbar{top:44px;height:44px}.terminal-mobile.focused .capture-body{top:88px}
 </style>

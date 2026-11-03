@@ -10,6 +10,7 @@ import { api, apiContext, apiFetch, apiUrl, isCurrentApi, segment, uuid } from '
 import { clearDownloads, disconnectDownloads, receiveDownload } from './downloads'
 import { clearDirectories, receiveDirectory } from './directories'
 import { clearUrls, receiveUrl } from './urls'
+import { clearCaptures, receiveCapture, removeCaptures } from './capture'
 import { captureRichPaste } from './rich-paste'
 import { previewRichPaste } from './rich-paste-dialog'
 import { bindFileInput, preventFileNavigation, TerminalUploads, type TerminalUploadState } from './uploads'
@@ -53,6 +54,7 @@ export type TerminalStatus = {
 interface FocusResize { token: string; suspended: boolean; requested?: { cols: number; rows: number } }
 interface CompletionFrame { generation: number; layout?: string; focusedPaneId?: string; panes: Array<{ id: string; completion?: CompletionToken }> }
 interface Session {
+  appShowing?: boolean
   readGeneration?: number
   readGesture?: boolean
   parsedCompletion?: CompletionFrame
@@ -181,6 +183,8 @@ function updateMetadata(session: Session, metadata?: WindowMetadata) {
   liveTerminalMetadata.value = next
 }
 export function retainTerminalMetadata(sourceIds: readonly string[], changedSources: readonly string[] = []) {
+  for (const sourceId of metadataSources) if (!sourceIds.includes(sourceId)) removeCaptures(sourceId)
+  for (const sourceId of changedSources) removeCaptures(sourceId)
   metadataSources = new Set(sourceIds)
   const next = new Map(liveTerminalMetadata.value)
   for (const session of sessions.values()) if (!metadataSources.has(session.resource.sourceId) || changedSources.includes(session.resource.sourceId)) {
@@ -334,7 +338,7 @@ function setState(session: Session, state: TerminalStatus) {
   session.listeners.forEach(listener => listener(next))
   refreshReadFocus()
 }
-function interactive(session: Session) { return !session.mobile || session.magnified }
+function interactive(session: Session) { return !session.appShowing && (!session.mobile || session.magnified) }
 function setModifiers(session: Session, modifiers: Partial<TerminalModifiers> = {}) {
   session.modifiers = { shift: modifiers.shift === true, ctrl: modifiers.ctrl === true, alt: modifiers.alt === true, meta: modifiers.meta === true }
   setState(session, { ...session.state, modifiers: session.modifiers })
@@ -391,6 +395,7 @@ function connectionFailed(session: Session, error = t('terminal.connection.disco
 }
 function windowRemoved(session: Session) {
   const { sourceId, windowId } = session.resource
+  removeCaptures(sourceId, windowId)
   for (const view of sessions.values()) if (view.resource.sourceId === sourceId && view.resource.windowId === windowId) {
     if (view.state.status === 'closed') continue
     view.reconnect?.stop()
@@ -474,7 +479,7 @@ async function connect(session: Session, probe: boolean) {
       try {
         const message = JSON.parse(event.data)
         if (receiveDownload(socket, message, session.resource)) return
-        if (receiveDirectory(socket, message) || receiveUrl(socket, message) || session.uploads.receive(message)) return
+        if (receiveCapture(session.resource.sourceId, session.resource.windowId, message) || receiveDirectory(socket, message) || receiveUrl(socket, message) || session.uploads.receive(message)) return
         if (message.type === 'metadata' && isWindowMetadata(message.window) && message.window.id === session.resource.windowId) updateMetadata(session, message.window)
         else if (message.type === 'reset') {
           session.resetPending = true
@@ -945,6 +950,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       if (!canPasteText()) throw new Error(t('terminal.unavailable'))
       await api(`${windowPath}/pane-action`, { method: 'POST', body: JSON.stringify({ pane: { paneId: pane.paneId, bootId: pane.bootId }, command }) }, mountingContext)
     },
+    setAppShowing(value: boolean) { current.appShowing = value; if (value) { current.term.blur(); current.keyboard?.blur() }; current.term.options.disableStdin = !interactive(current); refreshReadFocus() },
     focus(options: { keyboard?: boolean } = {}) { focusTerminal(current, options.keyboard) },
     blur() { if (current.mobile) current.keyboard?.blur(); else current.term.blur(); setModifiers(current) },
     setModifiers(modifiers: Partial<TerminalModifiers>) { setModifiers(current, modifiers) },
@@ -1011,6 +1017,7 @@ export function clearTerminals() {
   clearDownloads()
   clearDirectories()
   clearUrls()
+  clearCaptures()
   for (const session of sessions.values()) {
     session.fileRead?.abort(); session.fileRead = undefined
     session.uploads.clear()

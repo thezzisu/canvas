@@ -127,6 +127,41 @@ Paste or drop files and images into a terminal to upload them to that machine's
 opens offer VS Code Remote SSH. Loopback URLs refer to the terminal's machine;
 forwarded applications must support the provided subpath.
 
+## Capture a terminal application (experimental)
+
+On Linux, the npm CLI can start a trusted Web application inside a connected,
+single-pane terminal and show its UI in that same Canvas card:
+
+```sh
+canvas capture --port 5173 --title "My app" -- npm run dev -- --host 127.0.0.1 --port 5173
+```
+
+Enable this prototype on the backend with
+`CANVAS_CAPTURE_PUBLIC_BASE=https://backend.example/canvas` (the public backend
+base, including any proxy prefix). Serve the Canvas frontend from a different
+origin and allow that frontend through `CANVAS_ALLOWED_ORIGINS`. Separate loopback
+ports are sufficient for local experiments. The bundled same-origin frontend
+does not enable the iframe. This mode is for explicitly trusted applications;
+captured apps share the backend origin and are not isolated from each other.
+
+Capture rejects an occupied port before starting the command, then waits for
+that command's loopback listener. The app must support the generated subpath;
+`CANVAS_CAPTURE_PUBLIC_URL` and `CANVAS_CAPTURE_HOST` are passed to the command
+for its public-URL configuration. There is no generic HTML/JavaScript rewriting.
+Applications with a private login bootstrap can use `--ready-file /private/ready.json`;
+the command writes a private JSON file containing `launchUrl` (or `url`) before
+the iframe opens. Do not print login URLs or store this file in your project.
+
+The terminal remains connected. **Return to terminal** leaves the app running;
+**Open app** returns to it; **Stop app** stops this capture's owned process group.
+Command exit, bridge loss, logout or connection changes revoke the proxy. Capture
+is temporary: browser refresh and other devices do not replay the app view.
+The first prototype requires a single pane at registration and does not support
+later pane-layout changes. The Python-only helper installed on SSH hosts does
+not yet include capture; the npm CLI must be available on the command's machine.
+This does not replace the existing file/URL preview or the `canvas serve` backend
+command.
+
 ## Configuration
 
 | Variable | Default | Purpose |
