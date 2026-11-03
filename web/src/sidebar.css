@@ -47,7 +47,7 @@
 .source-empty { width: 100%; font-size: 11px; padding-block: 9px; text-align: left; color: #858d9a; }
 .source-empty:hover { color: var(--accent); }
 .sidebar-footer { flex: none; margin-top: auto; display: grid; grid-template-columns: minmax(0,1fr) var(--sidebar-rail); align-items: center; border-top: 1px solid #2a2e35; min-height: 55px; padding: 10px 0; gap: var(--sidebar-gap); }
-.sidebar-account { display: grid; grid-template-columns: var(--sidebar-rail) minmax(0,1fr); align-items: center; text-align: left; gap: var(--sidebar-gap); min-width: 0; font-size: 10px; padding: 0; border-radius: 5px; }
+.sidebar-account { display: grid; grid-template-columns: var(--sidebar-rail) minmax(0,1fr); align-items: center; text-align: left; gap: 8px; min-width: 0; font-size: 10px; padding: 0; border-radius: 5px; }
 .sidebar-account:hover,.sidebar-account[aria-expanded=true] { background: #ffffff05; }
 .sidebar-account>span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-account small { display: block; font-size: 9px; color: #707987; margin-top: 3px; }

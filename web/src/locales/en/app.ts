@@ -85,7 +85,7 @@ export default {
   "windowActions": "Window actions",
   "newSpace": "New space",
   "closeDialog": "Close dialog",
-  "herdrProvider": "Herdr runtime",
+  "terminalBackend": "Terminal backend",
   "connectionName": "Connection name",
   "connectionNamePlaceholder": "e.g. Development",
   "remoteSsh": "Remote SSH",
