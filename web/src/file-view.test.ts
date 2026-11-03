@@ -71,6 +71,20 @@ test('deleted nodes and changed instance addresses cannot resurrect preferences 
   assert.equal(store.length, 0)
 })
 
+test('undo retains the original file reading position across removal snapshots', () => {
+  const store = storage(), scope = effectScope(), key = fileViewKey('a', 'canvas', 'node')
+  const view = scope.run(() => useFileView('a', 'canvas', 'node', true, () => true, store))!
+  view.rendered.value = false; view.wrap.value = true; view.remember({ x: 23, y: 740 })
+  scope.stop()
+  pruneFileViews('a', [], store, new Set([key]))
+  const restored = effectScope(), reader = restored.run(() => useFileView('a', 'canvas', 'node', true, () => true, store))!
+  assert.equal(reader.rendered.value, false); assert.equal(reader.wrap.value, true)
+  assert.deepEqual(reader.reading.value, { x: 23, y: 740 })
+  restored.stop()
+  pruneFileViews('a', [], store)
+  assert.equal(store.length, 0)
+})
+
 test('authoritative pruning removes only missing file cards in the owning instance', () => {
   const store = storage()
   for (const [instance, canvas, node] of [['a', 'canvas', 'keep'], ['a', 'canvas', 'deleted'], ['a', 'removed', 'node'], ['b', 'canvas', 'node']])

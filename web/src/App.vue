@@ -38,6 +38,8 @@ import { subscribeState } from './state-events'
 import { retainBackgrounds, useBackgroundUrl } from './backgrounds'
 import { pruneFileViews } from './file-view'
 import { cardZoomKey, pruneCardZooms } from './card-zoom'
+import CardRemovalFeedback from './components/CardRemovalFeedback.vue'
+import type { CardRemovalResponse } from '../../shared/card-removal'
 import { pruneTerminalPreferences, terminalIdentityKey } from './terminal-identity'
 import Icon from './components/Icon.vue'
 import TerminalNode from './components/TerminalNode.vue'
@@ -260,6 +262,14 @@ let draftBase = ''
 function checkpointEdits() { pendingEdits.save(draftBase, pendingLayouts, [...savingNotes.values(), ...pendingNotes.values()]) }
 let layoutGesture = ''
 const latestState = shallowRef<SharedState>()
+const removalUndo = ref<InstanceType<typeof CardRemovalFeedback>>()
+function removalReleased(context: ReturnType<typeof apiContext>) { if (isCurrentApi(context)) pruneReadingPreferences() }
+function pruneReadingPreferences() {
+  const state = latestState.value
+  if (!state) return
+  pruneFileViews(activeInstance.value.id, state.canvases, undefined, removalUndo.value?.fileViews())
+  pruneCardZooms(state.instanceId, state.canvases, undefined, removalUndo.value?.zooms())
+}
 const notificationToasts = useToast().toasts
 // Nuxt UI can enqueue after nextTick; reject stale account notices when published.
 watch([notificationToasts, apiRevision, authenticated, () => latestState.value?.instanceId], ([items, revision, signedIn, backend]) => {
@@ -574,11 +584,11 @@ function noteData(node: NoteCanvasNode, focus = false): NoteData {
   const canvasId = activeId.value
   return { ...node, zoomKey: cardZoomKey(latestState.value?.instanceId || activeInstance.value.base, node.id), mobile: mobile.value, focus, onResize: resizeNode, onResizeStart: resizeStarted,
     onChange: (id, patch) => editNote(canvasId, id, patch), onFlush: () => void flushNotes(canvasId),
-    onAction: (action, id) => { if (action === 'remove') removeNote(id); else cardAction(action, id) } }
+    onAction: (action, id) => { if (action === 'remove') void removeNode(id); else cardAction(action, id) } }
 }
 function fileData(node: FileCanvasNode, focus = false): FileData {
   const { id: instanceId, base } = activeInstance.value, canvasId = activeId.value
-  return { ...node, zoomKey: cardZoomKey(latestState.value?.instanceId || base, node.id), instanceId, canvasId, mobile: mobile.value, focus, onResize: resizeNode, onResizeStart: resizeStarted, onRemove: removeFile, onAction: cardAction,
+  return { ...node, zoomKey: cardZoomKey(latestState.value?.instanceId || base, node.id), instanceId, canvasId, mobile: mobile.value, focus, onResize: resizeNode, onResizeStart: resizeStarted, onRemove: id => { void removeNode(id) }, onAction: cardAction,
     canPersistView: () => activeInstance.value.id === instanceId && activeInstance.value.base === base &&
       !!canvases.value.find(canvas => canvas.id === canvasId)?.nodes.some(candidate => candidate.id === node.id && candidate.type === 'file') }
 }
@@ -704,8 +714,7 @@ function applySharedState(state: SharedState) {
   }
   reconcileNoteEdits(state.canvases)
   latestState.value = state
-  pruneFileViews(activeInstance.value.id, state.canvases)
-  pruneCardZooms(state.instanceId, state.canvases)
+  pruneReadingPreferences()
   pruneTerminalPreferences(state.instanceId, state.sources, [])
   retainBackgrounds([state.overviewBackground, ...state.canvases.map(canvas => canvas.background)].flatMap(background => background ? [background.url] : []))
   applySettings(state.settings)
@@ -1017,6 +1026,7 @@ async function logout() {
   await write('/api/logout', 'POST'); if (isCurrentApi(context)) clearAuthentication()
 }
 function clearInstanceRuntime() {
+  removalUndo.value?.clear()
   checkpointEdits(); draftBase = ''
   stopStateEvents(); resetApiRequests(); clearTerminals(); hideMobileKeyboard(); void exitFullscreen()
   for (const timer of saveTimers.values()) clearTimeout(timer)
@@ -1441,17 +1451,29 @@ async function submitCardReference() {
 }
 async function removeNode(id: string) {
   const canvas = currentCanvas.value
-  if (!canvas) return
+  const node = canvas?.nodes.find(node => node.id === id)
+  if (!canvas || !node) return
   const context = apiContext()
+  const feedback = removalUndo.value
+  if (!feedback) return
+  const removal = feedback.begin(canvas.id, node, latestState.value?.instanceId || context.base, context)
+  if (!removal) return
+  let offered = false
   try {
-    if (canvas.nodes.find(node => node.id === id)?.type === 'note' && !await flushNotes(canvas.id)) return
-    if (!isCurrentApi(context) || !canvases.value.find(item => item.id === canvas.id)?.nodes.some(node => node.id === id)) return
-    await api(`/api/canvases/${segment(canvas.id)}/nodes/${segment(id)}`, { method: 'DELETE' }, context)
+    if (!await flushNotes(canvas.id) || !isCurrentApi(context)) return
+    await flushLayout(canvas.id)
+    const saved = canvases.value.find(item => item.id === canvas.id)?.nodes.find(node => node.id === id)
+    if (!isCurrentApi(context) || !saved) return
+    const name = saved.type === 'terminal' ? resourceFor(saved).window?.name || t('app.window') : saved.type === 'file' ? saved.asset.filename : saved.title || t('app.note')
+    const started = performance.now()
+    const result = await api<CardRemovalResponse<Canvas>>(`/api/canvases/${segment(canvas.id)}/nodes/${segment(id)}`, { method: 'DELETE' }, context)
     if (!isCurrentApi(context)) return
     pendingLayouts.get(canvas.id)?.delete(id)
     clearNoteEdits(canvas.id, id)
+    feedback.offer(removal, result.undo, started, name); offered = true
     await syncState()
   } catch (reason) { if (isCurrentApi(context)) showError(reason) }
+  finally { if (!offered) feedback.release(removal) }
 }
 function openAdd(node?: TerminalCanvasNode) {
   addDialogRevision++
@@ -1612,17 +1634,6 @@ async function addNote() {
     }
   } catch (reason) { showError(reason) }
   finally { busy.value = false }
-}
-function removeFile(id: string) {
-  const node = currentCanvas.value?.nodes.find(item => item.id === id)
-  if (!node || node.type !== 'file') return
-  actionDialog.value = { get title() { return t('app.deleteNamed', { name: node.asset.filename }) }, get description() { return t('app.deleteFileDescription') }, value: '', danger: true, get button() { return t('app.deleteFile') }, submit: async () => { await removeNode(id) } }
-}
-function removeNote(id: string) {
-  const node = currentCanvas.value?.nodes.find(item => item.id === id)
-  if (!node || node.type !== 'note') return
-  if (!node.content.trim()) { void removeNode(id); return }
-  actionDialog.value = { get title() { return t('app.deleteNamed', { name: node.title || t('app.note') }) }, description: '', value: '', danger: true, get button() { return t('app.deleteNote') }, submit: async () => { await removeNode(id) } }
 }
 async function toggleSnap() {
   const canvas = currentCanvas.value
@@ -1811,7 +1822,8 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
 </script>
 
 <template>
-  <UApp :locale="uiLocale" :portal="appElement || false" :toaster="{ portal: notificationPortal || false, position: 'bottom-right', max: 4, progress: false, ui: { viewport: 'canvas-notifications' } }">
+  <UApp :locale="uiLocale" :portal="appElement || false" :toaster="{ portal: notificationPortal || false, position: 'bottom-right', max: 4 + (removalUndo?.count || 0), progress: false, ui: { viewport: 'canvas-notifications' } }">
+    <CardRemovalFeedback ref="removalUndo" :sync="syncState" :released="removalReleased" :error="showError" />
   <NotificationCenter v-if="authenticated && latestState" :key="`${activeInstance.id}:${latestState.instanceId}`" ref="notificationCenter"
     :instance-id="activeInstance.id" :backend-id="latestState.instanceId" :resources="rawResources" :display-resources="resources" :focus="terminalReadFocus" :refresh="() => refreshResources(true)" :actions-available="notificationActionsAvailable" @open="openNotification" @go="goToNotification" />
   <NotificationHost :portal="appElement" />

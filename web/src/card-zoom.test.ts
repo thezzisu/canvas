@@ -14,3 +14,14 @@ test('content zoom belongs to a shared card and is removed only after its last r
   pruneCardZooms('instance', [], storage)
   assert.deepEqual([...values], [[cardZoomKey('other', 'note'), '120']])
 })
+
+test('an undo grace period retains only the removed card zoom until it expires', () => {
+  const held = cardZoomKey('instance', 'removed'), expired = cardZoomKey('instance', 'expired')
+  const values = new Map([[held, '150'], [expired, '80']])
+  const storage = { get length() { return values.size }, key: (index: number) => [...values.keys()][index] || null,
+    removeItem: (key: string) => { values.delete(key) } } as Storage
+  pruneCardZooms('instance', [], storage, new Set([held]))
+  assert.deepEqual([...values], [[held, '150']])
+  pruneCardZooms('instance', [], storage)
+  assert.equal(values.size, 0)
+})

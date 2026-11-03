@@ -40,13 +40,13 @@ export function useFileView(instance: string, canvas: string, node: string, mark
   }
 }
 
-export function pruneFileViews(instance: string, canvases: readonly { id: string; nodes: readonly { id: string; type: string }[] }[], storage?: Storage) {
+export function pruneFileViews(instance: string, canvases: readonly { id: string; nodes: readonly { id: string; type: string }[] }[], storage?: Storage, retained?: ReadonlySet<string>) {
   const valid = new Set(canvases.flatMap(canvas => canvas.nodes.filter(node => node.type === 'file').map(node => fileViewKey(instance, canvas.id, node.id))))
   try {
     storage ||= localStorage
     for (let index = storage.length - 1; index >= 0; index--) {
       const key = storage.key(index)
-      if (key?.startsWith(prefix(instance)) && !valid.has(key)) storage.removeItem(key)
+      if (key?.startsWith(prefix(instance)) && !valid.has(key) && !retained?.has(key)) storage.removeItem(key)
     }
   } catch { /* Storage may be unavailable. */ }
 }
