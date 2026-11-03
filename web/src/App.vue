@@ -344,13 +344,14 @@ function movePage(direction: PageDirection) {
   if (horizontal || preferredPageX.value === undefined) selectPage(currentPage.value)
   const page = pageNeighbor(direction)
   if (!page) return
-  if (document.activeElement instanceof HTMLElement && document.activeElement.closest('.terminal-host')) document.activeElement.blur()
+  clearContentFocus()
   pendingCreatedWindow.value = undefined
   if (horizontal) selectPage(page)
   else currentPage.value = page
   void fitPage(true)
 }
 async function togglePaging() {
+  clearContentFocus()
   resetPagingFeedback()
   preferredPageX.value = undefined
   if (!overviewPaged.value) saveViewport()
@@ -387,11 +388,10 @@ function navigateMinimap({ event, node }: NodeMouseEvent) {
 async function navigateCard(node: Node) {
   if (!['terminal', 'note', 'file'].includes(node.type || '') || hasFocus.value) return
   clearFitContext()
-  selectedTerminal.value = undefined
+  clearContentFocus()
   const canvasId = activeId.value, context = apiContext()
   resetPagingFeedback()
   cancelCreatedReveal()
-  if (document.activeElement instanceof HTMLElement && document.activeElement.closest('.card-content')) document.activeElement.blur()
   // Blurring can remove a focus-exempt window from the filtered overview.
   const fit = navigationFit.value = { canvasId, id: node.id, pending: true }
   await nextTick()
@@ -516,7 +516,17 @@ const logicalWindowFocus = computed<WindowFocus | undefined>(() => {
   return focused.value || selectedTerminal.value
 })
 watch(logicalWindowFocus, value => setTerminalReadFocus(value), { flush: 'sync' })
-watch([activeId, apiRevision], () => { selectedTerminal.value = undefined }, { flush: 'sync' })
+function clearContentFocus() {
+  selectedTerminal.value = undefined
+  pendingNoteFocus = ''; pendingKeyboard = undefined
+  const active = document.activeElement
+  if (active instanceof HTMLElement && active.closest('.card-content')) active.blur()
+  hideMobileKeyboard()
+}
+watch([activeId, apiRevision], clearContentFocus, { flush: 'sync' })
+watch(navigation.requested, request => {
+  if (request) { clearContentFocus(); cancelCreatedReveal() }
+}, { flush: 'sync' })
 function selectLogicalTerminal(event: Event) {
   if (!(event.target instanceof Element) || event instanceof PointerEvent && event.button !== 0) return
   const card = event.target.closest<HTMLElement>('.terminal-card') ||
@@ -1152,12 +1162,17 @@ watch([overviewSelected, overviewOrder], async () => { preferredPageX.value = un
 watch(activeId, async () => { if (!authenticated.value) return; scanTarget.value = null; preferredPageX.value = undefined; cancelCreatedReveal(); lastOverviewInteraction = undefined; overviewMenuOpen.value = false; layoutGesture = ''; resizingCard = undefined; focused.value = null; focusedCardId.value = ''; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
 function switchCanvas(id: string) {
   if (notificationReveal.value?.canvasId !== id) cancelNotificationReveal()
+  clearContentFocus(); cancelCreatedReveal()
   sidebarOpen.value = false
-  if (id === activeId.value && !unknownInstance.value && !navigation.requested.value) return
+  if (id === activeId.value && !unknownInstance.value && !navigation.requested.value) {
+    if (focused.value) void closeFocus()
+    if (focusedCardId.value) void closeCardFocus()
+    return
+  }
   void flushNotes(activeId.value); saveViewport(); navigation.visit(activeInstance.value.id, id)
 }
 function backgroundSaved(_updated: Canvas) { void syncState().catch(showError) }
-function openSettings() { sidebarOpen.value = false; canvasMenu.value = false; sourcePanel.value = false; settingsDialog.value = true }
+function openSettings() { settingsDialog.value = true; sidebarOpen.value = false; canvasMenu.value = false; sourcePanel.value = false }
 function settingsSaved(_settings: GlobalSettings) { void syncState().catch(showError) }
 function openBackground() { canvasMenu.value = false; backgroundCanvas.value = isOverview.value ? { id: 'overview', name: t('app.overview'), nodes: [], background: overviewBackground.value } : currentCanvas.value || null }
 function closeBackgroundDialog() {
@@ -1168,7 +1183,7 @@ async function toggleCanvasMenu() {
   canvasMenu.value = !canvasMenu.value
   if (canvasMenu.value) { await nextTick(); canvasMenuElement.value?.querySelector<HTMLButtonElement>('.canvas-menu button')?.focus() }
 }
-function openCanvasDialog(canvas?: Canvas) { canvasDialogRevision++; sidebarOpen.value = false; canvasDraft.id = canvas?.id || ''; canvasDraft.name = canvas?.name || ''; dialogError.value = ''; canvasDialog.value = true }
+function openCanvasDialog(canvas?: Canvas) { canvasDialogRevision++; canvasDraft.id = canvas?.id || ''; canvasDraft.name = canvas?.name || ''; dialogError.value = ''; canvasDialog.value = true; sidebarOpen.value = false }
 async function submitCanvas() {
   if (!canvasDraft.name.trim() || busy.value) return
   const context = apiContext(), revision = canvasDialogRevision, draft = { ...canvasDraft, name: canvasDraft.name.trim() }
@@ -1204,9 +1219,8 @@ function deleteCanvas() {
 }
 function openSource(source?: Source) {
   sourceDialogRevision++
-  sidebarOpen.value = false
   Object.assign(sourceDraft, { id: '', name: '', provider: 'tui', transport: 'local', target: '', herdrSession: '', herdrSocket: '', sshIdentityFile: '', sshKnownHostsFile: '' }, source || {})
-  dialogError.value = ''; sourceDialog.value = true
+  dialogError.value = ''; sourceDialog.value = true; sidebarOpen.value = false
 }
 watch([sourceDialog, sourceProbeKey, apiRevision, sourceProbeRetry, sourceConfigUnchanged], ([open, key], _previous, onCleanup) => {
   sourceProbe.value = { key: '', pending: false }
@@ -1347,6 +1361,7 @@ function getCanvasNode(id: string): TerminalCanvasNode | undefined {
 const notificationActionsAvailable = computed(() => !busy.value && (!notificationSurface.value || notificationSurface.value.classList.contains('settings-modal')))
 function prepareNotificationAction() {
   if (!notificationActionsAvailable.value) return false
+  clearContentFocus()
   if (settingsDialog.value) settingsDialogComponent.value?.close()
   return true
 }
@@ -1359,7 +1374,6 @@ watch([notificationFocus, terminalReadFocus], ([target, ready]) => {
 async function goToNotification(event: CanvasNotification) {
   if (!prepareNotificationAction()) return
   cancelNotificationReveal()
-  selectedTerminal.value = undefined
   const target = notificationTarget(event, resources.value), source = sources.value.find(item => item.id === event.sourceId)
   if (!target || !source || !latestState.value) return
   const context = apiContext(), intent = notificationIntent
@@ -1433,6 +1447,7 @@ function terminalAction(action: string, id: string) {
 }
 async function closeFocus() {
   const context = apiContext(), canvasId = activeId.value
+  clearContentFocus()
   if (document.activeElement instanceof HTMLElement && focusViewportElement.value?.contains(document.activeElement)) document.activeElement.blur()
   focused.value = null; graphKey.value++
   await nextTick()
@@ -1456,6 +1471,7 @@ function cardAction(action: string, id: string) {
 }
 async function closeCardFocus() {
   const context = apiContext(), canvasId = activeId.value
+  clearContentFocus()
   if (document.activeElement instanceof HTMLElement && focusViewportElement.value?.contains(document.activeElement)) document.activeElement.blur()
   void flushNotes(canvasId)
   focusedCardId.value = ''; graphKey.value++
