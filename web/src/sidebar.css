@@ -8,7 +8,10 @@
 .sidebar>.brand { height: 46px; min-height: 46px; padding: 0; margin-bottom: 12px; font-size: 20px; letter-spacing: -1px; }
 .sidebar>.brand svg { width: 21px; height: 21px; }
 /* Fixed rows reserve the same native gutter as the navigation scrollport. */
-.sidebar>.brand,.sidebar-navigation,.sidebar-footer { overflow: hidden; scrollbar-gutter: stable both-edges; scrollbar-width: thin; }
+.sidebar>.brand,.sidebar-navigation,.sidebar-footer { overflow: hidden; scrollbar-gutter: stable both-edges; }
+@supports not selector(::-webkit-scrollbar) {
+  .sidebar>.brand,.sidebar-navigation,.sidebar-footer { scrollbar-width: thin; }
+}
 .sidebar-navigation { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 8px; }
 .sidebar :is(.brand,.instance-trigger,.nav-item,.source-nav-item,.source-empty,.nav-section-label) {
   display: grid; grid-template-columns: var(--sidebar-leading) minmax(0,1fr) var(--sidebar-trailing);
