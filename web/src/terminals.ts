@@ -28,7 +28,7 @@ import { bindMobileInput } from './mobile-input'
 import { copiedFile } from './file-clipboard'
 import { loadCanvasFile } from './file-transfer'
 import type { CanvasFileReference } from './file-reference'
-import { fitTerminalGrid, terminalBox, terminalMetrics, type RenderedTerminalGrid } from './terminal-geometry'
+import { containTerminalScale, fitTerminalGrid, sameTerminalGrid, terminalBox, terminalFrameReady, terminalMetrics, type RenderedTerminalGrid, type TerminalGrid } from './terminal-geometry'
 import { TerminalReconnect, terminalInputHasFocus } from './terminal-reconnect'
 import { normalizeTerminalZoom } from './terminal-zoom'
 import type { SourceResource } from './types'
@@ -37,6 +37,7 @@ import type { PaneAction, PaneContext } from '../../shared/pane-context'
 export type TerminalStatus = {
   status: 'connecting' | 'connected' | 'disconnected' | 'closed'
   screenReady?: boolean
+  transitioning?: boolean
   error?: string
   readOnly?: boolean
   focusedPaneId?: string
@@ -53,7 +54,7 @@ export type TerminalStatus = {
   retryAttempt?: number
 }
 interface FocusResize { token: string; suspended: boolean; requested?: { cols: number; rows: number } }
-interface CompletionFrame { generation: number; layout?: string; focusedPaneId?: string; panes: Array<{ id: string; completion?: CompletionToken }> }
+interface CompletionFrame extends TerminalGrid { generation: number; layout?: string; focusedPaneId?: string; panes: Array<{ id: string; completion?: CompletionToken }> }
 interface Session {
   appShowing?: boolean
   readGeneration?: number
@@ -96,9 +97,10 @@ interface Session {
   metrics?: RenderedTerminalGrid
   cardFit?: { width: number; height: number; metrics: RenderedTerminalGrid }
   resizing?: boolean
-  parsedGrid?: { cols: number; rows: number }
-  paintedGrid?: { cols: number; rows: number }
-  initialFrame?: { cols: number; rows: number }
+  parsedGrid?: TerminalGrid
+  paintedGrid?: TerminalGrid
+  requestedGrid?: TerminalGrid
+  paintRevision?: number
   resetPending?: boolean
   state: TerminalStatus
   metadata?: WindowMetadata
@@ -156,7 +158,8 @@ function refreshReadFocus() {
   }
   const paneId = session.state.focusedPaneId
   if (!paneId) { terminalReadFocus.value = undefined; return }
-  const painted = session.paintedCompletion?.focusedPaneId === paneId ? session.paintedCompletion.panes.find(pane => pane.id === paneId)?.completion : undefined
+  const painted = !session.state.transitioning && sameTerminalGrid(session.paintedGrid, session.term) && session.paintedCompletion?.focusedPaneId === paneId
+    ? session.paintedCompletion.panes.find(pane => pane.id === paneId)?.completion : undefined
   const next: PaneFocus = { ...logicalFocus!, paneId, ...(painted ? { painted } : {}) }
   const previous = terminalReadFocus.value
   if (!previous || previous.sourceId !== next.sourceId || previous.windowId !== next.windowId || previous.paneId !== next.paneId || !sameCompletion(previous.painted, next.painted)) terminalReadFocus.value = next
@@ -284,6 +287,9 @@ export function setContentFont(settings: ContentFontSettings, presentation: Font
   for (const session of sessions.values()) {
     session.rendered = undefined
     session.metrics = undefined
+    session.paintedGrid = undefined
+    session.paintRevision = (session.paintRevision || 0) + 1
+    present(session)
     session.term.options.fontFamily = presentation.family
     if (session.opened) session.removeFontFeatures = applyTerminalFontFeatures(session.term, contentFont)
     // Fonts alter cell metrics, not the shared native grid. Only an existing
@@ -390,8 +396,8 @@ function disconnect(session: Session) {
   session.parsedLayout = undefined; session.paintedLayout = undefined
   session.readGeneration = 0; session.readGesture = false
   session.connectionRevision++
-  session.parsedGrid = undefined; session.paintedGrid = undefined; session.resetPending = false
-  session.initialFrame = undefined
+  session.parsedGrid = undefined; session.paintedGrid = undefined; session.requestedGrid = undefined; session.resetPending = false
+  session.paintRevision = (session.paintRevision || 0) + 1
   session.cardFit = undefined
   session.connectionProbe?.abort(); session.connectionProbe = undefined
   endFocusSize(session)
@@ -485,10 +491,7 @@ async function connect(session: Session, probe: boolean) {
         complete.set([27, 99]); complete.set(data, 2)
         data = complete; session.resetPending = false
       }
-      const grid = { cols: session.term.cols, rows: session.term.rows }
-      session.term.write(data, () => {
-        if (session.socket === socket && session.term.cols === grid.cols && session.term.rows === grid.rows) session.parsedGrid = grid
-      })
+      session.term.write(data)
     }
     else {
       try {
@@ -498,23 +501,27 @@ async function connect(session: Session, probe: boolean) {
         if (message.type === 'metadata' && isWindowMetadata(message.window) && message.window.id === session.resource.windowId) updateMetadata(session, message.window)
         else if (message.type === 'reset') {
           session.resetPending = true
-          session.initialFrame = undefined
+          session.parsedGrid = undefined; session.paintedGrid = undefined
+          session.paintRevision = (session.paintRevision || 0) + 1
           session.parsedCompletion = undefined; session.paintedCompletion = undefined; session.readCompletion = undefined
           session.parsedLayout = undefined; session.paintedLayout = undefined
+          present(session)
           refreshReadFocus()
         }
-        else if (message.type === 'completion-frame' && Number.isSafeInteger(message.generation) && message.generation === (session.readGeneration || 0) && Array.isArray(message.panes) && message.panes.every((pane: unknown) => pane && typeof pane === 'object' && 'id' in pane && typeof pane.id === 'string' &&
+        else if (message.type === 'completion-frame' && Number.isInteger(message.cols) && message.cols >= 2 && Number.isInteger(message.rows) && message.rows >= 1 &&
+          Number.isSafeInteger(message.generation) && message.generation === (session.readGeneration || 0) && Array.isArray(message.panes) && message.panes.every((pane: unknown) => pane && typeof pane === 'object' && 'id' in pane && typeof pane.id === 'string' &&
           (!('completion' in pane) || pane.completion === undefined || isCompletionToken(pane.completion)))) {
-          const frame: CompletionFrame = { generation: message.generation, layout: typeof message.layout === 'string' ? message.layout : undefined,
+          const frame: CompletionFrame = { cols: message.cols, rows: message.rows, generation: message.generation, layout: typeof message.layout === 'string' ? message.layout : undefined,
             focusedPaneId: typeof message.focusedPaneId === 'string' ? message.focusedPaneId : undefined, panes: message.panes }
-          const grid = { cols: session.term.cols, rows: session.term.rows }
+          const revision = session.paintRevision
           // This control frame follows the matching ANSI bytes. Queue behind their
           // parse, then request a real paint even when the result text is unchanged.
           session.term.write('', () => {
-            if (session.socket !== socket || !isCurrentApi(context) || frame.generation !== (session.readGeneration || 0)) return
+            if (session.socket !== socket || !isCurrentApi(context) || revision !== session.paintRevision ||
+              frame.generation !== (session.readGeneration || 0) || !sameTerminalGrid(frame, session.term)) return
             session.parsedCompletion = frame
             session.parsedLayout = frame.layout
-            if (!session.state.screenReady && session.term.cols === grid.cols && session.term.rows === grid.rows) session.initialFrame = grid
+            session.parsedGrid = frame
             if (session.opened) session.term.refresh(0, session.term.rows - 1)
           })
         }
@@ -538,12 +545,14 @@ async function connect(session: Session, probe: boolean) {
             connectionFailed(session, typeof message.error === 'string' ? message.error : undefined); return
           }
           if (message.status !== 'connected' && message.status !== 'connecting') return
+          if (message.readOnly === true && !session.magnified) session.requestedGrid = undefined
           const restoreInputFocus = probe && message.status === 'connected' && session.state.status !== 'connected'
           if (message.status === 'connected') session.reconnect?.connected()
           session.term.options.disableStdin = !interactive(session)
           setState(session, { ...session.state, status: message.status, error: undefined,
             retryAttempt: message.status === 'connected' ? undefined : session.state.retryAttempt, readOnly: message.readOnly === true })
           syncViewVisibility(session)
+          present(session)
           schedulePresentation(session)
           if (restoreInputFocus && session.host?.isConnected && session.viewVisible !== false &&
             terminalInputHasFocus(session.mobile ? session.mobileInput?.element : session.term.textarea)) claimFocus(session)
@@ -551,6 +560,8 @@ async function connect(session: Session, probe: boolean) {
         else if (message.type === 'resize' && Number.isInteger(message.cols) && Number.isInteger(message.rows)) {
           if (session.term.cols !== message.cols || session.term.rows !== message.rows) {
             session.parsedGrid = undefined; session.paintedGrid = undefined
+            session.parsedCompletion = undefined; session.paintedCompletion = undefined
+            session.paintRevision = (session.paintRevision || 0) + 1
             session.cardFit = undefined
           }
           session.term.resize(message.cols, message.rows)
@@ -565,6 +576,7 @@ async function connect(session: Session, probe: boolean) {
           const revoked = !message.owned && message.reason === 'superseded'
           if (message.token !== request.token && !revoked) return
           request.suspended = message.owned !== true
+          if (request.suspended) session.requestedGrid = undefined
           setState(session, { ...session.state, focusResize: { owned: message.owned === true } })
           schedulePresentation(session)
         }
@@ -603,6 +615,11 @@ function present(session: Session) {
   const { width, height } = geometry
   const requested = session.focusResize?.requested, painted = session.paintedGrid
   const desired = session.magnified ? proposedSize(session) : undefined
+  if (sameTerminalGrid(session.requestedGrid, painted) && sameTerminalGrid(painted, session.term)) session.requestedGrid = undefined
+  const target = session.requestedGrid || (!session.focusResize?.suspended ? desired : undefined)
+  const transitioning = session.state.status === 'connected' && !!session.state.screenReady && !session.appShowing &&
+    (!!session.resizing || !sameTerminalGrid(painted, session.term) || !!target && !sameTerminalGrid(painted, target))
+  if (session.state.transitioning !== transitioning) setState(session, { ...session.state, transitioning })
   // Keep the complete old frame fitted while the native resize is in flight.
   // Geometry acknowledgements alone do not mean xterm has painted that grid.
   const native = session.magnified && session.state.focusResize?.owned === true && requested && painted && desired &&
@@ -611,14 +628,17 @@ function present(session: Session) {
     session.term.cols === requested.cols && session.term.rows === requested.rows
   // A card can change aspect ratio while its shared native grid stays unchanged.
   // Keep the whole frame visible until the native grid catches up.
-  const scale = native ? 1 : Math.min(session.magnified ? Infinity : 1, available.width / width, available.height / height)
+  const scale = containTerminalScale(available, geometry, session.magnified && !native)
   if (!(scale > 0)) return
-  Object.assign(session.surface.style, { width: `${width}px`, height: `${height}px`, transform: native ? 'none' : `scale(${scale})` })
+  Object.assign(session.surface.style, { width: `${width}px`, height: `${height}px`, transform: scale === 1 ? 'none' : `scale(${scale})` })
 }
 function setTerminalZoom(session: Session, percent: number) {
   const fontSize = 12 * (session.magnified ? normalizeTerminalZoom(percent) : 100) / 100
   if (session.term.options.fontSize === fontSize) return
   session.rendered = undefined; session.metrics = undefined
+  session.paintedGrid = undefined
+  session.paintRevision = (session.paintRevision || 0) + 1
+  present(session)
   session.term.options.fontSize = fontSize
   present(session)
   schedulePresentation(session)
@@ -636,6 +656,7 @@ function updateFocusSize(session: Session) {
   if (!proposed) return
   if (!session.focusResize) {
     session.focusResize = { token: uuid(), suspended: false, requested: proposed }
+    session.requestedGrid = proposed
     claimFocus(session)
     session.socket.send(JSON.stringify({ type: 'focus-resize-begin', token: session.focusResize.token, ...proposed }))
     return
@@ -643,6 +664,7 @@ function updateFocusSize(session: Session) {
   const request = session.focusResize
   if (proposed.cols === request.requested?.cols && proposed.rows === request.requested?.rows) return
   request.requested = proposed
+  session.requestedGrid = proposed
   session.socket.send(JSON.stringify({ type: 'focus-resize-update', token: request.token, ...proposed }))
 }
 function endFocusSize(session: Session) {
@@ -650,6 +672,7 @@ function endFocusSize(session: Session) {
   const request = session.focusResize
   if (!request) return
   session.focusResize = undefined
+  session.requestedGrid = undefined
   if (session.socket?.readyState === WebSocket.OPEN) session.socket.send(JSON.stringify({ type: 'focus-resize-end', token: request.token }))
   setState(session, { ...session.state, focusResize: undefined })
 }
@@ -665,7 +688,7 @@ function resize(session: Session, explicit = true) {
   if (explicit) claimFocus(session)
   const { cols, rows } = proposed
   if (cols !== session.term.cols || rows !== session.term.rows) {
-    if (explicit) session.term.resize(cols, rows)
+    session.requestedGrid = proposed
     session.socket.send(JSON.stringify({ type: 'resize', cols, rows }))
   }
   if (explicit) present(session)
@@ -730,28 +753,24 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     // Offscreen xterm buffers can resize before the DOM renderer catches up.
     // Keep each measured grid paired with the dimensions that actually painted it.
     term.onRender(event => {
-      if (current.parsedLayout) current.paintedLayout = current.parsedLayout
-      if (current.parsedCompletion) { current.paintedCompletion = current.parsedCompletion; refreshReadFocus() }
       const grid = terminalGeometry(current)
       if (!grid) return
-      const parsed = current.parsedGrid, painted = current.paintedGrid
-      const frameReady = parsed && parsed.cols === term.cols && parsed.rows === term.rows &&
-        (painted?.cols !== parsed.cols || painted.rows !== parsed.rows)
-      if (frameReady) current.paintedGrid = parsed
+      const frameReady = terminalFrameReady(current.parsedGrid, term, event)
+      if (frameReady) {
+        current.paintedGrid = current.parsedGrid
+        current.paintedLayout = current.parsedLayout
+        current.paintedCompletion = current.parsedCompletion
+      }
       const previous = current.rendered
       const next = { ...grid, cols: term.cols, rows: term.rows }
       current.metrics = terminalMetrics(current.metrics, previous, next)
-      const initial = current.initialFrame
-      if (!current.state.screenReady && current.host?.isConnected && initial &&
-          initial.cols === term.cols && initial.rows === term.rows &&
-          parsed?.cols === term.cols && parsed.rows === term.rows && event.start === 0 && event.end === term.rows - 1) {
-        present(current)
-        current.initialFrame = undefined
-        setState(current, { ...current.state, screenReady: true })
-      }
-      if (!frameReady && previous?.width === grid.width && previous.height === grid.height && previous.cols === term.cols && previous.rows === term.rows) return
       current.rendered = next
+      if (!current.state.screenReady && current.host?.isConnected && frameReady) {
+        setState(current, { ...current.state, screenReady: true, transitioning: true })
+      }
       present(current)
+      refreshReadFocus()
+      if (!frameReady && previous?.width === grid.width && previous.height === grid.height && previous.cols === term.cols && previous.rows === term.rows) return
       schedulePresentation(current)
     })
     function sendInput(data: string, binary = false) {
@@ -966,7 +985,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     allowsContextMenu() { return current.mouseDefaults?.allowsContextMenu() ?? true },
     async paneContext(x: number, y: number, signal: AbortSignal): Promise<PaneContext | null> {
       const layout = current.paintedLayout
-      if (!canPasteText() || !layout) return null
+      if (!canPasteText() || !layout || current.state.transitioning) return null
       const rect = current.term.element?.querySelector('.xterm-screen')?.getBoundingClientRect()
       if (!rect?.width || !rect.height || x < rect.left || y < rect.top || x >= rect.right || y >= rect.bottom) return null
       const point = { column: Math.floor((x - rect.left) * current.term.cols / rect.width),
@@ -977,7 +996,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       if (!canPasteText()) throw new Error(t('terminal.unavailable'))
       await api(`${windowPath}/pane-action`, { method: 'POST', body: JSON.stringify({ pane: { paneId: pane.paneId, bootId: pane.bootId }, command }) }, mountingContext)
     },
-    setAppShowing(value: boolean) { current.appShowing = value; if (value) { current.term.blur(); current.keyboard?.blur() }; current.term.options.disableStdin = !interactive(current); refreshReadFocus() },
+    setAppShowing(value: boolean) { current.appShowing = value; if (value) { current.term.blur(); current.keyboard?.blur() }; current.term.options.disableStdin = !interactive(current); present(current); refreshReadFocus() },
     focus(options: { keyboard?: boolean } = {}) { focusTerminal(current, options.keyboard) },
     blur() { if (current.mobile) current.keyboard?.blur(); else current.term.blur(); setModifiers(current) },
     setModifiers(modifiers: Partial<TerminalModifiers>) { setModifiers(current, modifiers) },
@@ -1008,7 +1027,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     },
     setTouchMode(mode: TerminalTouchMode) { current.touchMode = mode; setModifiers(current); setState(current, { ...current.state, touchMode: mode }) },
     resize() { return resize(current) },
-    setResizing(value: boolean) { current.resizing = value },
+    setResizing(value: boolean) { current.resizing = value; present(current) },
     close() { if (current.host === host && isCurrentApi(mountingContext)) windowRemoved(current) },
     cancelUpload() { current.uploads.cancel() },
     reconnect() {

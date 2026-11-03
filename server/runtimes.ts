@@ -64,7 +64,7 @@ async function releaseIdleConnections(sourceId: string): Promise<void> {
     !preparing.has(sourceId) &&
     ![...active].some((item) => item.sourceId === sourceId)
   )
-    await closeProviderConnections(sourceId);
+    await closeRuntimeConnections(sourceId);
 }
 
 /** Quotes one argument for the remote POSIX login shell; never concatenate raw input. */
@@ -130,7 +130,7 @@ export function validateSource(source: Source): void {
   )
     throw new Error("Invalid source");
   if (source.transport === "ssh") parseSshTarget(source.target ?? "");
-  if (source.provider !== undefined && !['tui', 'core'].includes(source.provider)) throw new Error('Invalid Herdr runtime');
+  if (source.runtime !== undefined && !['tui', 'core'].includes(source.runtime)) throw new Error('Invalid runtime');
   validateHerdrLocation(source);
   for (const value of [
     source.herdrSession,
@@ -168,7 +168,7 @@ function sshOptions(source: Source): string[] {
   return [...options, "--", ssh.destination];
 }
 
-/** One scoped process for file transfer; no terminal or provider state is changed. */
+/** One scoped process for file transfer; no terminal or runtime state is changed. */
 export function sourcePythonCommand(source: Source, script: string, args: string[]) {
   validateSource(source);
   const command = ["python3", "-c", script, ...args];
@@ -353,7 +353,7 @@ async function runRemoteShellWithInput(source: Source, command: string, input: B
 
 export async function nativeSocketForSource(source: Source): Promise<string> {
   validateSource(source);
-  if (source.provider === 'core') return discoverCoreSocket(source);
+  if (source.runtime === 'core') return discoverCoreSocket(source);
   return (await discoverHerdrSockets(source)).api;
 }
 
@@ -427,16 +427,30 @@ export async function writeRemoteBridgeRegistry(
   };
 }
 
-// Existing commands belong to their installer/user. Only publish a missing helper.
-const helperInstallPython = String.raw`import hashlib,os,secrets,shutil,stat,sys
+// Match the shipped helper bytes; never execute or replace unrelated commands.
+const helperInstallPython = String.raw`import hashlib,json,os,pathlib,secrets,shutil,stat,sys
 os.umask(0o077)
 expected=sys.argv[1]
 payload=sys.stdin.buffer.read(8*1024*1024+1)
 if not payload or len(payload)>8*1024*1024 or hashlib.sha256(payload).hexdigest()!=expected: raise SystemExit('Canvas helper checksum mismatch')
-if shutil.which('canvas'): raise SystemExit(0)
+marker=b'#!/usr/bin/env python3\n# @thezzisu/canvas managed helper\n'
 uid=os.getuid()
 flags=os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK
 refusal='Canvas helper path is unsafe; leaving it untouched'
+home=os.environ.get('HOME')
+if not home or not os.path.isabs(home): raise SystemExit('HOME is required to install the Canvas helper')
+target=os.path.join(home,'.local','bin','canvas')
+found=shutil.which('canvas')
+if found and os.path.abspath(found)!=target:
+ try:
+  resolved=pathlib.Path(found).resolve(strict=True)
+  package=resolved.parent.parent.parent/'package.json'
+  if resolved.name!='main.js' or resolved.parent.name!='cli' or resolved.parent.parent.name!='dist' or package.stat().st_size>65536: raise SystemExit(0)
+  metadata=json.loads(package.read_text())
+  if metadata.get('name')!='@thezzisu/canvas' or metadata.get('bin',{}).get('canvas')!='dist/cli/main.js': raise SystemExit(0)
+  bundled=resolved.with_name('canvas')
+  if bundled.is_file() and bundled.stat().st_size<=8*1024*1024 and hashlib.sha256(bundled.read_bytes()).hexdigest()==expected: raise SystemExit(0)
+ except (OSError,ValueError,TypeError,AttributeError,RuntimeError): raise SystemExit(0)
 def directory(parent,name):
  try: os.mkdir(name,0o700,dir_fd=parent)
  except FileExistsError: pass
@@ -444,25 +458,38 @@ def directory(parent,name):
  info=os.fstat(fd)
  if info.st_uid!=uid or not stat.S_ISDIR(info.st_mode) or info.st_mode&0o002: raise SystemExit(refusal)
  return fd
-home=os.environ.get('HOME')
-if not home or not os.path.isabs(home): raise SystemExit('HOME is required to install the Canvas helper')
 root=os.open(home,flags|os.O_DIRECTORY)
 info=os.fstat(root)
 if info.st_uid!=uid or info.st_mode&0o002: raise SystemExit(refusal)
 bin=directory(directory(root,'.local'),'bin')
-try: os.stat('canvas',dir_fd=bin,follow_symlinks=False)
+previous=None
+try:
+ info=os.stat('canvas',dir_fd=bin,follow_symlinks=False)
+ if not stat.S_ISREG(info.st_mode) or info.st_uid!=uid or info.st_size>8*1024*1024: raise SystemExit(0)
+ with os.fdopen(os.open('canvas',flags,dir_fd=bin),'rb') as current:
+  before=os.fstat(current.fileno())
+  if (before.st_dev,before.st_ino)!=(info.st_dev,info.st_ino): raise SystemExit(refusal)
+  existing=current.read(8*1024*1024+1)
+ if hashlib.sha256(existing).hexdigest()==expected: raise SystemExit(0)
+ if not existing.startswith(marker): raise SystemExit(0)
+ previous=(info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns)
 except FileNotFoundError: pass
-else: raise SystemExit(0)
 name='.canvas.'+secrets.token_hex(16)+'.tmp'
 fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o755,dir_fd=bin)
 try:
  with os.fdopen(fd,'wb') as stream:
   stream.write(payload);stream.flush();os.fchmod(stream.fileno(),0o755);os.fsync(stream.fileno())
- try: os.link(name,'canvas',src_dir_fd=bin,dst_dir_fd=bin,follow_symlinks=False)
- except FileExistsError: pass
+ if previous:
+  info=os.stat('canvas',dir_fd=bin,follow_symlinks=False)
+  if not stat.S_ISREG(info.st_mode) or (info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns)!=previous: raise SystemExit(0)
+  os.replace(name,'canvas',src_dir_fd=bin,dst_dir_fd=bin)
+ else:
+  try: os.link(name,'canvas',src_dir_fd=bin,dst_dir_fd=bin,follow_symlinks=False)
+  except FileExistsError: pass
  os.fsync(bin)
 finally:
- os.unlink(name,dir_fd=bin)`;
+ try: os.unlink(name,dir_fd=bin)
+ except FileNotFoundError: pass`;
 
 async function installLocalHelper(bytes: Buffer, expectedHash: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -543,7 +570,7 @@ export async function prepareOpenBridge(
   }
 }
 
-/** Minimal named environment for provider commands; never forwards server secrets. */
+/** Minimal named environment for runtime commands; never forwards server secrets. */
 function commandEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     TERM: "xterm-256color",
@@ -570,7 +597,7 @@ function commandEnvironment(): NodeJS.ProcessEnv {
 }
 
 /** Close only Canvas-owned socket forwards; no workstation SSH configuration changes. */
-export async function closeProviderConnections(sourceId?: string): Promise<void> {
+export async function closeRuntimeConnections(sourceId?: string): Promise<void> {
   await closeSocketTunnels(sourceId);
 }
 
@@ -689,11 +716,11 @@ async function herdrResources(source: Source, signal?: AbortSignal): Promise<Pic
 export async function probeSource(draft: Omit<Source, "id" | "name">, signal?: AbortSignal): Promise<{ status: "online"; serverVersion: string }> {
   const source: Source = { ...draft, id: randomUUID(), name: "Connection probe" };
   try {
-    if (source.provider === 'core') return await withCore(source, async (_layout, rpc) => ({ status: 'online', serverVersion: rpc.hello.version }), signal);
+    if (source.runtime === 'core') return await withCore(source, async (_layout, rpc) => ({ status: 'online', serverVersion: rpc.hello.version }), signal);
     const { serverVersion } = await herdrResources(source, signal);
     if (!serverVersion) throw new Error("Herdr did not report a server version");
     return { status: "online", serverVersion };
-  } finally { await closeProviderConnections(source.id); }
+  } finally { await closeRuntimeConnections(source.id); }
 }
 
 export async function listResources(source: Source): Promise<SourceResource> {
@@ -705,7 +732,7 @@ export async function listResources(source: Source): Promise<SourceResource> {
     spaces: [],
   };
   try {
-    if (source.provider === 'core') return await withCore(source, async (layout, rpc) => ({ ...result, spaces: layout.resources(await layout.snapshot()), serverVersion: rpc.hello.version }));
+    if (source.runtime === 'core') return await withCore(source, async (layout, rpc) => ({ ...result, spaces: layout.resources(await layout.snapshot()), serverVersion: rpc.hello.version }));
     Object.assign(result, await herdrResources(source));
   } catch (error) {
     result.status = "offline";
@@ -736,7 +763,7 @@ export async function createSpace(
   label?: string,
   sourceSpaceId?: string,
 ): Promise<{ spaceId: string; windowId: string }> {
-  if (source.provider === 'core') return withCore(source, layout => layout.createSpace(label, sourceSpaceId));
+  if (source.runtime === 'core') return withCore(source, layout => layout.createSpace(label, sourceSpaceId));
   if (sourceSpaceId) await requireResource(source, sourceSpaceId);
   return createdWindow(await requestHerdr(source, "workspace.create", {
     ...(label?.trim() ? { label: name(label) } : {}),
@@ -756,7 +783,7 @@ export async function renameSpace(
   spaceId: string,
   label: string,
 ): Promise<void> {
-  if (source.provider === 'core') return withCore(source, layout => layout.renameSpace(spaceId, label));
+  if (source.runtime === 'core') return withCore(source, layout => layout.renameSpace(spaceId, label));
   label = name(label);
   await requireResource(source, spaceId);
   await requestHerdr(source, "workspace.rename", { workspace_id: spaceId, label });
@@ -765,7 +792,7 @@ export async function closeSpace(
   source: Source,
   spaceId: string,
 ): Promise<string[]> {
-  if (source.provider === 'core') return withCore(source, layout => layout.closeSpace(spaceId));
+  if (source.runtime === 'core') return withCore(source, layout => layout.closeSpace(spaceId));
   const space = await requireResource(source, spaceId);
   await Promise.all(
     [...active]
@@ -787,7 +814,7 @@ export async function createWindow(
   spaceId: string,
   label?: string,
 ): Promise<{ spaceId: string; windowId: string }> {
-  if (source.provider === 'core') return withCore(source, layout => layout.createWindow(spaceId, label));
+  if (source.runtime === 'core') return withCore(source, layout => layout.createWindow(spaceId, label));
   await requireResource(source, spaceId);
   return createdWindow(await requestHerdr(source, "tab.create", {
     workspace_id: spaceId,
@@ -801,7 +828,7 @@ export async function renameWindow(
   windowId: string,
   label: string,
 ): Promise<void> {
-  if (source.provider === 'core') return withCore(source, layout => layout.renameWindow(spaceId, windowId, label));
+  if (source.runtime === 'core') return withCore(source, layout => layout.renameWindow(spaceId, windowId, label));
   label = name(label);
   await requireResource(source, spaceId, windowId);
   await requestHerdr(source, "tab.rename", { tab_id: windowId, label });
@@ -811,7 +838,7 @@ export async function closeWindow(
   spaceId: string,
   windowId: string,
 ): Promise<void> {
-  if (source.provider === 'core') return withCore(source, layout => layout.closeWindow(spaceId, windowId));
+  if (source.runtime === 'core') return withCore(source, layout => layout.closeWindow(spaceId, windowId));
   await requireResource(source, spaceId, windowId);
   await Promise.all(
     [...active]
@@ -846,7 +873,7 @@ async function prepareTerminal(
   windowId: string,
 ): Promise<TerminalHandle> {
   await requireResource(source, spaceId, windowId);
-  if (source.provider === 'core') {
+  if (source.runtime === 'core') {
     const socket = await connectedCoreSocket(source);
     let rpc: CoreRpc | undefined, closed = false, connecting = false;
     const controller = new AbortController();

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { sourcePythonCommand } from "./providers.ts";
+import { sourcePythonCommand } from "./runtimes.ts";
 import type { Source } from "./state.ts";
 
 export interface InboxFile { name: string; size: number }

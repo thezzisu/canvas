@@ -5,7 +5,7 @@ import { mkdtemp, writeFile, readFile, stat, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { closeSocketTunnels, ensureSocketTunnel } from "./ssh-tunnels.ts";
-import { prepareLoopback, type Source } from "./providers.ts";
+import { prepareLoopback, type Source } from "./runtimes.ts";
 
 async function waitFor<T>(
   action: () => Promise<T>,

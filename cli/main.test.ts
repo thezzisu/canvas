@@ -44,3 +44,13 @@ test('open delegates to the bundled Python core without changing the caller work
   assert.match(help.stdout, /HERDR_SOCKET_PATH and HERDR_PANE_ID/u)
   assert.match(help.stdout, /each invocation/u)
 })
+
+test('capture delegates to the same standalone helper without requiring a sibling module', () => {
+  const help = run(['capture', '--help'])
+  assert.equal(help.status, 0)
+  assert.match(help.stdout, /--port/u)
+  assert.match(help.stdout, /--runtime/u)
+  const missing = run(['capture', '/usr/bin/true'])
+  assert.equal(missing.status, 1)
+  assert.match(missing.stderr, /connected herdr pane/u)
+})

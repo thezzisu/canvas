@@ -28,8 +28,7 @@ if (['--help', '-h', 'help'].includes(command) || command === 'serve' && args.le
 } else if (command === 'serve' && !args.length) {
   await import('../server/main.ts')
 } else if ((command === 'open' || command === 'capture') && args.length) {
-  const entry = command === 'capture' ? ['./capture.py', ...args] : ['./canvas', 'open', ...args]
-  const child = spawn('python3', [fileURLToPath(new URL(entry[0]!, import.meta.url)), ...entry.slice(1)], {
+  const child = spawn('python3', [fileURLToPath(new URL('./canvas', import.meta.url)), command, ...args], {
     stdio: 'inherit', env: { ...process.env, CANVAS_HELPER_DIRECT: '1' },
   })
   child.once('error', () => { console.error(`canvas: Python 3 is required for ${command}`); process.exitCode = 1 })

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Writable, type Readable } from "node:stream";
 import type { WebSocket } from "ws";
 import { sourceConnectionKey, type FileAsset, type Source } from "./state.ts";
-import type { SourceResource } from "./providers.ts";
+import type { SourceResource } from "./runtimes.ts";
 import { directoryPath } from "./editor-links.ts";
 import { webUrl, type OpenedUrl } from "./url-forward.ts";
 
@@ -68,7 +68,7 @@ interface Bridge {
   root: string;
   server: Server;
   sockets: Set<Socket>;
-  cleanupProvider: () => Promise<void>;
+  cleanupRuntime: () => Promise<void>;
   cleanupRegistry: () => Promise<void>;
   signature: string;
 }
@@ -217,7 +217,7 @@ export class OpenDownloadService {
         throw new Error("Native terminal file bridge could not be identified");
       const bridge: Bridge = {
         source, record, root, server, sockets,
-        cleanupProvider: prepared.cleanup,
+        cleanupRuntime: prepared.cleanup,
         cleanupRegistry: async () => {},
         signature,
       };
@@ -314,7 +314,7 @@ export class OpenDownloadService {
     try { resources = await this.options.resources(source); }
     catch { socket.end(rejected); return; }
     const matches = resources.spaces.flatMap(space => space.windows)
-      .filter(window => window.panes.some(pane => (source.provider === 'core' ? pane.terminalId : pane.id) === header.paneId));
+      .filter(window => window.panes.some(pane => (source.runtime === 'core' ? pane.terminalId : pane.id) === header.paneId));
     if (matches.length !== 1) { socket.end(jsonLine({ ok: false, reason: "pane-unavailable" })); return; }
     const windowId = matches[0]!.id;
     const recipient = await this.options.recipient(source.id, windowId).catch(() => undefined);
@@ -578,7 +578,7 @@ export class OpenDownloadService {
     for (const [id, ticket] of this.directories) if (ticket.sourceId === sourceId) this.finishDirectory(id, "not-attached");
     for (const socket of bridge.sockets) socket.destroy();
     await bridge.cleanupRegistry().catch(() => {});
-    await bridge.cleanupProvider().catch(() => {});
+    await bridge.cleanupRuntime().catch(() => {});
     await new Promise<void>((resolve) => bridge.server.close(() => resolve()));
     await rm(bridge.root, { recursive: true, force: true });
   }

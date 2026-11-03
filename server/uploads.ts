@@ -3,7 +3,7 @@ import type { WebSocket } from "ws";
 import { z } from "zod";
 import type { Source } from "./state.ts";
 import type { TerminalManager } from "./terminals.ts";
-import { listResources, shellQuote } from "./providers.ts";
+import { listResources, shellQuote } from "./runtimes.ts";
 import { validateInboxFile, writeInboxFile, removeInboxFiles, type InboxFile } from "./inbox.ts";
 import { MAX_PASTE_PARTS, MAX_TERMINAL_PASTE_BYTES, MAX_UPLOAD_BEGIN_BYTES, renderPasteParts, type PastePart } from "../shared/paste.ts";
 

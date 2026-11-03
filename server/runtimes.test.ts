@@ -28,12 +28,12 @@ import {
   nativeSocketForSource,
   prepareOpenBridge,
   writeRemoteBridgeRegistry,
-  closeProviderConnections,
+  closeRuntimeConnections,
   parseSshTarget,
   shellQuote,
   sourcePythonCommand,
   type Source,
-} from "./providers.ts";
+} from "./runtimes.ts";
 
 test("SSH arguments reject credentials, options and shell metacharacters", () => {
   assert.deepEqual(parseSshTarget("ssh://alice@example.test:2222"), {
@@ -106,7 +106,7 @@ test('discovery selects each tab\'s remembered pane rather than global focus or 
   await Promise.all([new Promise<void>(resolve => api.listen(source.herdrSocket, resolve)),
     new Promise<void>(resolve => endpoint.listen(join(root, 'herdr-client.sock'), resolve))]);
   t.after(async () => {
-    await closeProviderConnections(source.id);
+    await closeRuntimeConnections(source.id);
     await Promise.all([api, endpoint].map(server => new Promise<void>(resolve => server.close(() => resolve()))));
     rmSync(root, { recursive: true, force: true });
   });
@@ -135,7 +135,7 @@ test('official herdr preserves inactive single and split tab titles without atta
   const native = spawn(binary, ['--session', 'titles', 'server'], { env, stdio: 'ignore' });
   const source: Source = { id: randomUUID(), name: 'Isolated titles', transport: 'local', herdrSocket: join(config, 'herdr/sessions/titles/herdr.sock') };
   t.after(async () => {
-    await closeProviderConnections(source.id);
+    await closeRuntimeConnections(source.id);
     if (native.exitCode === null && native.signalCode === null) {
       const ended = new Promise<void>(resolve => native.once('exit', () => resolve()));
       native.kill(); const timer = setTimeout(() => native.kill('SIGKILL'), 3000); await ended; clearTimeout(timer);
@@ -186,20 +186,29 @@ async function helperFixture(t: import('node:test').TestContext) {
   return { root, target: join(root, '.local/bin/canvas'), source: { id: 'helper', name: 'Fixture', transport: 'local' } as Source };
 }
 
-test('Canvas publishes only a missing helper atomically, without state journals', async t => {
+const managedHelper = (body: string) => Buffer.from('#!/usr/bin/env python3\n# @thezzisu/canvas managed helper\n' + body + '\n');
+
+test('Canvas silently publishes or refreshes its own helper and leaves matching bytes untouched', async t => {
   const { root, target, source } = await helperFixture(t);
-  const bytes = Buffer.from('#!/bin/sh\nexit 0\n');
+  const bytes = managedHelper('print("first")');
   await Promise.all(Array.from({ length: 12 }, () => installCanvasHelper(source, bytes)));
   assert.deepEqual(readFileSync(target), bytes);
   assert.equal(statSync(target).mode & 0o777, 0o755);
   assert.deepEqual(readdirSync(join(root, '.local/bin')), ['canvas']);
   assert(!existsSync(join(root, '.local/state/canvas')));
-  await installCanvasHelper(source, Buffer.from('#!/bin/sh\nexit 1\n'));
-  assert.deepEqual(readFileSync(target), bytes, 'existing helpers are not upgraded or overwritten');
+  const original = statSync(target);
+  await installCanvasHelper(source, bytes);
+  assert.equal(statSync(target).ino, original.ino, 'matching helper is not rewritten');
+  const updated = managedHelper('print("updated")');
+  process.env.PATH = `${dirname(target)}:/usr/bin:/bin`;
+  await Promise.all(Array.from({ length: 12 }, () => installCanvasHelper(source, updated)));
+  assert.deepEqual(readFileSync(target), updated, 'mismatched managed helper is atomically refreshed');
+  assert.equal(statSync(target).mode & 0o777, 0o755);
+  assert.deepEqual(readdirSync(dirname(target)), ['canvas'], 'no version journals or leftover temporary files');
   await assert.rejects(installCanvasHelper(source, Buffer.alloc(8 * 1024 * 1024 + 1)), /size is invalid/u);
 });
 
-test('any executable canvas on PATH prevents injection without running it', async t => {
+test('an unrelated executable canvas on PATH prevents injection without running it', async t => {
   const { root, target, source } = await helperFixture(t), tools = join(root, 'tools');
   mkdirSync(tools);
   writeFileSync(join(tools, 'canvas'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
@@ -207,6 +216,25 @@ test('any executable canvas on PATH prevents injection without running it', asyn
   await installCanvasHelper(source, Buffer.from('#!/bin/sh\nexit 0\n'));
   assert(!existsSync(target));
   assert(!existsSync(join(root, '.local')), 'skipping an existing command creates no helper directories');
+});
+
+test('matching npm helper skips injection; mismatched npm stays untouched while a standalone helper is supplied', async t => {
+  const { root, target, source } = await helperFixture(t), tools = join(root, 'tools'), packageRoot = join(root, 'package');
+  mkdirSync(tools); mkdirSync(join(packageRoot, 'dist/cli'), { recursive: true });
+  writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: '@thezzisu/canvas', bin: { canvas: 'dist/cli/main.js' } }));
+  const entry = join(packageRoot, 'dist/cli/main.js'), bundled = join(packageRoot, 'dist/cli/canvas');
+  const entryBytes = '#!/bin/sh\nprintf should-not-run > ' + shellQuote(join(root, 'executed')) + '\n';
+  writeFileSync(entry, entryBytes, { mode: 0o755 }); symlinkSync(entry, join(tools, 'canvas'));
+  process.env.PATH = `${tools}:/usr/bin:/bin`;
+  const bytes = managedHelper('print("current")'); writeFileSync(bundled, bytes);
+  await installCanvasHelper(source, bytes);
+  assert(!existsSync(target));
+  writeFileSync(bundled, managedHelper('print("old")'));
+  await installCanvasHelper(source, bytes);
+  assert.deepEqual(readFileSync(target), bytes);
+  assert.equal(readFileSync(entry, 'utf8'), entryBytes);
+  assert.deepEqual(readFileSync(bundled), managedHelper('print("old")'));
+  assert(!existsSync(join(root, 'executed')), 'identification never executes the installed CLI');
 });
 
 test('existing helper, npm symlink, unrelated command and broken link stay untouched', async t => {
@@ -246,15 +274,16 @@ test('owner-managed group-writable parents retain their permissions', async t =>
   assert.equal(statSync(target).mode & 0o777, 0o755);
 });
 
-test('SSH helper installation applies the same no-overwrite rule in an isolated home', async t => {
+test('SSH helper installation refreshes only marked helpers in an isolated home', async t => {
   const { root, target } = await helperFixture(t), tools = join(root, 'tools'); mkdirSync(tools);
   writeFileSync(join(tools, 'ssh'), '#!/bin/sh\nfor argument do command=$argument; done\nexec /bin/sh -c "$command"\n', { mode: 0o755 });
   process.env.PATH = `${tools}:/usr/bin:/bin`;
   const source: Source = { id: 'helper-ssh', name: 'Fixture', transport: 'ssh', target: 'fixture.invalid' };
-  const bytes = Buffer.from('#!/bin/sh\nexit 0\n');
+  const bytes = managedHelper('print("first")');
   await installCanvasHelper(source, bytes);
-  await installCanvasHelper(source, Buffer.from('#!/bin/sh\nexit 1\n'));
-  assert.deepEqual(readFileSync(target), bytes);
+  const updated = managedHelper('print("updated")');
+  await installCanvasHelper(source, updated);
+  assert.deepEqual(readFileSync(target), updated);
 });
 
 test("SSH herdr discovers native sockets and shares direct API forwarding without a herdr executable", async () => {
@@ -388,8 +417,8 @@ process.on('SIGTERM',()=>{ for(const socket of sockets) socket.destroy(); for(co
     const bridge = await prepareOpenBridge(source, localBridgeSocket);
     assert.equal(bridge.nativeSocket, nativeSocket);
     assert.ok(bridge.remoteSocket?.startsWith("/tmp/canvas-bridge-"));
-    await closeProviderConnections(source.id);
-    assert.equal(bridge.remoteSocket && existsSync(dirname(bridge.remoteSocket)), true, "idle provider cleanup keeps the Canvas download forward alive");
+    await closeRuntimeConnections(source.id);
+    assert.equal(bridge.remoteSocket && existsSync(dirname(bridge.remoteSocket)), true, "idle runtime cleanup keeps the Canvas download forward alive");
     const fetched = await new Promise<string>((resolve, reject) => {
       const connection = createConnection(bridge.remoteSocket!);
       connection.once("connect", () => connection.write("ticket"));
@@ -409,7 +438,7 @@ process.on('SIGTERM',()=>{ for(const socket of sockets) socket.destroy(); for(co
   } finally {
     await first?.cleanup();
     await second?.cleanup();
-    await closeProviderConnections(source.id);
+    await closeRuntimeConnections(source.id);
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
     await Promise.all(

@@ -5,6 +5,7 @@ import { createCoreClient, coreHyperlink } from './client.ts'
 import { CoreLayout, type CoreDocument } from './layout.ts'
 import { CoreRpc, CoreStream, type CoreNotification } from './rpc.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
+import type { TerminalFrame } from '../herdr/client.ts'
 
 const tick = () => new Promise<void>(resolve => setImmediate(resolve))
 const report = (state: string) => `\x1b]7501;state=${state}:app=fixture\x1b\\`
@@ -53,9 +54,10 @@ test('widening a narrow core view attaches newly exposed panes before publishing
   await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('LEFT\x1b[?9001l') })
   const client = await opening
   try {
-    const frames: WindowMetadata[] = []; let output = ''
+    const frames: TerminalFrame[] = []; let output = ''
     client.onData(data => { output += data }); client.onFrame(frame => frames.push(frame)); await tick()
     assert.deepEqual(f.attached, ['t1'])
+    assert.equal(frames.at(-1)?.cols, 2)
     const before = frames.length
     client.resize(40, 6)
     await tick(); await tick()
@@ -65,6 +67,8 @@ test('widening a narrow core view attaches newly exposed panes before publishing
     await tick(); await tick()
     assert(!output.includes('Terminal unavailable'))
     assert.deepEqual((await client.content())?.map(pane => pane.lines[0]?.trim()), ['LEFT', 'RIGHT'])
+    assert.deepEqual({ cols: frames.at(-1)?.cols, rows: frames.at(-1)?.rows }, { cols: 40, rows: 6 })
+    assert.equal(frames[0]?.cols, 2, 'later geometry cannot relabel an earlier queued frame')
     assert.equal(f.failures.length, 0)
   } finally { client.kill() }
 })

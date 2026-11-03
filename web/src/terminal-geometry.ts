@@ -17,6 +17,20 @@ export function fitTerminalGrid(available: { width: number; height: number }, re
 }
 
 export interface RenderedTerminalGrid { width: number; height: number; cols: number; rows: number }
+export type TerminalGrid = Pick<RenderedTerminalGrid, 'cols' | 'rows'>
+
+export function sameTerminalGrid(a: TerminalGrid | undefined, b: TerminalGrid | undefined): boolean {
+  return !!a && !!b && a.cols === b.cols && a.rows === b.rows
+}
+
+/** A parsed frame becomes visible only after its entire matching viewport paints. */
+export function terminalFrameReady(frame: TerminalGrid | undefined, grid: TerminalGrid, paint: { start: number; end: number }): boolean {
+  return sameTerminalGrid(frame, grid) && paint.start === 0 && paint.end === grid.rows - 1
+}
+
+export function containTerminalScale(available: { width: number; height: number }, content: { width: number; height: number }, upscale = false): number {
+  return Math.min(upscale ? Infinity : 1, available.width / content.width, available.height / content.height)
+}
 
 /** DOM renderer totals are pixel-rounded. Resizing the grid must not turn that
  * rounding back into a new cell metric and alternate between adjacent grids. */

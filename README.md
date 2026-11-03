@@ -86,13 +86,14 @@ canvas open ./project
 canvas open http://localhost:5173/
 ```
 
-Canvas installs a Python helper at `~/.local/bin/canvas` only when the destination
-has no `canvas` command. Keep that directory in PATH. Existing commands and files
-are left untouched. The helper forwards to this npm package when it finds its CLI
-later on PATH; otherwise it provides `open` using Python alone. Installing npm
-into the same prefix as an existing helper can produce npm's `EEXIST` error.
-Choose a separate prefix or explicitly remove your own verified helper before
-installation; Canvas never forces replacement of another executable.
+Canvas silently installs its single-file Python helper at `~/.local/bin/canvas`
+and refreshes marked Canvas helpers when their content differs. Keep that directory
+in PATH. Unrelated commands, user links and npm installations remain untouched.
+The helper handles `open` and `capture` itself, or delegates to a matching Canvas
+npm helper later on PATH. An older npm installation does not prevent installing
+the standalone helper when its destination is available. Installing npm into the
+same prefix as a helper requires an explicit ownership handoff; Canvas never
+forces replacement of another executable.
 
 Files are copied into Canvas storage. The overview previews supported files;
 custom canvases retain downloadable file cards. Markdown supports rendered/source
@@ -149,9 +150,8 @@ own storage. The selected terminal/app view survives that transition.
 Stop terminates the launched process group; command exit, bridge loss, logout
 or connection changes revoke access. Capture is temporary and single-pane;
 refresh, other devices and later pane-layout changes do not restore the app.
-The npm CLI must be installed on the command's machine; the Python-only remote
-`open` helper does not include capture. POSIX process groups are required;
-native Windows is outside this release.
+The standalone Python helper supports capture without Node.js. POSIX process
+groups are required; native Windows is outside this release.
 
 ## Configuration
 

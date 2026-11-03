@@ -12,8 +12,8 @@ import { UploadService } from "./uploads.ts";
 import { Store, sourceConnectionKey, type Source } from "./state.ts";
 import { createApp } from "./app.ts";
 import { TerminalManager } from "./terminals.ts";
-import type { SourceResource } from "./providers.ts";
-import { closeWindow, createSpace, listResources, shellQuote } from "./providers.ts";
+import type { SourceResource } from "./runtimes.ts";
+import { closeWindow, createSpace, listResources, shellQuote } from "./runtimes.ts";
 import type { writeInboxFile } from "./inbox.ts";
 import { MAX_PASTE_PARTS, MAX_UPLOAD_BEGIN_BYTES, renderPasteParts, type PastePart } from "../shared/paste.ts";
 

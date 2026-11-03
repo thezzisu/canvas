@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { request as httpRequest, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { prepareLoopback } from './providers.ts'
+import { prepareLoopback } from './runtimes.ts'
 import { sourceConnectionKey, type Source, type Store } from './state.ts'
 
 const PREFIX = '/api/capture/'

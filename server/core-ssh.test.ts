@@ -8,8 +8,8 @@ import { tmpdir, userInfo } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import headless from '@xterm/headless'
 import { CoreRpc } from './core/rpc.ts'
-import { closeProviderConnections, closeSpace, createSpace, installCanvasHelper, listResources, nativeSocketForSource, openTerminal,
-  prepareOpenBridge, probeSource, renameSpace, renameWindow, shellQuote, sourcePythonCommand, writeRemoteBridgeRegistry, type Source } from './providers.ts'
+import { closeRuntimeConnections, closeSpace, createSpace, installCanvasHelper, listResources, nativeSocketForSource, openTerminal,
+  prepareOpenBridge, probeSource, renameSpace, renameWindow, shellQuote, sourcePythonCommand, writeRemoteBridgeRegistry, type Source } from './runtimes.ts'
 import { readSourceFile, regularSourceFiles } from './source-file.ts'
 import { removeInboxFiles, writeInboxFile } from './inbox.ts'
 import type { HerdrClientTransport } from './herdr/client.ts'
@@ -47,7 +47,7 @@ test('official core over private loopback SSH shares one forward, preserves term
   const address = portServer.address(); assert(address && typeof address === 'object'); const port = address.port
   await new Promise<void>(resolve => portServer.close(() => resolve()))
   const user = userInfo().username, previousPath = process.env.PATH
-  const source: Source = { id: `core-ssh-${randomUUID()}`, name: 'Core SSH fixture', provider: 'core', transport: 'ssh', target: `ssh://${user}@127.0.0.1:${port}`,
+  const source: Source = { id: `core-ssh-${randomUUID()}`, name: 'Core SSH fixture', runtime: 'core', transport: 'ssh', target: `ssh://${user}@127.0.0.1:${port}`,
     herdrSocket: socket, sshIdentityFile: join(sshRoot, 'client'), sshKnownHostsFile: join(sshRoot, 'known_hosts') }
   const screen = new headless.Terminal({ cols: 80, rows: 24, allowProposedApi: true })
   const text = () => Array.from({ length: screen.buffer.active.length }, (_, n) => screen.buffer.active.getLine(n)?.translateToString(true) || '').join('\n')
@@ -58,7 +58,7 @@ test('official core over private loopback SSH shares one forward, preserves term
   }
   t.after(async () => {
     client?.kill(); for (const handle of handles) await handle.cleanup()
-    await removeRegistry?.(); await bridge?.cleanup(); await closeProviderConnections(source.id)
+    await removeRegistry?.(); await bridge?.cleanup(); await closeRuntimeConnections(source.id)
     for (const peer of bridgeClients) peer.destroy()
     if (bridgeServer.listening) await new Promise<void>(resolve => bridgeServer.close(() => resolve()))
     try {
@@ -126,7 +126,7 @@ test('official core over private loopback SSH shares one forward, preserves term
   const remoteBridgeDirectory = dirname(bridge.remoteSocket!)
   await removeRegistry(); removeRegistry = undefined; await bridge.cleanup(); bridge = undefined
   assert.equal(await exists(remoteBridgeDirectory), false)
-  client.kill(); await first.cleanup(); await second.cleanup(); await closeProviderConnections(source.id)
+  client.kill(); await first.cleanup(); await second.cleanup(); await closeRuntimeConnections(source.id)
   await until(async () => !await exists(dirname(localForward)), 'forwarding socket directory was not cleaned up')
   await closeSpace(source, created.spaceId)
   assert(!(await listResources(source)).spaces.some(item => item.id === created.spaceId))

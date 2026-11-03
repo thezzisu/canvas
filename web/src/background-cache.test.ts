@@ -48,3 +48,31 @@ test('a failed background can be retried without leaving a rejected cache entry'
   assert.equal(await cache.get('/api/backgrounds/a'), 'blob:fixture-1')
   assert.equal(calls, 2)
 })
+test('wallpaper material shares one derivation and is discarded with its original background', async () => {
+  const { cache, revoked } = fixture(async () => new Blob(['wallpaper']))
+  let finish!: (value: string) => void, calls = 0
+  const render = async () => { calls++; return await new Promise<string>(resolve => { finish = resolve }) }
+  const first = cache.material('/a', render)
+  assert.equal(cache.material('/a', render), first)
+  await cache.get('/a'); await Promise.resolve()
+  finish('data:image/png;base64,material')
+  assert.equal(await first, 'data:image/png;base64,material')
+  assert.equal(await cache.material('/a', render), 'data:image/png;base64,material')
+  assert.equal(calls, 1)
+
+  const stale = cache.material('/b', render)
+  await cache.get('/b'); await Promise.resolve()
+  cache.retain(['/a'])
+  finish('stale material')
+  await assert.rejects(stale, { name: 'AbortError' })
+  assert.deepEqual(revoked, ['blob:fixture-2'])
+  cache.clear()
+  assert.deepEqual(revoked, ['blob:fixture-2', 'blob:fixture-1'])
+})
+test('failed material derivation retries without downloading the wallpaper again', async () => {
+  let loads = 0
+  const { cache } = fixture(async () => { loads++; return new Blob(['wallpaper']) })
+  await assert.rejects(cache.material('/a', async () => { throw new Error('decode failed') }), /decode failed/)
+  assert.equal(await cache.material('/a', async () => 'material'), 'material')
+  assert.equal(loads, 1)
+})

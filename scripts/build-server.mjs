@@ -13,5 +13,4 @@ execFileSync(process.execPath, ['node_modules/typescript/bin/tsc', '-p', 'tsconf
 await writeFile(new URL('../dist/server/build-info.js', import.meta.url), serverBuildModule(buildInfo))
 await mkdir(new URL('../dist/cli', import.meta.url), { recursive: true })
 await copyFile(new URL('../cli/canvas', import.meta.url), new URL('../dist/cli/canvas', import.meta.url))
-await copyFile(new URL('../cli/capture.py', import.meta.url), new URL('../dist/cli/capture.py', import.meta.url))
 await chmod(new URL('../dist/cli/main.js', import.meta.url), 0o755)

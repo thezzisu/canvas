@@ -85,7 +85,7 @@ export default {
   "windowActions": "Window actions",
   "newSpace": "New space",
   "closeDialog": "Close dialog",
-  "terminalBackend": "Terminal backend",
+  "runtime": "Runtime",
   "connectionName": "Connection name",
   "connectionNamePlaceholder": "e.g. Development",
   "remoteSsh": "Remote SSH",

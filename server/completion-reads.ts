@@ -2,7 +2,7 @@ import { aggregateStatus } from '../shared/status.ts'
 import { isCompletionToken, sameCompletion, type CompletionToken } from '../shared/completion.ts'
 import type { WindowMetadata } from '../shared/window-metadata.ts'
 import { sourceConnectionKey, type Source, type Store } from './state.ts'
-import type { SourceResource } from './providers.ts'
+import type { SourceResource } from './runtimes.ts'
 
 interface ReadRecord { id: string; connection: string; bootId: string; read: Record<string, number>; completed: Record<string, number> }
 const kind = 'completion-read'
@@ -145,7 +145,7 @@ export class CompletionReads {
     this.windows.delete(sourceId); this.connections.delete(sourceId); this.snapshots.delete(sourceId)
   }
   projectResources(source: Source, resource: SourceResource): SourceResource {
-    if (source.provider === 'core') return resource
+    if (source.runtime === 'core') return resource
     if (resource.status !== 'online' || resource.error || !this.current(source) || this.connections.get(source.id) !== sourceConnectionKey(source)) return resource
     const windows = this.windows.get(source.id)
     return { ...resource, spaces: resource.spaces.map(space => ({ ...space, windows: space.windows.map(window => {

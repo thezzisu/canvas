@@ -20,6 +20,7 @@ function fixture(t: import('node:test').TestContext) {
     mkdirSync(dirname(entry), { recursive: true })
     writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name, bin: { canvas: binValue } }))
     writeFileSync(entry, '#!/usr/bin/env python3\nimport json,os,sys\nprint(json.dumps({"args":sys.argv[1:],"cwd":os.getcwd()}))\nsys.exit(7)\n', { mode: 0o755 })
+    copyFileSync(helper, join(packageRoot, 'dist/cli/canvas'))
     symlinkSync(entry, join(npm, 'canvas'))
     return entry
   }
@@ -40,17 +41,32 @@ test('direct bundled-core mode cannot forward back into the npm CLI', t => {
   assert.equal(result.status, 1); assert.match(result.stderr, /connected herdr pane/u); assert.equal(result.stdout, '')
 })
 
+test('only a matching npm helper may handle open and capture; server and version still use the installed CLI', t => {
+  const f = fixture(t), entry = f.packageEntry()
+  for (const args of [['open', '--help'], ['capture', '--help']]) {
+    const matching = f.run(args)
+    assert.equal(matching.status, 7); assert.deepEqual(JSON.parse(matching.stdout).args, args)
+  }
+  writeFileSync(join(dirname(entry), 'canvas'), 'older helper')
+  for (const args of [['open', '--help'], ['capture', '--help']]) {
+    const mismatched = f.run(args)
+    assert.equal(mismatched.status, 0); assert.match(mismatched.stdout, /--runtime/u)
+  }
+  assert.equal(f.run(['version']).status, 7)
+  assert.equal(f.run(['serve']).status, 7)
+})
+
 test('unrelated same-name tools are never executed to detect the product', t => {
   const f = fixture(t)
   writeFileSync(join(f.npm, 'canvas'), '#!/bin/sh\necho SHOULD_NOT_EXECUTE\n', { mode: 0o755 })
   const result = f.run(['--help'])
-  assert.equal(result.status, 0); assert(!result.stdout.includes('SHOULD_NOT_EXECUTE')); assert.match(result.stdout, /Open a file/u)
+  assert.equal(result.status, 0); assert(!result.stdout.includes('SHOULD_NOT_EXECUTE')); assert.match(result.stdout, /Open files/u)
 })
 
 test('package name and bin target must both identify this CLI', t => {
   for (const [name, bin] of [['another-canvas', 'dist/cli/main.js'], ['@thezzisu/canvas', 'unrelated.js']]) {
     const f = fixture(t); f.packageEntry(name, bin)
-    const result = f.run(['--help']); assert.equal(result.status, 0); assert.match(result.stdout, /Open a file/u)
+    const result = f.run(['--help']); assert.equal(result.status, 0); assert.match(result.stdout, /Open files/u)
   }
 })
 

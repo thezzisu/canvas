@@ -8,7 +8,7 @@ import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import { HerdrInputRouter } from '../herdr/input.ts'
 import { HerdrScreen, type ScreenSelection } from '../herdr/screen.ts'
 import { windowContent, type NativeContentPane } from '../herdr/content.ts'
-import type { HerdrClientExit, HerdrClientTransport } from '../herdr/client.ts'
+import type { HerdrClientExit, HerdrClientTransport, TerminalFrame } from '../herdr/client.ts'
 import type { CellData, ClientMessage, ClientShellSnapshot, FrameData, PaneSurfaceFrame, PaneSurfacePane, PaneSurfaceSplit } from '../herdr/wire.ts'
 import { coreInput, type CoreInputModes } from './input.ts'
 import { CoreLayout, coreWindowMetadata, panes, projectTab, type CoreSnapshot, type CoreTab, type CoreTerminal } from './layout.ts'
@@ -96,7 +96,7 @@ class CoreWindowClient implements HerdrClientTransport {
   private surface?: PaneSurfaceFrame
   private shell?: ClientShellSnapshot
   private metadata?: WindowMetadata
-  private renderedMetadata?: WindowMetadata
+  private renderedMetadata?: TerminalFrame
   private renderedContent?: { surface: PaneSurfaceFrame; shell: ClientShellSnapshot; owners: Int32Array; layers: string[] }
   private layoutToken = { signature: '', token: '' }
   private readonly screen = new HerdrScreen()
@@ -113,13 +113,13 @@ class CoreWindowClient implements HerdrClientTransport {
   private readonly dataListeners = new Set<(data: string) => void>()
   private readonly paneFocusListeners = new Set<(id: string | undefined) => void>()
   private readonly metadataListeners = new Set<(metadata: WindowMetadata) => void>()
-  private readonly frameListeners = new Set<(metadata: WindowMetadata) => void>()
+  private readonly frameListeners = new Set<(metadata: TerminalFrame) => void>()
   private readonly snapshotListeners = new Set<() => void>()
   private readonly notificationListeners = new Set<(notification: NativeNotification) => void>()
   private readonly exitListeners = new Set<(exit: HerdrClientExit) => void>()
   private readonly subscriptions: Subscription[] = []
   private subscription?: { close(): void }
-  private output: Array<{ data: string; frame?: WindowMetadata }> = []
+  private output: Array<{ data: string; frame?: TerminalFrame }> = []
   private outputBytes = 0
   private paused = false
   private flushing = false
@@ -438,7 +438,7 @@ class CoreWindowClient implements HerdrClientTransport {
         frame, panes: surfacePanes, splits, popup: null }
       this.shell = shell; this.surface = surface; this.input.refresh()
       this.renderedContent = { surface, shell, owners, layers }
-      this.renderedMetadata = this.metadata ? { ...this.metadata, layout: this.layoutToken.token, panes: this.metadata.panes.map(metadata => {
+      this.renderedMetadata = this.metadata ? { ...this.metadata, cols: frame.width, rows: frame.height, layout: this.layoutToken.token, panes: this.metadata.panes.map(metadata => {
         const pane = this.attached.get(metadata.id), owner = layers.indexOf(metadata.id) + 1
         if (!metadata.completion || pane && owner > 0 && visible.has(owner) && this.completionPainted(pane, metadata.completion)) return metadata
         const { completion: _completion, ...pending } = metadata
@@ -602,7 +602,7 @@ class CoreWindowClient implements HerdrClientTransport {
     return { windows: this.state.spaces.flatMap(space => space.tabs.map(tab => coreWindowMetadata(this.state!, tab.id, tab.id === this.options.tabId ? this.focused : undefined)!)),
       state: { bootId: this.state.coreId, revision: this.revision } }
   }
-  async completionFence(): Promise<WindowMetadata | undefined> {
+  async completionFence(): Promise<TerminalFrame | undefined> {
     await this.input.settled(); await this.parseQueue
     if (this.closed) return
     // Core events and terminal bytes are independent channels. This fences the
@@ -653,7 +653,7 @@ class CoreWindowClient implements HerdrClientTransport {
     if (!this.initialized || data.length > 2 * 1024 * 1024 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(data)) return
     this.emit(`\x1b]52;c;${data}\x07`)
   }
-  private emit(data: string, frame?: WindowMetadata) {
+  private emit(data: string, frame?: TerminalFrame) {
     if (this.closed || !data && !frame) return
     this.output.push({ data, frame }); this.outputBytes += Buffer.byteLength(data)
     if (this.outputBytes > MAX_OUTPUT) { this.finish({ exitCode: 1 }); return }
@@ -681,7 +681,7 @@ class CoreWindowClient implements HerdrClientTransport {
     queueMicrotask(() => { if (!this.closed && metadata && this.metadataListeners.has(listener)) listener(metadata) })
     return { dispose: () => { this.metadataListeners.delete(listener) } }
   }
-  onFrame(listener: (metadata: WindowMetadata) => void) { this.frameListeners.add(listener); return { dispose: () => { this.frameListeners.delete(listener) } } }
+  onFrame(listener: (metadata: TerminalFrame) => void) { this.frameListeners.add(listener); return { dispose: () => { this.frameListeners.delete(listener) } } }
   onSnapshot(listener: () => void) {
     this.snapshotListeners.add(listener); queueMicrotask(() => { if (!this.closed && this.state && this.snapshotListeners.has(listener)) listener() })
     return { dispose: () => { this.snapshotListeners.delete(listener) } }

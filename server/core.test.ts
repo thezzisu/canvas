@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import headless from '@xterm/headless'
-import { closeProviderConnections, closeSpace, closeWindow, createSpace, createWindow, listResources, openTerminal, probeSource, renameSpace, renameWindow, type Source } from './providers.ts'
+import { closeRuntimeConnections, closeSpace, closeWindow, createSpace, createWindow, listResources, openTerminal, probeSource, renameSpace, renameWindow, type Source } from './runtimes.ts'
 import { CoreRpc } from './core/rpc.ts'
 import { CoreLayout } from './core/layout.ts'
 import type { HerdrClientTransport } from './herdr/client.ts'
@@ -21,7 +21,7 @@ async function stop(child: ChildProcess) {
   await done; clearTimeout(timer)
 }
 
-test('official core provider retains Canvas window, pane, input, geometry, status and lifecycle behavior', { timeout: 60000 }, async t => {
+test('official core runtime retains Canvas window, pane, input, geometry, status and lifecycle behavior', { timeout: 60000 }, async t => {
   const binary = process.env.CANVAS_TEST_CORE_BINARY
   if (!binary) { t.skip('Set CANVAS_TEST_CORE_BINARY to official isolated herdr-core 0.1.17+'); return }
   const root = await mkdtemp(join(tmpdir(), 'cv-core-native-'))
@@ -38,7 +38,7 @@ test('official core provider retains Canvas window, pane, input, geometry, statu
   core.stderr?.on('data', data => { diagnostics = (diagnostics + data.toString()).slice(-2000) })
   let rpc: CoreRpc | undefined
   const handles: Awaited<ReturnType<typeof openTerminal>>[] = [], clients: HerdrClientTransport[] = []
-  const source: Source = { id: 'core-native', name: 'Core native fixture', provider: 'core', transport: 'local', herdrSocket: socket }
+  const source: Source = { id: 'core-native', name: 'Core native fixture', runtime: 'core', transport: 'local', herdrSocket: socket }
   const screen = new headless.Terminal({ cols: 90, rows: 25, allowProposedApi: true })
   const screenText = () => Array.from({ length: screen.buffer.active.length }, (_, i) => screen.buffer.active.getLine(i)?.translateToString(true) || '').join('\n')
   const records = async (): Promise<Array<{ terminal: string; pid: number; kind: string; hex?: string; cols?: number; rows?: number; state?: string }>> => {
@@ -52,7 +52,7 @@ test('official core provider retains Canvas window, pane, input, geometry, statu
   t.after(async () => {
     for (const client of clients) client.kill()
     for (const handle of handles) await handle.cleanup()
-    await closeProviderConnections(source.id)
+    await closeRuntimeConnections(source.id)
     try {
       rpc ||= await CoreRpc.connect(socket, { timeoutMs: 1000 })
       const listed = await rpc.call<{ terminals: Array<{ address: string; state: string }> }>('terminal.list', { all: true })
@@ -63,7 +63,7 @@ test('official core provider retains Canvas window, pane, input, geometry, statu
   })
   await until(async () => (await listResources(source)).status === 'online', 'isolated core did not start')
   rpc = await CoreRpc.connect(socket)
-  assert.equal((await probeSource({ provider: 'core', transport: 'local', herdrSocket: socket })).serverVersion, rpc.hello.version)
+  assert.equal((await probeSource({ runtime: 'core', transport: 'local', herdrSocket: socket })).serverVersion, rpc.hello.version)
   const created = await createSpace(source, 'Synthetic')
   const layout = new CoreLayout(rpc)
   let resource = await listResources(source), space = resource.spaces.find(item => item.id === created.spaceId)!
@@ -168,7 +168,7 @@ test('official core provider retains Canvas window, pane, input, geometry, statu
   const recoveredPid = (await layout.snapshot()).terminals.find(item => item.address === terminalId)!.pid
   await until(() => Array.from({ length: cloneScreen.buffer.active.length }, (_, i) => cloneScreen.buffer.active.getLine(i)?.translateToString(true) || '').join('\n').includes(`PID=${recoveredPid}`), 'restarted terminal did not reattach its new program paint')
   assert.equal(cloneExit, false, 'kept recovery does not close the Canvas window')
-  cloneClient.kill(); await cloneHandle.cleanup(); await closeProviderConnections(cloned.id)
+  cloneClient.kill(); await cloneHandle.cleanup(); await closeRuntimeConnections(cloned.id)
   await closeSpace(source, created.spaceId)
   assert(!(await listResources(source)).spaces.some(item => item.id === created.spaceId))
   assert.equal((await layout.snapshot()).terminals.filter(item => item.state === 'live').length, 0, 'explicit close ends only the fixture terminals')

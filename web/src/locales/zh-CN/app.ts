@@ -85,7 +85,7 @@ export default {
   "windowActions": "窗口操作",
   "newSpace": "新建 space",
   "closeDialog": "关闭对话框",
-  "terminalBackend": "终端后端",
+  "runtime": "运行时",
   "connectionName": "连接名称",
   "connectionNamePlaceholder": "例如：开发机器",
   "remoteSsh": "远程 SSH",

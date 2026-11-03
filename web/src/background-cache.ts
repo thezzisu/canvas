@@ -1,4 +1,4 @@
-interface Entry { controller: AbortController; url?: string; pending?: Promise<string> }
+interface Entry { controller: AbortController; url?: string; pending?: Promise<string>; material?: Promise<string> }
 
 /** Original image bytes live only for the current signed-in instance. */
 export class BackgroundCache {
@@ -20,6 +20,13 @@ export class BackgroundCache {
       throw error
     })
     return entry.pending
+  }
+  material(path: string, create: (url: string) => Promise<string>): Promise<string> {
+    const loaded = this.get(path), entry = this.entries.get(path)!
+    return entry.material ??= loaded.then(create).then(value => {
+      if (this.entries.get(path) !== entry) throw new DOMException('Background discarded', 'AbortError')
+      return value
+    }).catch(error => { entry.material = undefined; throw error })
   }
   retain(paths: Iterable<string>) {
     const retained = new Set(paths)

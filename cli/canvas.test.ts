@@ -1,14 +1,14 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
-const helper = fileURLToPath(new URL("./canvas", import.meta.url));
+const helperSource = fileURLToPath(new URL("./canvas", import.meta.url));
 const routingError = (nativeSocket: string, message: string, pane = "w1:p2") =>
   `canvas: ${message}\n  HERDR_SOCKET_PATH=${JSON.stringify(nativeSocket)} HERDR_PANE_ID=${JSON.stringify(pane)}\n`;
 interface Header {
@@ -19,6 +19,8 @@ interface Header {
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "cv-open-"));
+  const helper = join(root, 'canvas');
+  await copyFile(helperSource, helper);
   const registry = join(root, "bridges");
   await mkdir(registry, { mode: 0o700 });
   const nativeSocket = join(root, "herdr.sock");
@@ -156,7 +158,8 @@ test("canvas open streams binary files with relative, Unicode and spaced names",
   const f = await fixture(t), endpoint = await f.endpoint("active");
   const name = "风景 文件.bin", content = randomBytes(1024 * 1024 + 71);
   await writeFile(join(f.root, name), content);
-  const result = await f.run(name);
+  const tools = join(f.root, 'python-only'); await mkdir(tools); await symlink('/usr/bin/python3', join(tools, 'python3'));
+  const result = await f.run(name, { PATH: tools });
   assert.deepEqual(result, { code: 0, stdout: "", stderr: "" });
   assert.deepEqual(endpoint.headers, [{ version: 1, kind: "file", nativeSocket: f.nativeSocket, paneId: "w1:p2", filename: name, size: content.length }]);
   assert.equal(endpoint.bodies.length, 1);

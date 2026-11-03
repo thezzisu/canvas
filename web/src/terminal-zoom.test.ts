@@ -34,7 +34,7 @@ test('concurrent views of different native tabs update isolated scalar keys and 
 })
 
 test('changing connection identity retires the previous binding without writing its value into the new key', () => {
-  for (const next of [{ ...source, target: 'other' }, { ...source, provider: 'core' as const }]) {
+  for (const next of [{ ...source, target: 'other' }, { ...source, runtime: 'core' as const }]) {
     const store = storage(), scope = effectScope(), first = terminalIdentityKey('backend', source, 'tab1'), second = terminalIdentityKey('backend', next, 'tab1')
     const key = ref(first), zoom = scope.run(() => useTerminalZoom(() => key.value, store))!
     zoom.value = 140; key.value = second

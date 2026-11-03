@@ -23,7 +23,7 @@ import {
   type Source,
   type Canvas,
 } from "./state.ts";
-import * as providers from "./providers.ts";
+import * as runtimes from "./runtimes.ts";
 import type { TerminalManager } from "./terminals.ts";
 import type { CanvasNotification } from "../shared/notification.ts";
 import type { DownloadContext } from "./open-download.ts";
@@ -257,7 +257,7 @@ export function createApp(
     const windowId = c.req.param('window');
     await terminals.paneAction(connection, c.req.param('space'), windowId, { ...pane, name: '' }, command, authorized);
     if (command.action === 'close') {
-      const after = await providers.listResources(connection);
+      const after = await runtimes.listResources(connection);
       if (after.status === 'online' && !after.spaces.some(space => space.windows.some(window => window.id === windowId)))
         store.removeWindowReferences(connection, [windowId]);
     }
@@ -442,16 +442,16 @@ export function createApp(
   app.get("/api/resources", async (c) =>
     c.json({
       sources: await Promise.all(
-        store.list<Source>("source").map(async (s) => { const resource = await providers.listResources(s); return options.completionReads?.projectResources(s, resource) || resource; }),
+        store.list<Source>("source").map(async (s) => { const resource = await runtimes.listResources(s); return options.completionReads?.projectResources(s, resource) || resource; }),
       ),
     }),
   );
   app.post("/api/sources/probe", async c =>
-    c.json(await providers.probeSource(sourceProbeSchema.parse(await c.req.json()), c.req.raw.signal)));
+    c.json(await runtimes.probeSource(sourceProbeSchema.parse(await c.req.json()), c.req.raw.signal)));
   app.post("/api/sources", async (c) => {
     const s = sourceSchema.parse(await c.req.json());
     if (s.id) return c.json({ error: "ID is assigned by the server" }, 400);
-    providers.validateSource({ ...s, id: s.id ?? "new" });
+    runtimes.validateSource({ ...s, id: s.id ?? "new" });
     return c.json(store.put("source", s), 201);
   });
   app.patch("/api/sources/:id", async (c) => {
@@ -463,11 +463,11 @@ export function createApp(
       ...patch,
       id,
     });
-    providers.validateSource({ ...s, id });
+    runtimes.validateSource({ ...s, id });
     if (sourceConnectionKey({ ...s, id }) !== sourceConnectionKey(previous)) {
       await terminals.closeSource(id);
       await options.closeOpenBridge?.(id);
-      await providers.closeProviderConnections(id);
+      await runtimes.closeRuntimeConnections(id);
     }
     return c.json(store.put("source", s));
   });
@@ -476,7 +476,7 @@ export function createApp(
     source(id);
     await terminals.closeSource(id);
     await options.closeOpenBridge?.(id);
-    await providers.closeProviderConnections(id);
+    await runtimes.closeRuntimeConnections(id);
     store.remove("source", id);
     return c.json({ ok: true });
   });
@@ -660,11 +660,11 @@ export function createApp(
   });
   app.post("/api/sources/:id/spaces", async (c) => {
     const { name, sourceSpaceId } = createSpaceSchema.parse(await c.req.json());
-    return c.json(await providers.createSpace(source(c.req.param("id")), name, sourceSpaceId), 201);
+    return c.json(await runtimes.createSpace(source(c.req.param("id")), name, sourceSpaceId), 201);
   });
   app.patch("/api/sources/:id/spaces/:space", async (c) => {
     const { name } = nameSchema.parse(await c.req.json());
-    await providers.renameSpace(
+    await runtimes.renameSpace(
       source(c.req.param("id")),
       c.req.param("space"),
       name,
@@ -673,13 +673,13 @@ export function createApp(
   });
   app.delete("/api/sources/:id/spaces/:space", async (c) => {
     const connection = source(c.req.param("id"));
-    const windows = await providers.closeSpace(connection, c.req.param("space"));
+    const windows = await runtimes.closeSpace(connection, c.req.param("space"));
     store.removeWindowReferences(connection, windows);
     return c.json({ ok: true });
   });
   app.post("/api/sources/:id/spaces/:space/windows", async (c) => {
     const { name } = createWindowSchema.parse(await c.req.json());
-    return c.json(await providers.createWindow(
+    return c.json(await runtimes.createWindow(
       source(c.req.param("id")),
       c.req.param("space"),
       name,
@@ -687,7 +687,7 @@ export function createApp(
   });
   app.patch("/api/sources/:id/spaces/:space/windows/:window", async (c) => {
     const { name } = nameSchema.parse(await c.req.json());
-    await providers.renameWindow(
+    await runtimes.renameWindow(
       source(c.req.param("id")),
       c.req.param("space"),
       c.req.param("window"),
@@ -697,7 +697,7 @@ export function createApp(
   });
   app.delete("/api/sources/:id/spaces/:space/windows/:window", async (c) => {
     const connection = source(c.req.param("id")), windowId = c.req.param("window");
-    await providers.closeWindow(
+    await runtimes.closeWindow(
       connection,
       c.req.param("space"),
       windowId,

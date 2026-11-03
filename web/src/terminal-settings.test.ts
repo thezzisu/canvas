@@ -22,7 +22,7 @@ test('right-click preferences persist by native identity and reset without leaki
   assert.equal(scope.run(() => useTerminalSettings(() => first, store))!.value, 'terminal', 'another canvas reference restores the same native preference')
   assert.equal(terminalIdentityKey('backend', { ...source, name: 'Renamed' }, 'first'), first)
   for (const next of [terminalIdentityKey('other-backend', source, 'first'), terminalIdentityKey('backend', source, 'second'), terminalIdentityKey('backend', { ...source, target: 'other-host' }, 'first'),
-    terminalIdentityKey('backend', { ...source, provider: 'core' }, 'first')]) {
+    terminalIdentityKey('backend', { ...source, runtime: 'core' }, 'first')]) {
     key.value = next; assert.equal(mode.value, 'menu'); assert.equal(store.getItem(terminalSettingsKey(next)), null)
   }
   key.value = first; assert.equal(mode.value, 'terminal')
@@ -39,7 +39,7 @@ test('settings prune only confirmed closed native identities and leave offline p
   pruneTerminalPreferences('backend', [source], resources('online', ['keep']), store)
   assert.equal(store.getItem(key('backend', 'closed')), null)
   assert.equal(store.getItem(key('backend', 'keep')), 'terminal'); assert.equal(store.getItem(key('other', 'closed')), 'terminal'); assert.equal(store.getItem('unrelated'), 'value')
-  const core = { ...source, provider: 'core' as const }, coreIdentity = terminalIdentityKey('backend', core, 'keep')
+  const core = { ...source, runtime: 'core' as const }, coreIdentity = terminalIdentityKey('backend', core, 'keep')
   const previousZoom = terminalZoomStorageKey(terminalIdentityKey('backend', source, 'keep')), coreZoom = terminalZoomStorageKey(coreIdentity)
   store.setItem(previousZoom, '140'); store.setItem(coreZoom, '80'); store.setItem(terminalSettingsKey(coreIdentity), 'terminal')
   pruneTerminalPreferences('backend', [core], resources('offline', []), store)

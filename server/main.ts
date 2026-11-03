@@ -14,13 +14,13 @@ import { TerminalManager } from "./terminals.ts";
 import { allowedOrigin, parseAllowedOrigins, bearerToken } from "./auth.ts";
 import { authenticateWebSocket } from "./websocket-auth.ts";
 import {
-  closeProviderConnections,
+  closeRuntimeConnections,
   prepareOpenBridge,
   writeRemoteBridgeRegistry,
   installCanvasHelper,
   listResources,
   editorAuthority,
-} from "./providers.ts";
+} from "./runtimes.ts";
 import { OpenDownloadService } from "./open-download.ts";
 import { AssetStore } from "./assets.ts";
 import { UploadService } from "./uploads.ts";
@@ -252,7 +252,7 @@ async function stop() {
   await terminals.closeAll();
   await downloads.closeAll();
   await assets.close();
-  await closeProviderConnections();
+  await closeRuntimeConnections();
   store.emit("close");
   wss.close();
   setTimeout(() => process.exit(0), 3000).unref();

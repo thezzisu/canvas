@@ -11,7 +11,7 @@ import { createApp } from './app.ts'
 import { Store, noteNodeSchema, type Canvas, type Source, type TerminalNode } from './state.ts'
 import type { WebSocket } from 'ws'
 import { TerminalManager } from './terminals.ts'
-import { closeProviderConnections, closeWindow, createSpace, createWindow, listResources } from './providers.ts'
+import { closeRuntimeConnections, closeWindow, createSpace, createWindow, listResources } from './runtimes.ts'
 
 async function fixture(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'canvas-close-'))
@@ -260,7 +260,7 @@ test('official herdr window and final-pane closes remove references while nonfin
     herdrSocket: join(config, 'herdr/sessions/close-reference/herdr.sock') })
   t.after(async () => {
     await manager.closeAll()
-    await closeProviderConnections(source.id)
+    await closeRuntimeConnections(source.id)
     if (native.exitCode === null && native.signalCode === null) {
       const done = new Promise<void>(resolve => native.once('exit', () => resolve()))
       native.kill(); const timer = setTimeout(() => native.kill('SIGKILL'), 3000); await done; clearTimeout(timer)

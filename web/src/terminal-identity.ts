@@ -2,7 +2,7 @@ import type { Source, SourceResource } from './types'
 
 /** The native tab, not its name, canvas reference or browser tab, owns the preference. */
 export function terminalIdentityKey(instance: string, source: Source, windowId: string) {
-  return JSON.stringify([instance, source.id, source.provider === 'core' ? `core:${source.transport}` : source.transport, source.transport === 'ssh' ? source.target?.trim() || '' : '',
+  return JSON.stringify([instance, source.id, source.runtime === 'core' ? `core:${source.transport}` : source.transport, source.transport === 'ssh' ? source.target?.trim() || '' : '',
     source.herdrSession?.trim() || '', source.herdrSocket?.trim() || '', windowId])
 }
 

@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { Store, type Source } from './state.ts'
 import { CompletionReads } from './completion-reads.ts'
 import type { WindowMetadata } from '../shared/window-metadata.ts'
-import type { SourceResource } from './providers.ts'
+import type { SourceResource } from './runtimes.ts'
 const source: Source = { id: 'source', name: 'Source', transport: 'local' }
 function completed(sequence = 3, bootId = 'boot'): WindowMetadata {
   return { id: 'window', name: 'Window', bootId, status: 'done', panes: [
@@ -131,7 +131,7 @@ test('initial idle without completion evidence is never guessed from its nonzero
 })
 
 test('native read labels remain authoritative through reads, unread changes and resource polling', t => {
-  const { store, reads } = fixture(t), nativeSource: Source = { ...source, provider: 'core' };
+  const { store, reads } = fixture(t), nativeSource: Source = { ...source, runtime: 'core' };
   store.put('source', nativeSource);
   const unread: WindowMetadata = { ...completed(), readAuthority: 'native' };
   assert.equal(reads.observe(nativeSource, unread), unread);

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createApp } from './app.ts'
 import { Store } from './state.ts'
-import { probeSource } from './providers.ts'
+import { probeSource } from './runtimes.ts'
 import type { TerminalManager } from './terminals.ts'
 
 async function fixture(t: test.TestContext) {

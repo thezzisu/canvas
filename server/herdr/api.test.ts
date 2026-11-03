@@ -70,8 +70,8 @@ test("local and SSH discovery agree on a named session without running a CLI", a
   } finally { if (before === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = before; }
 });
 
-test("herdr provider discovers sockets and performs resource CRUD without executable dispatch", async t => {
-  const { closeProviderConnections, closeSpace, closeWindow, createSpace, createWindow, listResources, nativeSocketForSource, openTerminal, renameSpace, renameWindow } = await import("../providers.ts");
+test("herdr runtime discovers sockets and performs resource CRUD without executable dispatch", async t => {
+  const { closeRuntimeConnections, closeSpace, closeWindow, createSpace, createWindow, listResources, nativeSocketForSource, openTerminal, renameSpace, renameWindow } = await import("../runtimes.ts");
   const root = await mkdtemp(join(tmpdir(), "cv-native-api-")), directory = join(root, "quoted ' session"), clients = new Set<Socket>();
   await mkdir(directory);
   const paths = herdrSocketPaths({ herdrSocket: join(directory, "herdr.sock") }), requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -103,7 +103,7 @@ test("herdr provider discovers sockets and performs resource CRUD without execut
   });
   const endpoint = createServer(socket => { clients.add(socket); socket.on("close", () => clients.delete(socket)); socket.on("error", () => {}); });
   await Promise.all([new Promise<void>(resolve => api.listen(paths.api, resolve)), new Promise<void>(resolve => endpoint.listen(paths.client, resolve))]);
-  t.after(async () => { await closeProviderConnections("native-api"); for (const client of clients) client.destroy(); await Promise.all([api, endpoint].map(server => new Promise<void>(resolve => server.close(() => resolve())))); await rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await closeRuntimeConnections("native-api"); for (const client of clients) client.destroy(); await Promise.all([api, endpoint].map(server => new Promise<void>(resolve => server.close(() => resolve())))); await rm(root, { recursive: true, force: true }); });
   const source: Source = { id: "native-api", name: "Native", transport: "local", herdrSocket: paths.api };
   assert.deepEqual(await localHerdrSockets(source), paths);
   assert.deepEqual(parseHerdrSockets(execFileSync("python3", ["-c", discoverHerdrPython, JSON.stringify({ herdrSocket: paths.api })], { encoding: "utf8" })), paths);

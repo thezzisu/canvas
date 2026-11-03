@@ -1,6 +1,26 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { fitTerminalGrid, terminalMetrics } from './terminal-geometry.ts'
+import { containTerminalScale, fitTerminalGrid, terminalFrameReady, terminalMetrics } from './terminal-geometry.ts'
+
+test('only the complete matching native frame releases a geometry transition', () => {
+  const grid = { cols: 80, rows: 24 }
+  assert.equal(terminalFrameReady(undefined, grid, { start: 0, end: 23 }), false)
+  assert.equal(terminalFrameReady({ cols: 100, rows: 30 }, grid, { start: 0, end: 23 }), false)
+  assert.equal(terminalFrameReady(grid, grid, { start: 2, end: 23 }), false)
+  assert.equal(terminalFrameReady(grid, grid, { start: 0, end: 22 }), false)
+  assert.equal(terminalFrameReady(grid, grid, { start: 0, end: 23 }), true)
+  assert.equal(terminalFrameReady({ cols: 2, rows: 1 }, { cols: 2, rows: 1 }, { start: 0, end: 0 }), true)
+})
+
+test('containment includes native pixel rounding and preserves aspect ratio', () => {
+  const available = { width: 273.6, height: 528.8 }, native = { width: 274, height: 528 }
+  const scale = containTerminalScale(available, native)
+  assert.equal(scale, available.width / native.width)
+  assert(scale * native.width <= available.width && scale * native.height <= available.height)
+  assert.equal(containTerminalScale({ width: 400, height: 100 }, { width: 100, height: 200 }), .5)
+  assert.equal(containTerminalScale({ width: 400, height: 800 }, { width: 100, height: 200 }), 1)
+  assert.equal(containTerminalScale({ width: 400, height: 800 }, { width: 100, height: 200 }, true), 4)
+})
 
 test('an exact rendered grid retains every cell when resizing, including fractional cell widths', () => {
   const grid = { width: 174, height: 319, cols: 21, rows: 23 }

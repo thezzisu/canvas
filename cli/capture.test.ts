@@ -3,13 +3,13 @@ import test, { type TestContext } from 'node:test'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer, type Socket } from 'node:net'
 import { createServer as createHttpServer } from 'node:http'
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { randomBytes } from 'node:crypto'
 
-const capture = fileURLToPath(new URL('./capture.py', import.meta.url))
+const helper = fileURLToPath(new URL('./canvas', import.meta.url))
 const delay = (ms = 20) => new Promise(resolve => setTimeout(resolve, ms))
 async function until(check: () => boolean | Promise<boolean>, label: string) {
   const end = Date.now() + 6000
@@ -25,6 +25,8 @@ async function unusedPort() {
 }
 async function fixture(t: TestContext, holdPrepare = false) {
   const root = await mkdtemp(join(tmpdir(), 'cv-capture-cli-')), registry = join(root, 'bridges'), nativeSocket = join(root, 'native.sock')
+  const capture = join(root, 'canvas')
+  await copyFile(helper, capture)
   await mkdir(registry, { mode: 0o700 })
   const endpoint = join(root, 'bridge.sock'), secret = randomBytes(24).toString('base64url')
   const publicUrl = `http://127.0.0.1:31500/api/capture/${'x'.repeat(43)}/`
@@ -59,9 +61,9 @@ async function fixture(t: TestContext, holdPrepare = false) {
     for (const socket of sockets) socket.destroy()
     await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true })
   })
-  const run = (args: string[]) => {
-    const child = spawn('python3', [capture, ...args], { cwd: root, env: { PATH: '/usr/bin:/bin', HOME: root, LANG: 'C.UTF-8',
-      HC_TERMINAL_SOCKET: nativeSocket, HC_TERMINAL_ID: 't7', CANVAS_BRIDGE_REGISTRY_DIR: registry }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const run = (args: string[], extra: NodeJS.ProcessEnv = {}) => {
+    const child = spawn('python3', [capture, 'capture', ...args], { cwd: root, env: { PATH: '/usr/bin:/bin', HOME: root, LANG: 'C.UTF-8',
+      HC_TERMINAL_SOCKET: nativeSocket, HC_TERMINAL_ID: 't7', CANVAS_BRIDGE_REGISTRY_DIR: registry, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] })
     children.push(child)
     let stdout = '', stderr = ''
     child.stdout?.on('data', data => { stdout += data.toString() }); child.stderr?.on('data', data => { stderr += data.toString() })
@@ -86,11 +88,13 @@ test('capture runs the selected command, keeps bootstrap credentials private and
   await until(async () => { try { await fetch(`http://127.0.0.1:${port}`); return false } catch { return true } }, 'owned application remains listening after Stop')
 })
 
-test('Python HTTP receives the assigned PORT through an explicit shell argument', { timeout: 15000 }, async t => {
+test('a standalone helper without Node or sibling modules captures Python HTTP on PORT', { timeout: 15000 }, async t => {
   if (process.platform === 'win32') { t.skip('Capture uses POSIX process groups'); return }
   const f = await fixture(t)
+  const tools = join(f.root, 'python-only'); await mkdir(tools); await symlink('/usr/bin/python3', join(tools, 'python3'))
+  assert.equal(await access(join(f.root, 'capture.py')).then(() => true, () => false), false)
   await writeFile(join(f.root, 'synthetic.txt'), 'owned Python web content')
-  const run = f.run(['--timeout', '5', '-c', 'exec python3 -m http.server "$PORT" --bind 127.0.0.1'])
+  const run = f.run(['--timeout', '5', '-c', 'exec python3 -m http.server "$PORT" --bind 127.0.0.1'], { PATH: tools })
   await until(() => run.stderr().includes('Web view ready'), 'Python capture did not become ready on PORT')
   const port = Number(f.messages[0]!.port)
   assert.deepEqual(f.messages[1], { action: 'ready' }); assert(port > 0 && port <= 65535)

@@ -13,7 +13,7 @@ import { terminalInputChunks } from "../web/src/terminal-input-chunks.ts";
 import { Store, type Canvas, type TerminalNode } from "./state.ts";
 import { CompletionReads } from "./completion-reads.ts";
 import { TerminalManager } from "./terminals.ts";
-import { createSpace, createWindow, listResources, shellQuote, type Source } from "./providers.ts";
+import { createSpace, createWindow, listResources, shellQuote, type Source } from "./runtimes.ts";
 import type { CanvasNotification } from "../shared/notification.ts";
 import { herdrApiRequest } from "./herdr/api.ts";
 
@@ -107,6 +107,34 @@ async function fixture(t: TestContext, probe = false, quietProbe = false, comple
   };
   return { root, bytes, manager, store, reads, source, target, shellResult, assertSize, ready, text, reportAgent, notify };
 }
+
+test('resize controls wait for queued output and complete frames retain their native dimensions', async t => {
+  const f = await fixture(t); if (!f) return;
+  const client = new Client();
+  await f.manager.connect(f.source, f.target, client.socket); await f.ready();
+  await waitFor(() => messages(client).some(message => message.type === 'completion-frame'), 'initial frame');
+  const terminal = (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const mark = client.received.length;
+  terminal.queue = terminal.queue.then(() => gate);
+  try {
+    client.command({ type: 'resize', cols: 83, rows: 27 });
+    await terminal.geometry.drain();
+    assert(!client.received.slice(mark).some(value => typeof value === 'string' && JSON.parse(value).type === 'resize'),
+      'geometry must not overtake queued terminal output');
+  } finally { release(); }
+  await waitFor(() => messages(client).some(message => message.type === 'completion-frame' && message.cols === 83 && message.rows === 27),
+    'quiet terminal must publish a complete frame after resizing');
+  let grid = { cols: 100, rows: 30 };
+  for (const value of client.received) {
+    if (typeof value !== 'string') continue;
+    const message = JSON.parse(value);
+    if (message.type === 'resize') grid = message;
+    if (message.type === 'completion-frame') assert.deepEqual({ cols: message.cols, rows: message.rows }, { cols: grid.cols, rows: grid.rows });
+  }
+  client.close();
+});
 
 test('one existing native endpoint per source delivers live notifications across viewers, owner closure and reconnect', async t => {
   const f = await fixture(t); if (!f) return;

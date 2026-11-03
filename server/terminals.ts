@@ -6,9 +6,9 @@ import { terminalUnicodeAddon } from "../shared/terminal-unicode.ts";
 import serialize from "@xterm/addon-serialize";
 import type { WebSocket } from "ws";
 import { sourceConnectionKey, type Source } from "./state.ts";
-import { openTerminal } from "./providers.ts";
+import { openTerminal } from "./runtimes.ts";
 import { GeometryController, type Size } from "./geometry.ts";
-import { HERDR_MOUSE_ENCODING, type HerdrClientTransport } from "./herdr/client.ts";
+import { HERDR_MOUSE_ENCODING, type HerdrClientTransport, type TerminalFrame } from "./herdr/client.ts";
 import type { WindowMetadata } from "../shared/window-metadata.ts";
 import { randomUUID } from "node:crypto";
 import type { CanvasNotification } from "../shared/notification.ts";
@@ -38,7 +38,7 @@ class LiveTerminal {
   private focusedPaneId?: string;
   private metadata?: WindowMetadata;
   private rawMetadata?: WindowMetadata;
-  private frame?: WindowMetadata;
+  private frame?: TerminalFrame;
   private sentFrames = new WeakMap<WebSocket, WindowMetadata>();
   private readGenerations = new WeakMap<WebSocket, number>();
   private pendingFences = new WeakMap<WebSocket, number>();
@@ -167,10 +167,11 @@ class LiveTerminal {
     for (const ws of this.clients) json(ws, { type: 'metadata', window: this.metadata });
   }
   private publishFrame(ws: WebSocket) {
-    if (!this.frame || this.pendingFences.has(ws)) return;
+    if (!this.frame || this.pendingFences.has(ws) || this.frame.cols !== this.emulator.cols || this.frame.rows !== this.emulator.rows) return;
     const frame = this.reads?.project(this.source, this.frame) || this.frame;
     this.sentFrames.set(ws, frame);
-    json(ws, { type: 'completion-frame', generation: this.readGenerations.get(ws) || 0, focusedPaneId: frame.panes.find(pane => pane.active)?.id, layout: frame.layout,
+    json(ws, { type: 'completion-frame', cols: this.frame.cols, rows: this.frame.rows,
+      generation: this.readGenerations.get(ws) || 0, focusedPaneId: frame.panes.find(pane => pane.active)?.id, layout: frame.layout,
       panes: frame.panes.map(pane => ({ id: pane.id, ...(pane.completion ? { completion: pane.completion } : {}) })) });
   }
   private canRender(ws: WebSocket) {
@@ -215,7 +216,7 @@ class LiveTerminal {
     // The caller runs in the same queue as headless writes. Reset, geometry,
     // serialized state and live output therefore form one ordered stream.
     json(ws, { type: "reset" });
-    json(ws, { type: "resize", cols: this.cols, rows: this.rows });
+    json(ws, { type: "resize", cols: this.emulator.cols, rows: this.emulator.rows });
     // SerializeAddon restores tracking but omits its wire encoding.
     const cursor = this.emulator.buffer.active;
     // Absolute positioning also avoids SerializeAddon's last-column relative
@@ -395,9 +396,13 @@ class LiveTerminal {
     this.proc.resize(size.cols, size.rows);
     this.cols = size.cols;
     this.rows = size.rows;
-    this.emulator.resize(size.cols, size.rows);
-    for (const ws of this.clients)
-      if (this.canRender(ws)) json(ws, { type: "resize", cols: size.cols, rows: size.rows });
+    // Geometry and its following bytes use the same lane as serialized snapshots.
+    this.queue = this.queue.then(() => {
+      if (this.closed) return;
+      this.emulator.resize(size.cols, size.rows);
+      for (const ws of this.clients)
+        if (this.canRender(ws)) json(ws, { type: "resize", cols: size.cols, rows: size.rows });
+    }).catch(() => { void this.close(); });
   }
   status() {
     for (const ws of this.clients)
