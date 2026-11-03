@@ -23,6 +23,7 @@ export interface CapturePreparation {
   windowId: string
   paneId: string
   session: string
+  /** Zero prepares the presentation before the command's port is discovered. */
   port: number
   title?: string
   onStop?(): void
@@ -31,7 +32,7 @@ export interface CapturePreparation {
 export interface CaptureLease {
   id: string
   publicUrl: string
-  ready(bootstrapUrl?: string): Promise<CapturePresentation>
+  ready(bootstrapUrl?: string, port?: number): Promise<CapturePresentation>
   close(): void
 }
 interface Capture extends CapturePreparation {
@@ -82,7 +83,7 @@ export class CaptureService {
     if (this.closed || !this.store.hasSession(options.session)) throw new Error('Please sign in')
     const current = this.store.get<Source>('source', source.id)
     if (!current || sourceConnectionKey(current) !== sourceConnectionKey(source)) throw new Error('Connection changed')
-    if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) throw new Error('Capture port must be between 1 and 65535')
+    if (!Number.isInteger(options.port) || options.port < 0 || options.port > 65535) throw new Error('Capture port must be zero for discovery or between 1 and 65535')
     if (!options.windowId || !options.paneId || options.windowId.length > 4096 || options.paneId.length > 4096) throw new Error('Capture terminal identity is invalid')
     if (this.captures.size >= 32) throw new Error('At most 32 captured applications are supported')
     const publicBase = new URL(normalizeCapturePublicBase(options.publicBase))
@@ -92,8 +93,11 @@ export class CaptureService {
     const capture: Capture = { ...options, title, id, source: { ...source }, sourceKey: sourceConnectionKey(source), publicUrl, ready: false,
       cookies: new Map(), connections: new Set() }
     this.captures.set(id, capture)
-    return { id, publicUrl: publicUrl.href, ready: async bootstrapUrl => {
+    return { id, publicUrl: publicUrl.href, ready: async (bootstrapUrl, port = capture.port) => {
       if (!this.valid(capture)) throw new Error('Capture expired')
+      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('The command has not reported a listening port')
+      if (capture.port && capture.port !== port) throw new Error('Capture port cannot change after selection')
+      capture.port = port
       const url = this.bootstrap(capture, bootstrapUrl)
       // Open only this source's declared loopback service; no browser-host or
       // arbitrary origin input becomes a connection target.

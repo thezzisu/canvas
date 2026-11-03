@@ -132,6 +132,19 @@ test('only the owning session stops a capture and revocation also closes a pendi
   lease.close(); assert.equal(ended, 1)
 })
 
+test('auto-port capture prepares its public mount before startup and binds only the reported source port', async t => {
+  const f = await fixture(t)
+  const lease = f.service.prepareCapture(f.source, { publicBase: f.base, windowId: 'window', paneId: 'pane', port: 0, session: 'first' })
+  assert.equal((await fetch(lease.publicUrl)).status, 404)
+  await assert.rejects(lease.ready(), /listening port/u)
+  assert.equal((await fetch(lease.publicUrl)).status, 404, 'an undiscovered service is never exposed')
+  const presentation = await lease.ready(undefined, f.target.port)
+  assert.equal(presentation.url, lease.publicUrl, 'the launch URL remains stable when the command selects its port')
+  assert.equal(await (await fetch(lease.publicUrl)).text(), '<title>Captured fixture</title>')
+  await assert.rejects(lease.ready(undefined, f.target.port === 65535 ? 65534 : f.target.port + 1), /cannot change/u)
+  assert.equal(await (await fetch(lease.publicUrl)).text(), '<title>Captured fixture</title>', 'a later ready message cannot redirect the proxy to another listener')
+})
+
 test('each capture keeps its authenticated API mount through cookies, redirects and WebSocket routing', async t => {
   const f = await fixture(t)
   const options = { windowId: 'window', paneId: 'pane', port: f.target.port, session: 'first' }

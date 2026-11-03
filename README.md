@@ -133,8 +133,34 @@ On Linux, the npm CLI can start a trusted Web application inside a connected,
 single-pane terminal and show its UI in that same Canvas card:
 
 ```sh
-canvas capture --port 5173 --title "My app" -- npm run dev -- --host 127.0.0.1 --port 5173
+canvas capture python3 -m http.server
+canvas capture npm start
 ```
+
+Canvas injects an available candidate port as `PORT` and `CANVAS_CAPTURE_PORT`.
+Applications that honor `PORT` can start without a fixed port in the command.
+When an application chooses its own port, such as Python's default 8000, Canvas
+discovers the loopback listener owned by this command. It does not scan or attach
+to unrelated services. If multiple eligible HTTP listeners remain, specify
+`--port` to choose one. Also specify a port for apps that open multiple services
+at different stages; an early HTTP service can otherwise be selected first.
+An application's fixed-port conflict still needs fixing;
+injecting `PORT` cannot change an app that ignores it.
+
+Use the child shell when a program takes its port as an argument, or give the
+app a different environment variable:
+
+```sh
+canvas capture -c 'python3 -m http.server "$PORT" --bind 127.0.0.1'
+canvas capture --env APP_PORT='$PORT' node app.js
+canvas capture --port 5173 npm run dev -- --port 5173
+```
+
+Ordinary command arguments are passed directly, without shell evaluation or
+variable expansion. `-c` explicitly selects `/bin/sh`; its variables expand in the
+child environment, after Canvas supplies the port. Repeat `--env NAME=VALUE` for
+child-only settings; values can refer to inherited or injected named variables.
+The parent shell is unchanged. Do not print sensitive environment values.
 
 Capture works through the selected Canvas instance's existing public address,
 including its reverse-proxy prefix. One public domain and port can serve Canvas
@@ -167,13 +193,27 @@ server-managed cookie authentication such as DeepSeek Harness.
 The capture URL grants temporary access to that authenticated application session;
 keep it private and do not share it or write it to logs.
 
-Capture rejects an occupied port before starting the command, then waits for
-that command's loopback listener. The app must support the generated subpath;
+With an explicit `--port`, Capture rejects an occupied port before starting the
+command. Otherwise it supplies an OS-selected candidate port, then confirms the
+command owns the selected listener; choosing a candidate is not an atomic port
+reservation for the child. The app must support the generated subpath;
 `CANVAS_CAPTURE_PUBLIC_URL` and `CANVAS_CAPTURE_HOST` are passed to the command
 for its public-URL configuration. There is no generic HTML/JavaScript rewriting.
-Applications with a private login bootstrap can use `--ready-file /private/ready.json`;
-the command writes a private JSON file containing `launchUrl` (or `url`) before
-the iframe opens. Do not print login URLs or store this file in your project.
+The default readiness check waits for an owned listener that responds to HTTP
+(200–499; startup errors such as 503 keep waiting). No ready file is needed.
+Choose `--ready tcp` for a TCP-only signal, `--probe /health` for an HTTP endpoint
+that must return 2xx, or `--probe-command '...'` for a bounded shell check whose
+exit code must be zero. The probe receives the selected port in its environment.
+`--timeout` bounds startup; failure preserves the terminal output and stops the
+owned command.
+
+Applications with a private login bootstrap, such as DeepSeek Harness, can use
+`--bootstrap-file /private/bootstrap.json` (`--ready-file` is an alias). The
+command writes a private JSON object containing `launchUrl` (or `url`); this
+supplies the authenticated first URL in addition to the normal readiness check.
+It is not the generic ready signal. Do not print login URLs or store the file
+in your project. `CANVAS_CAPTURE_PUBLIC_URL` and `CANVAS_CAPTURE_HOST` are also
+available before the command starts, so apps can configure their basepath.
 
 The terminal remains connected. **Return to terminal** leaves the app running;
 **Open app** returns to it; **Stop app** stops this capture's owned process group.

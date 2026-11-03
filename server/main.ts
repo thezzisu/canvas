@@ -46,7 +46,7 @@ const socketCaptureBases = new WeakMap<import("ws").WebSocket, string>();
 const downloads = new OpenDownloadService({
   capture: async (source, windowId, paneId, header, socket, recipient) => {
     const publicBase = socketCaptureBases.get(recipient.socket);
-    if (!publicBase || !Number.isInteger(header.port) || Number(header.port) < 1 || Number(header.port) > 65535
+    if (!publicBase || !Number.isInteger(header.port) || Number(header.port) < 0 || Number(header.port) > 65535
       || typeof header.title !== 'string' || header.title.length > 120) {
       socket.end(JSON.stringify({ ok: false, reason: 'capture-unavailable' }) + '\n'); return;
     }
@@ -65,10 +65,10 @@ const downloads = new OpenDownloadService({
       if (newline < 0) return;
       try {
         const value = JSON.parse(pending.subarray(0, newline).toString('utf8')); pending = pending.subarray(newline + 1);
-        if (ready || value.action !== 'ready' || pending.length) { socket.destroy(); return }
+        if (ready || value.action !== 'ready' || pending.length || value.port !== undefined && !Number.isInteger(value.port)) { socket.destroy(); return }
         ready = true;
         if (!recipient.isCurrent()) { socket.destroy(); return }
-        void lease.ready(typeof value.bootstrapUrl === 'string' ? value.bootstrapUrl : undefined).then(presentation => {
+        void lease.ready(typeof value.bootstrapUrl === 'string' ? value.bootstrapUrl : undefined, value.port).then(presentation => {
           if (socket.destroyed || !recipient.isCurrent()) { lease.close(); return }
           recipient.socket.send(JSON.stringify(presentation));
           socket.write(JSON.stringify({ ok: true, state: 'ready' }) + '\n');

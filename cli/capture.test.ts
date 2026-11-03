@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer, type Socket } from 'node:net'
+import { createServer as createHttpServer } from 'node:http'
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -75,12 +76,132 @@ test('capture runs the selected command, keeps bootstrap credentials private and
   const run = f.run(['--port', String(port), '--ready-file', ready, '--timeout', '5', '--', '/usr/bin/python3', program])
   await until(() => run.stderr().includes('Web view ready'), 'owned application did not enter Web view')
   assert.equal(f.messages[0]!.port, port)
-  assert.deepEqual(f.messages[1], { action: 'ready', bootstrapUrl: f.publicUrl + '?token=bootstrap-fixture' })
+  assert.deepEqual(f.messages[1], { action: 'ready', port, bootstrapUrl: f.publicUrl + '?token=bootstrap-fixture' })
   assert(run.stdout().includes('SYNTHETIC_WEB_READY'), 'ordinary stdout remains visible in the original terminal')
   assert(!run.stdout().includes('bootstrap-fixture') && !run.stderr().includes('bootstrap-fixture'), 'ready-file bootstrap is never echoed')
   f.peer()!.write(JSON.stringify({ action: 'stop' }) + '\n')
   assert.equal(await run.exit, 0)
   await until(async () => { try { await fetch(`http://127.0.0.1:${port}`); return false } catch { return true } }, 'owned application remains listening after Stop')
+})
+
+test('automatic capture discovers an owned Python HTTP listener when the command ignores PORT', { timeout: 15000 }, async t => {
+  if (process.platform !== 'linux') { t.skip('Capture preview uses Linux listener ownership'); return }
+  const f = await fixture(t)
+  await writeFile(join(f.root, 'synthetic.txt'), 'owned Python web content')
+  // Port 0 gives this real standard-library command its own port, independent
+  // of the candidate environment intended for applications that honor PORT.
+  const run = f.run(['--timeout', '5', 'python3', '-m', 'http.server', '0', '--bind', '127.0.0.1'])
+  await until(() => run.stderr().includes('Web view ready'), 'automatic Python capture did not become ready')
+  assert.equal(f.messages[0]!.port, 0)
+  const ready = f.messages[1]!, port = Number(ready.port)
+  assert.equal(ready.action, 'ready'); assert(port > 0 && port <= 65535)
+  assert.equal(await (await fetch(`http://127.0.0.1:${port}/synthetic.txt`)).text(), 'owned Python web content')
+  f.peer()!.write(JSON.stringify({ action: 'stop' }) + '\n'); assert.equal(await run.exit, 0)
+  await until(async () => { try { await fetch(`http://127.0.0.1:${port}`); return false } catch { return true } }, 'Python application was not stopped')
+})
+
+test('PORT and child env aliases work without interpreting argv, while explicit shell mode expands its script', { timeout: 15000 }, async t => {
+  if (process.platform !== 'linux') { t.skip('Capture preview uses Linux listener ownership'); return }
+  const f = await fixture(t), program = join(f.root, 'web.mjs'), observed = join(f.root, 'child.json')
+  await writeFile(program, `import http from 'node:http';import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(observed)},JSON.stringify({port:process.env.PORT,capture:process.env.CANVAS_CAPTURE_PORT,alias:process.env.APP_PORT,composed:process.env.COMPOSED,dollar:process.env.LITERAL,args:process.argv.slice(2)}));http.createServer((req,res)=>res.end('node application')).listen(Number(process.env.APP_PORT),'127.0.0.1');`)
+  const run = f.run(['--env', 'APP_PORT=$PORT', '--env', 'COMPOSED=${APP_PORT}:child', '--env', 'LITERAL=$$UNCHANGED', '--timeout', '5',
+    process.execPath, program, '$PORT', '${NOT_DEFINED_IN_COMMAND}', '$(printf no-eval)'])
+  await until(() => run.stderr().includes('Web view ready'), 'Node did not receive the injected port')
+  const child = JSON.parse(await readFile(observed, 'utf8')), port = Number(f.messages[1]!.port)
+  assert.equal(child.port, String(port)); assert.equal(child.capture, String(port)); assert.equal(child.alias, String(port))
+  assert.equal(child.composed, `${port}:child`); assert.equal(child.dollar, '$UNCHANGED')
+  assert.deepEqual(child.args, ['$PORT', '${NOT_DEFINED_IN_COMMAND}', '$(printf no-eval)'], 'ordinary command argv is never expanded or evaluated')
+  f.peer()!.write(JSON.stringify({ action: 'stop' }) + '\n'); assert.equal(await run.exit, 0)
+
+  const first = f.messages.length
+  const shell = f.run(['--timeout', '5', '-c', 'exec python3 -m http.server "$PORT" --bind 127.0.0.1'])
+  await until(() => shell.stderr().includes('Web view ready'), 'explicit shell did not expand PORT')
+  assert.equal(f.messages[first]!.port, 0); assert(Number(f.messages[first + 1]!.port) > 0)
+  f.peer()!.write(JSON.stringify({ action: 'stop' }) + '\n'); assert.equal(await shell.exit, 0)
+
+  const marker = join(f.root, 'undefined-must-not-start')
+  const invalid = f.run(['--env', 'APP_PORT=${NOT_DEFINED_IN_CHILD_ENV}', 'python3', '-c', `open(${JSON.stringify(marker)},'w').write('started')`])
+  assert.equal(await invalid.exit, 1); assert.match(invalid.stderr(), /undefined child environment variable/u)
+  assert.equal(await access(marker).then(() => true, () => false), false, 'invalid env aliases fail before starting the application')
+  const incompatible = f.run(['-c', 'exit 0', 'python3'])
+  assert.equal(await incompatible.exit, 2); assert.match(incompatible.stderr(), /cannot be combined/u)
+})
+
+test('HTTP startup waits through 503 and an explicit probe requires 2xx at its selected path', { timeout: 15000 }, async t => {
+  if (process.platform !== 'linux') { t.skip('Capture preview uses Linux listener ownership'); return }
+  const f = await fixture(t), program = join(f.root, 'health.mjs'), seen = join(f.root, 'probes.jsonl')
+  await writeFile(program, `import http from 'node:http';import fs from 'node:fs';let count=0;http.createServer((req,res)=>{fs.appendFileSync(${JSON.stringify(seen)},JSON.stringify({path:req.url,count:++count})+'\\n');res.writeHead(count<3?503:req.url==='/health'?204:401);res.end()}).listen(Number(process.env.PORT),'127.0.0.1');`)
+  const run = f.run(['--timeout', '5', process.execPath, program])
+  await until(() => run.stderr().includes('Web view ready'), 'default HTTP readiness did not recover from 503')
+  assert((await readFile(seen, 'utf8')).trim().split('\n').length >= 3)
+  f.peer()!.write(JSON.stringify({ action: 'stop' }) + '\n'); assert.equal(await run.exit, 0)
+
+  await writeFile(seen, '')
+  const health = f.run(['--probe', '/health', '--timeout', '5', process.execPath, program])
+  await until(() => health.stderr().includes('Web view ready'), 'explicit health probe did not become ready')
+  const probes = (await readFile(seen, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+  assert(probes.length >= 3); assert(probes.every(probe => probe.path === '/health'))
+  f.peer()!.write(JSON.stringify({ action: 'stop' }) + '\n'); assert.equal(await health.exit, 0)
+
+  const strict = f.run(['--probe', '/', '--timeout', '0.6', process.execPath, program])
+  assert.equal(await strict.exit, 1, 'a 401 response is online for default readiness but cannot satisfy an explicit 2xx probe')
+  assert.match(strict.stderr(), /startup deadline/u)
+})
+
+test('TCP and bounded custom readiness use the owned port and never expose probe output', { timeout: 15000 }, async t => {
+  if (process.platform !== 'linux') { t.skip('Capture preview uses Linux listener ownership'); return }
+  const f = await fixture(t), program = join(f.root, 'tcp.py'), probe = join(f.root, 'probe.py'), ready = join(f.root, 'probe-ready')
+  await writeFile(program, `import os,socket,time,threading\ns=socket.socket();s.bind(('127.0.0.1',0));s.listen()\ndef publish():\n time.sleep(.25)\n open(${JSON.stringify(ready)},'w').write(str(s.getsockname()[1]))\nthreading.Thread(target=publish,daemon=True).start()\nwhile True:\n c,_=s.accept();c.close()\n`)
+  await writeFile(probe, `import os,sys\nprint('PRIVATE_PROBE_OUTPUT')\ntry:ready=open(${JSON.stringify(ready)}).read()\nexcept FileNotFoundError:sys.exit(1)\nsys.exit(0 if ready==os.environ['PORT']==os.environ['CANVAS_CAPTURE_PORT'] else 1)\n`)
+  const custom = f.run(['--probe-command', `python3 ${probe}`, '--timeout', '5', 'python3', program])
+  await until(() => custom.stderr().includes('Web view ready'), 'custom readiness did not receive the actual detected port')
+  assert(!custom.stdout().includes('PRIVATE_PROBE_OUTPUT') && !custom.stderr().includes('PRIVATE_PROBE_OUTPUT'))
+  assert.equal(Number(await readFile(ready, 'utf8')), f.messages[1]!.port)
+  f.peer()!.write(JSON.stringify({ action: 'stop' }) + '\n'); assert.equal(await custom.exit, 0)
+
+  const first = f.messages.length, tcp = f.run(['--ready', 'tcp', '--timeout', '5', 'python3', program])
+  await until(() => tcp.stderr().includes('Web view ready'), 'TCP readiness incorrectly required HTTP')
+  assert(Number(f.messages[first + 1]!.port) > 0)
+  f.peer()!.write(JSON.stringify({ action: 'stop' }) + '\n'); assert.equal(await tcp.exit, 0)
+
+  const timeout = f.run(['--probe-command', 'sleep 30', '--timeout', '0.3', 'python3', program])
+  const started = Date.now(); assert.equal(await timeout.exit, 1); assert(Date.now() - started < 4000, 'a hung probe is bounded by the startup deadline')
+})
+
+test('Stop also closes an owned server when its shell wrapper exits before a TERM-resistant child', { timeout: 15000 }, async t => {
+  if (process.platform !== 'linux') { t.skip('Capture preview uses Linux listener ownership'); return }
+  const f = await fixture(t), program = join(f.root, 'stubborn.py')
+  await writeFile(program, "import http.server,os,signal\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\nhttp.server.HTTPServer(('127.0.0.1',int(os.environ['PORT'])),http.server.SimpleHTTPRequestHandler).serve_forever()\n")
+  const run = f.run(['--timeout', '5', '-c', `trap 'exit 0' TERM; python3 '${program}' & wait`])
+  await until(() => run.stderr().includes('Web view ready'), 'wrapped server did not become ready')
+  const port = Number(f.messages[1]!.port)
+  assert.equal((await fetch(`http://127.0.0.1:${port}/`)).status, 200)
+  f.peer()!.write(JSON.stringify({ action: 'stop' }) + '\n')
+  assert.equal(await run.exit, 0)
+  await until(async () => { try { await fetch(`http://127.0.0.1:${port}/`); return false } catch { return true } }, 'the server survived its exited wrapper after Stop')
+})
+
+test('automatic capture ignores unrelated services and ambiguous owned HTTP ports fail with cleanup', { timeout: 15000 }, async t => {
+  if (process.platform !== 'linux') { t.skip('Capture preview uses Linux listener ownership'); return }
+  const f = await fixture(t), unrelated = createHttpServer((_req, res) => res.end('unrelated service'))
+  await new Promise<void>(resolve => unrelated.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise<void>(resolve => unrelated.close(() => resolve())))
+  const address = unrelated.address(); assert(address && typeof address !== 'string')
+  const ended = join(f.root, 'stopped'), sleeper = join(f.root, 'sleep.py')
+  await writeFile(sleeper, `import signal,time,sys\ndef stop(*_):\n open(${JSON.stringify(ended)},'w').write('stopped');sys.exit(0)\nsignal.signal(signal.SIGTERM,stop);time.sleep(30)\n`)
+  const run = f.run(['--timeout', '0.3', 'python3', sleeper])
+  assert.equal(await run.exit, 1); assert.match(run.stderr(), /startup deadline/u)
+  assert.equal(await readFile(ended, 'utf8'), 'stopped', 'failed readiness terminates the owned command')
+  assert.equal(f.messages.length, 1, 'no unowned listener becomes an iframe')
+  assert.equal(await (await fetch(`http://127.0.0.1:${address.port}`)).text(), 'unrelated service')
+
+  const program = join(f.root, 'ambiguous.mjs'), portsFile = join(f.root, 'ports.json')
+  await writeFile(program, `import http from 'node:http';import fs from 'node:fs';const ports=[];for(let i=0;i<2;i++){const s=http.createServer((req,res)=>res.end('owned'));s.listen(0,'127.0.0.1',()=>{ports.push(s.address().port);if(ports.length===2)fs.writeFileSync(${JSON.stringify(portsFile)},JSON.stringify(ports))})}`)
+  const ambiguous = f.run(['--timeout', '5', process.execPath, program])
+  assert.equal(await ambiguous.exit, 1); assert.match(ambiguous.stderr(), /multiple HTTP ports/u)
+  for (const port of JSON.parse(await readFile(portsFile, 'utf8'))) {
+    await until(async () => { try { await fetch(`http://127.0.0.1:${port}`); return false } catch { return true } }, 'ambiguous command left a listening service behind')
+  }
 })
 
 test('an occupied port never starts the command and revoking a pending capture stops startup', { timeout: 15000 }, async t => {

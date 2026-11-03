@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { buildInfo } from '../server/build-info.ts'
 
-const help = `Usage: canvas [serve | open <path-or-url> | capture --port <port> -- <command> | version]
+const help = `Usage: canvas [serve | open <path-or-url> | capture [options] <command> | version]
 
   serve       Start Canvas (default)
   open        Open a file, directory or URL from a connected herdr pane
@@ -14,6 +14,12 @@ const help = `Usage: canvas [serve | open <path-or-url> | capture --port <port> 
 open uses the caller's HERDR_SOCKET_PATH and HERDR_PANE_ID for TUI,
 or HC_TERMINAL_SOCKET and HC_TERMINAL_ID for Core.
 Daemon callers must supply the originating pane's values per invocation.
+
+Capture examples:
+  canvas capture python3 -m http.server
+  canvas capture npm start
+  canvas capture -c 'python3 -m http.server "$PORT"'
+Use canvas capture --help for ports, environment and readiness options.
 `
 const [command = 'serve', ...args] = process.argv.slice(2)
 if (['--help', '-h', 'help'].includes(command) || command === 'serve' && args.length === 1 && ['--help', '-h'].includes(args[0]!)) {
