@@ -218,6 +218,70 @@ test('full-width CJK path display joins a short extension tail and verifies the 
   assert.deepEqual((await f.scan()).panes, [], 'a reconstructed path still requires an existing file')
 })
 
+test('unquoted tool paths join slash and hyphen wraps across multiple hard lines and verify the exact file', async t => {
+  const f = await fixture(t)
+  const directory = 'dist/2026/11/02/image-demo/accepted-final'
+  await mkdir(join(f.root, directory), { recursive: true })
+  const path = join(f.root, directory, 'official-app.png')
+  await writeFile(path, 'synthetic image')
+  await writeFile(join(f.root, directory, 'officialapp.png'), 'different synthetic image')
+  f.setContent([{ ...pane([
+    `Viewed image ${f.root}/`,
+    `${directory}/official-`,
+    'app.png',
+  ]), columns: 150 }])
+  assert.deepEqual((await f.scan()).panes.flatMap(pane => pane.items.flatMap(item => item.kind === 'file' ? [item.path] : [])), [path])
+  assert.equal(f.reads(), 0, 'reconstructed candidates are checked as regular files without reading bytes')
+  await rm(path)
+  assert.deepEqual((await f.scan()).panes, [], 'missing exact hyphenated file never falls back to a different filename')
+})
+
+test('unquoted wrapped paths preserve bracketed names and do not infer a new working directory', async t => {
+  const f = await fixture(t)
+  const directory = 'captures(1)/set[2]/选图（最终）'
+  await mkdir(join(f.root, directory), { recursive: true })
+  const path = join(f.root, directory, 'official-(app)[3].png')
+  await writeFile(path, 'synthetic image')
+  f.setContent([pane([
+    'captures(1)/', 'set[2]/', '选图（最终）/official-', '(app)[3].png',
+  ], f.root)])
+  assert.deepEqual((await f.scan()).panes.flatMap(pane => pane.items.flatMap(item => item.kind === 'file' ? [item.path] : [])), [path])
+  f.setContent([pane(['cd /unrelated', 'captures(1)/', 'set[2]/', '选图（最终）/official-', '(app)[3].png'])])
+  assert.deepEqual((await f.scan()).panes, [], 'relative candidates require the native reported cwd, never a parsed cd')
+})
+
+test('unquoted continuation stops at prose, separators, bullets and independent paths', () => {
+  const paths = (lines: string[], other?: string[]) => contentCandidates([
+    pane(lines, '/work'), ...(other ? [pane(other, '/work', 'other')] : []),
+  ]).panes.flatMap(pane => pane.items.flatMap(item => item.kind === 'file' ? [item.path] : []))
+  for (const next of ['', '─────', '---', '- app.png', '+ app.png', '• app.png', '1. app.png', 'another image.png',
+    '/elsewhere/app.png', './app.png', '../app.png', '~/app.png', '@app.png', '--flag', 'https://example.test/app.png']) {
+    assert(!paths(['Viewed image /tmp/example/', next, 'app.png']).some(path => path?.startsWith('/tmp/example/') && path !== '/tmp/example/'), next)
+  }
+  assert(!paths(['Viewed image /tmp/example/official-'], ['app.png']).includes('/tmp/example/official-app.png'), 'pane boundaries stop wrapping')
+  assert(!paths(['Output /tmp/example/file', 'app.png']).includes('/tmp/example/fileapp.png'), 'ordinary hard lines lack a wrapping cue')
+  assert(!paths(['the next option -', 'app.png']).includes('/work/-app.png'), 'prose hyphens never become path prefixes')
+  assert(!paths(['Viewed image /tmp/example/official-', '─────', 'app.png']).includes('/tmp/example/official-app.png'), 'a drawn separator is not silently removed')
+})
+
+test('unquoted wrap reconstruction shares the existing path size and candidate budgets', () => {
+  const groups = [pane(['Viewed image /tmp/' + 'x'.repeat(8190) + '-', 'app.png'], '/work')]
+  assert(!contentCandidates(groups).panes.flatMap(pane => pane.items).some(item => item.kind === 'file' && item.path && item.path.length > 8192))
+  const rows = Array.from({ length: 250 }, (_, index) => [`Viewed image /tmp/item-${index}/`, 'official-', 'app.png']).flat()
+  const result = contentCandidates([pane(rows)])
+  assert.equal(result.truncated, true)
+  assert(result.panes.flatMap(pane => pane.items).length <= 200)
+})
+
+test('an oversized initial path does not consume the budget of a later valid wrapped path', () => {
+  const result = contentCandidates([pane([
+    `Viewed image /tmp/${'x'.repeat(70_000)}-`, 'app.png',
+    'Viewed image /tmp/valid/', 'official-', 'app.png',
+  ])])
+  assert(result.panes.flatMap(pane => pane.items).some(item => item.kind === 'file' && item.path === '/tmp/valid/official-app.png'))
+  assert.equal(result.truncated, false)
+})
+
 test('inline parenthesized video paths survive TUI hard wraps and retain their exact filename', async t => {
   const f = await fixture(t)
   const directory = 'dist/2026/11/02/layout-preview/tutorial'

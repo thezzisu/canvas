@@ -53,6 +53,30 @@ function pathDisplay(value: string): boolean {
     && !/[<>"'`]/u.test(value) && !/\s+[^\s]*\//u.test(value) && !/^[a-z][a-z\d+.-]*:\/\//iu.test(value)
 }
 
+/** TUI word wrapping can break a path at a slash or literal hyphen before the
+ * pane edge. Accept only a trailing path and consecutive single-token parts. */
+function wrappedPathTokens(lines: readonly string[], index: number, budget: { remaining: number; characters: number }): string | undefined {
+  const line = presentationPath(lines[index]!).value
+  const token = (value: string) => !!value && !/[\s<>"'`|;&\\\x00-\x1f\x7f-\x9f]/u.test(value)
+  let value = /(?:^|\s)(@?(?:\/|~\/|\.{1,2}\/)[^\s<>"'`|;&\\]+)$/u.exec(line)?.[1]
+    || (token(line) && pathDisplay(line) ? line : '')
+  if (!value || value.length > 8192 || !/[/-]$/u.test(value) || budget.remaining <= 0 || budget.characters <= 0) return
+  if (value.length > budget.characters) { budget.characters = 0; return }
+  budget.remaining--
+  budget.characters -= value.length
+  let joined = false
+  for (let row = index + 1; row < lines.length && /[/-]$/u.test(value); row++) {
+    const part = lines[row]!.trim().replace(/^(?:>\s*)+/u, '')
+    if (!token(part) || !/[\p{L}\p{N}_]/u.test(part) || /^(?:[\/@~+*•-]|\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:\/\/)/iu.test(part)) break
+    if (value.length + part.length > 8192) break
+    if (budget.characters < part.length) { budget.characters = 0; break }
+    budget.characters -= part.length
+    value += part
+    joined = true
+  }
+  return joined && !/[/-]$/u.test(value) ? value : undefined
+}
+
 /** Balanced wrappers distinguish inline paths from the prose around them. */
 function wrappedParenthesizedPaths(lines: readonly string[], index: number, budget: { remaining: number; characters: number }): string[] {
   const pairs: Record<string, string> = { '(': ')', '（': '）' }
@@ -140,6 +164,8 @@ export function contentCandidates(panes: NativeContentPane[]): { panes: WindowCo
       if (pathDisplay(value)) add(value, true)
     }
     for (const [index, line] of pane.lines.entries()) {
+      const wrapped = wrappedPathTokens(pane.lines, index, wrapBudget)
+      if (wrapped) add(wrapped, true)
       for (const wrapped of wrappedParenthesizedPaths(pane.lines, index, wrapBudget)) add(wrapped, true)
       const { value, closing } = presentationPath(line)
       const width = pane.columns

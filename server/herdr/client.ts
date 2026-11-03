@@ -441,6 +441,9 @@ class HerdrClient implements HerdrClientTransport {
     const bytes = Buffer.concat(this.pendingInput, this.pendingInputBytes)
     this.pendingInput = []; this.pendingInputBytes = 0
     this.input.write(bytes)
+    // A focus-only input can settle without another native redraw. Publish the
+    // coherent frame held behind it once the existing input lane has drained.
+    void this.input.settled().then(() => this.render()).catch(error => this.fail(error))
   }
   async completionFence(): Promise<WindowMetadata | undefined> {
     await this.inputFocusBarrier
