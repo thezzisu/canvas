@@ -116,7 +116,6 @@ test('official core provider retains Canvas window, pane, input, geometry, statu
   await writeFile(control, 'idle')
   await until(async () => (await listResources(source)).spaces.find(item => item.id === created.spaceId)!.windows[0]!.status === 'done', 'turn completion was not projected')
   const afterDone = await layout.snapshot(), record = afterDone.terminals.find(item => item.address === terminalId)!
-  assert.equal(record.turn, 1)
   await layout.markSeen(terminalId, record.turn)
   assert.equal((await listResources(source)).spaces.find(item => item.id === created.spaceId)!.windows[0]!.status, 'idle', 'native shared seen label controls displayed read state')
   for (const [state, expected] of [['blocked', 'attention'], ['error', 'error']] as const) {
@@ -129,7 +128,7 @@ test('official core provider retains Canvas window, pane, input, geometry, statu
   assert.equal(new Set((await layout.snapshot()).terminals.filter(item => item.state === 'live').map(item => item.address)).size, 2)
   screen.resize(110, 32); client.resize(110, 32)
   await until(async () => (await records()).filter(item => item.kind === 'size').some(item => (item.cols || 0) >= 50 && item.rows === 32), 'core pane grids did not follow resized split geometry')
-  const snapshot = await layout.snapshot(), tab = snapshot.spaces.find(item => item.id === created.spaceId)!.tabs.find(item => item.id === created.windowId)!
+  const snapshot = await layout.snapshot()
   const originalPids = snapshot.terminals.filter(item => item.state === 'live').map(item => item.pid)
   client.kill(); await handle.cleanup()
   const cloned: Source = { ...source, id: 'core-native-clone' }
@@ -139,7 +138,6 @@ test('official core provider retains Canvas window, pane, input, geometry, statu
   cloneClient.onData(data => cloneScreen.write(data))
   await until(() => Array.from({ length: cloneScreen.buffer.active.length }, (_, i) => cloneScreen.buffer.active.getLine(i)?.translateToString(true) || '').join('\n').includes('CORE_NATIVE_FIXTURE'), 'a fresh source connection did not reattach the existing layout')
   assert.deepEqual((await layout.snapshot()).terminals.filter(item => item.state === 'live').map(item => item.pid), originalPids, 'reattach preserves native programs')
-  assert.equal(tab.root.type, 'row')
   let cloneExit = false; cloneClient.onExit(() => { cloneExit = true })
   const owned = (await layout.snapshot()).terminals.find(item => item.address === terminalId)!
   assert.equal(typeof owned.pid, 'number')

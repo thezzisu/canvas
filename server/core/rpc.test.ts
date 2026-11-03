@@ -102,7 +102,7 @@ test('core events wait for initial snapshot application and parse fragmented Uni
   assert.equal(f.received.filter(frame => frame.channel === 2 && frame.kind === 1).reduce((n, frame) => n + frame.data.readUInt32LE(), 0), Buffer.byteLength(notification) + Buffer.byteLength(JSON.stringify({ jsonrpc: '2.0', method: 'heartbeat', params: { seq: 4 } }) + '\n'))
 })
 
-test('core RPC retains stable error kinds, bounds pending calls and cancels orphan attach requests', async t => {
+test('core RPC retains error kinds, times out unanswered calls and cancels orphan attach requests', async t => {
   const f = await fixture(t, (request, socket) => {
     if (request.params.mode === 'error') socket.write(encoded(0, 0, { jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'stale document', data: { kind: 'conflict', hint: 'read again' } } }))
   })
