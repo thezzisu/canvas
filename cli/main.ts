@@ -16,7 +16,7 @@ or HC_TERMINAL_SOCKET and HC_TERMINAL_ID for Core.
 Daemon callers must supply the originating pane's values per invocation.
 
 Capture examples:
-  canvas capture python3 -m http.server
+  canvas capture python3 -m http.server 0
   canvas capture npm start
   canvas capture -c 'python3 -m http.server "$PORT"'
 Use canvas capture --help for ports, environment and readiness options.

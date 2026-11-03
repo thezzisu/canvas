@@ -133,7 +133,7 @@ On Linux, the npm CLI can start a trusted Web application inside a connected,
 single-pane terminal and show its UI in that same Canvas card:
 
 ```sh
-canvas capture python3 -m http.server
+canvas capture python3 -m http.server 0
 canvas capture npm start
 ```
 
@@ -146,6 +146,9 @@ to unrelated services. If multiple eligible HTTP listeners remain, specify
 at different stages; an early HTTP service can otherwise be selected first.
 An application's fixed-port conflict still needs fixing;
 injecting `PORT` cannot change an app that ignores it.
+Python accepts port `0` to bind an available port itself, so the example above
+avoids conflicts with a pre-existing server on 8000. Without `0`, its normal
+default still works when 8000 is free.
 
 Use the child shell when a program takes its port as an argument, or give the
 app a different environment variable:
