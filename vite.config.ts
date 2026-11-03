@@ -18,7 +18,16 @@ export default defineConfig({
     this.emitFile({ type: 'asset', ...notificationWorker })
   } }, contentFontsPlugin(), VitePWA(pwaOptions), vue(), VueI18nPlugin({ include: fileURLToPath(new URL('./web/src/locales/**', import.meta.url)) }), ui({ prose: true, router: false, colorMode: false, autoImport: false, components: false, dts: false,
     icon: { clientBundle: { scan: { globInclude: ['src/**/*.{vue,ts}'] } } },
-    ui: { colors: { primary: 'amber', neutral: 'zinc' } },
+    ui: {
+      colors: { primary: 'amber', neutral: 'zinc' },
+      toast: { slots: {
+        root: '[--ui-error:#f38ba8] [--ui-success:#94e2d5]',
+        title: '[overflow-wrap:anywhere]',
+        description: 'whitespace-pre-line [overflow-wrap:anywhere]',
+        actions: 'flex-wrap',
+      } },
+      toaster: { slots: { viewport: 'm-0 p-0 list-none' } },
+    },
   })],
   build: { outDir: '../dist/web', emptyOutDir: true, rolldownOptions: { output: { comments: { legal: true } } } },
   server: {

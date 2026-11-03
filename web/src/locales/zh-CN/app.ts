@@ -105,7 +105,6 @@ export default {
   "searchPlaceholder": "搜索连接、Space 或窗口…",
   "noAvailableWindows": "暂无可用窗口",
   "addToOtherCanvas": "加入其他画布",
-  "closeNotification": "关闭通知",
   "filteredWindows": "{visible} / {total} 个窗口",
   "windowCount": "{count} 个窗口",
   "connectionCount": "{count} 个连接",

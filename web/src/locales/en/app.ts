@@ -105,7 +105,6 @@ export default {
   "searchPlaceholder": "Search connections, spaces or windows…",
   "noAvailableWindows": "No available windows",
   "addToOtherCanvas": "Add to another canvas",
-  "closeNotification": "Dismiss notification",
   "filteredWindows": "{visible} / {total} windows",
   "windowCount": "{count} window | {count} windows",
   "connectionCount": "{count} connection | {count} connections",

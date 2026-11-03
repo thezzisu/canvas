@@ -6,6 +6,7 @@ import { api, apiRevision, ApiError, isCurrentApi, segment, uuid, type ApiContex
 import { fileViewKey } from './file-view'
 import { cardZoomKey } from './card-zoom'
 import type { CanvasNode } from './types'
+import { toastAction } from './toast'
 
 interface Removal {
   id: string; canvasId: string; nodeId: string; context: ApiContext
@@ -47,7 +48,7 @@ export function useCardRemovalUndo(options: { sync(): Promise<void>; released(co
     if (!current(entry) || entry.restoring) return
     if (performance.now() >= entry.deadline!) { release(entry); return }
     entry.restoring = true
-    toast.update(entry.id, { duration: Math.max(1, entry.deadline! - performance.now()), actions: [{ label: t('app.undoRemoval'), loading: true, disabled: true, closeOnClick: false }] })
+    toast.update(entry.id, { duration: Math.max(1, entry.deadline! - performance.now()), actions: [{ ...toastAction, label: t('app.undoRemoval'), loading: true, disabled: true, closeOnClick: false }] })
     try {
       // A peer may have pruned shared localStorage after removal. Restore only
       // missing preferences before the restored card can mount from its SSE.
@@ -84,9 +85,8 @@ export function useCardRemovalUndo(options: { sync(): Promise<void>; released(co
         if (!entry.restoring) release(entry)
       }, remaining)
       toast.add({ id: entry.id, title: t('app.cardRemoved', { name }), duration: remaining,
-        color: 'neutral', progress: false, type: 'background', class: 'card-removal-toast',
-        close: { 'aria-label': t('app.closeNotification') },
-        actions: [{ label: t('app.undoRemoval'), closeOnClick: false, onClick: () => { void restore(entry, undo) } }],
+        color: 'neutral', type: 'background', class: 'card-removal-toast',
+        actions: [{ ...toastAction, label: t('app.undoRemoval'), closeOnClick: false, onClick: () => { void restore(entry, undo) } }],
       })
     },
     fileViews: () => new Set([...entries.values()].flatMap(entry => entry.fileView ? [entry.fileView] : [])),
