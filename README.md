@@ -151,9 +151,11 @@ The authenticated browser supplies its selected instance base to its terminal
 connection. Canvas validates that mount and uses it only for app presentation;
 forwarding still targets the source machine's declared loopback port. Independent
 frontends and multiple instances keep their own addresses. This mode is for
-explicitly trusted applications: a same-origin app has the same DOM/storage
-authority as Canvas, and cookie paths do not isolate it. The iframe's navigation
-restrictions are not a security boundary between the app and Canvas.
+explicitly trusted applications. Same-origin app scripts can read and change the
+Canvas DOM and local storage, including the signed-in Canvas bearer token, and can
+act with that account's access to connected machines. A malicious captured app
+can take over the Canvas session. Cookie paths and iframe navigation restrictions
+do not isolate it. Use capture only for commands and applications you trust.
 
 Application authentication cookies are held in this capture's temporary server
 cookie jar and supplied to its upstream HTTP/WebSocket requests. No application
