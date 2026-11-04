@@ -21,6 +21,7 @@ export default {
   file: { singleOnly: '一次只能上传一个文件', uploadBusy: '正在上传，请稍后再试', dropOnCanvas: '请拖到画布空白处', unreadableTransfer: '无法读取拖入的文件', uploadingTo: '上传到「{name}」', addFailed: '无法添加文件', dropToAdd: '松开以添加为便签', adding: '正在添加文件', download: '下载文件', remove: '移除文件', downloadNamed: '下载 {name}', downloadOriginal: '下载原文件', unreadable: '无法读取文本' },
   image: { zoom: '图片缩放', zoomOut: '缩小图片', zoomIn: '放大图片', fit: '适合图片', scale: '缩放比例' },
   note: {
+    tooLong: '便签内容过长',
     copy: '复制便签', copyOrDrag: '复制便签 · 拖入终端粘贴', paste: '粘贴便签', openToPaste: '打开窗口后粘贴',
     name: '便签', color: '便签颜色', title: '便签标题', rename: '重命名便签',
     remove: '移除便签', content: '便签内容', placeholder: '写点什么…',

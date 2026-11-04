@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
 import type { NodeProps } from '@vue-flow/core'
 import { NodeResizer } from '@vue-flow/node-resizer'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import type { NoteData, NotePatch } from '../types'
 import Icon from './Icon.vue'
+import { noteText } from '../note-document'
 import ContentZoom from './ContentZoom.vue'
 import CardHeaderActions from './CardHeaderActions.vue'
 import { contentZoomMenu } from '../content-zoom-menu'
@@ -18,12 +19,15 @@ import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout
 import { usePointerDismiss } from '../pointer-dismiss'
 import { useCardContentFocus } from '../card-content-focus'
 
+const NoteEditor = defineAsyncComponent(() => import('./NoteEditor.vue'))
 const { t } = useI18n()
 
 const props = withDefaults(defineProps<Pick<NodeProps<NoteData>, 'id' | 'data'> & { selected?: boolean }>(), { selected: false })
 const zoom = useContentZoom(() => props.data.zoomKey)
 const mobilePreview = computed(() => !!props.data.mobile && !props.data.focus)
 const noteBody = ref<HTMLElement>()
+const noteEditor = ref<InstanceType<typeof NoteEditor>>()
+const copyContent = computed(() => noteText(content.value, props.data.attachments))
 const { active: contentActive, pointerDown: contentPointerDown } = useCardContentFocus(noteBody, () => mobilePreview.value)
 const header = ref<HTMLElement>()
 const headerCompact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined), undefined, 6)
@@ -33,6 +37,7 @@ const menu = computed<DropdownMenuItem[]>(() => [
     { label: t('panels.note.copy'), icon: 'i-lucide-copy', disabled: !content.value, onSelect: copyNote },
     { label: t('app.addToOtherCanvas'), icon: 'i-lucide-layers', onSelect: () => props.data.onAction('add', props.id) },
   ] : []),
+  { label: t('app.uploadFile'), icon: 'i-lucide-upload', disabled: noteEditor.value?.pending, onSelect: () => noteEditor.value?.chooseFiles() },
   { label: t('panels.note.rename'), icon: 'i-lucide-pencil', onSelect: () => { void rename() } },
   { label: t('common.settings'), icon: 'i-lucide-settings', onSelect: () => props.data.onAction('settings', props.id) },
 ])
@@ -62,9 +67,9 @@ function escapeColors(event: KeyboardEvent) {
   event.preventDefault(); event.stopPropagation(); colorOpen.value = false
 }
 function setColor(value: typeof colors[number]) { emitChange({ color: value }); colorOpen.value = false; flush() }
-function copyNote() { void copyText(content.value) }
+function copyNote() { void copyText(copyContent.value) }
 function dragNote(event: DragEvent) {
-  if (!writeNoteTransfer(event.dataTransfer, content.value)) event.preventDefault()
+  if (!writeNoteTransfer(event.dataTransfer, copyContent.value)) event.preventDefault()
   event.stopPropagation()
 }
 </script>
@@ -87,12 +92,14 @@ function dragNote(event: DragEvent) {
         <button type="button" class="card-header-action note-copy" :disabled="!content" :draggable="!!content" :title="t('panels.note.copyOrDrag')" :aria-label="t('panels.note.copy')" @pointerdown.stop @click="copyNote" @dragstart="dragNote"><Icon name="copy" :size="15" /></button>
       </CardHeaderActions>
     </header>
-    <textarea ref="noteBody" v-model="content" class="note-content card-content nodrag nowheel" :data-content-active="contentActive" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :readonly="mobilePreview" :tabindex="mobilePreview ? -1 : undefined" :aria-label="t('panels.note.content')" :placeholder="t('panels.note.placeholder')" maxlength="200000" @input="emitChange({ content })" @blur="flush" @pointerdown.stop="contentPointerDown" @wheel.stop @dblclick.stop />
+    <div ref="noteBody" class="note-content card-content nodrag nowheel" :data-content-active="contentActive" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.stop="contentPointerDown" @wheel.stop @dblclick.stop>
+      <NoteEditor ref="noteEditor" :content="content" :attachments="data.attachments || []" :canvas-id="data.canvasId" :note-id="id" :read-only="mobilePreview" :insert-attachment="data.onAttachment" @change="value => { content = value; emitChange({ content: value }) }" @flush="flush" />
+    </div>
     <CardPreview v-if="mobilePreview" :label="t('common.openCard', { name: title || t('panels.note.name') })" @open="data.onAction('focus', id)" />
   </article>
 </template>
 
 <style scoped>
-.note-copy[draggable=true]{cursor:grab}.note-copy[draggable=true]:active{cursor:grabbing}
+.note-content{position:relative;padding:0;overflow:hidden}.note-copy[draggable=true]{cursor:grab}.note-copy[draggable=true]:active{cursor:grabbing}
 .note-copy:disabled{cursor:default}
 </style>

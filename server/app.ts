@@ -82,7 +82,7 @@ const isBackgroundUpload = (method: string, path: string) =>
 const isInboxUpload = (method: string, path: string) =>
   method === "PUT" && /^\/api\/uploads\/[A-Za-z0-9_-]+$/.test(path);
 const isCanvasFileUpload = (method: string, path: string) =>
-  method === 'POST' && /^\/api\/canvases\/[^/]+\/files$/.test(path);
+  method === 'POST' && /^\/api\/canvases\/[^/]+\/(?:notes\/[^/]+\/)?files$/.test(path);
 export type { Account } from "./account.ts";
 export interface DownloadResponse {
   body: Readable;
@@ -212,6 +212,14 @@ export function createApp(
     const input = z.object({ filename: z.string().min(1).max(255), size: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
       x: z.coerce.number().finite().min(-1e7).max(1e7), y: z.coerce.number().finite().min(-1e7).max(1e7) }).strict().parse(c.req.query());
     return c.json(await receiveCanvasFile(store, options.assets, id, input, c.req.raw, bearerToken(c.req.header('authorization'))), 201);
+  });
+  app.post('/api/canvases/:id/notes/:note/files', async c => {
+    const id = c.req.param('id'), noteId = c.req.param('note');
+    if (!store.hasNote(id, noteId) || !options.assets) return c.json({ error: 'Note not found' }, 404);
+    const input = z.object({ filename: z.string().min(1).max(255),
+      size: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).strict().parse(c.req.query());
+    return c.json(await receiveCanvasFile(store, options.assets, id, { ...input, noteId }, c.req.raw,
+      bearerToken(c.req.header('authorization'))), 201);
   });
   app.get("/api/downloads/:ticket", async (c) => {
     if (c.req.method !== "GET") return c.body(null, 405);

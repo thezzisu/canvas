@@ -4,7 +4,7 @@ import { lstat, mkdir, open, readdir, rename, rm, type FileHandle } from "node:f
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { getMimeType } from "hono/utils/mime";
-import type { Store, FileAsset, FileNodeContext } from "./state.ts";
+import type { Store, FileAsset, FileAssetContext } from "./state.ts";
 
 function safeFilename(value: string): string {
   if (!value || Buffer.byteLength(value, "utf8") > 255 || Buffer.from(value).toString() !== value ||
@@ -24,7 +24,7 @@ async function writeAll(file: FileHandle, chunk: Buffer, position: number) {
 
 export interface AssetUpload {
   write(chunk: Uint8Array): Promise<void>;
-  complete(context: FileNodeContext, signal?: AbortSignal): Promise<FileAsset & { temporary: boolean }>;
+  complete(context: FileAssetContext, signal?: AbortSignal): Promise<FileAsset & { temporary: boolean }>;
   abort(): Promise<void>;
 }
 
@@ -103,7 +103,7 @@ export class AssetStore {
             const timer = setTimeout(() => { void this.discardTemporary(id).catch(() => {}); }, ttl);
             timer.unref();
             this.stagedFiles.set(id, { asset, expiresAt: Date.now() + ttl, timer });
-          } else if (!this.store.addFileNode(asset, context)) {
+          } else if (!this.store.commitFileAsset(asset, context)) {
             throw new Error("File destination no longer exists");
           }
           active = false;

@@ -57,18 +57,19 @@ export const terminalNodeSchema = nodeLayoutSchema.extend({
   windowId: z.string().max(300),
 }).strict();
 export const noteColorSchema = z.enum(["yellow", "blue", "green", "pink", "neutral"]);
-export const noteNodeSchema = nodeLayoutSchema.extend({
-  type: z.literal("note"),
-  title: z.string().max(200).default(""),
-  content: z.string().max(200_000).default(""),
-  color: noteColorSchema.default("yellow"),
-}).strict();
 export const fileAssetSchema = z.object({
   id: z.string().uuid(),
   filename: z.string().min(1).max(255),
   size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   mime: z.string().max(100),
   createdAt: z.number().int().nonnegative(),
+}).strict();
+export const noteNodeSchema = nodeLayoutSchema.extend({
+  type: z.literal("note"),
+  title: z.string().max(200).default(""),
+  content: z.string().max(200_000).default(""),
+  color: noteColorSchema.default("yellow"),
+  attachments: z.array(fileAssetSchema).optional(),
 }).strict();
 export const fileNodeSchema = nodeLayoutSchema.extend({
   type: z.literal("file"),
@@ -88,9 +89,10 @@ export type FileAsset = {
   createdAt: number;
 };
 export type FileNodeView = FileNode & { asset: FileAsset };
-export type FileNodeContext = { canvasId?: string } & (
+export type FileAssetContext = { canvasId?: string } & (
   | { anchorId?: string; sourceId: string; windowId: string }
   | { position: { x: number; y: number } }
+  | { noteId: string }
 );
 export const isTerminalNode = (node: CanvasNode): node is TerminalNode =>
   node.type === "terminal";
@@ -133,7 +135,7 @@ export class Store extends EventEmitter {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(path);
     this.db.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (kind TEXT, id TEXT, body TEXT, PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER); CREATE TABLE IF NOT EXISTS canvas_backgrounds (canvas_id TEXT PRIMARY KEY, image_id TEXT NOT NULL UNIQUE, opacity REAL NOT NULL CHECK(opacity >= 0 AND opacity <= 1), data BLOB NOT NULL, document_kind TEXT NOT NULL DEFAULT 'canvas' CHECK(document_kind = 'canvas'), FOREIGN KEY(document_kind, canvas_id) REFERENCES documents(kind, id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS canvas_files (id TEXT PRIMARY KEY, canvas_id TEXT NOT NULL, filename TEXT NOT NULL, size INTEGER NOT NULL CHECK(size >= 0), mime TEXT NOT NULL, created_at INTEGER NOT NULL);",
+      "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (kind TEXT, id TEXT, body TEXT, PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER); CREATE TABLE IF NOT EXISTS canvas_backgrounds (canvas_id TEXT PRIMARY KEY, image_id TEXT NOT NULL UNIQUE, opacity REAL NOT NULL CHECK(opacity >= 0 AND opacity <= 1), data BLOB NOT NULL, document_kind TEXT NOT NULL DEFAULT 'canvas' CHECK(document_kind = 'canvas'), FOREIGN KEY(document_kind, canvas_id) REFERENCES documents(kind, id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS canvas_files (id TEXT PRIMARY KEY, canvas_id TEXT NOT NULL, filename TEXT NOT NULL, size INTEGER NOT NULL CHECK(size >= 0), mime TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS note_files (note_id TEXT NOT NULL, asset_id TEXT NOT NULL REFERENCES canvas_files(id) ON DELETE CASCADE, PRIMARY KEY(note_id,asset_id)); CREATE INDEX IF NOT EXISTS note_files_asset ON note_files(asset_id);",
     );
     // The overview only owns its background. Its name and generated window
     // layout never enter the editable canvas collection.
@@ -211,7 +213,7 @@ export class Store extends EventEmitter {
     let releasedFile = false;
     for (const [token, item] of this.removals) if (matches(item)) {
       clearTimeout(item.timer); this.removals.delete(token);
-      releasedFile ||= !item.restored && item.node.type === 'file';
+      releasedFile ||= !item.restored && item.node.type !== 'terminal';
     }
     return releasedFile;
   }
@@ -227,7 +229,7 @@ export class Store extends EventEmitter {
       const item = this.removals.get(token);
       if (!item) return;
       this.removals.delete(token);
-      if (!item.restored && item.node.type === 'file') this.changed();
+      if (!item.restored && item.node.type !== 'terminal') this.changed();
     }, CARD_REMOVAL_UNDO_MS);
     timer.unref();
     this.removals.set(token, { canvasId, node, index, sessionId, expiresAt, timer, restored: false,
@@ -305,7 +307,7 @@ export class Store extends EventEmitter {
       ...canvas,
       nodes: canvas.nodes.map(node => node.type === "file"
         ? { ...node, asset: this.fileAsset(node.assetId)! }
-        : node.type === "note" ? node : { ...node, ...this.windowSize(node.sourceId, node.windowId) }),
+        : node.type === "note" ? { ...node, attachments: this.noteAttachments(node.id) } : { ...node, ...this.windowSize(node.sourceId, node.windowId) }),
       background: background
         ? {
             url: `/api/backgrounds/${String(background.image_id)}`,
@@ -331,7 +333,8 @@ export class Store extends EventEmitter {
     return nodes.map(node => {
       if (node.type === "note") {
         const current = notes.get(node.id);
-        return current ? { ...node, title: current.title, content: current.content, color: current.color } : node;
+        const { attachments: _, ...stored } = node;
+        return current ? { ...stored, title: current.title, content: current.content, color: current.color } : stored;
       }
       if (node.type === "file") {
         const { asset: _asset, ...stored } = node;
@@ -394,7 +397,7 @@ export class Store extends EventEmitter {
     return { canvas, added };
   }
 
-  addFileNode(asset: FileAsset, context: FileNodeContext): boolean {
+  commitFileAsset(asset: FileAsset, context: FileAssetContext): boolean {
     const canvasId = context.canvasId;
     if (!canvasId || canvasId === "overview") return false;
     this.db.exec("BEGIN IMMEDIATE");
@@ -402,33 +405,56 @@ export class Store extends EventEmitter {
       const row = this.db.prepare("SELECT body FROM documents WHERE kind='canvas' AND id=?").get(canvasId);
       if (!row) { this.db.exec("ROLLBACK"); return false; }
       const canvas = JSON.parse(String(row.body)) as Canvas;
-      let x: number, y: number;
-      if ('position' in context) {
-        ({ x, y } = nodeLayoutSchema.pick({ x: true, y: true }).parse(context.position));
+      if ('noteId' in context) {
+        if (!canvas.nodes.some(node => node.type === 'note' && node.id === context.noteId)) { this.db.exec("ROLLBACK"); return false; }
+        this.db.prepare("INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)")
+          .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.createdAt);
+        this.db.prepare("INSERT INTO note_files(note_id,asset_id) VALUES(?,?)").run(context.noteId, asset.id);
       } else {
-        const anchor = canvas.nodes.find(node => isTerminalNode(node) && node.id === context.anchorId &&
-          node.sourceId === context.sourceId && node.windowId === context.windowId);
-        if (!anchor) { this.db.exec("ROLLBACK"); return false; }
-        x = Math.min(1e7, anchor.x + this.windowSize(context.sourceId, context.windowId).width + 24);
-        const occupied = canvas.nodes.filter(node => node.type === "file" && Math.abs(node.x - x) < 1)
-          .reduce((bottom, node) => Math.max(bottom, node.y + node.height), anchor.y);
-        y = Math.min(1e7, occupied === anchor.y ? anchor.y : occupied + 16);
+        let x: number, y: number;
+        if ('position' in context) {
+          ({ x, y } = nodeLayoutSchema.pick({ x: true, y: true }).parse(context.position));
+        } else {
+          const anchor = canvas.nodes.find(node => isTerminalNode(node) && node.id === context.anchorId &&
+            node.sourceId === context.sourceId && node.windowId === context.windowId);
+          if (!anchor) { this.db.exec("ROLLBACK"); return false; }
+          x = Math.min(1e7, anchor.x + this.windowSize(context.sourceId, context.windowId).width + 24);
+          const occupied = canvas.nodes.filter(node => node.type === "file" && Math.abs(node.x - x) < 1)
+            .reduce((bottom, node) => Math.max(bottom, node.y + node.height), anchor.y);
+          y = Math.min(1e7, occupied === anchor.y ? anchor.y : occupied + 16);
+        }
+        if (canvas.nodes.length >= 500) throw new Error("Canvas contains too many items");
+        this.db.prepare("INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)")
+          .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.createdAt);
+        const node: FileNode = {
+          id: randomUUID(), type: "file", assetId: asset.id,
+          x, y,
+          width: 360, height: 280,
+        };
+        canvas.nodes.push(node);
+        this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
+          .run(JSON.stringify(canvas), canvasId);
       }
-      if (canvas.nodes.length >= 500) throw new Error("Canvas contains too many items");
-      this.db.prepare("INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)")
-        .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.createdAt);
-      const node: FileNode = {
-        id: randomUUID(), type: "file", assetId: asset.id,
-        x, y,
-        width: 360, height: 280,
-      };
-      canvas.nodes.push(node);
-      this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
-        .run(JSON.stringify(canvas), canvasId);
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     this.changed();
     return true;
+  }
+
+  hasNote(canvasId: string, noteId: string): boolean {
+    return !!this.get<Canvas>('canvas', canvasId)?.nodes.some(node => node.type === 'note' && node.id === noteId);
+  }
+
+  noteAttachments(noteId: string): FileAsset[] {
+    return this.db.prepare("SELECT f.* FROM canvas_files f JOIN note_files n ON n.asset_id=f.id WHERE n.note_id=? ORDER BY f.rowid")
+      .all(noteId).map(row => this.fileAssetFromRow(row));
+  }
+
+  private assetNoteIds(assetId: string): Set<string> {
+    return new Set(this.db.prepare("SELECT note_id FROM note_files WHERE asset_id=?").all(assetId).map(row => String(row.note_id)));
+  }
+  private nodeReferencesAsset(node: CanvasNode, assetId: string, noteIds: Set<string>): boolean {
+    return node.type === 'file' ? node.assetId === assetId : node.type === 'note' && noteIds.has(node.id);
   }
 
   fileAsset(id: string): FileAsset | undefined {
@@ -439,7 +465,8 @@ export class Store extends EventEmitter {
 
   fileAssetForCanvas(id: string, canvasId: string): FileAsset | undefined {
     const canvas = this.get<Canvas>("canvas", canvasId);
-    return canvas?.nodes.some(node => node.type === "file" && node.assetId === id) ? this.fileAsset(id) : undefined;
+    const owners = this.assetNoteIds(id);
+    return canvas?.nodes.some(node => this.nodeReferencesAsset(node, id, owners)) ? this.fileAsset(id) : undefined;
   }
 
   private fileAssetFromRow(row: Record<string, unknown>): FileAsset {
@@ -455,10 +482,11 @@ export class Store extends EventEmitter {
   }
 
   fileAssetReferenced(id: string): boolean {
-    if ([...this.removals.values()].some(item => !item.restored && item.expiresAt > Date.now() && item.node.type === 'file' && item.node.assetId === id)) return true;
+    const owners = this.assetNoteIds(id);
+    if ([...this.removals.values()].some(item => !item.restored && item.expiresAt > Date.now() && this.nodeReferencesAsset(item.node, id, owners))) return true;
     const canvases = this.db.prepare("SELECT body FROM documents WHERE kind='canvas'").all()
       .map(row => JSON.parse(String(row.body)) as Canvas);
-    return canvases.some(canvas => canvas.nodes.some(node => node.type === "file" && node.assetId === id));
+    return canvases.some(canvas => canvas.nodes.some(node => this.nodeReferencesAsset(node, id, owners)));
   }
 
   removeFileAssetIfUnreferenced(id: string): boolean {

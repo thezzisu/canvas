@@ -21,6 +21,7 @@ export default {
   file: { singleOnly: 'Choose one file at a time', uploadBusy: 'An upload is already in progress', dropOnCanvas: 'Drop on an empty canvas area', unreadableTransfer: 'Could not read the dropped file', uploadingTo: 'Uploading to {name}', addFailed: 'Could not add this file', dropToAdd: 'Drop to add a file note', adding: 'Adding file', download: 'Download file', remove: 'Remove file', downloadNamed: 'Download {name}', downloadOriginal: 'Download original', unreadable: 'Unable to read this text file' },
   image: { zoom: 'Image zoom', zoomOut: 'Zoom out', zoomIn: 'Zoom in', fit: 'Fit image', scale: 'Zoom level' },
   note: {
+    tooLong: 'Note content is too long',
     copy: 'Copy note', copyOrDrag: 'Copy note · drag to a terminal to paste', paste: 'Paste note', openToPaste: 'Open this window to paste',
     name: 'Note', color: 'Note color', title: 'Note title', rename: 'Rename note',
     remove: 'Remove note', content: 'Note content', placeholder: 'Write something…',

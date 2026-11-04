@@ -58,6 +58,7 @@ export interface NoteCanvasNode extends NodeLayout {
   title: string
   content: string
   color: NoteColor
+  attachments?: FileAsset[]
 }
 export interface FileAsset {
   id: string
@@ -101,12 +102,14 @@ export interface TerminalData {
   onResizeStart: (id: string, bounds: Omit<NodeLayout, 'id'>) => void
 }
 export interface NoteData extends NoteCanvasNode {
+  canvasId: string
   zoomKey: string
   mobile?: boolean
   focus?: boolean
   onResize: (id: string, width: number, height: number, x?: number, y?: number) => void
   onResizeStart: (id: string, bounds: Omit<NodeLayout, 'id'>) => void
   onChange: (id: string, patch: NotePatch) => void
+  onAttachment: (asset: FileAsset, offset: number) => void
   onFlush: () => void
   onAction: (action: string, id: string) => void
 }
