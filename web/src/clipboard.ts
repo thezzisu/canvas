@@ -1,7 +1,7 @@
 import type { Terminal } from '@xterm/xterm'
 import { isPasteShortcut } from './clipboard-shortcuts'
 import { clearCopiedFile } from './file-clipboard'
-import { notifyCopyFeedback } from './copy-feedback'
+import { beginCopyFeedback } from './copy-feedback'
 
 const MAX_COPY_BYTES = 1024 * 1024
 const COPY_GESTURE_MS = 3000
@@ -10,8 +10,9 @@ export const clipboardRestoringFocus = () => restoringFocus
 
 /** A user copy works on HTTP as well as secure origins. Never read the clipboard. */
 export async function copyText(text: string): Promise<boolean> {
+  const feedback = beginCopyFeedback()
   if (!text || new TextEncoder().encode(text).length > MAX_COPY_BYTES) {
-    notifyCopyFeedback('failed')
+    feedback('failed')
     return false
   }
   clearCopiedFile()
@@ -59,7 +60,7 @@ export async function copyText(text: string): Promise<boolean> {
   if (!copied && navigator.clipboard?.writeText) {
     try { await navigator.clipboard.writeText(text); copied = true } catch { copied = false }
   }
-  notifyCopyFeedback(copied ? 'copied' : 'failed')
+  feedback(copied ? 'copied' : 'failed')
   return copied
 }
 
@@ -106,6 +107,7 @@ export class TerminalClipboard {
   }
   private async copy(text: string) {
     clearTimeout(this.noticeTimer)
+    this.options.copyError?.(undefined)
     return copyText(text)
   }
   copyText(text: string): Promise<boolean> { return this.ready() ? this.copy(text) : Promise.resolve(false) }
@@ -114,6 +116,7 @@ export class TerminalClipboard {
     if (this.disposed) return
     clearTimeout(this.noticeTimer)
     this.options.copyError?.(message)
+    this.noticeTimer = setTimeout(() => { this.options.copyError?.(undefined) }, 5000)
   }
 
   key(event: KeyboardEvent): boolean {

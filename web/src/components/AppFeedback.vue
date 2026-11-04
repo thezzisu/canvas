@@ -22,7 +22,7 @@ watch([copyFeedback, locale], ([feedback]) => {
   if (copyCurrent) { toast.remove(copyCurrent.id); copyCurrent = undefined }
   if (!feedback) return
   const title = feedback.kind === 'canvas' ? t('fileTransfer.copied') : t(`terminal.clipboard.${feedback.kind}`)
-  copyCurrent = toast.add({ id: 'copy-feedback', title, color: feedback.kind === 'failed' ? 'error' : 'success', duration: feedback.kind === 'failed' ? 5000 : 1500, type: 'background' })
+  copyCurrent = toast.add({ title, color: feedback.kind === 'failed' ? 'error' : 'success', duration: feedback.kind === 'failed' ? 5000 : 1500, type: 'background' })
 }, { immediate: true })
 onBeforeUnmount(() => { if (current) toast.remove(current.id); if (copyCurrent) toast.remove(copyCurrent.id) })
 </script>

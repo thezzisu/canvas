@@ -23,7 +23,6 @@ const result = shallowRef<{ scan: WindowContentScan; target: Target }>()
 const loading = ref(false)
 const opening = ref('')
 const error = shallowRef<string | Error>('')
-const copied = ref<{ id: string; failed: boolean }>()
 const added = ref<string>()
 const errorMessage = computed(() => error.value instanceof Error ? error.value.message : error.value ? t(error.value) : '')
 const panes = computed(() => result.value?.scan.panes.filter(pane => pane.items.length).map(pane => ({ ...pane,
@@ -34,7 +33,6 @@ const panes = computed(() => result.value?.scan.panes.filter(pane => pane.items.
 })) || [])
 let scanRequest: AbortController | undefined
 let fileRequest: AbortController | undefined
-let copyTimer: ReturnType<typeof setTimeout> | undefined
 let retryItem: { item: FileItem; action: FileAction } | undefined
 
 function externalLink(value: string) {
@@ -57,7 +55,6 @@ async function scan() {
   if (!target) return
   cancelRequests()
   result.value = undefined; error.value = ''; retryItem = undefined
-  copied.value = undefined; clearTimeout(copyTimer)
   const current = scanRequest = new AbortController()
   loading.value = true
   try {
@@ -123,18 +120,13 @@ async function openLink(item: Extract<WindowContentItem, { kind: 'link' }>) {
     if (!current.signal.aborted && result.value === snapshot) error.value = reason instanceof Error ? reason : 'panels.scan.openFailed'
   } finally { if (fileRequest === current) { fileRequest = undefined; opening.value = '' } }
 }
-async function copy(item: WindowContentItem) {
-  clearTimeout(copyTimer)
-  const value = item.kind === 'link' ? item.url : item.path || item.label
-  copied.value = { id: item.id, failed: !(await copyText(value)) }
-  copyTimer = setTimeout(() => { copied.value = undefined }, 1800)
-}
+function copy(item: WindowContentItem) { void copyText(item.kind === 'link' ? item.url : item.path || item.label) }
 const modalContent = { onCloseAutoFocus: (event: Event) => event.preventDefault(), onEscapeKeyDown: (event: Event) => event.stopPropagation() }
 watch(() => props.target, target => {
-  cancelRequests(); result.value = undefined; error.value = ''; copied.value = undefined; added.value = undefined; retryItem = undefined; clearTimeout(copyTimer)
+  cancelRequests(); result.value = undefined; error.value = ''; added.value = undefined; retryItem = undefined
   if (target) void scan()
 }, { immediate: true })
-onBeforeUnmount(() => { cancelRequests(); clearTimeout(copyTimer) })
+onBeforeUnmount(() => { cancelRequests() })
 </script>
 
 <template>
@@ -160,7 +152,7 @@ onBeforeUnmount(() => { cancelRequests(); clearTimeout(copyTimer) })
             <span v-if="opening === item.id" class="spinner" /><Icon v-else name="globe" :size="16" />
             <span><strong>{{ item.displayLabel }}</strong><small>{{ t('urls.open') }}</small></span>
           </button>
-          <UButton type="button" color="neutral" variant="ghost" class="content-scan-action" :aria-label="t(item.kind === 'file' ? 'panels.scan.copyPath' : 'panels.scan.copyLink')" :title="copied?.id === item.id ? t(copied.failed ? 'terminal.clipboard.failed' : 'terminal.clipboard.copied') : t(item.kind === 'file' ? 'panels.scan.copyPath' : 'panels.scan.copyLink')" @click="copy(item)"><Icon :name="copied?.id === item.id ? copied.failed ? 'info' : 'check' : 'copy'" :size="15" /></UButton>
+          <UButton type="button" color="neutral" variant="ghost" class="content-scan-action" :aria-label="t(item.kind === 'file' ? 'panels.scan.copyPath' : 'panels.scan.copyLink')" :title="t(item.kind === 'file' ? 'panels.scan.copyPath' : 'panels.scan.copyLink')" @click="copy(item)"><Icon name="copy" :size="15" /></UButton>
           <div v-if="item.kind === 'file' && item.path" class="content-scan-file-actions">
             <UButton v-if="item.previewable" type="button" color="neutral" variant="ghost" size="xs" :disabled="!!opening" @click="openFile(item, 'preview')"><Icon name="eye" :size="13" />{{ t('panels.scan.preview') }}</UButton>
             <UButton type="button" color="neutral" variant="ghost" size="xs" :disabled="!!opening" @click="openFile(item)"><Icon name="download" :size="13" />{{ t('panels.file.download') }}</UButton>
@@ -172,7 +164,7 @@ onBeforeUnmount(() => { cancelRequests(); clearTimeout(copyTimer) })
       </section>
       <p v-if="result?.scan.truncated" class="content-scan-truncated">{{ t('panels.scan.truncated') }}</p>
       <p v-if="result?.scan.incomplete" class="content-scan-truncated">{{ t('panels.scan.incomplete') }}</p>
-      <span class="sr-only" role="status">{{ opening ? t('panels.scan.staging') : copied ? t(copied.failed ? 'terminal.clipboard.failed' : 'terminal.clipboard.copied') : '' }}</span>
+      <span class="sr-only" role="status">{{ opening ? t('panels.scan.staging') : '' }}</span>
     </template>
   </UModal>
 </template>

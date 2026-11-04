@@ -31,21 +31,7 @@ const props = defineProps<{ open: boolean; settings: GlobalSettings; portal?: HT
 const emit = defineEmits<{ close: []; saved: [settings: GlobalSettings]; error: [message: string] }>()
 const mobile = useMobileLayout()
 const fullVersionLabel = buildLabel(frontendBuild)
-const versionFeedback = ref<'copied' | 'failed'>()
-let copyTimer: ReturnType<typeof setTimeout> | undefined
-let copyAttempt = 0
-function clearVersionFeedback() { copyAttempt++; clearTimeout(copyTimer); versionFeedback.value = undefined }
-async function copyVersion() {
-  const attempt = ++copyAttempt
-  const feedback = (value: 'copied' | 'failed') => {
-    if (disposed || attempt !== copyAttempt || !props.open) return
-    versionFeedback.value = value
-    clearTimeout(copyTimer)
-    copyTimer = setTimeout(() => { versionFeedback.value = undefined }, 1800)
-  }
-  feedback(await copyText(JSON.stringify(frontendBuild, null, 2)) ? 'copied' : 'failed')
-}
-watch(() => props.open, clearVersionFeedback)
+function copyVersion() { void copyText(JSON.stringify(frontendBuild, null, 2)) }
 watch(() => props.open, open => { if (open) refreshNotificationPermission() }, { immediate: true })
 const systemNotificationStatus = computed(() => !systemNotificationSupported.value
   ? window.isSecureContext ? 'common.unsupportedBrowser' : 'common.httpsRequired'
@@ -204,7 +190,7 @@ function close(open = false) {
   }
   emit('close')
 }
-onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer); clearVersionFeedback() })
+onBeforeUnmount(() => { disposed = true; revision++; clearTimeout(timer) })
 defineExpose({ close })
 </script>
 
@@ -289,12 +275,11 @@ defineExpose({ close })
     </template>
     <template #footer>
       <div class="settings-footer-actions">
-        <UButton type="button" color="neutral" variant="link" class="settings-version" :class="{ 'copy-failed': versionFeedback === 'failed' }"
-          :title="versionFeedback ? t(`terminal.clipboard.${versionFeedback}`) : `${t('settings.copyFrontendVersion')}: ${fullVersionLabel}`"
+        <UButton type="button" color="neutral" variant="link" class="settings-version"
+          :title="`${t('settings.copyFrontendVersion')}: ${fullVersionLabel}`"
           :aria-label="`${t('settings.copyFrontendVersion')}: ${fullVersionLabel}`" @click="copyVersion">
-          <span class="settings-version-number">{{ frontendBuild.version }}</span><span v-if="versionFeedback || frontendBuild.revision || frontendBuild.dirty" class="settings-version-revision">{{ versionFeedback ? t(`terminal.clipboard.${versionFeedback}`) : `${frontendBuild.revision ? `· ${frontendBuild.revision.slice(0, 7)}` : ''}${frontendBuild.dirty ? ' *' : ''}` }}</span>
+          <span class="settings-version-number">{{ frontendBuild.version }}</span><span v-if="frontendBuild.revision || frontendBuild.dirty" class="settings-version-revision">{{ `${frontendBuild.revision ? `· ${frontendBuild.revision.slice(0, 7)}` : ''}${frontendBuild.dirty ? ' *' : ''}` }}</span>
         </UButton>
-        <span class="sr-only" role="status">{{ versionFeedback ? t(`terminal.clipboard.${versionFeedback}`) : '' }}</span>
         <UButton color="neutral" variant="outline" class="font-done" @click="close()">{{ t('common.done') }}</UButton>
       </div>
     </template>
@@ -308,7 +293,7 @@ defineExpose({ close })
 .settings-preference-row :deep(.settings-select){width:150px;max-width:66%;min-width:0;flex:0 1 auto}
 .settings-footer-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0;width:100%}
 .settings-version{flex:1;min-width:0;justify-content:flex-start;gap:5px;padding:0;height:32px;color:#7d899a;font-size:10px;font-weight:400;white-space:nowrap;text-decoration:none}
-.settings-version:hover{color:#b7c2d0}.settings-version.copy-failed{color:#dfaaa5}
+.settings-version:hover{color:#b7c2d0}
 .settings-version-number{flex:none}.settings-version-revision{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .settings-footer-actions>.font-done{flex:none}
 .font-done{height:32px;min-width:62px;padding:0 12px;border:1px solid #485262;border-radius:6px;font-size:11px;font-weight:500;color:#c3cdd9;background:#2a323e}

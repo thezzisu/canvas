@@ -33,7 +33,6 @@ const snapshot = ref('')
 const loadingText = ref(false), textFailed = ref(false)
 let textRequest: AbortController | undefined
 const draft = ref('')
-const copyResult = ref('')
 const selected = ref(false)
 const textArea = ref<HTMLTextAreaElement>()
 const fileInput = ref<HTMLInputElement>()
@@ -41,7 +40,6 @@ let held: { pointer: number; target: HTMLElement; key: string; modifiers: Termin
   x: number; y: number; deferred: boolean; sent: boolean } | undefined
 let repeatDelay: ReturnType<typeof setTimeout> | undefined
 let repeatTimer: ReturnType<typeof setInterval> | undefined
-let copyTimer: ReturnType<typeof setTimeout> | undefined
 let previousMode: TouchMode = 'scroll'
 const arrows = computed<Keycap[]>(() => [
   { key: 'ArrowLeft', label: t('terminal.keyboard.arrowLeft'), symbol: '←' }, { key: 'ArrowDown', label: t('terminal.keyboard.arrowDown'), symbol: '↓' },
@@ -175,7 +173,6 @@ function closeSheet() {
   if (!sheet.value) return
   textRequest?.abort(); textRequest = undefined
   sheet.value = undefined
-  copyResult.value = ''
   selected.value = false
   emit('mode', previousMode === 'select' ? 'scroll' : previousMode)
   emit('reading', false)
@@ -207,7 +204,6 @@ function openSheet(kind: 'select' | 'paste') {
   textRequest?.abort(); textRequest = undefined
   snapshot.value = ''; loadingText.value = false; textFailed.value = false
   draft.value = ''
-  copyResult.value = ''
   selected.value = false
   sheet.value = kind
   if (kind === 'select') void loadText()
@@ -220,9 +216,7 @@ async function copy(all: boolean) {
   const area = textArea.value
   const text = all ? snapshot.value : area?.value.slice(area.selectionStart, area.selectionEnd) || ''
   if (!text) return
-  copyResult.value = await props.copyText(text) ? 'copied' : 'failed'
-  clearTimeout(copyTimer)
-  copyTimer = setTimeout(() => { copyResult.value = '' }, 1800)
+  await props.copyText(text)
 }
 function pasteText() {
   if (!draft.value || props.disabled) return
@@ -251,7 +245,7 @@ function visibilityChanged() { if (document.hidden) cancelPress() }
 watch(() => props.sessionKey, reset)
 watch(() => props.disabled, disabled => { if (disabled) reset() })
 onMounted(() => { window.addEventListener('blur', cancelPress); document.addEventListener('visibilitychange', visibilityChanged) })
-onBeforeUnmount(() => { textRequest?.abort(); cancelPress(); clearTimeout(copyTimer); window.removeEventListener('blur', cancelPress); document.removeEventListener('visibilitychange', visibilityChanged) })
+onBeforeUnmount(() => { textRequest?.abort(); cancelPress(); window.removeEventListener('blur', cancelPress); document.removeEventListener('visibilitychange', visibilityChanged) })
 </script>
 
 <template>
@@ -288,7 +282,7 @@ onBeforeUnmount(() => { textRequest?.abort(); cancelPress(); clearTimeout(copyTi
         </div>
         <textarea v-else-if="sheet === 'select'" ref="textArea" :value="snapshot" readonly inputmode="none" :aria-label="t('terminal.keyboard.terminalText')" spellcheck="false" @select="updateSelection" @pointerup="updateSelection" @keyup="updateSelection" />
         <textarea v-else ref="textArea" v-model="draft" :aria-label="t('terminal.keyboard.textToPaste')" :placeholder="t('terminal.keyboard.longPressPaste')" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" @paste="pasteFiles" />
-        <footer v-if="sheet === 'select'"><span role="status">{{ copyResult ? t(`terminal.clipboard.${copyResult}`) : '' }}</span><button type="button" :disabled="!selected" @pointerdown.prevent @click="copy(false)">{{ t('terminal.keyboard.copySelection') }}</button><button type="button" :disabled="!snapshot" @pointerdown.prevent @click="copy(true)">{{ t('terminal.keyboard.copyAll') }}</button></footer>
+        <footer v-if="sheet === 'select'"><button type="button" :disabled="!selected" @pointerdown.prevent @click="copy(false)">{{ t('terminal.keyboard.copySelection') }}</button><button type="button" :disabled="!snapshot" @pointerdown.prevent @click="copy(true)">{{ t('terminal.keyboard.copyAll') }}</button></footer>
         <footer v-else><button type="button" :disabled="!draft || disabled" @pointerdown.prevent @click="pasteText">{{ t('terminal.keyboard.pasteIntoTerminal') }}</button></footer>
       </section>
     </div>
@@ -331,7 +325,6 @@ onBeforeUnmount(() => { textRequest?.abort(); cancelPress(); clearTimeout(copyTi
 .mobile-text-status{display:flex;flex:1;align-items:center;justify-content:center;gap:8px;padding:12px;color:#a0adbf;font-size:13px}
 .mobile-text-sheet textarea{display:block;flex:1;min-height:0;resize:none;width:100%;padding:12px;margin:0;color:#d7dce5;border:0;border-radius:0;outline:none;box-shadow:none;background:#15191f;font-family:var(--content-font-family,monospace);font-feature-settings:var(--content-font-features,normal);font-size:16px;line-height:1.5;white-space:pre-wrap;overflow:auto;user-select:text;-webkit-user-select:text;touch-action:pan-y;-webkit-touch-callout:default}
 .mobile-text-sheet footer{display:flex;align-items:center;justify-content:flex-end;gap:5px;flex:0 0 52px;padding:2px 8px;border-top:1px solid #353e4b}
-.mobile-text-sheet footer>span{margin-right:auto;color:#a0b6a9;font-size:11px}
 .mobile-text-sheet footer button{background:#333c49;color:#d4dfed;font-size:12px}
 @media(hover:hover){.mobile-keyboard button:hover:not(:disabled):not([aria-pressed=true]):not(.active){background:#37414e;border-color:#526071}.mobile-keyboard button:is([aria-pressed=true],.active):hover:not(:active):not(:disabled){background:var(--toggle-hover)}}
 @media(max-height:400px){.mobile-text-backdrop{padding:calc(5px + var(--text-safe-top)) calc(5px + var(--ui-safe-right)) calc(5px + var(--text-safe-bottom)) calc(5px + var(--ui-safe-left))}.mobile-text-sheet{height:100%;}.mobile-text-sheet header{flex-basis:44px}.mobile-text-sheet footer{flex-basis:44px}}

@@ -17,8 +17,6 @@ const panel = ref<HTMLElement>()
 const bounds = ref<HTMLElement>()
 const boundsVisible = ref(false)
 const boundsSupported = typeof HTMLElement.prototype.showPopover === 'function'
-const feedback = ref('')
-let timer: ReturnType<typeof setTimeout> | undefined
 function preserveTerminalFocus(event: Event) {
   if (document.activeElement?.matches('.terminal-mobile-input, .xterm-helper-textarea')) event.preventDefault()
 }
@@ -45,12 +43,7 @@ watch(open, (value, _, cleanup) => {
     window.removeEventListener('pointerdown', outside, true)
   })
 })
-async function copy() {
-  const snapshot = collectViewportDiagnostics(props.settings)
-  feedback.value = await copyText(JSON.stringify(snapshot, null, 2)) ? 'copied' : 'failed'
-  clearTimeout(timer)
-  timer = setTimeout(() => { feedback.value = '' }, 2000)
-}
+function copy() { void copyText(JSON.stringify(collectViewportDiagnostics(props.settings), null, 2)) }
 function reloadPage() { if (!props.reloadBlocked) window.location.reload() }
 function syncBounds() { boundsVisible.value = bounds.value?.matches(':popover-open') === true }
 function toggleBounds() {
@@ -66,7 +59,7 @@ onMounted(() => {
   document.addEventListener('visibilitychange', visibilityChanged)
 })
 onBeforeUnmount(() => {
-  clearTimeout(timer); hideBounds()
+  hideBounds()
   document.removeEventListener('fullscreenchange', hideBounds)
   document.removeEventListener('visibilitychange', visibilityChanged)
 })
@@ -74,7 +67,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="toolbar" class="debug-toolbar" @pointerdown.stop @click.stop>
-    <button class="viewport-diagnostics" type="button" :aria-label="t('terminal.copyDiagnostics')" @pointerdown.prevent @click="copy"><span :style="{ visibility: feedback ? 'hidden' : undefined }">{{ t('terminal.copyDiagnostics') }}</span><span v-if="feedback" class="debug-copy-feedback" aria-live="polite">{{ t(`terminal.clipboard.${feedback}`) }}</span></button>
+    <button class="viewport-diagnostics" type="button" :aria-label="t('terminal.copyDiagnostics')" @pointerdown.prevent @click="copy">{{ t('terminal.copyDiagnostics') }}</button>
     <UPopover v-model:open="open" :modal="false" :portal="portal || false"
       :content="popoverContent"
       :ui="{ content: 'debug-settings-popover' }">
@@ -104,7 +97,6 @@ onBeforeUnmount(() => {
 <style scoped>
 .debug-toolbar{position:fixed;top:calc(max(8px,var(--mobile-safe-top,var(--ui-safe-top))) + 44px);left:50%;transform:translateX(-50%);z-index:120;display:flex;max-width:calc(var(--mobile-width,var(--ui-viewport-width)) - 16px);border:1px solid #46505b;border-radius:6px;background:#23272ef2;color:#c6ced8;font-size:11px;box-shadow:0 3px 12px #0003}
 .viewport-diagnostics{position:relative;min-height:32px;padding:4px 10px;white-space:nowrap}
-.debug-copy-feedback{position:absolute;inset:0;display:grid;place-items:center}
 .debug-settings-trigger{display:flex;align-items:center;justify-content:center;flex:0 0 32px;width:32px;min-height:32px;padding:0;border:0;border-left:1px solid #46505b;border-radius:0 5px 5px 0;color:#9ba8b9;background:transparent}
 .viewport-diagnostics:hover,.debug-settings-trigger:hover,.debug-settings-trigger[data-state=open]{background:#ffffff08;color:#e1e7ef}
 .debug-settings{display:grid;gap:14px;padding:12px}

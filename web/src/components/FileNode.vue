@@ -64,14 +64,7 @@ const text = ref('')
 const textLoading = ref(false)
 const textError = ref<string | Error>('')
 const truncated = ref(false)
-const copyFeedback = ref('')
-let copyTimer: ReturnType<typeof setTimeout> | undefined
-function copyFile() {
-  clearTimeout(copyTimer)
-  try { copyCanvasFile(props.data.asset, sourceInstance); copyFeedback.value = 'fileTransfer.copied' }
-  catch (error) { copyFeedback.value = error instanceof Error ? error.message : 'fileTransfer.failed' }
-  copyTimer = setTimeout(() => { copyFeedback.value = '' }, 2200)
-}
+function copyFile() { copyCanvasFile(props.data.asset, sourceInstance) }
 function dragFile(event: DragEvent) {
   if (!writeFileReference(event.dataTransfer, fileReference(props.data.assetId, sourceInstance))) event.preventDefault()
   event.stopPropagation()
@@ -105,7 +98,7 @@ watch([fileBody, () => props.data.assetId, () => preview.value], ([element, _id,
   }, { rootMargin: '200px' })
   visibility.observe(element)
 }, { immediate: true, flush: 'post' })
-onBeforeUnmount(() => { clearTimeout(copyTimer); request?.abort(); visibility?.disconnect() })
+onBeforeUnmount(() => { request?.abort(); visibility?.disconnect() })
 const size = computed(() => {
   const bytes = props.data.asset.size
   if (bytes < 1024) return `${n(bytes)} B`
@@ -123,9 +116,8 @@ const size = computed(() => {
       <CardHeaderActions class="file-actions" :class="{ 'cutout-actions': data.mobile && data.focus }" :items="menu" :expanded="!!data.focus" removable :compact="compact" :add-label="t('app.addToOtherCanvas')" :remove-label="t('panels.file.remove')"
         @add="data.onAction?.('add', id)" @toggle="data.onAction?.(data.focus ? 'unfocus' : 'focus', id)" @remove="data.onRemove(id)">
         <ContentZoom v-if="data.focus && preview === 'text'" v-model="zoom" :mobile="data.mobile" :label="t('common.contentZoom')" />
-        <button type="button" class="card-header-action file-copy" draggable="true" :title="t(copyFeedback || 'fileTransfer.copyOrDrag')" :aria-label="t('fileTransfer.copy')" @pointerdown.stop @click="copyFile" @dragstart="dragFile"><Icon :name="copyFeedback === 'fileTransfer.copied' ? 'check' : 'copy'" :size="15" /></button>
+        <button type="button" class="card-header-action file-copy" draggable="true" :title="t('fileTransfer.copyOrDrag')" :aria-label="t('fileTransfer.copy')" @pointerdown.stop @click="copyFile" @dragstart="dragFile"><Icon name="copy" :size="15" /></button>
       </CardHeaderActions>
-      <span class="sr-only" role="status">{{ copyFeedback ? t(copyFeedback) : '' }}</span>
     </header>
     <div ref="fileBody" class="file-body card-content nodrag nopan" :style="{ '--content-zoom': data.focus ? zoom / 100 : 1 }" :data-content-active="contentActive" :tabindex="mobilePreview ? -1 : 0" :aria-label="data.asset.filename" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.capture="contentPointerDown" @pointerdown.stop @dblclick.stop>
       <div v-if="(['image', 'audio', 'video'].includes(preview) || preview === 'pdf' && pdfPreview) && !url" class="file-text-status" :role="ticketError ? 'alert' : 'status'">

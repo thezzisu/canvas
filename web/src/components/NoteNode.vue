@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import type { NodeProps } from '@vue-flow/core'
 import { NodeResizer } from '@vue-flow/node-resizer'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
@@ -44,8 +44,6 @@ const titleInput = ref<HTMLInputElement>()
 const colorOpen = ref(false)
 const colorPicker = ref<HTMLElement>()
 usePointerDismiss(colorOpen, colorPicker)
-const copied = ref<'' | 'copied' | 'failed'>('')
-let copyTimer: ReturnType<typeof setTimeout> | undefined
 const color = computed(() => colors.includes(props.data.color) ? props.data.color : 'yellow')
 // Pending fields are merged above remote snapshots by the parent. Fields edited
 // in another browser can therefore update here without replacing a local draft.
@@ -64,18 +62,11 @@ function escapeColors(event: KeyboardEvent) {
   event.preventDefault(); event.stopPropagation(); colorOpen.value = false
 }
 function setColor(value: typeof colors[number]) { emitChange({ color: value }); colorOpen.value = false; flush() }
-function copyResult(value: 'copied' | 'failed') {
-  clearTimeout(copyTimer); copied.value = value
-  copyTimer = setTimeout(() => { copied.value = '' }, 2200)
-}
-async function copyNote() {
-  copyResult(await copyText(content.value) ? 'copied' : 'failed')
-}
+function copyNote() { void copyText(content.value) }
 function dragNote(event: DragEvent) {
   if (!writeNoteTransfer(event.dataTransfer, content.value)) event.preventDefault()
   event.stopPropagation()
 }
-onBeforeUnmount(() => clearTimeout(copyTimer))
 </script>
 
 <template>
@@ -93,9 +84,8 @@ onBeforeUnmount(() => clearTimeout(copyTimer))
       <CardHeaderActions class="note-actions" :class="{ 'cutout-actions': data.mobile && data.focus }" :items="menu" :expanded="!!data.focus" removable :compact="compact" :add-label="t('app.addToOtherCanvas')" :remove-label="t('panels.note.remove')"
         @add="data.onAction('add', id)" @toggle="data.onAction(data.focus ? 'unfocus' : 'focus', id)" @remove="data.onAction('remove', id)">
         <ContentZoom v-if="data.focus" v-model="zoom" :mobile="data.mobile" :label="t('common.contentZoom')" />
-        <button type="button" class="card-header-action note-copy" :class="{ 'note-copy-failed': copied === 'failed' }" :disabled="!content" :draggable="!!content" :title="copied ? t(`terminal.clipboard.${copied}`) : t('panels.note.copyOrDrag')" :aria-label="t('panels.note.copy')" @pointerdown.stop @click="copyNote" @dragstart="dragNote"><Icon :name="copied === 'copied' ? 'check' : 'copy'" :size="15" /></button>
+        <button type="button" class="card-header-action note-copy" :disabled="!content" :draggable="!!content" :title="t('panels.note.copyOrDrag')" :aria-label="t('panels.note.copy')" @pointerdown.stop @click="copyNote" @dragstart="dragNote"><Icon name="copy" :size="15" /></button>
       </CardHeaderActions>
-      <span class="sr-only" role="status">{{ copied ? t(`terminal.clipboard.${copied}`) : '' }}</span>
     </header>
     <textarea ref="noteBody" v-model="content" class="note-content card-content nodrag nowheel" :data-content-active="contentActive" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :readonly="mobilePreview" :tabindex="mobilePreview ? -1 : undefined" :aria-label="t('panels.note.content')" :placeholder="t('panels.note.placeholder')" maxlength="200000" @input="emitChange({ content })" @blur="flush" @pointerdown.stop="contentPointerDown" @wheel.stop @dblclick.stop />
     <CardPreview v-if="mobilePreview" :label="t('common.openCard', { name: title || t('panels.note.name') })" @open="data.onAction('focus', id)" />
@@ -104,5 +94,5 @@ onBeforeUnmount(() => clearTimeout(copyTimer))
 
 <style scoped>
 .note-copy[draggable=true]{cursor:grab}.note-copy[draggable=true]:active{cursor:grabbing}
-.note-copy:disabled{cursor:default}.note-actions .note-copy-failed{color:#dfaaa5}
+.note-copy:disabled{cursor:default}
 </style>

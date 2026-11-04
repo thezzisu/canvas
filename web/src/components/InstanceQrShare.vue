@@ -7,12 +7,11 @@ import { copyText } from '../clipboard'
 const props = defineProps<{ link: string; name: string; base: string; username: string }>()
 const { t } = useI18n()
 const image = ref(''), failed = ref(false), retry = ref(0)
-const copied = ref<'copied' | 'failed'>()
 
 watch([() => props.link, retry], async ([link], _, onCleanup) => {
   let current = true
   onCleanup(() => { current = false })
-  image.value = ''; failed.value = false; copied.value = undefined
+  image.value = ''; failed.value = false
   try {
     const { toDataURL } = await import('qrcode')
     const data = await toDataURL(link, { errorCorrectionLevel: 'M', margin: 4, scale: 8, color: { dark: '#111111', light: '#ffffff' } })
@@ -20,10 +19,7 @@ watch([() => props.link, retry], async ([link], _, onCleanup) => {
   } catch { if (current) failed.value = true }
 }, { immediate: true })
 
-async function copy() {
-  const link = props.link
-  copied.value = await copyText(link) ? 'copied' : 'failed'
-}
+function copy() { void copyText(props.link) }
 </script>
 
 <template>
@@ -36,8 +32,7 @@ async function copy() {
     <div class="instance-qr-details">
       <strong>{{ name }}</strong>
       <span>{{ username }}</span>
-      <div class="instance-qr-address"><span>{{ base }}</span><UButton type="button" :icon="copied === 'copied' ? 'i-lucide-check' : 'i-lucide-copy'" color="neutral" variant="ghost" :aria-label="t('account.copyLink')" :title="copied ? t(`terminal.clipboard.${copied}`) : t('account.copyLink')" @click="copy" /></div>
-      <span class="sr-only" role="status">{{ copied ? t(`terminal.clipboard.${copied}`) : '' }}</span>
+      <div class="instance-qr-address"><span>{{ base }}</span><UButton type="button" icon="i-lucide-copy" color="neutral" variant="ghost" :aria-label="t('account.copyLink')" :title="t('account.copyLink')" @click="copy" /></div>
     </div>
   </div>
 </template>
