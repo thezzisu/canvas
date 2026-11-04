@@ -15,7 +15,7 @@ function changed(proposed: string[], moved: string) {
   const item = props.items.find(item => item.id === moved)
   if (item) announcement.value = t('app.itemReordered', { name: item.name, position: ids.indexOf(moved) + 1, count: ids.length })
 }
-useSortable(root, computed(() => props.items), {
+const sortableOptions: UseSortableOptions & { supportPointer: boolean } = {
   animation: 150, direction: 'vertical', delay: 200, delayOnTouchOnly: true,
   // Native touchmove keeps scrolling available until the long press starts a drag.
   supportPointer: false,
@@ -30,7 +30,8 @@ useSortable(root, computed(() => props.items), {
     insertNodeAt(event.from, event.item, index)
     changed(ids, id)
   },
-} satisfies UseSortableOptions & { supportPointer: boolean })
+}
+useSortable(root, computed(() => props.items), sortableOptions)
 function keydown(event: KeyboardEvent) {
   if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return
   const element = (event.target as HTMLElement).closest<HTMLElement>('[data-order-id]')
