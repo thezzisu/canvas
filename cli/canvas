@@ -408,6 +408,7 @@ def open_file(path):
             header = {
                 **header,
                 "kind": "file",
+                "path": path,
                 "filename": os.path.basename(path),
                 "size": info.st_size,
             }
@@ -728,7 +729,7 @@ def capture_application(args, parser, launch_path=None):
             terminate(child)
 
 
-def serve_preview(directory):
+def serve_preview(directory, managed_path=None):
     from functools import partial
     from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -753,8 +754,23 @@ def serve_preview(directory):
         def log_message(self, _format, *_args):
             pass
 
-    with ThreadingHTTPServer(("127.0.0.1", int(os.environ["PORT"])), partial(Handler, directory=str(root))) as server:
+    port = 0 if managed_path is not None else int(os.environ["PORT"])
+    with ThreadingHTTPServer(("127.0.0.1", port), partial(Handler, directory=str(root))) as server:
+        if managed_path is not None:
+            import threading
+            def watch_parent():
+                sys.stdin.buffer.read()
+                server.shutdown()
+            threading.Thread(target=watch_parent, daemon=True).start()
+            print(json.dumps({"port": server.server_port, "path": managed_path}), flush=True)
         server.serve_forever()
+
+
+def serve_file_preview(path):
+    target = Path(path).resolve(strict=True)
+    if not target.is_file() or target.suffix.lower() not in (".html", ".htm"):
+        raise CanvasError("HTML source file unavailable")
+    serve_preview(target.parent, "/" + quote(target.name, safe=""))
 
 
 def preview_application(args, parser):

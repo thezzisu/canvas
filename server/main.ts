@@ -29,6 +29,7 @@ import { WindowContentService } from "./window-content.ts";
 import { UrlForwardService } from "./url-forward.ts";
 import { CaptureError, CaptureService, type CaptureLease } from './capture.ts';
 import { captureAddress } from './capture-address.ts';
+import { SourcePreviewService } from './source-preview.ts';
 const dataDir =
   process.env.CANVAS_DATA_DIR ?? join(homedir(), ".local/share/canvas");
 const accounts = new AccountStore(dataDir);
@@ -41,6 +42,7 @@ const completionReads = new CompletionReads(store);
 const terminals = new TerminalManager(completionReads, (source, windowId) => store.removeWindowReferences(source, [windowId]));
 const uploads = new UploadService(terminals);
 const helperBytes = readFileSync(new URL("../cli/canvas", import.meta.url));
+const sourcePreviews = new SourcePreviewService(store, captures, helperBytes.toString('utf8'));
 const socketSessions = new WeakMap<import("ws").WebSocket, string>();
 const socketCaptureBases = new WeakMap<import("ws").WebSocket, string>();
 const downloads = new OpenDownloadService({
@@ -110,6 +112,10 @@ const app = createApp(store, account, terminals, {
   allowedOrigins,
   openDownload: (ticket, session) => downloads.open(ticket, session),
   prepareDownload: (ticket, session, context) => downloads.prepare(ticket, session, context),
+  previewFile: (id, temporary, session, publicBase) => {
+    const assetId = temporary ? downloads.stagedAssetId(id, session) : id;
+    return sourcePreviews.open(assetId ? assets.origin(assetId, temporary) : undefined, session, publicBase);
+  },
   closeOpenBridge: (sourceId) => { uploads.closeSource(sourceId); windowContent.closeSource(sourceId); urlForwards.closeSource(sourceId); captures.closeSource(sourceId); return downloads.closeSource(sourceId); },
   assets,
   uploads,
@@ -252,6 +258,7 @@ async function stop() {
   clearInterval(heartbeat);
   windowContent.close();
   await captures.close();
+  await sourcePreviews.close();
   await urlForwards.close();
   await uploads.closeAll();
   await terminals.closeAll();

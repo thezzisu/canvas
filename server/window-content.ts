@@ -128,9 +128,10 @@ export class WindowContentService {
       controller.signal.throwIfAborted(); this.source(record)
       const destination = context.position ? { canvasId: context.canvasId, position: context.position }
         : { ...context, sourceId: record.sourceId, windowId: record.windowId }
-      const asset = await upload.complete(destination, controller.signal)
+      const asset = await upload.complete({ ...destination,
+        origin: { sourceId: source.id, sourceKey: record.sourceKey, path: item.path } }, controller.signal)
       const id = asset.temporary ? this.options.registerStaged(asset.id, sessionId) : asset.id
-      return { id, filename: asset.filename, size: asset.size, mime: asset.mime,
+      return { id, filename: asset.filename, size: asset.size, mime: asset.mime, sourcePreview: asset.sourcePreview,
         temporary: asset.temporary, url: asset.temporary ? `/api/downloads/${id}` : `/api/files/${id}` }
     } catch (error) {
       await upload?.abort()

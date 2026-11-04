@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable, type Readable } from "node:stream";
 import type { WebSocket } from "ws";
-import { sourceConnectionKey, type FileAsset, type Source } from "./state.ts";
+import { sourceConnectionKey, type FileAsset, type FileAssetContext, type FileOrigin, type Source } from "./state.ts";
 import type { SourceResource } from "./runtimes.ts";
 import { directoryPath } from "./editor-links.ts";
 import { webUrl, type OpenedUrl } from "./url-forward.ts";
@@ -22,7 +22,7 @@ type DownloadReason = "cancelled" | "timed-out" | "disconnected" | "invalid-tran
 export interface DownloadContext { canvasId?: string; anchorId?: string }
 interface Upload {
   write(chunk: Buffer): Promise<void>;
-  complete(target: { canvasId?: string; anchorId?: string; sourceId: string; windowId: string }): Promise<FileAsset & { temporary: boolean }>;
+  complete(target: FileAssetContext): Promise<FileAsset & { temporary: boolean }>;
   abort(): Promise<void>;
 }
 export interface PreparedOpenBridge {
@@ -74,6 +74,7 @@ interface Bridge {
 }
 
 interface DownloadTicket {
+  origin?: FileOrigin;
   id: string;
   sessionId: string;
   socket: Socket;
@@ -306,6 +307,10 @@ export class OpenDownloadService {
         !Number.isSafeInteger(header.size) || (header.size as number) < 0 || !safeFilename(header.filename))) {
       socket.end(rejected); return;
     }
+    if (header.kind === 'file' && header.path !== undefined) {
+      try { path = directoryPath(header.path); }
+      catch { socket.end(rejected); return; }
+    }
     const bridge = this.bridges.get(source.id);
     if (!bridge || bridge.source !== source || bridge.sockets.size > MAX_TRANSFERS_PER_SOURCE) {
       socket.end(rejected); return;
@@ -342,6 +347,7 @@ export class OpenDownloadService {
     const id = randomBytes(32).toString("base64url");
     const ticket: DownloadTicket = {
       id, sessionId: recipient.sessionId, socket, sourceId: source.id, windowId,
+      ...(path ? { origin: { sourceId: source.id, sourceKey: sourceConnectionKey(source), path } } : {}),
       filename, size: header.size as number, state: "offered", transferred: 0,
       recipient: recipient.socket,
       lastProgressAt: 0, releaseSource: this.retainSource(source.id), removeCloseListener: () => {},
@@ -496,7 +502,7 @@ export class OpenDownloadService {
       final: callback => {
         if (received !== ticket.size) { callback(new Error("File transfer ended before declared length")); return; }
         const complete = async () => {
-          const asset = await upload.complete({ ...ticket.context, sourceId: ticket.sourceId, windowId: ticket.windowId });
+          const asset = await upload.complete({ ...ticket.context, sourceId: ticket.sourceId, windowId: ticket.windowId, origin: ticket.origin });
           if (this.tickets.get(ticket.id) !== ticket) { callback(new Error("File transfer cancelled")); return; }
           if (asset.temporary) this.registerStaged(asset.id, ticket.sessionId, ticket.id);
           // Success means the server has committed the complete file. Browser
@@ -505,7 +511,7 @@ export class OpenDownloadService {
           if (asset.temporary && ticket.recipient.readyState === 1) {
             try { ticket.recipient.send(JSON.stringify({ type: "download", id: ticket.id,
               url: `/api/downloads/${ticket.id}`, filename: ticket.filename, size: ticket.size,
-              mime: asset.mime })); } catch {}
+              mime: asset.mime, sourcePreview: asset.sourcePreview })); } catch {}
           }
           callback();
         };
@@ -530,6 +536,11 @@ export class OpenDownloadService {
     timer.unref();
     this.staged.set(id, { sessionId, assetId, timer });
     return id;
+  }
+
+  stagedAssetId(ticketId: string, sessionId: string): string | undefined {
+    const staged = this.staged.get(ticketId);
+    return staged?.sessionId === sessionId ? staged.assetId : undefined;
   }
 
   async open(ticketId: string, sessionId: string): Promise<{ body: Readable; headers: Record<string, string>; previewHeaders?: Record<string, string>; readRange(start: number, end: number): Promise<Readable | undefined> } | undefined> {

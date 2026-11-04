@@ -63,6 +63,7 @@ export const fileAssetSchema = z.object({
   size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   mime: z.string().max(100),
   createdAt: z.number().int().nonnegative(),
+  sourcePreview: z.boolean().optional(),
 }).strict();
 export const noteNodeSchema = nodeLayoutSchema.extend({
   type: z.literal("note"),
@@ -87,9 +88,12 @@ export type FileAsset = {
   size: number;
   mime: string;
   createdAt: number;
+  sourcePreview?: boolean;
 };
+/** Source provenance stays server-side; browsers receive only the capability. */
+export interface FileOrigin { sourceId: string; sourceKey: string; path: string }
 export type FileNodeView = FileNode & { asset: FileAsset };
-export type FileAssetContext = { canvasId?: string } & (
+export type FileAssetContext = { canvasId?: string; origin?: FileOrigin } & (
   | { anchorId?: string; sourceId: string; windowId: string }
   | { position: { x: number; y: number } }
   | { noteId: string }
@@ -435,6 +439,8 @@ export class Store extends EventEmitter {
         this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
           .run(JSON.stringify(canvas), canvasId);
       }
+      if (context.origin) this.db.prepare("INSERT INTO documents(kind,id,body) VALUES('file-origin',?,?)")
+        .run(asset.id, JSON.stringify(context.origin));
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     this.changed();
@@ -463,7 +469,7 @@ export class Store extends EventEmitter {
   }
 
   noteAttachments(noteId: string): FileAsset[] {
-    return this.db.prepare("SELECT f.* FROM canvas_files f JOIN note_files n ON n.asset_id=f.id WHERE n.note_id=? ORDER BY f.rowid")
+    return this.db.prepare("SELECT f.*, o.id IS NOT NULL AS source_preview FROM canvas_files f JOIN note_files n ON n.asset_id=f.id LEFT JOIN documents o ON o.kind='file-origin' AND o.id=f.id WHERE n.note_id=? ORDER BY f.rowid")
       .all(noteId).map(row => this.fileAssetFromRow(row));
   }
 
@@ -475,7 +481,7 @@ export class Store extends EventEmitter {
   }
 
   fileAsset(id: string): FileAsset | undefined {
-    const row = this.db.prepare("SELECT id,filename,size,mime,created_at FROM canvas_files WHERE id=?")
+    const row = this.db.prepare("SELECT f.*, o.id IS NOT NULL AS source_preview FROM canvas_files f LEFT JOIN documents o ON o.kind='file-origin' AND o.id=f.id WHERE f.id=?")
       .get(id);
     return row ? this.fileAssetFromRow(row) : undefined;
   }
@@ -491,6 +497,7 @@ export class Store extends EventEmitter {
       id: String(row.id), filename: String(row.filename), size: Number(row.size),
       mime: getMimeType(String(row.filename)) || "application/octet-stream",
       createdAt: Number(row.created_at),
+      ...(row.source_preview ? { sourcePreview: true } : {}),
     };
   }
 
@@ -508,7 +515,9 @@ export class Store extends EventEmitter {
 
   removeFileAssetIfUnreferenced(id: string): boolean {
     if (this.fileAssetReferenced(id)) return false;
-    return this.db.prepare("DELETE FROM canvas_files WHERE id=?").run(id).changes > 0;
+    const removed = this.db.prepare("DELETE FROM canvas_files WHERE id=?").run(id).changes > 0;
+    this.db.prepare("DELETE FROM documents WHERE kind='file-origin' AND id=?").run(id);
+    return removed;
   }
 
   setCanvasBackground(canvasId: string, data: Uint8Array, opacity: number) {

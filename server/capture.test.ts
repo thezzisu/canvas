@@ -220,6 +220,18 @@ test('application cookie paths, expiry and deletion apply to the logical public 
 })
 
 
+test('capture cleanup runs once when its owner also closes the lease from onEnded', async t => {
+  const f = await fixture(t)
+  let ended = 0
+  const lease = f.service.prepareCapture(f.source, { publicBase: f.base, session: 'first', port: f.target.port,
+    onEnded: () => { ended++; lease.close() } })
+  await lease.ready()
+  f.store.removeSession('first')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(ended, 1)
+  assert.equal(f.endpointsClosed(), 1)
+})
+
 test('capture failures preserve their specific public category', async t => {
   const f = await fixture(t)
   const options = { publicBase: f.base, windowId: 'window', paneId: 'pane', port: f.target.port, session: 'first' }

@@ -494,6 +494,9 @@ test('HTTP scans authenticate, verify regular file metadata and do not read byte
   assert.equal(response.status, 200)
   const opened = await response.json() as WindowContentOpen
   assert.equal(opened.temporary, true); assert.equal('preview' in opened, false); assert.equal(f.reads(), 1)
+  assert.equal(opened.sourcePreview, true)
+  const stagedId = f.downloads.stagedAssetId(opened.id, 'first-session'); assert(stagedId)
+  assert.equal(f.assets.origin(stagedId, true)?.path, join(f.root, 'report.txt'))
   const download = await f.app.request(`http://canvas.test${opened.url}`, { headers: { Authorization: 'Bearer first-session' } })
   assert.equal(await download.text(), 'original\n')
   assert.equal((await f.app.request(`http://canvas.test${opened.url}`, { headers: { Authorization: 'Bearer other-session' } })).status, 404)

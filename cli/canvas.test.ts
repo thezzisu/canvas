@@ -161,7 +161,7 @@ test("canvas open streams binary files with relative, Unicode and spaced names",
   const tools = join(f.root, 'python-only'); await mkdir(tools); await symlink('/usr/bin/python3', join(tools, 'python3'));
   const result = await f.run(name, { PATH: tools });
   assert.deepEqual(result, { code: 0, stdout: "", stderr: "" });
-  assert.deepEqual(endpoint.headers, [{ version: 1, kind: "file", nativeSocket: f.nativeSocket, paneId: "w1:p2", filename: name, size: content.length }]);
+  assert.deepEqual(endpoint.headers, [{ version: 1, kind: "file", path: join(f.root, name), nativeSocket: f.nativeSocket, paneId: "w1:p2", filename: name, size: content.length }]);
   assert.equal(endpoint.bodies.length, 1);
   assert(endpoint.bodies[0]!.equals(content), "download preserves every byte");
 });

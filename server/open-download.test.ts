@@ -231,6 +231,12 @@ test("overview copy succeeds before any HTTP request and stages exact retryable 
   assert.equal(f.observations.uploadedBytes, content.length);
   const notice = f.receiver.messages.find(message => message.type === "download")!;
   assert(notice, "native download starts only after server staging completes");
+  assert.equal(notice.sourcePreview, true);
+  const stagedId = f.service.stagedAssetId(String(notice.id), 'authenticated-session');
+  assert(stagedId);
+  assert.equal(f.assets.origin(stagedId, true)?.path, join(f.root, '风景 文件.bin'));
+  assert.equal(f.service.stagedAssetId(String(notice.id), 'other-session'), undefined);
+  assert.equal('path' in notice, false, 'browser messages never expose source provenance');
   assert.deepEqual(f.receiver.messages.map(message => message.type), ["file-context", "download"]);
   const url = `http://canvas.test${notice.url}`;
   assert.equal((await f.app.request(url, { headers: { Authorization: "Bearer other-session" } })).status, 404);

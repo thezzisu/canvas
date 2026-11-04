@@ -23,4 +23,5 @@ export interface WindowContentOpen {
   mime: string
   url: string
   temporary: boolean
+  sourcePreview?: boolean
 }

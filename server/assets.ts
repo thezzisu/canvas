@@ -4,7 +4,7 @@ import { lstat, mkdir, open, readdir, rename, rm, type FileHandle } from "node:f
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { getMimeType } from "hono/utils/mime";
-import type { Store, FileAsset, FileAssetContext } from "./state.ts";
+import type { Store, FileAsset, FileAssetContext, FileOrigin } from "./state.ts";
 
 function safeFilename(value: string): string {
   if (!value || Buffer.byteLength(value, "utf8") > 255 || Buffer.from(value).toString() !== value ||
@@ -35,7 +35,7 @@ export class AssetStore {
   private cleanupQueued = false;
   private closed = false;
   private initialized?: Promise<void>;
-  private stagedFiles = new Map<string, { asset: FileAsset; expiresAt: number; timer: ReturnType<typeof setTimeout> }>();
+  private stagedFiles = new Map<string, { asset: FileAsset; origin?: FileOrigin; expiresAt: number; timer: ReturnType<typeof setTimeout> }>();
 
   constructor(dataDirectory: string, private readonly store: Store, private readonly options: { temporaryTtlMs?: number } = {}) {
     this.directory = join(dataDirectory, "files");
@@ -92,6 +92,7 @@ export class AssetStore {
           const asset: FileAsset = {
             id, filename, size: written, mime: getMimeType(filename) || "application/octet-stream",
             createdAt: Date.now(),
+            ...(context.origin ? { sourcePreview: true } : {}),
           };
           await rename(partialPath, path);
           const directory = await open(directoryPath, constants.O_RDONLY | constants.O_DIRECTORY);
@@ -102,7 +103,7 @@ export class AssetStore {
             const ttl = this.options.temporaryTtlMs ?? 60 * 60_000;
             const timer = setTimeout(() => { void this.discardTemporary(id).catch(() => {}); }, ttl);
             timer.unref();
-            this.stagedFiles.set(id, { asset, expiresAt: Date.now() + ttl, timer });
+            this.stagedFiles.set(id, { asset, origin: context.origin, expiresAt: Date.now() + ttl, timer });
           } else if (!this.store.commitFileAsset(asset, context)) {
             throw new Error("File destination no longer exists");
           }
@@ -146,6 +147,13 @@ export class AssetStore {
     clearTimeout(staged.timer);
     this.stagedFiles.delete(id);
     await rm(join(this.staged, id), { force: true });
+  }
+
+  origin(id: string, temporary = false): FileOrigin | undefined {
+    if (this.closed) return;
+    if (!temporary) return this.store.fileAsset(id) ? this.store.get<FileOrigin>('file-origin', id) : undefined;
+    const staged = this.stagedFiles.get(id);
+    return staged && staged.expiresAt > Date.now() ? staged.origin : undefined;
   }
 
   private async openAsset(path: string, asset: FileAsset, range?: { start: number; end: number }): Promise<{ body: Readable; asset: FileAsset } | undefined> {

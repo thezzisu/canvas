@@ -21,20 +21,22 @@ export interface CapturePresentation {
   type: 'capture'
   id: string
   url: string
-  windowId: string
-  paneId: string
+  windowId?: string
+  paneId?: string
   title: string
 }
 export interface CapturePreparation {
   /** Exact browser API base bound to the authenticated terminal connection. */
   publicBase: string
-  windowId: string
-  paneId: string
+  windowId?: string
+  paneId?: string
   session: string
   port: number
   title?: string
+  /** Browser-opened previews expire without traffic; CLI captures keep their owner lifetime. */
+  idleTtlMs?: number
   onStop?(): void
-  onEnded?(message: { type: 'capture-ended'; id: string; windowId: string; paneId: string }): void
+  onEnded?(message: { type: 'capture-ended'; id: string; windowId?: string; paneId?: string }): void
 }
 export interface CaptureLease {
   id: string
@@ -48,6 +50,7 @@ interface Capture extends CapturePreparation {
   sourceKey: string
   publicUrl: URL
   ready: boolean
+  lastActivity: number
   endpoint?: ReturnType<typeof prepareLoopback>
   closing?: Promise<void>
   cookies: Map<string, AppCookie>
@@ -92,14 +95,15 @@ export class CaptureService {
     const current = this.store.get<Source>('source', source.id)
     if (!current || sourceConnectionKey(current) !== sourceConnectionKey(source)) throw new CaptureError('capture-connection-changed', 'Connection changed')
     if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) throw new CaptureError('capture-invalid-request', 'Capture port must be between 1 and 65535')
-    if (!options.windowId || !options.paneId || options.windowId.length > 4096 || options.paneId.length > 4096) throw new CaptureError('capture-invalid-request', 'Capture terminal identity is invalid')
+    if ((options.windowId !== undefined || options.paneId !== undefined)
+      && (!options.windowId || !options.paneId || options.windowId.length > 4096 || options.paneId.length > 4096)) throw new CaptureError('capture-invalid-request', 'Capture terminal identity is invalid')
     if (this.captures.size >= 32) throw new CaptureError('capture-limit', 'At most 32 captured applications are supported')
     const publicBase = new URL(normalizeCapturePublicBase(options.publicBase))
     const id = randomBytes(32).toString('base64url')
     const publicUrl = new URL(publicBase.pathname.replace(/\/$/u, '') + PREFIX + id + '/', publicBase)
     const title = (options.title || 'Application').replace(/[\x00-\x1f\x7f]/gu, '').slice(0, 160)
     const capture: Capture = { ...options, title, id, source: { ...source }, sourceKey: sourceConnectionKey(source), publicUrl, ready: false,
-      cookies: new Map(), connections: new Set() }
+      cookies: new Map(), connections: new Set(), lastActivity: Date.now() }
     this.captures.set(id, capture)
     return { id, publicUrl: publicUrl.href, ready: async bootstrapUrl => {
       if (!this.valid(capture)) throw new CaptureError('capture-expired', 'Capture expired')
@@ -112,6 +116,7 @@ export class CaptureService {
       } catch { throw new CaptureError('capture-forward-unavailable', 'Capture forwarding is unavailable') }
       if (!this.valid(capture)) throw new CaptureError('capture-expired', 'Capture expired')
       capture.ready = true
+      capture.lastActivity = Date.now()
       return { type: 'capture', id, url, windowId: capture.windowId, paneId: capture.paneId, title }
     }, close: () => { void this.remove(capture) } }
   }
@@ -132,7 +137,8 @@ export class CaptureService {
     return !this.closed && this.captures.get(capture.id) === capture && this.store.hasSession(capture.session)
       && !!source && sourceConnectionKey(source) === capture.sourceKey
   }
-  private prune = () => { for (const capture of this.captures.values()) if (!this.valid(capture)) void this.remove(capture) }
+  private prune = () => { for (const capture of this.captures.values())
+    if (!this.valid(capture) || capture.idleTtlMs && Date.now() - capture.lastActivity >= capture.idleTtlMs) void this.remove(capture) }
   private remove(capture: Capture): Promise<void> {
     if (capture.closing) return capture.closing
     if (this.captures.get(capture.id) === capture) this.captures.delete(capture.id)
@@ -140,8 +146,8 @@ export class CaptureService {
     capture.connections.clear()
     capture.cookies.clear()
     capture.ready = false
-    capture.onEnded?.({ type: 'capture-ended', id: capture.id, windowId: capture.windowId, paneId: capture.paneId })
     capture.closing = (capture.endpoint || Promise.resolve(undefined)).then(endpoint => endpoint?.close(), () => {}).catch(() => {})
+    capture.onEnded?.({ type: 'capture-ended', id: capture.id, windowId: capture.windowId, paneId: capture.paneId })
     return capture.closing
   }
   closeSource(sourceId: string): void { for (const capture of this.captures.values()) if (capture.source.id === sourceId) void this.remove(capture) }
@@ -162,6 +168,7 @@ export class CaptureService {
     const match = /^\/api\/capture\/([A-Za-z0-9_-]{43})(\/.*)?$/u.exec(url.pathname)
     const capture = match && this.captures.get(match[1]!)
     if (!capture || !capture.ready || !this.valid(capture)) return
+    capture.lastActivity = Date.now()
     return { capture, path: (match![2] || '/') + url.search }
   }
   private logicalPath(capture: Capture, path: string): string {

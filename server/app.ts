@@ -30,6 +30,8 @@ import type { DownloadContext } from "./open-download.ts";
 import type { AssetStore } from "./assets.ts";
 import type { UploadService } from "./uploads.ts";
 import type { WindowContentService } from "./window-content.ts";
+import { captureAddress } from './capture-address.ts';
+import { SourcePreviewError } from './source-preview.ts';
 import {
   BackgroundError,
   DEFAULT_BACKGROUND_OPACITY,
@@ -100,6 +102,7 @@ export function createApp(
     allowedOrigins?: ReadonlySet<string>;
     openDownload?: (ticket: string, sessionId: string) => Promise<DownloadResponse | undefined>;
     prepareDownload?: (ticket: string, sessionId: string, context?: DownloadContext) => boolean;
+    previewFile?: (id: string, temporary: boolean, sessionId: string, publicBase: string) => Promise<{ id: string; url: string }>;
     closeOpenBridge?: (sourceId: string) => Promise<void>;
     assets?: AssetStore;
     uploads?: UploadService;
@@ -291,6 +294,23 @@ export function createApp(
     const opened = await options.windowContent?.open(c.req.param("scan"), c.req.param("item"),
       bearerToken(c.req.header("authorization")), context, c.req.raw.signal);
     return opened ? c.json(opened) : c.json({ error: "Scan expired; scan this window again" }, 404);
+  });
+  app.on('POST', ['/api/files/:id/preview', '/api/downloads/:id/preview'], async c => {
+    if (!options.previewFile) return c.json({ error: 'Original HTML preview unavailable', code: 'source-preview-unavailable' }, 404);
+    let publicBase: string;
+    try {
+      const body = z.object({ apiBase: z.string().max(2048) }).strict().parse(await c.req.json());
+      const url = new URL(c.req.url); url.searchParams.set('apiBase', body.apiBase);
+      publicBase = captureAddress(url, c.req.header('x-forwarded-prefix'))!;
+    } catch { return c.json({ error: 'Invalid Canvas API base', code: 'source-preview-invalid-base' }, 400); }
+    try {
+      return c.json(await options.previewFile(c.req.param('id')!, c.req.path.startsWith('/api/downloads/'),
+        bearerToken(c.req.header('authorization')), publicBase));
+    } catch (error) {
+      if (error instanceof SourcePreviewError)
+        return c.json({ error: error.message, code: error.code }, error.code === 'source-preview-unavailable' ? 404 : 502);
+      return c.json({ error: 'Could not start the original HTML preview', code: 'source-preview-start-failed' }, 502);
+    }
   });
   app.on(["GET", "HEAD"], "/api/files/:id", async (c) => {
     const file = await loadFile(c.req.param("id"), c.req.query("download") === "1");
