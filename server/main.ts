@@ -27,7 +27,7 @@ import { UploadService } from "./uploads.ts";
 import { vscodeDirectoryUri } from "./editor-links.ts";
 import { WindowContentService } from "./window-content.ts";
 import { UrlForwardService } from "./url-forward.ts";
-import { CaptureService } from './capture.ts';
+import { CaptureError, CaptureService, type CaptureLease } from './capture.ts';
 import { captureAddress } from './capture-address.ts';
 const dataDir =
   process.env.CANVAS_DATA_DIR ?? join(homedir(), ".local/share/canvas");
@@ -46,14 +46,17 @@ const socketCaptureBases = new WeakMap<import("ws").WebSocket, string>();
 const downloads = new OpenDownloadService({
   capture: async (source, windowId, paneId, header, socket, recipient) => {
     const publicBase = socketCaptureBases.get(recipient.socket);
-    if (!publicBase || !Number.isInteger(header.port) || Number(header.port) < 1 || Number(header.port) > 65535
+    const reject = (reason: string) => socket.end(JSON.stringify({ ok: false, reason }) + '\n');
+    if (!publicBase) { reject('capture-address-unavailable'); return; }
+    if (!Number.isInteger(header.port) || Number(header.port) < 1 || Number(header.port) > 65535
       || typeof header.title !== 'string' || header.title.length > 120) {
-      socket.end(JSON.stringify({ ok: false, reason: 'capture-unavailable' }) + '\n'); return;
+      reject('capture-invalid-request'); return;
     }
-    const lease = captures.prepareCapture(source, { windowId, paneId, session: recipient.sessionId, publicBase, port: Number(header.port), title: header.title,
+    let lease: CaptureLease;
+    try { lease = captures.prepareCapture(source, { windowId, paneId, session: recipient.sessionId, publicBase, port: Number(header.port), title: header.title,
       onStop: () => { if (!socket.destroyed) socket.write(JSON.stringify({ action: 'stop' }) + '\n') },
       onEnded: message => { if (recipient.socket.readyState === 1) recipient.socket.send(JSON.stringify(message)); socket.destroy() },
-    });
+    }); } catch (error) { reject(error instanceof CaptureError ? error.reason : 'capture-failed'); return; }
     socket.once('close', () => lease.close());
     socket.once('end', () => { lease.close(); socket.end() });
     socket.setTimeout(0);
@@ -67,12 +70,13 @@ const downloads = new OpenDownloadService({
         const value = JSON.parse(pending.subarray(0, newline).toString('utf8')); pending = pending.subarray(newline + 1);
         if (ready || value.action !== 'ready' || pending.length || value.port !== undefined) { socket.destroy(); return }
         ready = true;
-        if (!recipient.isCurrent()) { socket.destroy(); return }
+        if (!recipient.isCurrent()) { reject('not-attached'); return }
         void lease.ready(typeof value.bootstrapUrl === 'string' ? value.bootstrapUrl : undefined).then(presentation => {
-          if (socket.destroyed || !recipient.isCurrent()) { lease.close(); return }
+          if (socket.destroyed) { lease.close(); return; }
+          if (!recipient.isCurrent()) { reject('not-attached'); return; }
           recipient.socket.send(JSON.stringify(presentation));
           socket.write(JSON.stringify({ ok: true, state: 'ready' }) + '\n');
-        }).catch(() => socket.destroy());
+        }).catch(error => { reject(error instanceof CaptureError ? error.reason : 'capture-failed'); });
       } catch { socket.destroy() }
     });
     socket.write(JSON.stringify({ ok: true, state: 'prepared', id: lease.id, publicUrl: lease.publicUrl }) + '\n');

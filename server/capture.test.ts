@@ -7,7 +7,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { WebSocket, WebSocketServer } from 'ws'
-import { CaptureService, normalizeCapturePublicBase } from './capture.ts'
+import { CaptureError, CaptureService, normalizeCapturePublicBase } from './capture.ts'
 import { Store, type Source } from './state.ts'
 
 async function listen(server: Server) {
@@ -217,4 +217,29 @@ test('application cookie paths, expiry and deletion apply to the logical public 
   await setCookies(['session=; Path=/; Max-Age=0', 'alive=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT'])
   assert.equal((await fetch(lease.publicUrl + 'authenticated')).status, 401, 'cookie deletion removes application authentication')
   assert.equal(f.received.at(-1)!.headers.cookie, undefined)
+})
+
+
+test('capture failures preserve their specific public category', async t => {
+  const f = await fixture(t)
+  const options = { publicBase: f.base, windowId: 'window', paneId: 'pane', port: f.target.port, session: 'first' }
+  const reason = (expected: string) => (error: unknown) => error instanceof CaptureError && error.reason === expected
+  assert.throws(() => f.service.prepareCapture(f.source, { ...options, session: 'missing' }), reason('capture-sign-in'))
+  assert.throws(() => f.service.prepareCapture(f.source, { ...options, port: 0 }), reason('capture-invalid-request'))
+  const lease = f.service.prepareCapture(f.source, options)
+  for (const url of ['not-a-url', 'http://127.0.0.1:1/'])
+    await assert.rejects(lease.ready(url), reason('capture-bootstrap-invalid'))
+  for (let index = 1; index < 32; index++) f.service.prepareCapture(f.source, options)
+  assert.throws(() => f.service.prepareCapture(f.source, options), reason('capture-limit'))
+  f.store.removeSession('first')
+  await assert.rejects(lease.ready(), reason('capture-expired'))
+  f.store.put('source', { ...f.source, transport: 'ssh', target: 'changed.invalid' })
+  f.store.addSession('first')
+  assert.throws(() => f.service.prepareCapture(f.source, options), reason('capture-connection-changed'))
+  const failing = new CaptureService(f.store, { prepare: async () => { throw new Error('PRIVATE_FORWARD_DETAIL') } })
+  t.after(() => failing.close())
+  f.store.put('source', f.source)
+  await assert.rejects(failing.prepareCapture(f.source, options).ready(), reason('capture-forward-unavailable'))
+  await failing.close()
+  assert.throws(() => failing.prepareCapture(f.source, options), reason('capture-stopping'))
 })

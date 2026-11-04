@@ -9,6 +9,14 @@ const hop = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-au
 const cookieName = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u
 const unavailable = 'Captured application unavailable'
 
+/** Public failure categories; transport responses never expose internal errors. */
+export class CaptureError extends Error {
+  constructor(readonly reason: 'capture-stopping' | 'capture-sign-in' | 'capture-connection-changed' | 'capture-invalid-request' |
+    'capture-limit' | 'capture-expired' | 'capture-bootstrap-invalid' | 'capture-forward-unavailable', message: string) {
+    super(message)
+  }
+}
+
 export interface CapturePresentation {
   type: 'capture'
   id: string
@@ -79,12 +87,13 @@ export class CaptureService {
     this.timer = setInterval(this.prune, 1000); this.timer.unref()
   }
   prepareCapture(source: Source, options: CapturePreparation): CaptureLease {
-    if (this.closed || !this.store.hasSession(options.session)) throw new Error('Please sign in')
+    if (this.closed) throw new CaptureError('capture-stopping', 'Canvas capture service is stopping')
+    if (!this.store.hasSession(options.session)) throw new CaptureError('capture-sign-in', 'Please sign in')
     const current = this.store.get<Source>('source', source.id)
-    if (!current || sourceConnectionKey(current) !== sourceConnectionKey(source)) throw new Error('Connection changed')
-    if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) throw new Error('Capture port must be between 1 and 65535')
-    if (!options.windowId || !options.paneId || options.windowId.length > 4096 || options.paneId.length > 4096) throw new Error('Capture terminal identity is invalid')
-    if (this.captures.size >= 32) throw new Error('At most 32 captured applications are supported')
+    if (!current || sourceConnectionKey(current) !== sourceConnectionKey(source)) throw new CaptureError('capture-connection-changed', 'Connection changed')
+    if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) throw new CaptureError('capture-invalid-request', 'Capture port must be between 1 and 65535')
+    if (!options.windowId || !options.paneId || options.windowId.length > 4096 || options.paneId.length > 4096) throw new CaptureError('capture-invalid-request', 'Capture terminal identity is invalid')
+    if (this.captures.size >= 32) throw new CaptureError('capture-limit', 'At most 32 captured applications are supported')
     const publicBase = new URL(normalizeCapturePublicBase(options.publicBase))
     const id = randomBytes(32).toString('base64url')
     const publicUrl = new URL(publicBase.pathname.replace(/\/$/u, '') + PREFIX + id + '/', publicBase)
@@ -93,25 +102,29 @@ export class CaptureService {
       cookies: new Map(), connections: new Set() }
     this.captures.set(id, capture)
     return { id, publicUrl: publicUrl.href, ready: async bootstrapUrl => {
-      if (!this.valid(capture)) throw new Error('Capture expired')
+      if (!this.valid(capture)) throw new CaptureError('capture-expired', 'Capture expired')
       const url = this.bootstrap(capture, bootstrapUrl)
       // Open only this source's declared loopback service; no browser-host or
       // arbitrary origin input becomes a connection target.
-      capture.endpoint ??= this.prepare(capture.source, '127.0.0.1', capture.port)
-      await capture.endpoint
-      if (!this.valid(capture)) throw new Error('Capture expired')
+      try {
+        capture.endpoint ??= this.prepare(capture.source, '127.0.0.1', capture.port)
+        await capture.endpoint
+      } catch { throw new CaptureError('capture-forward-unavailable', 'Capture forwarding is unavailable') }
+      if (!this.valid(capture)) throw new CaptureError('capture-expired', 'Capture expired')
       capture.ready = true
       return { type: 'capture', id, url, windowId: capture.windowId, paneId: capture.paneId, title }
     }, close: () => { void this.remove(capture) } }
   }
   private bootstrap(capture: Capture, value?: string): string {
     if (!value) return capture.publicUrl.href
-    if (Buffer.byteLength(value) > 16384 || /[\x00-\x20\x7f]/u.test(value)) throw new Error('Invalid application bootstrap URL')
-    const url = new URL(value)
-    if (url.username || url.password || !['http:', 'https:'].includes(url.protocol)) throw new Error('Invalid application bootstrap URL')
+    if (Buffer.byteLength(value) > 16384 || /[\x00-\x20\x7f]/u.test(value)) throw new CaptureError('capture-bootstrap-invalid', 'Invalid application bootstrap URL')
+    let url: URL
+    try { url = new URL(value) }
+    catch { throw new CaptureError('capture-bootstrap-invalid', 'Invalid application bootstrap URL') }
+    if (url.username || url.password || !['http:', 'https:'].includes(url.protocol)) throw new CaptureError('capture-bootstrap-invalid', 'Invalid application bootstrap URL')
     if (url.origin === capture.publicUrl.origin && url.pathname.startsWith(capture.publicUrl.pathname)) return url.href
     if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(url.hostname) || Number(url.port || 80) !== capture.port)
-      throw new Error('Application bootstrap URL does not match the captured service')
+      throw new CaptureError('capture-bootstrap-invalid', 'Application bootstrap URL does not match the captured service')
     return capture.publicUrl.href.replace(/\/$/u, '') + url.pathname + url.search + url.hash
   }
   private valid(capture: Capture): boolean {

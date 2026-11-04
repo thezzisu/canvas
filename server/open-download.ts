@@ -323,8 +323,11 @@ export class OpenDownloadService {
       socket.end(jsonLine({ ok: false, reason: "not-attached" })); return;
     }
     if (isCapture) {
-      if (matches[0]!.panes.length !== 1 || !this.options.capture) {
+      if (matches[0]!.panes.length !== 1) {
         socket.end(jsonLine({ ok: false, reason: 'capture-requires-single-pane' })); return;
+      }
+      if (!this.options.capture) {
+        socket.end(jsonLine({ ok: false, reason: 'capture-unavailable' })); return;
       }
       const release = this.retainSource(source.id);
       socket.once('close', release);

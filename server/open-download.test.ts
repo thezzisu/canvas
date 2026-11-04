@@ -50,6 +50,7 @@ type FixtureOptions = Partial<Pick<OpenDownloadOptions, "contextTimeoutMs" | "pr
   directoryAck?: boolean;
   directoryUri?: OpenDownloadOptions["directoryUri"];
   urlAck?: boolean;
+  capture?: OpenDownloadOptions["capture"];
 };
 async function fixture(t: TestContext, options: FixtureOptions = {}) {
   const root = await mkdtemp(join(tmpdir(), "canvas-open-service-"));
@@ -67,6 +68,7 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
   store.addSession("authenticated-session"); store.addSession("other-session");
   const observations = { uploadedBytes: 0, aborted: 0, finalized: 0, bridgeStarts: 0, bridgeStops: 0, sourceCloses: 0, recipientWindows: [] as string[] };
   const service = new OpenDownloadService({
+    capture: options.capture,
     openUrl: (_source, url, session) => { assert.equal(session, "authenticated-session"); return { url, forwarded: false }; },
     registryDirectory: registry,
     socketDirectory: sockets,
@@ -671,3 +673,26 @@ test("two independent Canvas backends on the same native socket fail closed", as
   assert.equal(f.observations.uploadedBytes, 0);
   assert.deepEqual(f.receiver.messages, []);
 });
+
+
+test('capture distinguishes split tabs from an unavailable capture handler before launching', async t => {
+  const f = await fixture(t)
+  const record = JSON.parse(await readFile(join(f.registry, (await readdir(f.registry))[0]!), 'utf8'))
+  const request = () => new Promise<Record<string, unknown>>((resolve, reject) => {
+    const socket = createConnection(record.socket)
+    let reply = ''
+    socket.on('data', data => { reply += data })
+    socket.once('error', reject)
+    socket.once('end', () => { socket.end(); resolve(JSON.parse(reply)) })
+    socket.once('connect', () => socket.write(JSON.stringify({ version: 1, kind: 'capture', secret: record.secret,
+      nativeSocket: f.nativeSocket, paneId: 'pane', port: 3011, title: 'Fixture' }) + '\n'))
+    t.after(() => socket.destroy())
+  })
+  const split = structuredClone(resources)
+  split.spaces[0]!.windows[0]!.panes.push({ id: 'second-pane', name: 'shell', active: false, status: 'unknown' })
+  f.setResources(split)
+  assert.deepEqual(await request(), { ok: false, reason: 'capture-requires-single-pane' })
+  f.setResources(resources)
+  assert.deepEqual(await request(), { ok: false, reason: 'capture-unavailable' })
+  assert.deepEqual(f.receiver.messages, [])
+})

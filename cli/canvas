@@ -180,6 +180,28 @@ def rejected_response(result, started):
         "file transfer failed" if started else "open request rejected"))
 
 
+def capture_rejected(response, stage):
+    reason = response.get("reason")
+    if reason in ("not-attached", "pane-unavailable"):
+        return rejected_response(response, False)
+    messages = {
+        "capture-requires-single-pane": "capture does not support split-pane tabs; move this pane to a single-pane tab and retry",
+        "capture-unavailable": "capture is not enabled on this Canvas server",
+        "capture-address-unavailable": "the connected browser did not provide a capture API address; reload Canvas and reconnect this terminal",
+        "capture-invalid-request": "capture request is invalid; update the Canvas CLI and server together",
+        "capture-limit": "32 captured applications are already active; stop one before starting another",
+        "capture-stopping": "the Canvas server is stopping; reconnect after it restarts and retry",
+        "capture-sign-in": "the Canvas session has expired; sign in again and reconnect this terminal",
+        "capture-connection-changed": "the Canvas connection changed; reconnect this terminal before capturing",
+        "capture-expired": "the capture session ended before the application was ready; reconnect this terminal and retry",
+        "capture-bootstrap-invalid": "the bootstrap URL must address this captured loopback port or its Canvas public URL",
+        "capture-forward-unavailable": "Canvas could not establish forwarding to this connection's loopback service; check the connection and application port",
+    }
+    # Only known reason codes become diagnostics; never print bridge text or URLs.
+    return CanvasError(messages.get(reason if isinstance(reason, str) else None,
+        "Canvas rejected capture " + stage))
+
+
 def transfer_file(connection, file, size, progress=None, start_timeout=70, idle_timeout=65):
     """Copy to Canvas while reading the server's acknowledgements together.
 
@@ -645,7 +667,7 @@ def capture_application(args, parser):
             response = line(connection)
             public_url = response.get("publicUrl")
             if response.get("ok") is not True or response.get("state") != "prepared" or not isinstance(public_url, str):
-                raise CanvasError("Canvas could not prepare this terminal capture")
+                raise capture_rejected(response, "preparation")
             public = urlsplit(public_url)
             if public.scheme not in ("http", "https") or not public.netloc or public.username or public.password:
                 raise CanvasError("invalid capture public URL")
@@ -668,7 +690,7 @@ def capture_application(args, parser):
                     if value.get("action") == "stop":
                         terminate(child)
                         return 0
-                    raise CanvasError("capture bridge rejected startup")
+                    raise capture_rejected(value, "startup")
                 if args.probe_command:
                     ready = probe_command(args.probe_command, environment, port, deadline)
                 elif args.ready == "tcp":
@@ -688,7 +710,7 @@ def capture_application(args, parser):
             send(connection, {"action": "ready", **({"bootstrapUrl": ready_url} if ready_url else {})}, 32768)
             response = line(connection)
             if response.get("ok") is not True or response.get("state") != "ready":
-                raise CanvasError("Canvas could not display this captured application")
+                raise capture_rejected(response, "display")
             print("canvas: Web view ready; return to this terminal without stopping, or stop the captured command.", file=sys.stderr)
             while child.poll() is None and not requested_signal[0]:
                 if select.select([connection], [], [], 0.2)[0]:
@@ -696,7 +718,7 @@ def capture_application(args, parser):
                     if response.get("action") == "stop":
                         terminate(child)
                         return 0
-                    raise CanvasError("capture bridge closed the application view")
+                    raise capture_rejected(response, "continuation")
             if requested_signal[0]:
                 return 128 + requested_signal[0]
             result = child.returncode
@@ -724,6 +746,7 @@ def main():
     opened.add_argument("--runtime", choices=["core", "tui"], help="select the originating runtime in nested terminals")
     opened.add_argument("path", help="file, folder or HTTP(S) address")
     capture = commands.add_parser("capture", help="run a command and display its Web UI", epilog=
+        "Capture requires a single-pane tab connected in Canvas. Split-pane tabs are not supported. "
         "PORT and CANVAS_CAPTURE_PORT are provided to the command. Command arguments are passed unchanged. "
         "Use -c 'python3 -m http.server \"$PORT\"' for explicit shell expansion. "
         "Only --env values expand named variables; $$ means a literal $. Options must precede the command.")

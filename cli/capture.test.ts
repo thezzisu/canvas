@@ -23,7 +23,7 @@ async function unusedPort() {
   await new Promise<void>(resolve => server.close(() => resolve()))
   return address.port
 }
-async function fixture(t: TestContext, holdPrepare = false) {
+async function fixture(t: TestContext, holdPrepare = false, rejection?: { stage: "prepare" | "ready"; reason: unknown }) {
   const root = await mkdtemp(join(tmpdir(), 'cv-capture-cli-')), registry = join(root, 'bridges'), nativeSocket = join(root, 'native.sock')
   const capture = join(root, 'canvas')
   await copyFile(helper, capture)
@@ -44,11 +44,14 @@ async function fixture(t: TestContext, holdPrepare = false) {
           assert(value.secret === secret, 'the helper authenticates through the private source bridge')
           assert.equal(value.nativeSocket, nativeSocket); assert.equal(value.paneId, 't7')
           delete value.secret; messages.push(value); peer = socket
-          prepare = () => socket.write(JSON.stringify({ ok: true, state: 'prepared', id: 'x'.repeat(43), publicUrl }) + '\n')
+          prepare = () => rejection?.stage === 'prepare'
+            ? socket.end(JSON.stringify({ ok: false, reason: rejection.reason, message: 'PRIVATE_BRIDGE_ERROR\u001b[2J' }) + '\n')
+            : socket.write(JSON.stringify({ ok: true, state: 'prepared', id: 'x'.repeat(43), publicUrl }) + '\n')
           if (!holdPrepare) prepare()
         } else {
           messages.push(value)
-          socket.write(JSON.stringify({ ok: true, state: 'ready' }) + '\n')
+          if (rejection?.stage === 'ready') socket.end(JSON.stringify({ ok: false, reason: rejection.reason, message: 'PRIVATE_BRIDGE_ERROR\u001b[2J' }) + '\n')
+          else socket.write(JSON.stringify({ ok: true, state: 'ready' }) + '\n')
         }
       }
     })
@@ -259,4 +262,46 @@ test('interrupt preserves signal exit status and cleans a resistant child withou
   assert(!run.stderr().includes(privateArgument))
   const port = Number(f.messages[0]!.port)
   await until(async () => { try { await fetch(`http://127.0.0.1:${port}`); return false } catch { return true } }, 'resistant child survived interrupt cleanup')
+})
+
+
+test('capture explains known preparation limits without starting the command or echoing bridge text', async t => {
+  const reasons: Array<[unknown, RegExp]> = [
+    ['capture-requires-single-pane', /split-pane tabs; move this pane to a single-pane tab/u],
+    ['capture-unavailable', /not enabled/u],
+    ['capture-address-unavailable', /API address; reload Canvas/u],
+    ['capture-invalid-request', /CLI and server together/u],
+    ['capture-limit', /32 captured applications.*stop one/u],
+    ['capture-stopping', /server is stopping; reconnect after it restarts/u],
+    ['capture-sign-in', /session has expired; sign in again/u],
+    ['capture-connection-changed', /connection changed; reconnect/u],
+    ['not-attached', /no browser ready.*\n  HC_TERMINAL_SOCKET=/u],
+    ['pane-unavailable', /herdr pane is unavailable.*\n  HC_TERMINAL_SOCKET=/u],
+    ['UNTRUSTED_DETAIL', /Canvas rejected capture preparation/u],
+    [{ bad: 'response' }, /Canvas rejected capture preparation/u],
+  ]
+  for (const [reason, expected] of reasons) await t.test(String(reason), async t => {
+    const f = await fixture(t, false, { stage: 'prepare', reason }), marker = join(f.root, 'must-not-start')
+    const run = f.run(['python3', '-c', `open(${JSON.stringify(marker)},'w').write('started')`])
+    assert.equal(await run.exit, 1)
+    assert.match(run.stderr(), expected)
+    assert(!/PRIVATE_BRIDGE_ERROR|UNTRUSTED_DETAIL|\x1b/u.test(run.stderr()))
+    assert.equal(await access(marker).then(() => true, () => false), false)
+  })
+})
+
+test('capture explains readiness rejection and still stops the command it owns', async t => {
+  for (const [reason, expected] of [
+    ['capture-expired', /session ended before the application was ready/u],
+    ['capture-bootstrap-invalid', /bootstrap URL must address/u],
+    ['capture-forward-unavailable', /could not establish forwarding/u],
+  ] as const) await t.test(reason, async t => {
+    const f = await fixture(t, false, { stage: 'ready', reason })
+    const run = f.run(['--timeout', '5', '-c', 'exec python3 -m http.server "$PORT" --bind 127.0.0.1'])
+    assert.equal(await run.exit, 1)
+    assert.match(run.stderr(), expected)
+    assert(!/PRIVATE_BRIDGE_ERROR|\x1b/u.test(run.stderr()))
+    const port = Number(f.messages[0]!.port)
+    await until(async () => { try { await fetch(`http://127.0.0.1:${port}/`); return false } catch { return true } }, 'rejected capture left its command running')
+  })
 })
