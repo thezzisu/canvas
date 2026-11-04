@@ -1,4 +1,5 @@
 export default {
+  reorderHint: 'Drag the icon to reorder, or press Alt + Up / Down.', itemReordered: '{name}: position {position} of {count}',
   cardRemoved: 'Removed {name}', undoRemoval: 'Undo', undoUnavailable: 'This removal can no longer be undone.',
   addContent: 'Add content', uploadFile: 'Upload file',
   "previousWindow": "Previous window",
