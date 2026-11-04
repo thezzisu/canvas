@@ -20,8 +20,8 @@ function markdownPath(path: string): string {
     encodeURIComponent(character).replace(/[!'()*]/gu, value => `%${value.charCodeAt(0).toString(16).toUpperCase()}`));
 }
 
-/** Render both the preview paths and the server's completed upload paths identically. */
-export function renderPasteParts(parts: readonly PastePart[], paths: readonly string[]): string {
+/** Keep each file occurrence a separate terminal paste event. */
+export function renderPasteSegments(parts: readonly PastePart[], paths: readonly string[]): string[] {
   return parts.map(part => {
     if (typeof part === "string") return part;
     const path = paths[part.file];
@@ -29,5 +29,10 @@ export function renderPasteParts(parts: readonly PastePart[], paths: readonly st
     if (part.format === "path") return quotePath(path);
     const label = (part.label ?? "").replace(/[\r\n]+/gu, " ").replace(/[\\[\]*_`<>&]/gu, "\\$&");
     return `${part.image ? "!" : ""}[${label}](${markdownPath(path)})`;
-  }).join("");
+  }).filter(text => text.length > 0);
+}
+
+/** Preview text and delivered segments concatenate to exactly the same content. */
+export function renderPasteParts(parts: readonly PastePart[], paths: readonly string[]): string {
+  return renderPasteSegments(parts, paths).join("");
 }

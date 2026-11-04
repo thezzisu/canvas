@@ -15,7 +15,7 @@ import { TerminalManager } from "./terminals.ts";
 import type { SourceResource } from "./runtimes.ts";
 import { closeWindow, createSpace, listResources, shellQuote } from "./runtimes.ts";
 import type { writeInboxFile } from "./inbox.ts";
-import { MAX_PASTE_PARTS, MAX_UPLOAD_BEGIN_BYTES, renderPasteParts, type PastePart } from "../shared/paste.ts";
+import { MAX_PASTE_PARTS, MAX_UPLOAD_BEGIN_BYTES, renderPasteParts, renderPasteSegments, type PastePart } from "../shared/paste.ts";
 
 class FakeSocket {
   readyState = 1;
@@ -150,8 +150,9 @@ test("confirmed rich paste inserts the complete rendered content only after the 
   writing.resolve();
   assert.equal(await pending, 204);
   const text = renderPasteParts(parts, [...f.files.keys()]);
-  assert.deepEqual(f.pasted, [{ sourceId: f.source.id, windowId: "window-a", text }]);
-  assert.deepEqual(f.pasteCalls, [[text]], 'mixed text and attachments remain one atomic paste');
+  const segments = renderPasteSegments(parts, [...f.files.keys()]);
+  assert.deepEqual(f.pasted, segments.map(text => ({ sourceId: f.source.id, windowId: "window-a", text })));
+  assert.deepEqual(f.pasteCalls, [segments], 'each text/file segment stays distinct in the completed atomic batch');
   assert(!text.endsWith("\n"), "completion must not submit the terminal input");
 });
 
@@ -487,9 +488,11 @@ test('real native terminal receives no upload paths until the whole batch succee
   assert.equal(await service.receive(rich[0]!, 'session', uploadRequest(Buffer.from('png'))), 204);
   assert.deepEqual(actualInput(), richBaseline, 'Rich text also waits until every attachment succeeds');
   assert.equal(await service.receive(rich[1]!, 'session', uploadRequest(Buffer.from('pdf'))), 204);
-  const richInserted = Buffer.from(paste(renderPasteParts(richParts, files.slice(-2))));
+  const richSegments = renderPasteSegments(richParts, files.slice(-2));
+  const richInserted = Buffer.from(richSegments.map(paste).join(""));
   await waitFor(() => actualInput().length === richBaseline.length + richInserted.length, 'Rich content reaches the original native input');
   assert.deepEqual(actualInput(), Buffer.concat([richBaseline, richInserted]));
+  if (bracketed) assert.equal(richInserted.toString().split("\x1b[200~").length - 1, richSegments.length, 'mixed file references have individual paste events');
   const failed = await start('failure', ['retained.txt', 'broken.txt']);
   assert.equal(await service.receive(failed[0]!, 'session', uploadRequest(Buffer.from('yes'))), 204);
   const beforeFailure = actualInput(), retained = files.at(-1)!;

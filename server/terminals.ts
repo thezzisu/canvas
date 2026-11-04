@@ -182,18 +182,18 @@ class LiveTerminal {
     return ws && ws === this.controller && ws.readyState === 1 && this.clients.has(ws) &&
       (!this.maximized || this.maximized.owner === ws) ? ws : undefined;
   }
-  captureFilePaste(ws: WebSocket): ((texts: readonly string[], signal: AbortSignal) => Promise<void>) | undefined {
+  captureFilePaste(ws: WebSocket): ((texts: readonly string[], signal: AbortSignal, separator?: "" | " ") => Promise<void>) | undefined {
     if (this.closed || this.controller !== ws || !this.clients.has(ws) ||
         ws.readyState !== 1 || (this.maximized && this.maximized.owner !== ws)) return;
     // A file drop authorizes this window at its start. Canvas navigation and
     // native pane selection do not redirect its eventual paste.
-    return async (texts: readonly string[], signal: AbortSignal) => {
+    return async (texts: readonly string[], signal: AbortSignal, separator = " ") => {
       await this.queue;
       signal.throwIfAborted();
       if (this.closed) throw new Error("目标窗口已关闭");
-      // Each file is one paste event for agents; spaces outside the brackets
-      // keep ordinary shell arguments separate. Commit the completed batch once.
-      this.proc.write(texts.map(text => this.emulator.modes.bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text).join(' '));
+      // Each segment is one paste event. Raw file lists need shell separators;
+      // mixed content already carries its exact whitespace. Commit in one write.
+      this.proc.write(texts.map(text => this.emulator.modes.bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text).join(separator));
     };
   }
   private presentation(ws: WebSocket) {

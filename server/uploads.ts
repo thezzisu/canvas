@@ -5,7 +5,7 @@ import type { Source } from "./state.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { listResources, shellQuote } from "./runtimes.ts";
 import { validateInboxFile, writeInboxFile, removeInboxFiles, type InboxFile } from "./inbox.ts";
-import { MAX_PASTE_PARTS, MAX_TERMINAL_PASTE_BYTES, MAX_UPLOAD_BEGIN_BYTES, renderPasteParts, type PastePart } from "../shared/paste.ts";
+import { MAX_PASTE_PARTS, MAX_TERMINAL_PASTE_BYTES, MAX_UPLOAD_BEGIN_BYTES, renderPasteSegments, type PastePart } from "../shared/paste.ts";
 
 const pastePartSchema = z.union([z.string(), z.object({
   file: z.number().int().nonnegative(),
@@ -25,7 +25,7 @@ interface Batch {
   files: InboxFile[]; parts?: PastePart[]; tokens: string[]; paths: string[]; next: number; busy: boolean;
   completedBytes: number; transferred: number; total: number;
   controller: AbortController; timer?: ReturnType<typeof setTimeout>; lastProgress: number;
-  paste(texts: readonly string[], signal: AbortSignal): Promise<void>;
+  paste(texts: readonly string[], signal: AbortSignal, separator?: "" | " "): Promise<void>;
 }
 
 export class UploadService {
@@ -159,9 +159,10 @@ export class UploadService {
         const native = await this.options.resources(batch.source);
         if (!native.spaces.some(space => space.windows.some(window => window.id === batch.windowId))) throw new Error("目标窗口已关闭");
         if (this.batches.get(batch.key) !== batch) return 409;
-        const texts = batch.parts ? [renderPasteParts(batch.parts, batch.paths)] : batch.paths.map(shellQuote);
-        if (texts.reduce((size, text) => size + Buffer.byteLength(text), texts.length - 1) > MAX_TERMINAL_PASTE_BYTES) throw new Error("粘贴内容过长");
-        await batch.paste(texts, batch.controller.signal);
+        const texts = batch.parts ? renderPasteSegments(batch.parts, batch.paths) : batch.paths.map(shellQuote);
+        const separator = batch.parts ? "" : " ";
+        if (texts.reduce((size, text) => size + Buffer.byteLength(text), separator.length * Math.max(0, texts.length - 1)) > MAX_TERMINAL_PASTE_BYTES) throw new Error("粘贴内容过长");
+        await batch.paste(texts, batch.controller.signal, separator);
         this.removeBatch(batch);
         this.progress(batch, "completed");
       } else this.progress(batch, "uploading");

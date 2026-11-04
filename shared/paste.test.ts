@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderPasteParts, type PastePart } from "./paste.ts";
+import { renderPasteParts, renderPasteSegments, type PastePart } from "./paste.ts";
 
 test("mixed paste keeps text, images, files and repeated references in their original positions", () => {
   const parts: PastePart[] = ["Compare **before**\n", { file: 0, format: "markdown", image: true, label: "before.png" },
@@ -26,4 +26,15 @@ test("path format quotes apostrophes and keeps filenames literal", () => {
     "cat '/uploaded/O'\\''Brien $price.txt'");
   assert.throws(() => renderPasteParts([{ file: 1, format: "path" }], ["/file"]), /Invalid paste file reference/u);
   assert.throws(() => renderPasteParts([{ file: 0, format: "markdown" }], ["/file\0"]), /Invalid paste file reference/u);
+});
+
+test("every attachment is a separate paste segment without changing text or whitespace", () => {
+  const parts: PastePart[] = ["", "Read\n", { file: 0, format: "path" }, " then ",
+    { file: 1, format: "markdown", image: true, label: "after.png" }, { file: 0, format: "path" }, "\n", ""];
+  const paths = ["/inbox/O'Brien image.png", "/inbox/after.png"];
+  const segments = renderPasteSegments(parts, paths);
+  assert.deepEqual(segments, ["Read\n", "'/inbox/O'\\''Brien image.png'", " then ",
+    "![after.png](/inbox/after.png)", "'/inbox/O'\\''Brien image.png'", "\n"]);
+  assert.equal(segments.join(""), renderPasteParts(parts, paths));
+  assert.equal(segments.filter(text => text.includes("/inbox/")).length, 3);
 });
