@@ -3,8 +3,8 @@ import test, { type TestContext } from 'node:test'
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import { tmpdir } from 'node:os'
+import { join, relative } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
 import { getRequestListener } from '@hono/node-server'
 import { AssetStore } from './assets.ts'
 import { createApp } from './app.ts'
@@ -80,6 +80,8 @@ test('HTML source preview serves the original directory through capture and reus
   assert.equal(f.captures.stop(preview.id, 'other'), false)
   assert.equal(f.captures.stop(preview.id, 'owner'), true)
   assert.equal((await fetch(preview.url)).status, 404)
+  const homeRelative = await f.previews.open({ ...f.origin, path: '~/' + relative(homedir(), f.file) }, 'owner', f.base)
+  assert.match(await (await fetch(homeRelative.url)).text(), /Original preview/u, 'scanner home paths resolve on the source machine')
 })
 
 test('preview requires server-side provenance, source identity and an authenticated ticket owner', async t => {

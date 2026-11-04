@@ -767,7 +767,7 @@ def serve_preview(directory, managed_path=None):
 
 
 def serve_file_preview(path):
-    target = Path(path).resolve(strict=True)
+    target = Path(path).expanduser().resolve(strict=True)
     if not target.is_file() or target.suffix.lower() not in (".html", ".htm"):
         raise CanvasError("HTML source file unavailable")
     serve_preview(target.parent, "/" + quote(target.name, safe=""))
