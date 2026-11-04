@@ -540,8 +540,8 @@ export class OpenDownloadService {
       "X-Content-Type-Options": "nosniff", "Cross-Origin-Resource-Policy": "same-origin",
       "Referrer-Policy": "no-referrer",
     };
-    // Inline content is classified from staged bytes, never from a helper URL
-    // or an untrusted filename alone. The ticket stays bound to its owner.
+    // Use the staged asset MIME; preview rendering belongs to the browser.
+    // The ticket stays bound to its owner.
     const previewHeaders = {
       ...headers,
       "Content-Type": file.asset.mime,

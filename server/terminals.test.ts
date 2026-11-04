@@ -108,11 +108,10 @@ async function fixture(t: TestContext, probe = false, quietProbe = false, comple
   return { root, bytes, manager, store, reads, source, target, shellResult, assertSize, ready, text, reportAgent, notify };
 }
 
-test('resize controls wait for queued output and complete frames retain their native dimensions', async t => {
+test('geometry controls cannot overtake queued terminal output', async t => {
   const f = await fixture(t); if (!f) return;
   const client = new Client();
   await f.manager.connect(f.source, f.target, client.socket); await f.ready();
-  await waitFor(() => messages(client).some(message => message.type === 'completion-frame'), 'initial frame');
   const terminal = (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!;
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
@@ -121,18 +120,11 @@ test('resize controls wait for queued output and complete frames retain their na
   try {
     client.command({ type: 'resize', cols: 83, rows: 27 });
     await terminal.geometry.drain();
-    assert(!client.received.slice(mark).some(value => typeof value === 'string' && JSON.parse(value).type === 'resize'),
-      'geometry must not overtake queued terminal output');
+    assert(!client.received.slice(mark).some(value => typeof value === 'string' && JSON.parse(value).type === 'resize'));
+    assert.notEqual(terminal.emulator.cols, 83, 'queued old output retains its original grid');
   } finally { release(); }
-  await waitFor(() => messages(client).some(message => message.type === 'completion-frame' && message.cols === 83 && message.rows === 27),
-    'quiet terminal must publish a complete frame after resizing');
-  let grid = { cols: 100, rows: 30 };
-  for (const value of client.received) {
-    if (typeof value !== 'string') continue;
-    const message = JSON.parse(value);
-    if (message.type === 'resize') grid = message;
-    if (message.type === 'completion-frame') assert.deepEqual({ cols: message.cols, rows: message.rows }, { cols: grid.cols, rows: grid.rows });
-  }
+  await waitFor(() => messages(client).some(message => message.type === 'resize' && message.cols === 83 && message.rows === 27), 'ordered resize');
+  assert.equal(terminal.emulator.cols, 83);
   client.close();
 });
 

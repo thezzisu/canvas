@@ -468,7 +468,7 @@ try:
  if not stat.S_ISREG(info.st_mode) or info.st_uid!=uid or info.st_size>8*1024*1024: raise SystemExit(0)
  with os.fdopen(os.open('canvas',flags,dir_fd=bin),'rb') as current:
   before=os.fstat(current.fileno())
-  if (before.st_dev,before.st_ino)!=(info.st_dev,info.st_ino): raise SystemExit(refusal)
+  if (before.st_dev,before.st_ino)!=(info.st_dev,info.st_ino): raise SystemExit(0)
   existing=current.read(8*1024*1024+1)
  if hashlib.sha256(existing).hexdigest()==expected: raise SystemExit(0)
  if not existing.startswith(marker): raise SystemExit(0)

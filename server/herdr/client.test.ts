@@ -4,7 +4,7 @@ import { createServer, type Socket } from 'node:net'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHerdrClient, type HerdrClientExit, type TerminalFrame } from './client.ts'
+import { createHerdrClient, type HerdrClientExit } from './client.ts'
 import { Writer } from './wire.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import type { NativeNotification } from '../../shared/notification.ts'
@@ -424,17 +424,6 @@ test('native metadata changes arrive independently of frames, deduplicate and re
   subscription.dispose(); snapshot(5, 'blocked')
   await until(() => late.at(-1)?.status === 'attention')
   assert.equal(updates.at(-1)?.status, 'idle')
-})
-
-test('queued frame dimensions describe the rendered surface rather than a later resize request', async t => {
-  const f = await fixture(t), client = await f.connect()
-  t.after(() => client.kill())
-  const frames: TerminalFrame[] = []
-  client.resize(40, 10)
-  client.onFrame(frame => frames.push(frame))
-  client.onData(() => {})
-  await until(() => frames.length > 0)
-  assert.deepEqual(frames.map(frame => ({ cols: frame.cols, rows: frame.rows })), [{ cols: 8, rows: 1 }])
 })
 
 test('completion companions identify idle work and frame fences follow the coherent output', async t => {

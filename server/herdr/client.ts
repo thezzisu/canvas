@@ -9,16 +9,15 @@ import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import type { NativeNotification } from '../../shared/notification.ts'
 import type { PaneAction, PaneContext, PanePoint } from '../../shared/pane-context.ts'
 
-export interface TerminalFrame extends WindowMetadata { cols: number; rows: number }
 export interface HerdrClientTransport {
   onData(listener: (data: string) => void): { dispose(): void }
   onPaneFocus(listener: (paneId: string | undefined) => void): { dispose(): void }
   onSnapshot(listener: () => void): { dispose(): void }
   completionSnapshot(): { windows: WindowMetadata[]; state: { bootId: string; revision: number } } | undefined
-  onFrame(listener: (metadata: TerminalFrame) => void): { dispose(): void }
+  onFrame(listener: (metadata: WindowMetadata) => void): { dispose(): void }
   onMetadata(listener: (metadata: WindowMetadata) => void): { dispose(): void }
   onNotification(listener: (notification: NativeNotification) => void): { dispose(): void }
-  completionFence(): Promise<TerminalFrame | undefined>
+  completionFence(): Promise<WindowMetadata | undefined>
   acknowledgeCompletion?(paneId: string, completion: import('../../shared/completion.ts').CompletionToken): Promise<void>
   onExit(listener: (event: HerdrClientExit) => void): { dispose(): void }
   content(): Promise<NativeContentPane[] | undefined>
@@ -64,7 +63,7 @@ class HerdrClient implements HerdrClientTransport {
   private readonly dataListeners = new Set<(data: string) => void>()
   private readonly paneFocusListeners = new Set<(paneId: string | undefined) => void>()
   private readonly snapshotListeners = new Set<() => void>()
-  private readonly frameListeners = new Set<(metadata: TerminalFrame) => void>()
+  private readonly frameListeners = new Set<(metadata: WindowMetadata) => void>()
   private completions?: { bootId: string; revision: number; values: Map<string, number> }
   private snapshotWindows?: WindowMetadata[]
   private completed = new Map<string, number>()
@@ -81,11 +80,11 @@ class HerdrClient implements HerdrClientTransport {
   private readonly input: HerdrInputRouter
   private snapshot?: ClientShellSnapshot
   private surface?: PaneSurfaceFrame
-  private renderedMetadata?: TerminalFrame
+  private renderedMetadata?: WindowMetadata
   private renderedContent?: { surface: PaneSurfaceFrame; snapshot: ClientShellSnapshot }
   private layout = { signature: '', token: '' }
   private selection?: ScreenSelection
-  private output: Array<{ data: string; frame?: TerminalFrame }> = []
+  private output: Array<{ data: string; frame?: WindowMetadata }> = []
   private outputBytes = 0
   private paused = false
   private flushing = false
@@ -324,8 +323,7 @@ class HerdrClient implements HerdrClientTransport {
       this.emit(INITIAL_MODES)
       this.resolve(this)
     }
-    this.renderedMetadata = this.metadata ? { ...this.metadata, cols: surface.frame.width, rows: surface.frame.height,
-      layout: this.layout.token, ...(surface.popup ? { panes: [] } : {}) } : undefined
+    this.renderedMetadata = this.metadata ? { ...this.metadata, layout: this.layout.token, ...(surface.popup ? { panes: [] } : {}) } : undefined
     this.emit(rendered, !this.pendingInputBytes && !this.inputFocusPending && this.input.focusSettled ? this.renderedMetadata : undefined)
     this.flushInput()
   }
@@ -362,7 +360,7 @@ class HerdrClient implements HerdrClientTransport {
     if (!this.initialized || data.length > 2 * 1024 * 1024 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data)) return
     this.emit(`\x1b]52;c;${data}\x07`)
   }
-  private emit(data: string, frame?: TerminalFrame) {
+  private emit(data: string, frame?: WindowMetadata) {
     if ((!data && !frame) || this.closed) return
     this.output.push({ data, frame }); this.outputBytes += Buffer.byteLength(data)
     if (this.outputBytes > MAX_BUFFER) { this.fail(new Error('Herdr display buffer exceeded its limit')); return }
@@ -398,7 +396,7 @@ class HerdrClient implements HerdrClientTransport {
     this.snapshotWindows ??= snapshot.tabs.map(tab => windowMetadata(snapshot, tab.tab_id, this.completed))
     return { windows: this.snapshotWindows, state: { bootId: snapshot.boot_id, revision: snapshot.revision } }
   }
-  onFrame(listener: (metadata: TerminalFrame) => void) {
+  onFrame(listener: (metadata: WindowMetadata) => void) {
     this.frameListeners.add(listener)
     return { dispose: () => { this.frameListeners.delete(listener) } }
   }
@@ -448,7 +446,7 @@ class HerdrClient implements HerdrClientTransport {
     // coherent frame held behind it once the existing input lane has drained.
     void this.input.settled().then(() => this.render()).catch(error => this.fail(error))
   }
-  async completionFence(): Promise<TerminalFrame | undefined> {
+  async completionFence(): Promise<WindowMetadata | undefined> {
     await this.inputFocusBarrier
     await this.input.settled()
     if (this.closed) return
