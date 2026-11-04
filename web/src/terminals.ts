@@ -564,6 +564,11 @@ async function connect(session: Session, probe: boolean) {
             session.paintRevision = (session.paintRevision || 0) + 1
             session.cardFit = undefined
           }
+          // A resize control frame is already ordered after the native geometry
+          // change. Quiet terminals may produce no completion-frame afterward;
+          // use the confirmed grid as the paint barrier without manufacturing a
+          // completion token or acknowledging a completed pane.
+          session.parsedGrid = { cols: message.cols, rows: message.rows }
           session.term.resize(message.cols, message.rows)
           present(session)
           schedulePresentation(session)
