@@ -16,7 +16,7 @@ import stat
 import subprocess
 import sys
 import time
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 
 class CanvasError(Exception):
@@ -619,7 +619,7 @@ def terminate(child):
 
 
 
-def capture_application(args, parser):
+def capture_application(args, parser, launch_path=None):
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if args.shell is not None:
         if command or not args.shell.strip():
@@ -699,7 +699,7 @@ def capture_application(args, parser):
                     status = probe_http(port, args.probe or "/", public, deadline)
                     ready = status is not None and (200 <= status < 300 if args.probe else 200 <= status < 500)
                 if ready and time.monotonic() < deadline:
-                    ready_url = bootstrap_file(args.bootstrap_file, public_url, port)
+                    ready_url = public_url.rstrip("/") + launch_path if launch_path is not None else bootstrap_file(args.bootstrap_file, public_url, port)
                     if ready_url is not False:
                         break
                 if time.monotonic() >= deadline:
@@ -728,10 +728,63 @@ def capture_application(args, parser):
             terminate(child)
 
 
+def serve_preview(directory):
+    from functools import partial
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    root = Path(directory).resolve(strict=True)
+    class Handler(SimpleHTTPRequestHandler):
+        def send_head(self):
+            target = Path(self.translate_path(self.path))
+            try:
+                if target.is_dir():
+                    target = next((target / name for name in ("index.html", "index.htm") if (target / name).is_file()), target)
+                if os.path.commonpath((str(root), str(target.resolve()))) != str(root):
+                    raise ValueError()
+            except (OSError, ValueError, RuntimeError):
+                self.send_error(404)
+                return None
+            return super().send_head()
+
+        def end_headers(self):
+            self.send_header("Cache-Control", "no-store")
+            super().end_headers()
+
+        def log_message(self, _format, *_args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", int(os.environ["PORT"])), partial(Handler, directory=str(root))) as server:
+        server.serve_forever()
+
+
+def preview_application(args, parser):
+    if args.path.lower().startswith(("http://", "https://")):
+        parser.error("preview requires a local directory or file, not a URL")
+    try:
+        target = Path(args.path).expanduser().resolve(strict=True)
+    except OSError:
+        raise CanvasError("preview path does not exist or cannot be read") from None
+    if target.is_dir():
+        root, launch_path = target, "/"
+    elif args.subcommand == "open" and target.is_file():
+        root, launch_path = target.parent, "/" + quote(target.name, safe="")
+    else:
+        parser.error("preview requires a directory; use canvas open --preview for a file")
+    options = argparse.Namespace(command=[sys.executable, str(Path(__file__).resolve()), "--serve-preview", str(root)],
+        shell=None, port=None, timeout=120, probe=launch_path, probe_command=None, ready="http", env=[],
+        bootstrap_file=None, title=target.name or str(target))
+    return capture_application(options, parser, launch_path)
+
+
 def main():
     global selected_runtime
+    if sys.argv[1:2] == ["--serve-preview"]:
+        if len(sys.argv) != 3:
+            return 2
+        serve_preview(sys.argv[2])
+        return 0
     if os.environ.get("CANVAS_HELPER_DIRECT") != "1":
-        installed = installed_canvas(sys.argv[1:2] in (["open"], ["capture"]))
+        installed = installed_canvas(sys.argv[1:2] in (["open"], ["capture"], ["preview"]))
         if installed:
             try:
                 os.execv(installed, [installed, *sys.argv[1:]])
@@ -744,7 +797,13 @@ def main():
         "Routing uses HERDR_SOCKET_PATH and HERDR_PANE_ID, or HC_TERMINAL_SOCKET and HC_TERMINAL_ID, from this process. "
         "A daemon must receive the originating pane's values for each invocation.")
     opened.add_argument("--runtime", choices=["core", "tui"], help="select the originating runtime in nested terminals")
+    opened.add_argument("--preview", action="store_true", help="serve a local file or directory in this terminal using capture")
     opened.add_argument("path", help="file, folder or HTTP(S) address")
+    preview = commands.add_parser("preview", help="serve a directory and preview its static website", epilog=
+        "Uses capture in a connected single-pane tab. Return keeps the server running; Stop app or Ctrl+C stops it. "
+        "Relative URLs work under the capture prefix; root-relative URLs require site support for that prefix.")
+    preview.add_argument("--runtime", choices=["core", "tui"], help="explicit identity for nested terminal environments")
+    preview.add_argument("path", nargs="?", default=".", help="directory to serve (default: current directory)")
     capture = commands.add_parser("capture", help="run a command and display its Web UI", epilog=
         "Capture requires a single-pane tab connected in Canvas. Split-pane tabs are not supported. "
         "PORT and CANVAS_CAPTURE_PORT are provided to the command. Command arguments are passed unchanged. "
@@ -766,6 +825,8 @@ def main():
     try:
         if arguments.subcommand == "capture":
             return capture_application(arguments, capture)
+        if arguments.subcommand == "preview" or arguments.preview:
+            return preview_application(arguments, preview if arguments.subcommand == "preview" else opened)
         if arguments.path.lower().startswith(("http://", "https://")):
             open_url(arguments.path)
         else:
@@ -777,7 +838,7 @@ def main():
         print("canvas: " + str(error), file=sys.stderr)
         return 1
     except (OSError, ValueError):
-        print("canvas: " + ("capture failed" if arguments.subcommand == "capture" else "file transfer failed"), file=sys.stderr)
+        print("canvas: " + ("capture failed" if arguments.subcommand == "capture" else "preview failed" if arguments.subcommand == "preview" or arguments.preview else "file transfer failed"), file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print("canvas: cancelled", file=sys.stderr)

@@ -89,7 +89,7 @@ canvas open http://localhost:5173/
 Canvas silently installs its single-file Python helper at `~/.local/bin/canvas`
 and refreshes marked Canvas helpers when their content differs. Keep that directory
 in PATH. Unrelated commands, user links and npm installations remain untouched.
-The helper handles `open` and `capture` itself, or delegates to a matching Canvas
+The helper handles `open`, `preview` and `capture` itself, or delegates to a matching Canvas
 npm helper later on PATH. An older npm installation does not prevent installing
 the standalone helper when its destination is available. Installing npm into the
 same prefix as a helper requires an explicit ownership handoff; Canvas never
@@ -104,6 +104,22 @@ Paste or drop files and images into a terminal to upload them to that machine's
 `~/.local/share/canvas/inbox`. Canvas inserts a quoted path without Enter. Directory
 opens offer VS Code Remote SSH. Loopback URLs refer to the terminal's machine;
 forwarded applications must support the provided subpath.
+
+## Preview a static site
+
+```sh
+canvas preview ./site
+canvas preview
+canvas open --preview ./site/page.html
+```
+
+`preview` serves the selected directory, or the current directory when omitted.
+`open --preview` also accepts a file and serves its containing directory so relative
+images, scripts and styles work. Ordinary `canvas open` keeps its file behavior.
+Preview uses capture in a connected single-pane tab, binds only loopback, and stays
+in the foreground. Return to terminal keeps the preview running; Stop app or
+Ctrl+C stops it. Refresh reads current files. Links outside the selected directory
+are not served. Root-relative site URLs require support for the capture subpath.
 
 ## Capture a terminal application (experimental)
 

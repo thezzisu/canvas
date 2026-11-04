@@ -64,8 +64,8 @@ async function fixture(t: TestContext, holdPrepare = false, rejection?: { stage:
     for (const socket of sockets) socket.destroy()
     await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true })
   })
-  const run = (args: string[], extra: NodeJS.ProcessEnv = {}) => {
-    const child = spawn('python3', [capture, 'capture', ...args], { cwd: root, env: { PATH: '/usr/bin:/bin', HOME: root, LANG: 'C.UTF-8',
+  const run = (args: string[], extra: NodeJS.ProcessEnv = {}, command = 'capture') => {
+    const child = spawn('python3', [capture, command, ...args], { cwd: root, env: { PATH: '/usr/bin:/bin', HOME: root, LANG: 'C.UTF-8',
       HC_TERMINAL_SOCKET: nativeSocket, HC_TERMINAL_ID: 't7', CANVAS_BRIDGE_REGISTRY_DIR: registry, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] })
     children.push(child)
     let stdout = '', stderr = ''
@@ -304,4 +304,57 @@ test('capture explains readiness rejection and still stops the command it owns',
     const port = Number(f.messages[0]!.port)
     await until(async () => { try { await fetch(`http://127.0.0.1:${port}/`); return false } catch { return true } }, 'rejected capture left its command running')
   })
+})
+
+
+test('preview serves the selected directory with the capture lifecycle and stays within its root', { timeout: 15000 }, async t => {
+  const f = await fixture(t), site = join(f.root, 'site with spaces'), nested = join(site, 'nested')
+  await mkdir(nested, { recursive: true })
+  await writeFile(join(site, 'index.html'), '<h1>Static preview</h1><a href="nested/">Nested</a>')
+  await writeFile(join(nested, 'asset.txt'), 'relative asset')
+  await writeFile(join(f.root, 'outside.txt'), 'outside root')
+  await symlink(join(f.root, 'outside.txt'), join(site, 'outside.txt'))
+  await mkdir(join(site, 'index-link')); await symlink(join(f.root, 'outside.txt'), join(site, 'index-link/index.html'))
+  const run = f.run([site], {}, 'preview')
+  await until(() => run.stderr().includes('Web view ready'), 'directory preview did not become ready')
+  const port = Number(f.messages[0]!.port), base = `http://127.0.0.1:${port}`
+  assert.equal(f.messages[0]!.title, 'site with spaces')
+  assert.deepEqual(f.messages[1], { action: 'ready', bootstrapUrl: f.publicUrl })
+  const home = await fetch(base + '/'); assert.equal(home.status, 200); assert.match(await home.text(), /Static preview/)
+  assert.equal(home.headers.get('cache-control'), 'no-store')
+  assert.equal(await (await fetch(base + '/nested/asset.txt')).text(), 'relative asset')
+  assert.equal((await fetch(base + '/nested')).status, 200, 'standard directory redirect is retained')
+  for (const route of ['/outside.txt', '/index-link/', '/%2e%2e/outside.txt']) assert.equal((await fetch(base + route)).status, 404, route)
+  await writeFile(join(site, 'index.html'), '<h1>Changed preview</h1>')
+  assert.match(await (await fetch(base + '/')).text(), /Changed preview/)
+  f.peer()!.write(JSON.stringify({ action: 'stop' }) + '\n'); assert.equal(await run.exit, 0)
+  await until(async () => { try { await fetch(base); return false } catch { return true } }, 'preview server remains after Stop')
+})
+
+test('explicit open preview selects an encoded filename while ordinary open is unchanged', { timeout: 15000 }, async t => {
+  const f = await fixture(t), filename = "page #1 (中文) O'Brien.html"
+  await writeFile(join(f.root, filename), '<h1>Specific file</h1>')
+  const run = f.run(['--preview', filename], {}, 'open')
+  await until(() => run.stderr().includes('Web view ready'), 'file preview did not become ready')
+  const encoded = encodeURIComponent(filename).replace(/[!'()*]/g, value => '%' + value.charCodeAt(0).toString(16).toUpperCase())
+  assert.equal(f.messages[1]!.bootstrapUrl, f.publicUrl + encoded)
+  assert.match(await (await fetch(`http://127.0.0.1:${f.messages[0]!.port}/${encoded}`)).text(), /Specific file/)
+  f.peer()!.write(JSON.stringify({ action: 'stop' }) + '\n'); assert.equal(await run.exit, 0)
+})
+
+test('preview defaults to the current directory and rejects invalid inputs before capture preparation', { timeout: 15000 }, async t => {
+  const f = await fixture(t)
+  await writeFile(join(f.root, 'index.html'), 'current directory')
+  for (const [command, args, message] of [
+    ['preview', ['missing'], /does not exist/],
+    ['preview', ['index.html'], /requires a directory/],
+    ['open', ['--preview', 'https://example.test/page.html'], /not a URL/],
+  ] as const) {
+    const run = f.run([...args], {}, command); assert.notEqual(await run.exit, 0); assert.match(run.stderr(), message)
+  }
+  assert.equal(f.messages.length, 0, 'invalid preview inputs cannot start a capture or child server')
+  const run = f.run([], {}, 'preview')
+  await until(() => run.stderr().includes('Web view ready'), 'default directory preview did not become ready')
+  assert.equal(await (await fetch(`http://127.0.0.1:${f.messages[0]!.port}/`)).text(), 'current directory')
+  f.peer()!.write(JSON.stringify({ action: 'stop' }) + '\n'); assert.equal(await run.exit, 0)
 })

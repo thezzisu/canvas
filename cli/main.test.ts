@@ -54,3 +54,13 @@ test('capture delegates to the same standalone helper without requiring a siblin
   assert.equal(missing.status, 1)
   assert.match(missing.stderr, /connected herdr pane/u)
 })
+
+
+test('preview forwards to the bundled helper and documents explicit HTML preview', () => {
+  const help = run(['preview', '--help'])
+  assert.equal(help.status, 0); assert.match(help.stdout, /directory/); assert.match(help.stdout, /single-pane/)
+  const opened = run(['open', '--help'])
+  assert.match(opened.stdout, /--preview/)
+  const missing = run(['preview'])
+  assert.equal(missing.status, 1); assert.match(missing.stderr, /connected herdr pane/)
+})
