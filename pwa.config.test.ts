@@ -18,7 +18,7 @@ test('PWA precaches only the static shell and icons, with no API or font precach
 
 test('PWA lazily caches only same-origin hashed font responses, with bounded storage', () => {
   const rules = pwaOptions.workbox?.runtimeCaching
-  assert.equal(rules?.length, 1)
+  assert.equal(rules?.length, 2)
   const rule = rules![0]!
   assert.equal(rule.handler, 'CacheFirst')
   assert.deepEqual(rule.options?.cacheableResponse, { statuses: [200] })
@@ -44,4 +44,16 @@ test('install manifest uses neutral start URL and real 192, 512, maskable and Ap
     assert.equal(bytes.readUInt32BE(16), width); assert.equal(bytes.readUInt32BE(20), height)
   }
   assert(manifest.icons!.some(icon => icon.purpose === 'maskable'))
+})
+
+test('preview code is cached on demand without caching arbitrary scripts or private captures', () => {
+  const rule = pwaOptions.workbox!.runtimeCaching![1]!
+  assert.equal(rule.handler, 'CacheFirst')
+  assert.equal(rule.options?.expiration?.maxEntries, 128)
+  const matches = rule.urlPattern as (input: { request: Pick<Request, 'destination'>; url: URL; sameOrigin: boolean }) => boolean
+  for (const destination of ['worker', 'script'] as const)
+    assert(matches({ request: { destination }, url: new URL('https://canvas.test/assets/code-preview/html-A1b2C3d4.js'), sameOrigin: true }))
+  for (const pathname of ['/api/capture/id/assets/code-preview/html-A1b2C3d4.js', '/assets/html-A1b2C3d4.js', '/assets/code-preview/html.js'])
+    assert.equal(matches({ request: { destination: 'script' }, url: new URL(pathname, 'https://canvas.test'), sameOrigin: true }), false)
+  assert.equal(matches({ request: { destination: 'script' }, url: new URL('https://other.test/assets/code-preview/html-A1b2C3d4.js'), sameOrigin: false }), false)
 })

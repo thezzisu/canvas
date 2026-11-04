@@ -5,6 +5,8 @@ export interface ReadingPosition { x: number; y: number }
 export interface FileView {
   mode: 'source' | 'rendered'
   wrap: boolean
+  formatted: boolean
+  highlighted: boolean
   source: ReadingPosition
   rendered: ReadingPosition
 }
@@ -18,6 +20,7 @@ const position = (value: unknown): ReadingPosition => {
 export function fileView(value: unknown, markdown: boolean): FileView {
   const saved = value as Partial<FileView> | undefined
   return { mode: markdown && saved?.mode !== 'source' ? 'rendered' : 'source', wrap: saved?.wrap === true,
+    formatted: saved?.formatted === true, highlighted: saved?.highlighted === true,
     source: position(saved?.source), rendered: position(saved?.rendered) }
 }
 
@@ -35,6 +38,8 @@ export function useFileView(instance: string, canvas: string, node: string, mark
   return {
     rendered: computed({ get: () => view.value.mode === 'rendered', set: (value: boolean) => update({ ...view.value, mode: markdown && value ? 'rendered' : 'source' }) }),
     wrap: computed({ get: () => view.value.wrap, set: (value: boolean) => update({ ...view.value, wrap: value }) }),
+    formatted: computed({ get: () => view.value.formatted, set: (value: boolean) => update({ ...view.value, formatted: value }) }),
+    highlighted: computed({ get: () => view.value.highlighted, set: (value: boolean) => update({ ...view.value, highlighted: value }) }),
     reading: computed(() => view.value[view.value.mode]),
     remember(value: ReadingPosition) { update({ ...view.value, [view.value.mode]: position(value) }) },
   }

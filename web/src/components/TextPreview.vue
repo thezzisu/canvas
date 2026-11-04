@@ -6,14 +6,39 @@ import { MarkdownDocument } from '@comark/vue'
 import type { MarkdownDocument as MarkdownTree } from 'comark'
 import { ProseA, ProseBlockquote, ProseCode, ProseEm, ProseH1, ProseH2, ProseH3, ProseH4, ProseHr,
   ProseImg, ProseLi, ProseOl, ProseP, ProsePre, ProseStrong, ProseTable, ProseTbody, ProseTd, ProseTh, ProseThead, ProseTr, ProseUl } from '@nuxt/ui/components/prose'
+import { useToast } from '@nuxt/ui/composables/useToast'
+import { processCodePreview, type CodePreviewResult } from '../code-preview'
 import { isMarkdownFile, parseFileMarkdown } from '../markdown'
 import type { ReadingPosition } from '../file-view'
 
-const props = withDefaults(defineProps<{ text: string; filename: string; rendered?: boolean; wrap?: boolean; reading?: ReadingPosition; readOnly?: boolean }>(), { rendered: true, wrap: false, readOnly: false })
-const emit = defineEmits<{ reading: [position: ReadingPosition] }>()
+const props = withDefaults(defineProps<{ text: string; filename: string; rendered?: boolean; wrap?: boolean; formatted?: boolean; highlighted?: boolean; reading?: ReadingPosition; readOnly?: boolean }>(), { rendered: true, wrap: false, formatted: false, highlighted: false, readOnly: false })
+const emit = defineEmits<{ reading: [position: ReadingPosition]; 'update:formatted': [value: boolean]; 'update:highlighted': [value: boolean] }>()
 const { t } = useI18n()
 const markdown = computed(() => isMarkdownFile(props.filename))
 const renderMarkdown = computed(() => props.rendered && markdown.value)
+const toast = useToast()
+const code = shallowRef<CodePreviewResult>()
+const processing = ref(false)
+watch([() => props.text, () => props.filename, () => props.formatted, () => props.highlighted, renderMarkdown], async (value, previous, onCleanup) => {
+  const controller = new AbortController()
+  onCleanup(() => controller.abort())
+  processing.value = false
+  if (value[0] !== previous?.[0] || value[1] !== previous?.[1]) code.value = undefined
+  if (renderMarkdown.value || !props.formatted && !props.highlighted) { code.value = undefined; return }
+  processing.value = true
+  try {
+    const result = await processCodePreview({ text: props.text, filename: props.filename, format: props.formatted, highlight: props.highlighted }, controller.signal)
+    if (controller.signal.aborted) return
+    code.value = result
+    if (result.formatError) emit('update:formatted', false)
+    if (result.highlightError) emit('update:highlighted', false)
+    if (result.formatError || result.highlightError) toast.add({ title: t(result.formatError ? 'panels.preview.formatFailed' : 'panels.preview.highlightFailed'), color: 'warning' })
+  } catch {
+    if (controller.signal.aborted) return
+    emit('update:formatted', false); emit('update:highlighted', false)
+    toast.add({ title: t(props.formatted ? 'panels.preview.formatFailed' : 'panels.preview.highlightFailed'), color: 'warning' })
+  } finally { if (!controller.signal.aborted) processing.value = false }
+}, { immediate: true })
 const document = shallowRef<MarkdownTree>()
 const failed = ref(false), loading = ref(false)
 const readingElement = ref<HTMLElement>(), readingContent = ref<HTMLElement>()
@@ -52,7 +77,7 @@ useEventListener(readingElement, 'keydown', readingIntent)
 useEventListener(readingElement, 'scroll', rememberReading, { passive: true })
 useEventListener(readingElement, 'scrollend', () => { intentUntil = 0 })
 useEventListener(window, ['pointerup', 'pointercancel', 'blur'], () => { pointerDown = false })
-watch([readingElement, readingContent, renderMarkdown, () => props.wrap, () => props.text, loading], restoreReading, { flush: 'post' })
+watch([readingElement, readingContent, renderMarkdown, () => props.wrap, () => props.text, loading, code], restoreReading, { flush: 'post' })
 onBeforeUnmount(() => { cancelAnimationFrame(restoreFrame); pointerDown = false; intentUntil = 0 })
 const prose = { ProseA, ProseBlockquote, ProseCode, ProseEm, ProseH1, ProseH2, ProseH3, ProseH4, ProseHr,
   ProseImg, ProseLi, ProseOl, ProseP, ProsePre, ProseStrong, ProseTable, ProseTbody, ProseTd, ProseTh, ProseThead, ProseTr, ProseUl }
@@ -69,8 +94,8 @@ watch([() => props.text, renderMarkdown], async () => {
 </script>
 
 <template>
-  <div class="text-preview" :data-text-mode="renderMarkdown ? 'rendered' : 'source'">
-    <pre v-if="!renderMarkdown" ref="readingElement" class="text-preview-source" :class="{ 'text-preview-wrap': wrap }" :aria-label="filename" tabindex="0"><span ref="readingContent" class="text-preview-lines">{{ text }}</span></pre>
+  <div class="text-preview" :aria-busy="processing || loading" :data-text-mode="renderMarkdown ? 'rendered' : 'source'">
+    <pre v-if="!renderMarkdown" ref="readingElement" class="text-preview-source" :class="{ 'text-preview-wrap': wrap }" :aria-label="filename" tabindex="0"><span ref="readingContent" class="text-preview-lines"><template v-if="code?.tokens"><span v-for="(token, index) in code.tokens" :key="index" :style="{ color: token.color }">{{ token.text }}</span></template><template v-else>{{ code?.text ?? text }}</template></span></pre>
     <div v-else ref="readingElement" class="text-preview-markdown" :aria-label="filename" tabindex="0">
       <div ref="readingContent" class="text-preview-document">
       <div v-if="loading" class="text-preview-status" role="status"><span class="spinner" />{{ t('common.loading') }}</div>

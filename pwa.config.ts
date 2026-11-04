@@ -31,7 +31,7 @@ export const pwaOptions: Partial<VitePWAOptions> = {
     cleanupOutdatedCaches: true,
     skipWaiting: false,
     clientsClaim: false,
-    // Cache only requested, versioned public fonts. No font precache or API cache.
+    // Cache only requested, versioned public resources. No private files or API cache.
     runtimeCaching: [{
       urlPattern: ({ request, url, sameOrigin }) => sameOrigin && request.destination === 'font' && /^\/assets\/[^/]+-[\w-]{8,}\.woff2$/.test(url.pathname),
       handler: 'CacheFirst',
@@ -39,6 +39,14 @@ export const pwaOptions: Partial<VitePWAOptions> = {
         cacheName: 'canvas-content-fonts',
         cacheableResponse: { statuses: [200] },
         expiration: { maxEntries: 20, maxAgeSeconds: 365 * 24 * 60 * 60, purgeOnQuotaError: true },
+      },
+    }, {
+      urlPattern: ({ request, url, sameOrigin }) => sameOrigin && ['script', 'worker'].includes(request.destination) && /^\/assets\/code-preview\/[^/]+-[\w-]{8,}\.js$/.test(url.pathname),
+      handler: 'CacheFirst',
+      options: {
+        cacheName: 'canvas-code-preview',
+        cacheableResponse: { statuses: [200] },
+        expiration: { maxEntries: 128, maxAgeSeconds: 365 * 24 * 60 * 60, purgeOnQuotaError: true },
       },
     }],
   },

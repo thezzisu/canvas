@@ -10,6 +10,7 @@ export interface DownloadPreview {
   filename: string
   size: number
   mime?: string
+  sourcePreview?: boolean
   preview: Exclude<FilePreview, 'file'>
   url: string
 }
@@ -85,7 +86,7 @@ export function receiveDownload(socket: WebSocket, message: Record<string, unkno
   if (!firstMessage(socket, message.type, message.id)) return true
   if (Number.isSafeInteger(message.size) && (message.size as number) >= 0) {
     void presentDownload({ id: message.id, filename: message.filename,
-      size: message.size as number, mime: typeof message.mime === 'string' ? message.mime : undefined, url: path }).catch(reportDownloadError)
+      size: message.size as number, mime: typeof message.mime === 'string' ? message.mime : undefined, sourcePreview: message.sourcePreview === true, url: path }).catch(reportDownloadError)
     return true
   }
   void downloadMedia(url.href, message.filename).catch(reportDownloadError)

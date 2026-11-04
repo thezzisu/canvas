@@ -14,6 +14,7 @@ export default {
   },
   directory: { title: 'Continue locally', openVSCode: 'Open in VS Code' },
   preview: {
+    format: 'Format code', highlight: 'Syntax highlighting', site: 'Preview original site in a new tab', noSource: 'Original directory unavailable; open this file again from Canvas CLI', formatFailed: 'This file could not be formatted.', highlightFailed: 'Syntax highlighting is unavailable for this content.', siteStarting: 'Starting site preview…', siteFailed: 'Could not start site preview.', popupBlocked: 'Allow pop-ups to open the site preview.',
     source: 'Show source', rendered: 'Render Markdown', wrap: 'Wrap text',
     close: 'Close preview', remaining: '{count} more file to preview | {count} more files to preview', fullscreen: 'Fullscreen preview', exitFullscreen: 'Exit fullscreen preview',
     unavailable: 'Unable to preview this file', mediaUnavailable: 'This browser cannot play this file.', pdfUnavailable: 'This browser cannot preview PDFs', truncated: 'Showing the first 1 MiB',

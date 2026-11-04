@@ -12,6 +12,9 @@ const buildInfo = readBuildInfo()
 
 export default defineConfig({
   root: 'web',
+  worker: { format: 'es', rolldownOptions: { output: {
+    entryFileNames: 'assets/code-preview/[name]-[hash].js', chunkFileNames: 'assets/code-preview/[name]-[hash].js',
+  } } },
   define: { __CANVAS_FRONTEND_BUILD__: JSON.stringify(buildInfo) },
   plugins: [{ name: 'canvas-build-info', generateBundle() {
     this.emitFile({ type: 'asset', fileName: 'build-info.json', source: JSON.stringify(buildInfo) + '\n' })

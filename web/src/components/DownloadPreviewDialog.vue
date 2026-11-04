@@ -17,6 +17,8 @@ import { reportDownloadError } from '../downloads'
 import { apiFetch } from '../api'
 import { useMobileViewport } from '../viewport'
 import { cutoutActiveKey, cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
+import { textCapabilities } from '../code-preview'
+import { useSourcePreview } from '../source-preview'
 import { isMarkdownFile } from '../markdown'
 import { useMobileLayout } from '../mobile-layout'
 import { usePointerDismiss } from '../pointer-dismiss'
@@ -31,7 +33,11 @@ const loading = ref(false)
 const error = ref<string | Error>('')
 const truncated = ref(false)
 const expanded = ref(false)
-const rendered = ref(true), wrap = ref(false)
+const rendered = ref(true), wrap = ref(false), formatted = ref(false), highlighted = ref(false)
+const sitePreview = useSourcePreview()
+const previewBusy = sitePreview.busy
+function previewSite() { const item = downloadPreview.value; if (item?.sourcePreview) void sitePreview.open(item.url, item.filename) }
+const capabilities = computed(() => textCapabilities(downloadPreview.value?.filename || ''))
 const menuOpen = ref(false), menuTrigger = ref<InstanceType<typeof UButton>>()
 const menuDismiss = usePointerDismiss(menuOpen, menuTrigger)
 const header = ref<HTMLElement>()
@@ -46,8 +52,13 @@ const mobileHeader = computed(() => mobile.value || viewport.value.width <= 600)
 const compact = useCompactHeader(header, () => cutoutActive.value && mobileHeader.value && expanded.value)
 function download() { const preview = downloadPreview.value; if (preview) void downloadMedia(preview.url, preview.filename).catch(reportDownloadError) }
 const menu = computed<DropdownMenuItem[]>(() => [
-  ...(markdown.value && compact.value ? [{ label: t('panels.preview.source'), type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
-  ...(downloadPreview.value?.preview === 'text' && (!markdown.value || !rendered.value) ? [{ label: t('panels.preview.wrap'), type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } }] : []),
+  ...(markdown.value ? [{ label: t('panels.preview.source'), icon: 'i-lucide-code', type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
+  ...(downloadPreview.value?.preview === 'text' && (!markdown.value || !rendered.value) ? [
+    ...(capabilities.value.format ? [{ label: t('panels.preview.format'), icon: 'i-lucide-list-tree', type: 'checkbox' as const, checked: formatted.value, onUpdateChecked: (checked: boolean) => { formatted.value = checked } }] : []),
+    ...(capabilities.value.highlight ? [{ label: t('panels.preview.highlight'), icon: 'i-lucide-palette', type: 'checkbox' as const, checked: highlighted.value, onUpdateChecked: (checked: boolean) => { highlighted.value = checked } }] : []),
+    { label: t('panels.preview.wrap'), icon: 'i-lucide-wrap-text', type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } },
+  ] : []),
+  ...(capabilities.value.html ? [{ label: t('panels.preview.site'), icon: 'i-lucide-square-arrow-out-up-right', description: !downloadPreview.value?.sourcePreview ? t('panels.preview.noSource') : undefined, disabled: !downloadPreview.value?.sourcePreview || previewBusy.value, onSelect: previewSite }] : []),
   { label: t('panels.file.download'), onSelect: download },
   { label: t(expanded.value ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen'), onSelect: () => { expanded.value = !expanded.value } },
   ...(expanded.value ? [{ label: t('panels.preview.close'), onSelect: dismissDownloadPreview }] : []),
@@ -96,7 +107,7 @@ watch(downloadPreview, preview => {
   request?.abort(); request = undefined
   text.value = ''; error.value = ''; truncated.value = false
   expanded.value = false; imageSize.value = undefined
-  rendered.value = true; wrap.value = false
+  rendered.value = true; wrap.value = false; formatted.value = false; highlighted.value = false
   loading.value = preview?.preview === 'image' || preview?.preview === 'video'
   if (preview?.preview === 'text') void loadText()
 }, { immediate: true })
@@ -133,7 +144,7 @@ onBeforeUnmount(() => request?.abort())
         <span v-if="preparing" class="download-preview-pending" role="status"><span class="spinner" />{{ t('common.loading') }}</span>
         <DialogTitle class="download-preview-title" :class="{ 'cutout-title': mobileHeader && expanded, 'sr-only': preparing }">{{ downloadPreview.filename }}<span v-if="downloadPreviewCount > 1" class="download-preview-count" :aria-label="t('panels.preview.remaining', downloadPreviewCount - 1)"> +{{ n(downloadPreviewCount - 1) }}</span></DialogTitle>
         <div class="download-preview-actions" :class="{ 'cutout-actions': mobileHeader && expanded }">
-          <TextPreviewActions v-if="downloadPreview.preview === 'text' && !loading && !error && (!mobileHeader || markdown && !compact)" :filename="downloadPreview.filename" v-model:rendered="rendered" v-model:wrap="wrap" :hide-wrap="mobileHeader" />
+          <TextPreviewActions v-if="downloadPreview.preview === 'text' && !loading && !error && !mobileHeader" :filename="downloadPreview.filename" v-model:rendered="rendered" v-model:wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :source-preview="downloadPreview.sourcePreview" :preview-busy="previewBusy" @preview="previewSite" />
           <UButton v-if="!preparing && (!mobileHeader || !markdown && !compact)" type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-download" :aria-label="t('panels.file.download')" :title="t('panels.file.download')" @click="download"><Icon name="download" :size="16" /></UButton>
           <UDropdownMenu v-if="mobileHeader && !preparing" v-model:open="menuOpen" :modal="false" :items="menu" :portal="portal || false" :content="{ align: 'end', ...menuDismiss }" :ui="{ content: 'card-action-menu download-preview-menu z-[90] min-w-[160px]' }">
             <UButton ref="menuTrigger" type="button" color="neutral" variant="ghost" class="download-preview-button" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></UButton>
@@ -155,7 +166,7 @@ onBeforeUnmount(() => request?.abort())
           <div v-else class="download-preview-status">{{ t('panels.preview.pdfUnavailable') }}</div>
         </template>
         <template v-else-if="downloadPreview.preview === 'text' && !loading && !error">
-          <TextPreview :text="text" :filename="downloadPreview.filename" :rendered="rendered" :wrap="wrap" />
+          <TextPreview :text="text" :filename="downloadPreview.filename" :rendered="rendered" :wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" />
           <div v-if="truncated" class="download-preview-truncated">{{ t('panels.preview.truncated') }}</div>
         </template>
       </div>

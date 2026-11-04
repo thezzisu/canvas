@@ -10,12 +10,12 @@ function storage(): Storage {
     removeItem(key) { values.delete(key) }, clear() { values.clear() } }
 }
 
-test('file view defaults and stored values contain only mode, wrap and bounded numeric positions', () => {
-  assert.deepEqual(fileView(undefined, true), { mode: 'rendered', wrap: false, source: { x: 0, y: 0 }, rendered: { x: 0, y: 0 } })
+test('file view defaults and stored values contain only view preferences and bounded numeric positions', () => {
+  assert.deepEqual(fileView(undefined, true), { mode: 'rendered', wrap: false, formatted: false, highlighted: false, source: { x: 0, y: 0 }, rendered: { x: 0, y: 0 } })
   assert.equal(fileView(undefined, false).mode, 'source')
   const clean = fileView({ mode: 'source', wrap: true, source: { x: -1, y: Infinity }, rendered: { x: 12.5, y: 30 },
     text: 'private content', url: 'https://private.example', token: 'DUMMY_TOKEN' }, true)
-  assert.deepEqual(clean, { mode: 'source', wrap: true, source: { x: 0, y: 0 }, rendered: { x: 12.5, y: 30 } })
+  assert.deepEqual(clean, { mode: 'source', wrap: true, formatted: false, highlighted: false, source: { x: 0, y: 0 }, rendered: { x: 12.5, y: 30 } })
   assert.equal(fileView({ mode: 'rendered' }, false).mode, 'source')
   assert.deepEqual(fileView({ source: { x: 1e20, y: NaN } }, true).source, { x: 0, y: 0 })
 })
@@ -27,6 +27,7 @@ test('card and fullscreen mounts restore separate source/rendered reading positi
   view.remember({ x: 0, y: 430 })
   view.rendered.value = false
   view.wrap.value = true
+  view.formatted.value = true; view.highlighted.value = true
   view.remember({ x: 80, y: 920 })
   view.rendered.value = true
   assert.deepEqual(view.reading.value, { x: 0, y: 430 })
@@ -34,6 +35,7 @@ test('card and fullscreen mounts restore separate source/rendered reading positi
   scope.stop()
   const reopened = effectScope(), restored = reopened.run(() => useFileView('instance', 'canvas', 'node', true, () => true, store))!
   assert.equal(restored.rendered.value, false); assert.equal(restored.wrap.value, true)
+  assert.equal(restored.formatted.value, true); assert.equal(restored.highlighted.value, true)
   assert.deepEqual(restored.reading.value, { x: 80, y: 920 })
   restored.rendered.value = true
   assert.deepEqual(restored.reading.value, { x: 0, y: 430 })

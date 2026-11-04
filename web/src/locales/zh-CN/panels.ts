@@ -14,6 +14,7 @@ export default {
   },
   directory: { title: '在本地继续', openVSCode: '在 VS Code 打开' },
   preview: {
+    format: '格式化代码', highlight: '语法高亮', site: '在新标签页预览原站点', noSource: '无法获取原目录，请通过 Canvas CLI 重新打开此文件', formatFailed: '无法格式化此文件。', highlightFailed: '此内容暂无法进行语法高亮。', siteStarting: '正在启动站点预览…', siteFailed: '无法启动站点预览。', popupBlocked: '请允许弹出窗口以打开站点预览。',
     source: '显示源码', rendered: '渲染 Markdown', wrap: '自动换行',
     close: '关闭预览', remaining: '还有 {count} 个文件待预览', fullscreen: '全屏预览', exitFullscreen: '退出全屏预览',
     unavailable: '无法预览此文件', mediaUnavailable: '当前浏览器无法播放此文件。', pdfUnavailable: '浏览器不支持 PDF 预览', truncated: '已显示前 1 MiB',

@@ -10,6 +10,9 @@ import CardPreview from './CardPreview.vue'
 import { BinaryFileError, readTextPreview } from '../text-preview'
 import { filePreview } from '../file-preview'
 import TextPreview from './TextPreview.vue'
+import TextPreviewActions from './TextPreviewActions.vue'
+import { textCapabilities } from '../code-preview'
+import { useSourcePreview } from '../source-preview'
 import MediaPreview from './MediaPreview.vue'
 import ImagePreview from './ImagePreview.vue'
 import ContentZoom from './ContentZoom.vue'
@@ -36,10 +39,14 @@ watch(() => props.data.assetId, () => { binary.value = false })
 const mobilePreview = computed(() => !!props.data.mobile && !props.data.focus)
 const zoom = useContentZoom(() => props.data.zoomKey)
 const header = ref<HTMLElement>()
-const headerCompact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined), undefined, () => preview.value === 'text' ? 6 : 5)
+const headerCompact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined), undefined, () => preview.value === 'text' ? 10 : 5)
 const compact = computed(() => !!props.data.mobile && props.data.focus && headerCompact.value)
 const markdown = computed(() => preview.value === 'text' && isMarkdownFile(props.data.asset.filename))
-const { rendered, wrap, reading, remember } = useFileView(props.data.instanceId, props.data.canvasId, props.id, markdown.value, props.data.canPersistView)
+const { rendered, wrap, formatted, highlighted, reading, remember } = useFileView(props.data.instanceId, props.data.canvasId, props.id, markdown.value, props.data.canPersistView)
+const capabilities = computed(() => textCapabilities(props.data.asset.filename))
+const sitePreview = useSourcePreview()
+const previewBusy = sitePreview.busy
+function previewSite() { if (props.data.asset.sourcePreview) void sitePreview.open(path.value, props.data.asset.filename) }
 const menu = computed<DropdownMenuItem[]>(() => [
   ...(compact.value ? [
     ...(preview.value === 'text' ? contentZoomMenu(zoom) : []),
@@ -47,7 +54,12 @@ const menu = computed<DropdownMenuItem[]>(() => [
     { label: t('app.addToOtherCanvas'), icon: 'i-lucide-layers', onSelect: () => props.data.onAction?.('add', props.id) },
   ] : []),
   ...(markdown.value ? [{ label: t('panels.preview.source'), icon: 'i-lucide-code', type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
-  ...(preview.value === 'text' && (!markdown.value || !rendered.value) ? [{ label: t('panels.preview.wrap'), icon: 'i-lucide-wrap-text', type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } }] : []),
+  ...(preview.value === 'text' && (!markdown.value || !rendered.value) ? [
+    ...(capabilities.value.format ? [{ label: t('panels.preview.format'), icon: 'i-lucide-list-tree', type: 'checkbox' as const, checked: formatted.value, onUpdateChecked: (checked: boolean) => { formatted.value = checked } }] : []),
+    ...(capabilities.value.highlight ? [{ label: t('panels.preview.highlight'), icon: 'i-lucide-palette', type: 'checkbox' as const, checked: highlighted.value, onUpdateChecked: (checked: boolean) => { highlighted.value = checked } }] : []),
+    { label: t('panels.preview.wrap'), icon: 'i-lucide-wrap-text', type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } },
+  ] : []),
+  ...(preview.value === 'text' && capabilities.value.html ? [{ label: t('panels.preview.site'), icon: 'i-lucide-square-arrow-out-up-right', description: !props.data.asset.sourcePreview ? t('panels.preview.noSource') : undefined, disabled: !props.data.asset.sourcePreview || previewBusy.value, onSelect: previewSite }] : []),
   { label: t('panels.file.download'), icon: 'i-lucide-download', onSelect: download },
   { label: t('common.settings'), icon: 'i-lucide-settings', onSelect: () => props.data.onAction?.('settings', props.id) },
 ])
@@ -115,6 +127,7 @@ const size = computed(() => {
       <span class="file-title" :class="{ 'cutout-title': data.focus }" :title="`${data.asset.filename} · ${size}`">{{ data.asset.filename }}</span>
       <CardHeaderActions class="file-actions" :class="{ 'cutout-actions': data.mobile && data.focus }" :items="menu" :expanded="!!data.focus" removable :compact="compact" :add-label="t('app.addToOtherCanvas')" :remove-label="t('panels.file.remove')"
         @add="data.onAction?.('add', id)" @toggle="data.onAction?.(data.focus ? 'unfocus' : 'focus', id)" @remove="data.onRemove(id)">
+        <TextPreviewActions v-if="data.focus && preview === 'text'" :filename="data.asset.filename" v-model:rendered="rendered" v-model:wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :source-preview="data.asset.sourcePreview" :preview-busy="previewBusy" @preview="previewSite" />
         <ContentZoom v-if="data.focus && preview === 'text'" v-model="zoom" :mobile="data.mobile" :label="t('common.contentZoom')" />
         <button type="button" class="card-header-action file-copy" draggable="true" :title="t('fileTransfer.copyOrDrag')" :aria-label="t('fileTransfer.copy')" @pointerdown.stop @click="copyFile" @dragstart="dragFile"><Icon name="copy" :size="15" /></button>
       </CardHeaderActions>
@@ -129,7 +142,7 @@ const size = computed(() => {
       <div v-else-if="preview === 'text'" class="file-text-body nowheel" @wheel.stop>
         <div v-if="textLoading" class="file-text-status" role="status"><span class="spinner" /> {{ t('common.loading') }}</div>
         <div v-else-if="textError" class="file-text-status" role="alert"><span>{{ textError instanceof Error ? textError.message : t(textError) }}</span><button type="button" @click="loadText">{{ t('common.retry') }}</button></div>
-        <TextPreview v-else :text="text" :filename="data.asset.filename" :rendered="rendered" :wrap="wrap" :reading="reading" :read-only="mobilePreview" @reading="remember" />
+        <TextPreview v-else :text="text" :filename="data.asset.filename" :rendered="rendered" :wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :reading="reading" :read-only="mobilePreview" @reading="remember" />
         <div v-if="truncated" class="file-text-truncated"><span>{{ t('panels.preview.truncated') }}</span><button type="button" @click="download">{{ t('panels.file.downloadOriginal') }}</button></div>
       </div>
       <template v-else-if="preview === 'pdf' && pdfPreview && url">
@@ -143,7 +156,7 @@ const size = computed(() => {
 </template>
 
 <style scoped>
-.file-card { position:relative; height: 100%; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #3a3d46; border-radius: 7px; background: #1b1d23; box-shadow: 0 5px 18px #0003; }
+.file-card { --header-action-size:24px; --text-preview-action-gap:2px; position:relative; height: 100%; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #3a3d46; border-radius: 7px; background: #1b1d23; box-shadow: 0 5px 18px #0003; }
 .file-header { display: flex; align-items: center; gap: 7px; height: 30px; flex: 0 0 30px; padding: 0 7px 0 10px; color: #a9b0be; cursor: grab; border-bottom: 1px solid #343740; }
 .file-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: #e0e3ea; }
 .file-icon{display:flex;align-items:center;flex:none}
@@ -163,7 +176,7 @@ const size = computed(() => {
 .mobile-layout .card-focused .file-header{height:calc(44px + var(--mobile-safe-top,0px));flex-basis:calc(44px + var(--mobile-safe-top,0px));padding:var(--mobile-safe-top,0px) 0 0;gap:0}
 .mobile-layout .card-focused .file-title{font-size:13px;margin-inline:6px}
 .mobile-layout .card-focused .file-icon{width:44px;height:44px;justify-content:center}
-.mobile-layout .card-focused{--header-action-size:44px}
+.mobile-layout .card-focused{--header-action-size:44px;--text-preview-action-gap:0px}
 .mobile-layout.canvas-fullscreen .card-focused .file-header{height:44px;flex-basis:44px;padding-top:0}
 
 </style>
