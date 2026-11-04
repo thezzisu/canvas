@@ -143,8 +143,9 @@ export class TerminalUploads {
     } catch {
       if (this.current !== batch) return
       if (batch.cancelling) return
-      // A lost request is a failure, not permission to delete earlier successes.
-      // The server retires it on request abort or its existing upload deadline.
+      // Release a batch even when a proxy failed before the PUT reached Canvas.
+      // This reports failure, preserving earlier files rather than cancelling them.
+      this.options.send({ type: 'upload-failed', id: batch.id })
       this.finish('failed', t('terminal.upload.fileFailed', { name, error: t('terminal.upload.failed') }))
     }
   }

@@ -94,6 +94,22 @@ function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; b
     setPasteFailure: () => { pasteFails = true; }, disableCapture: () => { canCapture = false; } };
 }
 
+test("a failed client request releases only its batch while preserving completed files", async t => {
+  const f = fixture(t), tokens = await f.begin([{ name: "first", size: 3 }, { name: "second", size: 3 }]);
+  await f.service.receive(tokens[0]!, "session-a", uploadRequest(Buffer.from("one")));
+  f.service.failed(f.other as never, "batch");
+  f.service.failed(f.socket as never, "stale-id");
+  assert(!f.socket.messages.some(message => message.state === "failed"));
+  f.service.failed(f.socket as never, "batch");
+  assert.equal(f.socket.messages.at(-1)?.state, "failed");
+  assert.equal(f.files.size, 1); assert.deepEqual(f.removed, []); assert.deepEqual(f.pasted, []);
+  const [next] = await f.begin([{ name: "retry", size: 3 }], "window-a", "retry");
+  f.service.failed(f.socket as never, "batch");
+  await f.service.receive(next!, "session-a", uploadRequest(Buffer.from("two")));
+  assert.equal(f.socket.messages.at(-1)?.state, "completed");
+  assert.equal(f.files.size, 2); assert.equal(f.pasted.length, 1);
+});
+
 test("multi-file batches preserve order and paste each quoted path separately only after all uploads succeed", async t => {
   const f = fixture(t);
   const names = ["风景 O'Brian.png", "second file.txt", "empty"];

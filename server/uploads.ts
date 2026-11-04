@@ -104,6 +104,10 @@ export class UploadService {
     // A failed later file never pastes a partial batch or deletes earlier successes.
     if (cancelled) this.cleanup(batch.source, [...batch.paths]);
   }
+  failed(socket: WebSocket, id: string) {
+    for (const batch of this.batches.values())
+      if (batch.socket === socket && batch.id === id) this.fail(batch, "上传请求失败");
+  }
   cancel(socket: WebSocket, id?: string) {
     for (const batch of this.batches.values())
       if (batch.socket === socket && (id === undefined || batch.id === id)) this.fail(batch, "上传已取消", true);
