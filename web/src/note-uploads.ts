@@ -3,7 +3,7 @@ import { api, apiContext, apiRevision, requireCurrentApi, segment } from './api'
 import { reportDownloadError } from './downloads'
 import { loadCanvasFile } from './file-transfer'
 import { attachmentToken } from './note-document'
-import { loadNoteClipboard, type NoteClipboard } from './note-clipboard'
+import { loadNoteClipboard, reusedNoteClipboard, type NoteClipboard } from './note-clipboard'
 import type { PastePart } from '../../shared/paste'
 import type { FileAsset } from './types'
 
@@ -13,6 +13,7 @@ export interface NoteUpload {
   end: number
   replaced: string
   controller: AbortController
+  uploading: boolean
   insert?: (value: NoteInsertion) => boolean
 }
 const pending = shallowReactive(new Map<string, NoteUpload>())
@@ -24,15 +25,16 @@ watch(apiRevision, () => {
 
 /** Uploads belong to the note, so changing its canvas representation does not cancel them. */
 async function upload(canvasId: string, noteId: string, offset: number, end: number, replaced: string,
-  prepare: (signal: AbortSignal) => Promise<{ files: File[]; parts: PastePart[] }>, insert: (value: NoteInsertion) => void) {
+  prepare: (signal: AbortSignal) => Promise<{ files: (File | FileAsset)[]; parts: PastePart[] }>, insert: (value: NoteInsertion) => void, uploading = true) {
   if (pending.has(noteId)) return
-  const context = apiContext(), task: NoteUpload = { offset, end, replaced, controller: new AbortController() }
+  const context = apiContext(), task: NoteUpload = { offset, end, replaced, controller: new AbortController(), uploading }
   pending.set(noteId, task)
   try {
     const signal = AbortSignal.any([context.signal, task.controller.signal])
     const { files, parts } = await prepare(signal), assets: FileAsset[] = []
     for (const file of files) {
       requireCurrentApi(context); signal.throwIfAborted()
+      if (!(file instanceof File)) { assets.push(file); continue }
       const query = new URLSearchParams({ filename: file.name, size: String(file.size) })
       assets.push(await api<FileAsset>(`/api/canvases/${segment(canvasId)}/notes/${segment(noteId)}/files?${query}`,
         { method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream' }, signal }, context))
@@ -49,6 +51,25 @@ export function uploadNoteAttachment(canvasId: string, noteId: string, file: Fil
   return upload(canvasId, noteId, offset, offset, '', async () => ({ files: [file], parts: [{ file: 0, format: 'path' }] }), insert)
 }
 export function pasteNoteAttachments(canvasId: string, noteId: string, note: NoteClipboard, offset: number, end: number, replaced: string,
-  insert: (value: NoteInsertion) => void) {
-  return upload(canvasId, noteId, offset, end, replaced, signal => loadNoteClipboard(note, reference => loadCanvasFile(reference, signal)), insert)
+  insert: (value: NoteInsertion) => void, ownedAssets: readonly FileAsset[] = []) {
+  if (pending.has(noteId)) return
+  const context = apiContext(), reused = reusedNoteClipboard(note, context.base, ownedAssets)
+  if (reused) { insert({ ...reused, offset, end, replaced }); return }
+  const owned = new Map(ownedAssets.map(asset => [asset.id, asset]))
+  const localIds = [...new Set(note.parts.flatMap(part => typeof part !== 'string' && part.reference.base === context.base && !owned.has(part.reference.assetId)
+    ? [part.reference.assetId] : []))]
+  const uploading = note.parts.some(part => typeof part !== 'string' && part.reference.base !== context.base)
+  return upload(canvasId, noteId, offset, end, replaced, async signal => {
+    if (localIds.length) {
+      const linked = await api<FileAsset[]>(`/api/canvases/${segment(canvasId)}/notes/${segment(noteId)}/file-references`,
+        { method: 'POST', body: JSON.stringify({ assetIds: localIds }), signal }, context)
+      for (const asset of linked) owned.set(asset.id, asset)
+    }
+    return loadNoteClipboard<File | FileAsset>(note, reference => {
+      if (reference.base !== context.base) return loadCanvasFile(reference, signal)
+      const asset = owned.get(reference.assetId)
+      if (!asset) throw new Error('fileTransfer.fileMissing')
+      return Promise.resolve(asset)
+    })
+  }, insert, uploading)
 }

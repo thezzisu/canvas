@@ -221,6 +221,11 @@ export function createApp(
     return c.json(await receiveCanvasFile(store, options.assets, id, { ...input, noteId }, c.req.raw,
       bearerToken(c.req.header('authorization'))), 201);
   });
+  app.post('/api/canvases/:id/notes/:note/file-references', async c => {
+    const input = z.object({ assetIds: z.array(z.string().uuid()).min(1).max(64) }).strict().parse(await c.req.json());
+    const assets = store.referenceNoteFiles(c.req.param('id'), c.req.param('note'), input.assetIds);
+    return assets ? c.json(assets) : c.json({ error: 'Note or file not found' }, 404);
+  });
   app.get("/api/downloads/:ticket", async (c) => {
     if (c.req.method !== "GET") return c.body(null, 405);
     const download = await options.openDownload?.(

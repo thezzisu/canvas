@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { noteClipboard, clipboardText, parseNoteClipboard, loadNoteClipboard, terminalNoteClipboard } from './note-clipboard'
+import { noteClipboard, clipboardText, parseNoteClipboard, loadNoteClipboard, terminalNoteClipboard, reusedNoteClipboard } from './note-clipboard'
 import { attachmentToken, insertNoteContent, noteDocument, serializeNote } from './note-document'
 
 const id = '11111111-1111-4111-8111-111111111111', instance = { id: '22222222-2222-4222-8222-222222222222', base: 'https://source.example/subpath/' }
@@ -47,4 +47,16 @@ test('file-only terminal selections preserve duplicate occurrences as separate f
   assert.equal(paste.files.length, 2)
   assert.equal(paste.files[0], paste.files[1], 'load original bytes once; upload each explicit occurrence')
   assert.equal(terminalNoteClipboard({ ...loaded, parts: ['Text ', ...loaded.parts] }).parts?.length, 3)
+})
+
+
+test('owned same-endpoint clipboard assets are reused locally with exact text and duplicate occurrences', () => {
+  const note = noteClipboard(`Before ${attachmentToken(id)}\n${attachmentToken(id)} after`, [asset], instance)
+  assert.deepEqual(reusedNoteClipboard(note, instance.base, [asset]), {
+    content: `Before ${attachmentToken(id)}\n${attachmentToken(id)} after`, assets: [asset],
+  })
+  assert.equal(reusedNoteClipboard(note, 'https://different.example/', [asset]), undefined)
+  assert.equal(reusedNoteClipboard(note, instance.base, []), undefined)
+  const otherRegistration = { parts: note.parts.map(part => typeof part === 'string' ? part : { ...part, reference: { ...part.reference, instance: '33333333-3333-4333-8333-333333333333' } }) }
+  assert(reusedNoteClipboard(otherRegistration, instance.base, [asset]), 'same authenticated endpoint does not duplicate local bytes for another registration')
 })

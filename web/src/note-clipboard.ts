@@ -1,6 +1,7 @@
 import { parseFileReference, type CanvasFileReference } from './file-reference'
 import type { FileAsset } from './types'
 import type { PastePart } from '../../shared/paste'
+import { attachmentToken } from './note-document'
 
 export const NOTE_CLIPBOARD_TYPE = 'application/x-canvas-note'
 export interface NoteClipboard { parts: Array<string | { reference: CanvasFileReference; filename: string }> }
@@ -50,8 +51,8 @@ export function readNoteClipboard(data: DataTransfer | null): NoteClipboard | un
 }
 
 /** Resolve every asset before starting any target write; preserve repeated references and order. */
-export async function loadNoteClipboard(note: NoteClipboard, load: (reference: CanvasFileReference) => Promise<File>) {
-  const files: File[] = [], parts: PastePart[] = []
+export async function loadNoteClipboard<T>(note: NoteClipboard, load: (reference: CanvasFileReference) => Promise<T>) {
+  const files: T[] = [], parts: PastePart[] = []
   const indices = new Map<string, number>()
   for (const part of note.parts) {
     if (typeof part === 'string') { parts.push(part); continue }
@@ -70,4 +71,13 @@ export function terminalNoteClipboard(value: { files: File[]; parts: PastePart[]
   return value.parts.every(part => typeof part !== 'string' || !part.trim())
     ? { files: value.parts.flatMap(part => typeof part === 'string' ? [] : [value.files[part.file]!]) }
     : value
+}
+
+/** An existing note already owns these bytes; clipboard editing is a local transaction. */
+export function reusedNoteClipboard(note: NoteClipboard, base: string, assets: readonly FileAsset[]) {
+  const owned = new Map(assets.map(asset => [asset.id, asset]))
+  if (note.parts.some(part => typeof part !== 'string' && (part.reference.base !== base || !owned.has(part.reference.assetId)))) return
+  const ids = new Set(note.parts.flatMap(part => typeof part === 'string' ? [] : [part.reference.assetId]))
+  return { content: note.parts.map(part => typeof part === 'string' ? part : attachmentToken(part.reference.assetId)).join(''),
+    assets: [...ids].map(id => owned.get(id)!) }
 }

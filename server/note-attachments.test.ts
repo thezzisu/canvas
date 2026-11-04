@@ -83,3 +83,49 @@ test('deleting the note or revoking its session aborts an in-flight attachment a
     assert.deepEqual(await readdir(join(f.root, 'files')), [])
   })
 })
+
+
+test('references share existing bytes across notes and preserve them until the last owner leaves', async t => {
+  const f = await fixture(t), asset = await (await f.upload()).json()
+  const peer: NoteNode = { ...f.note, id: randomUUID(), content: 'Second note' }
+  const canvas = f.store.put<Canvas>('canvas', { id: randomUUID(), name: 'B', nodes: [peer] })
+  const refs = (ids: string[]) => f.app.request(`http://canvas.test/api/canvases/${canvas.id}/notes/${peer.id}/file-references`, {
+    method: 'POST', headers: { Authorization: 'Bearer fixture', 'Content-Type': 'application/json' }, body: JSON.stringify({ assetIds: ids }),
+  })
+  let changes = 0
+  const changed = () => { changes++ }
+  f.store.on('change', changed); t.after(() => f.store.off('change', changed))
+  const linked = await refs([asset.id, asset.id])
+  assert.equal(linked.status, 200); assert.deepEqual(await linked.json(), [f.store.fileAsset(asset.id)])
+  assert.equal(changes, 1)
+  assert.equal((await refs([asset.id])).status, 200); assert.equal(changes, 1, 'linking existing ownership is a no-op')
+  assert.equal(f.store.fileAssetIds().length, 1)
+  assert.deepEqual(await readdir(join(f.root, 'files')), [asset.id])
+  assert.equal((f.store.get<Canvas>('canvas', canvas.id)!.nodes[0] as NoteNode).content, 'Second note')
+  f.store.remove('canvas', f.canvas.id)
+  assert(f.store.fileAssetReferenced(asset.id), 'the receiving note owns the original bytes')
+  assert.equal((await f.app.request(`http://canvas.test/api/files/${asset.id}`, { headers: { Authorization: 'Bearer fixture' } })).status, 200)
+  f.store.updateNote(canvas.id, peer.id, { content: '' })
+  assert(f.store.fileAssetReferenced(asset.id), 'deleting a capsule keeps editor undo available')
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
+  const removed = f.store.removeCard(canvas.id, peer.id, 'fixture')!
+  assert(f.store.fileAssetReferenced(asset.id)); assert(f.store.restoreCard(canvas.id, removed.undo!.token, 'fixture'))
+  f.store.removeCard(canvas.id, peer.id, 'fixture'); t.mock.timers.tick(CARD_REMOVAL_UNDO_MS + 1)
+  assert.equal(f.store.fileAssetReferenced(asset.id), false)
+})
+
+test('note references require authentication and validate the whole destination batch before linking', async t => {
+  const f = await fixture(t), asset = await (await f.upload()).json()
+  const peer: NoteNode = { ...f.note, id: randomUUID() }
+  const canvas = f.store.put<Canvas>('canvas', { id: randomUUID(), name: 'B', nodes: [peer] })
+  const request = (body: unknown, token = 'fixture', node = peer.id) => f.app.request(`http://canvas.test/api/canvases/${canvas.id}/notes/${node}/file-references`, {
+    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  assert.equal((await request({ assetIds: [asset.id] }, 'expired')).status, 401)
+  assert.equal((await request({ assetIds: [asset.id] }, 'fixture', randomUUID())).status, 404)
+  assert.equal((await request({ assetIds: [asset.id, randomUUID()] })).status, 404)
+  for (const body of [{ assetIds: [] }, { assetIds: Array(65).fill(asset.id) }, { assetIds: ['../file'] }, { assetIds: [asset.id], path: '/unrelated' }])
+    assert.equal((await request(body)).status, 400)
+  assert.deepEqual(f.store.noteAttachments(peer.id), [], 'invalid batches leave no partial ownership')
+  assert.equal(f.store.fileAssetIds().length, 1)
+})

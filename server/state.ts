@@ -445,6 +445,23 @@ export class Store extends EventEmitter {
     return !!this.get<Canvas>('canvas', canvasId)?.nodes.some(node => node.type === 'note' && node.id === noteId);
   }
 
+  referenceNoteFiles(canvasId: string, noteId: string, assetIds: readonly string[]): FileAsset[] | undefined {
+    this.db.exec("BEGIN IMMEDIATE");
+    let assets: FileAsset[];
+    let changed = false;
+    try {
+      if (!this.hasNote(canvasId, noteId)) { this.db.exec("ROLLBACK"); return; }
+      const existing = [...new Set(assetIds)].map(id => this.fileAsset(id));
+      if (existing.some(asset => !asset)) { this.db.exec("ROLLBACK"); return; }
+      assets = existing as FileAsset[];
+      const link = this.db.prepare("INSERT OR IGNORE INTO note_files(note_id,asset_id) VALUES(?,?)");
+      for (const asset of assets) changed = link.run(noteId, asset.id).changes > 0 || changed;
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    if (changed) this.changed();
+    return assets;
+  }
+
   noteAttachments(noteId: string): FileAsset[] {
     return this.db.prepare("SELECT f.* FROM canvas_files f JOIN note_files n ON n.asset_id=f.id WHERE n.note_id=? ORDER BY f.rowid")
       .all(noteId).map(row => this.fileAssetFromRow(row));
