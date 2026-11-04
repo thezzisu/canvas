@@ -52,6 +52,7 @@
     "prettier": "^3.9.10",
     "qr-scanner": "^1.4.2",
     "qrcode": "^1.5.4",
+    "shiki": "^4.6.0",
     "sortablejs": "^1.15.7",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
