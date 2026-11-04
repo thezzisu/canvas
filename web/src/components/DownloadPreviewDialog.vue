@@ -59,9 +59,9 @@ const menu = computed<DropdownMenuItem[]>(() => [
     { label: t('panels.preview.wrap'), icon: 'i-lucide-wrap-text', type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } },
   ] : []),
   ...(capabilities.value.html ? [{ label: t('panels.preview.site'), icon: 'i-lucide-square-arrow-out-up-right', description: !downloadPreview.value?.sourcePreview ? t('panels.preview.noSource') : undefined, disabled: !downloadPreview.value?.sourcePreview || previewBusy.value, onSelect: previewSite }] : []),
-  { label: t('panels.file.download'), onSelect: download },
-  { label: t(expanded.value ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen'), onSelect: () => { expanded.value = !expanded.value } },
-  ...(expanded.value ? [{ label: t('panels.preview.close'), onSelect: dismissDownloadPreview }] : []),
+  { label: t('panels.file.download'), icon: 'i-lucide-download', onSelect: download },
+  { label: t(expanded.value ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen'), icon: expanded.value ? 'i-lucide-minimize' : 'i-lucide-maximize', onSelect: () => { expanded.value = !expanded.value } },
+  ...(expanded.value ? [{ label: t('panels.preview.close'), icon: 'i-lucide-x', onSelect: dismissDownloadPreview }] : []),
 ])
 const modalStyle = computed(() => {
   const visible = viewport.value, narrow = visible.width <= 600
