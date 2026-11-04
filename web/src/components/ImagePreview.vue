@@ -173,7 +173,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="image-preview-viewer">
     <div ref="viewport" class="image-preview-viewport" :class="{ 'can-pan': canPan, dragging }" :data-scale="scale" :data-fit="fitted" :data-pan-x="pan.x" :data-pan-y="pan.y"
-      @wheel="wheel" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerEnd" @pointercancel="pointerEnd($event, true)" @lostpointercapture="pointerEnd($event, true)" @dblclick="doubleClick" @dragstart.prevent @contextmenu.prevent>
+      @wheel="wheel" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerEnd" @pointercancel="pointerEnd($event, true)" @lostpointercapture="pointerEnd($event, true)" @dblclick="doubleClick" @dragstart.prevent @contextmenu.stop>
       <img class="download-preview-image" :data-preview-id="id" :src="src" :alt="alt" :style="imageStyle" draggable="false" @load="loaded" @error="failed" />
     </div>
     <div v-if="ready && !readOnly" class="image-preview-tools" role="toolbar" :aria-label="t('panels.image.zoom')" @pointerdown.stop @mousedown.prevent.stop @dblclick.stop>
@@ -189,7 +189,7 @@ onBeforeUnmount(() => {
 .image-preview-viewer{position:relative;display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;width:100%;overflow:hidden}
 .image-preview-viewport{position:relative;flex:1;min-width:0;min-height:0;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none;cursor:zoom-in}
 .image-preview-viewport.can-pan{cursor:grab}.image-preview-viewport.dragging{cursor:grabbing}
-.download-preview-image{position:absolute;left:50%;top:50%;display:block;max-width:none;max-height:none;flex:none;object-fit:fill;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;pointer-events:none;transform-origin:0 0}
+.download-preview-image{position:absolute;left:50%;top:50%;display:block;max-width:none;max-height:none;flex:none;object-fit:fill;user-select:none;-webkit-user-select:none;-webkit-user-drag:none;transform-origin:0 0}
 .image-preview-tools{display:flex;flex:0 0 40px;align-items:center;justify-content:center;gap:3px;height:40px;padding:3px;border-top:1px solid #303947;background:#191f27;color:#bdc9d8;touch-action:manipulation}
 .image-preview-tools button{display:flex;align-items:center;justify-content:center;width:32px;min-width:32px;height:32px;padding:0;border:0;border-radius:4px;background:transparent;color:inherit}
 .image-preview-tools button:hover:not(:disabled){background:#ffffff0d;color:#e5c9b3}.image-preview-tools button:disabled{opacity:.35;cursor:default}
