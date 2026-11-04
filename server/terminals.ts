@@ -12,6 +12,7 @@ import { HERDR_MOUSE_ENCODING, type HerdrClientTransport } from "./herdr/client.
 import type { WindowMetadata } from "../shared/window-metadata.ts";
 import { randomUUID } from "node:crypto";
 import type { CanvasNotification } from "../shared/notification.ts";
+import type { PasteSegment } from "../shared/paste.ts";
 const { Terminal } = headless;
 const { SerializeAddon } = serialize;
 export type TerminalTarget = {
@@ -19,6 +20,12 @@ export type TerminalTarget = {
   spaceId: string;
   windowId: string;
 };
+// Agents may read a pasted attachment path asynchronously and insert its
+// placeholder later. Following text waits until the screen has stayed quiet.
+export const PASTE_SETTLE_QUIET_MS = 500;
+export const PASTE_SETTLE_LIMIT_MS = 2_000;
+// One paste never holds keyboard input or its upload request much longer.
+export const PASTE_TOTAL_LIMIT_MS = 10_000;
 const clamp = (n: unknown, min: number, max: number, fallback: number) =>
   typeof n === "number" && Number.isFinite(n)
     ? Math.min(max, Math.max(min, Math.round(n)))
@@ -45,6 +52,9 @@ class LiveTerminal {
   private readSubscription?: { dispose(): unknown };
   private cursorVisible = true;
   private cursorShape = 0;
+  private outputWaiters = new Set<() => void>();
+  // Keyboard input typed during a paced paste follows the complete paste.
+  private pasting?: Promise<void>;
   controller?: WebSocket;
   private downloadController?: WebSocket;
   idle?: ReturnType<typeof setTimeout>;
@@ -124,6 +134,7 @@ class LiveTerminal {
     });
     this.proc.onData((data) => {
       if (this.closed) return;
+      for (const waiter of this.outputWaiters) waiter();
       const bytes = Buffer.byteLength(data);
       this.pendingBytes += bytes;
       if (this.pendingBytes > 256 * 1024 && !this.paused) {
@@ -182,19 +193,44 @@ class LiveTerminal {
     return ws && ws === this.controller && ws.readyState === 1 && this.clients.has(ws) &&
       (!this.maximized || this.maximized.owner === ws) ? ws : undefined;
   }
-  captureFilePaste(ws: WebSocket): ((texts: readonly string[], signal: AbortSignal, separator?: "" | " ") => Promise<void>) | undefined {
+  captureFilePaste(ws: WebSocket): ((segments: readonly PasteSegment[]) => Promise<void>) | undefined {
     if (this.closed || this.controller !== ws || !this.clients.has(ws) ||
         ws.readyState !== 1 || (this.maximized && this.maximized.owner !== ws)) return;
     // A file drop authorizes this window at its start. Canvas navigation and
     // native pane selection do not redirect its eventual paste.
-    return async (texts: readonly string[], signal: AbortSignal, separator = " ") => {
-      await this.queue;
-      signal.throwIfAborted();
-      if (this.closed) throw new Error("目标窗口已关闭");
-      // Each segment is one paste event. Raw file lists need shell separators;
-      // mixed content already carries its exact whitespace. Commit in one write.
-      this.proc.write(texts.map(text => this.emulator.modes.bracketedPasteMode ? `\x1b[200~${text}\x1b[201~` : text).join(separator));
+    return segments => {
+      const paste = this.writePaste(segments);
+      this.holdInput(paste);
+      return paste;
     };
+  }
+  private holdInput(operation: Promise<unknown>) {
+    const held = this.pasting = operation.then(() => {}, () => {});
+    void held.finally(() => { if (this.pasting === held) this.pasting = undefined; });
+  }
+  private async writePaste(segments: readonly PasteSegment[]) {
+    const deadline = Date.now() + PASTE_TOTAL_LIMIT_MS;
+    for (const [index, segment] of segments.entries()) {
+      await this.queue;
+      if (this.closed) throw new Error("目标窗口已关闭");
+      const pace = segment.file && index < segments.length - 1 ? Math.min(PASTE_SETTLE_LIMIT_MS, deadline - Date.now()) : 0;
+      const settled = pace > 0 ? this.outputSettled(pace) : undefined;
+      this.proc.write(this.emulator.modes.bracketedPasteMode ? `\x1b[200~${segment.text}\x1b[201~` : segment.text);
+      await settled;
+    }
+  }
+  /** Resolves after output follows by a quiet interval, or after the bounded limit. */
+  private outputSettled(limitMs: number) {
+    return new Promise<void>(resolve => {
+      let quiet: ReturnType<typeof setTimeout> | undefined;
+      const done = () => { clearTimeout(quiet); clearTimeout(limit); this.outputWaiters.delete(output); resolve(); };
+      const output = () => {
+        clearTimeout(quiet);
+        if (this.closed) done(); else quiet = setTimeout(done, PASTE_SETTLE_QUIET_MS);
+      };
+      const limit = setTimeout(done, limitMs);
+      this.outputWaiters.add(output);
+    });
   }
   private presentation(ws: WebSocket) {
     json(ws, {
@@ -361,11 +397,9 @@ class LiveTerminal {
         ) {
           // Outer window focus reports cannot change the native pane or pixels.
           if (msg.data !== '\x1b[I' && msg.data !== '\x1b[O') this.sentFrames.delete(ws);
-          this.proc.write(
-            msg.encoding === "binary"
-              ? Buffer.from(msg.data, "latin1")
-              : msg.data,
-          );
+          const data = msg.encoding === "binary" ? Buffer.from(msg.data, "latin1") : msg.data;
+          if (this.pasting) this.holdInput(this.pasting.then(() => { if (!this.closed) this.proc.write(data); }));
+          else this.proc.write(data);
         }
         if (msg.type === "resize") this.geometry.persistent(size);
       } catch {
@@ -415,6 +449,7 @@ class LiveTerminal {
     if (this.closing) return this.closing;
     const focused = reason === 'removed' && [...this.focused].some(ws => ws.readyState === 1 && this.clients.has(ws) && this.canRender(ws));
     this.closed = true;
+    for (const waiter of this.outputWaiters) waiter();
     this.readSubscription?.dispose();
     if (reason === 'removed') this.reads?.removeWindow(this.source, this.key.slice(this.sourceId.length + 1));
     if (focused) this.onFocusedRemove?.();

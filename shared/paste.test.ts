@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderPasteParts, renderPasteSegments, type PastePart } from "./paste.ts";
+import { filePasteParts, renderPasteParts, renderPasteSegments, type PastePart } from "./paste.ts";
 
 test("mixed paste keeps text, images, files and repeated references in their original positions", () => {
   const parts: PastePart[] = ["Compare **before**\n", { file: 0, format: "markdown", image: true, label: "before.png" },
@@ -33,8 +33,14 @@ test("every attachment is a separate paste segment without changing text or whit
     { file: 1, format: "markdown", image: true, label: "after.png" }, { file: 0, format: "path" }, "\n", ""];
   const paths = ["/inbox/O'Brien image.png", "/inbox/after.png"];
   const segments = renderPasteSegments(parts, paths);
-  assert.deepEqual(segments, ["Read\n", "'/inbox/O'\\''Brien image.png'", " then ",
-    "![after.png](/inbox/after.png)", "'/inbox/O'\\''Brien image.png'", "\n"]);
-  assert.equal(segments.join(""), renderPasteParts(parts, paths));
-  assert.equal(segments.filter(text => text.includes("/inbox/")).length, 3);
+  assert.deepEqual(segments, [{ text: "Read\n", file: false }, { text: "'/inbox/O'\\''Brien image.png'", file: true },
+    { text: " then ", file: false }, { text: "![after.png](/inbox/after.png)", file: true },
+    { text: "'/inbox/O'\\''Brien image.png'", file: true }, { text: "\n", file: false }]);
+  assert.equal(segments.map(segment => segment.text).join(""), renderPasteParts(parts, paths));
+});
+
+test("plain file lists keep shell spacing between separate path segments", () => {
+  assert.deepEqual(filePasteParts(1), [{ file: 0, format: "path" }]);
+  assert.equal(renderPasteParts(filePasteParts(3), ["/a b", "/c", "/O'd"]), "'/a b' '/c' '/O'\\''d'");
+  assert.deepEqual(renderPasteSegments(filePasteParts(2), ["/a", "/b"]).map(segment => segment.file), [true, false, true]);
 });

@@ -3,9 +3,9 @@ import type { WebSocket } from "ws";
 import { z } from "zod";
 import type { Source } from "./state.ts";
 import type { TerminalManager } from "./terminals.ts";
-import { listResources, shellQuote } from "./runtimes.ts";
+import { listResources } from "./runtimes.ts";
 import { validateInboxFile, writeInboxFile, removeInboxFiles, type InboxFile } from "./inbox.ts";
-import { MAX_PASTE_PARTS, MAX_TERMINAL_PASTE_BYTES, MAX_UPLOAD_BEGIN_BYTES, renderPasteSegments, type PastePart } from "../shared/paste.ts";
+import { filePasteParts, MAX_PASTE_PARTS, MAX_TERMINAL_PASTE_BYTES, MAX_UPLOAD_BEGIN_BYTES, renderPasteSegments, type PastePart, type PasteSegment } from "../shared/paste.ts";
 
 const pastePartSchema = z.union([z.string(), z.object({
   file: z.number().int().nonnegative(),
@@ -22,10 +22,10 @@ const beginSchema = z.object({
 
 interface Batch {
   key: string; id: string; source: Source; windowId: string; session: string; socket: WebSocket;
-  files: InboxFile[]; parts?: PastePart[]; tokens: string[]; paths: string[]; next: number; busy: boolean;
-  completedBytes: number; transferred: number; total: number;
+  files: InboxFile[]; parts: PastePart[]; tokens: string[]; paths: string[]; next: number; busy: boolean;
+  completedBytes: number; transferred: number; total: number; committed?: boolean;
   controller: AbortController; timer?: ReturnType<typeof setTimeout>; lastProgress: number;
-  paste(texts: readonly string[], signal: AbortSignal, separator?: "" | " "): Promise<void>;
+  paste(segments: readonly PasteSegment[]): Promise<void>;
 }
 
 export class UploadService {
@@ -72,7 +72,7 @@ export class UploadService {
       if (this.stopped || (this.sourceGenerations.get(source.id) || 0) !== generation) throw new Error("连接已关闭");
       if (!paste || socket.readyState !== 1) throw new Error("请先连接目标窗口");
       if (this.batches.has(key)) throw new Error("窗口已有上传任务");
-      const batch: Batch = { key, id, source, windowId, socket, session, files: request.files, parts: request.parts,
+      const batch: Batch = { key, id, source, windowId, socket, session, files: request.files, parts: request.parts ?? filePasteParts(request.files.length),
         tokens: request.files.map(() => randomBytes(32).toString("base64url")), paths: [], next: 0,
         busy: false, completedBytes: 0, transferred: 0, total, controller: new AbortController(),
         lastProgress: 0, paste };
@@ -97,7 +97,7 @@ export class UploadService {
     this.closing.add(cleaning);
   }
   private fail(batch: Batch, error: string, cancelled = false, failedFile?: string) {
-    if (this.batches.get(batch.key) !== batch) return;
+    if (this.batches.get(batch.key) !== batch || batch.committed) return;
     this.removeBatch(batch);
     batch.controller.abort();
     this.progress(batch, cancelled ? "cancelled" : "failed", error, failedFile);
@@ -159,10 +159,18 @@ export class UploadService {
         const native = await this.options.resources(batch.source);
         if (!native.spaces.some(space => space.windows.some(window => window.id === batch.windowId))) throw new Error("目标窗口已关闭");
         if (this.batches.get(batch.key) !== batch) return 409;
-        const texts = batch.parts ? renderPasteSegments(batch.parts, batch.paths) : batch.paths.map(shellQuote);
-        const separator = batch.parts ? "" : " ";
-        if (texts.reduce((size, text) => size + Buffer.byteLength(text), separator.length * Math.max(0, texts.length - 1)) > MAX_TERMINAL_PASTE_BYTES) throw new Error("粘贴内容过长");
-        await batch.paste(texts, batch.controller.signal, separator);
+        const segments = renderPasteSegments(batch.parts, batch.paths);
+        if (segments.reduce((size, segment) => size + Buffer.byteLength(segment.text), 0) > MAX_TERMINAL_PASTE_BYTES) throw new Error("粘贴内容过长");
+        // Pasting is paced by the target's output. Once it starts, the batch is
+        // committed: cancellation and disconnects can no longer split it.
+        batch.committed = true;
+        clearTimeout(batch.timer);
+        try { await batch.paste(segments); }
+        catch (error) {
+          this.removeBatch(batch);
+          this.progress(batch, "failed", error instanceof Error ? error.message : "粘贴失败");
+          return 409;
+        }
         this.removeBatch(batch);
         this.progress(batch, "completed");
       } else this.progress(batch, "uploading");

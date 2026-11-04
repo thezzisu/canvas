@@ -12,7 +12,7 @@ import { terminalUnicodeAddon } from "../shared/terminal-unicode.ts";
 import { terminalInputChunks } from "../web/src/terminal-input-chunks.ts";
 import { Store, type Canvas, type TerminalNode } from "./state.ts";
 import { CompletionReads } from "./completion-reads.ts";
-import { TerminalManager } from "./terminals.ts";
+import { PASTE_SETTLE_QUIET_MS, TerminalManager } from "./terminals.ts";
 import { createSpace, createWindow, listResources, shellQuote, type Source } from "./runtimes.ts";
 import type { CanvasNotification } from "../shared/notification.ts";
 import { herdrApiRequest } from "./herdr/api.ts";
@@ -664,6 +664,25 @@ test('explicit native right and middle input preserve Unicode paste bytes withou
   const middle = Buffer.from('\x1b[M!%#\x1b[M#%#');
   await waitFor(() => readFileSync(f.bytes).length >= right.length + Buffer.byteLength(pasted) + middle.length, 'native middle button did not reach the receiver');
   assert.deepEqual(readFileSync(f.bytes), Buffer.concat([right, Buffer.from(pasted), middle]), 'middle input is one native press/release without a duplicate paste');
+});
+
+test('keyboard input typed during a paced attachment paste follows the complete paste', async t => {
+  const f = await fixture(t, true); if (!f) return;
+  const client = new Client();
+  await f.manager.connect(f.source, f.target, client.socket);
+  await f.ready();
+  client.command({ type: 'focus' });
+  const terminal = (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!;
+  const paste = (await f.manager.captureFilePaste(f.source.id, f.target.windowId, client.socket))!;
+  const started = performance.now();
+  const pasting = paste([{ text: 'A ', file: false }, { text: "'/inbox/one.png'", file: true }, { text: ' B', file: false }]);
+  await waitFor(() => existsSync(f.bytes) && readFileSync(f.bytes).includes("one.png'"), 'first attachment was not written');
+  client.command({ type: 'input', data: 'typed\r' });
+  await pasting;
+  await waitFor(() => readFileSync(f.bytes).toString().endsWith('typed\r'), 'held input was dropped');
+  assert.equal(readFileSync(f.bytes).toString(), "A '/inbox/one.png' Btyped\r", 'typing and Enter never split the paste');
+  assert(performance.now() - started >= PASTE_SETTLE_QUIET_MS, 'text after an attachment waits for settled output');
+  assert.equal(terminal.closed, false);
 });
 
 test("a 200000-code-unit note reaches the native pane intact in bounded chunks and one paste bracket pair", async t => {

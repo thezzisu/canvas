@@ -20,19 +20,26 @@ function markdownPath(path: string): string {
     encodeURIComponent(character).replace(/[!'()*]/gu, value => `%${value.charCodeAt(0).toString(16).toUpperCase()}`));
 }
 
+export interface PasteSegment { text: string; file: boolean }
+
 /** Keep each file occurrence a separate terminal paste event. */
-export function renderPasteSegments(parts: readonly PastePart[], paths: readonly string[]): string[] {
+export function renderPasteSegments(parts: readonly PastePart[], paths: readonly string[]): PasteSegment[] {
   return parts.map(part => {
-    if (typeof part === "string") return part;
+    if (typeof part === "string") return { text: part, file: false };
     const path = paths[part.file];
     if (path === undefined || path.includes("\0")) throw new Error("Invalid paste file reference");
-    if (part.format === "path") return quotePath(path);
+    if (part.format === "path") return { text: quotePath(path), file: true };
     const label = (part.label ?? "").replace(/[\r\n]+/gu, " ").replace(/[\\[\]*_`<>&]/gu, "\\$&");
-    return `${part.image ? "!" : ""}[${label}](${markdownPath(path)})`;
-  }).filter(text => text.length > 0);
+    return { text: `${part.image ? "!" : ""}[${label}](${markdownPath(path)})`, file: true };
+  }).filter(segment => segment.text.length > 0);
+}
+
+/** Uploaded files without surrounding text are separated like a native multi-file drop. */
+export function filePasteParts(count: number): PastePart[] {
+  return Array.from({ length: count }, (_, file): PastePart[] => file ? [" ", { file, format: "path" }] : [{ file, format: "path" }]).flat();
 }
 
 /** Preview text and delivered segments concatenate to exactly the same content. */
 export function renderPasteParts(parts: readonly PastePart[], paths: readonly string[]): string {
-  return renderPasteSegments(parts, paths).join("");
+  return renderPasteSegments(parts, paths).map(segment => segment.text).join("");
 }

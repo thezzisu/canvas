@@ -11,11 +11,11 @@ import type { AddressInfo } from 'node:net';
 import { UploadService } from "./uploads.ts";
 import { Store, sourceConnectionKey, type Source } from "./state.ts";
 import { createApp } from "./app.ts";
-import { TerminalManager } from "./terminals.ts";
+import { PASTE_SETTLE_QUIET_MS, TerminalManager } from "./terminals.ts";
 import type { SourceResource } from "./runtimes.ts";
 import { closeWindow, createSpace, listResources, shellQuote } from "./runtimes.ts";
 import type { writeInboxFile } from "./inbox.ts";
-import { MAX_PASTE_PARTS, MAX_UPLOAD_BEGIN_BYTES, renderPasteParts, renderPasteSegments, type PastePart } from "../shared/paste.ts";
+import { MAX_PASTE_PARTS, MAX_UPLOAD_BEGIN_BYTES, renderPasteParts, renderPasteSegments, type PastePart, type PasteSegment } from "../shared/paste.ts";
 
 class FakeSocket {
   readyState = 1;
@@ -31,7 +31,7 @@ function uploadRequest(bytes: Uint8Array, signal?: AbortSignal) {
   return new Request("http://canvas.test/api/uploads/fixture", { method: "PUT", body: bytes as BodyInit, signal });
 }
 type Writer = typeof writeInboxFile;
-function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; beforePaste?: () => Promise<void>; capture?: () => Promise<void>; reportAfterAbort?: boolean; inbox?: string } = {}) {
+function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; beforePaste?: () => Promise<void>; beforeResources?: () => Promise<void>; capture?: () => Promise<void>; reportAfterAbort?: boolean; inbox?: string } = {}) {
   const source: Source = { id: randomUUID(), name: "Fixture", transport: "local" };
   const socket = new FakeSocket(), other = new FakeSocket();
   const files = new Map<string, Buffer>(), removed: Array<{ sourceId: string; paths: string[] }> = [];
@@ -64,12 +64,11 @@ function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; b
       await options.capture?.();
       captures.push({ sourceId, windowId, socket });
       if (!canCapture) return undefined;
-      return async (texts: readonly string[], signal: AbortSignal) => {
+      return async (segments: readonly PasteSegment[]) => {
         await options.beforePaste?.();
-        signal.throwIfAborted();
         if (pasteFails) throw new Error("目标窗口已关闭");
-        pasteCalls.push([...texts]);
-        pasted.push(...texts.map(text => ({ sourceId, windowId, text })));
+        pasteCalls.push(segments.map(segment => segment.text));
+        pasted.push(...segments.map(({ text }) => ({ sourceId, windowId, text })));
       };
     },
   } as unknown as TerminalManager;
@@ -79,7 +78,7 @@ function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; b
       removed.push({ sourceId: removedSource.id, paths: [...paths] });
       for (const path of paths) files.delete(path);
     },
-    resources: async () => ({ ...source, status: "online", spaces: [{ id: "space", name: "Space",
+    resources: async () => (await options.beforeResources?.(), { ...source, status: "online", spaces: [{ id: "space", name: "Space",
       windows: [...windows].map(id => ({ id, name: id, panes: [], status: "unknown" })),
     }] }) as SourceResource,
   });
@@ -124,8 +123,9 @@ test("multi-file batches preserve order and paste each quoted path separately on
   const paths = [...f.files.keys()];
   assert.deepEqual(paths.map(path => path.slice(path.indexOf("_") + 1)), names);
   assert.deepEqual([...f.files.values()], contents);
-  assert.deepEqual(f.pasted, paths.map(path => ({ sourceId: f.source.id, windowId: "window-a", text: shellQuote(path) })));
-  assert.deepEqual(f.pasteCalls, [paths.map(shellQuote)], 'the complete ordered batch is submitted once');
+  const texts = paths.flatMap((path, index) => index ? [" ", shellQuote(path)] : [shellQuote(path)]);
+  assert.deepEqual(f.pasted, texts.map(text => ({ sourceId: f.source.id, windowId: "window-a", text })));
+  assert.deepEqual(f.pasteCalls, [texts], 'the complete ordered batch is submitted once');
   assert(f.pasted.every(item => !/[\r\n]/u.test(item.text)));
   assert.equal(f.captures.length, 1);
   const completed = f.socket.messages.find(message => message.state === "completed")!;
@@ -151,8 +151,8 @@ test("confirmed rich paste inserts the complete rendered content only after the 
   assert.equal(await pending, 204);
   const text = renderPasteParts(parts, [...f.files.keys()]);
   const segments = renderPasteSegments(parts, [...f.files.keys()]);
-  assert.deepEqual(f.pasted, segments.map(text => ({ sourceId: f.source.id, windowId: "window-a", text })));
-  assert.deepEqual(f.pasteCalls, [segments], 'each text/file segment stays distinct in the completed atomic batch');
+  assert.deepEqual(f.pasted, segments.map(({ text }) => ({ sourceId: f.source.id, windowId: "window-a", text })));
+  assert.deepEqual(f.pasteCalls, [segments.map(segment => segment.text)], 'each text/file segment stays distinct in the completed atomic batch');
   assert(!text.endsWith("\n"), "completion must not submit the terminal input");
 });
 
@@ -219,7 +219,7 @@ test("upload tokens reject other sessions, out-of-order writes and replays", asy
   assert.equal(await f.service.receive(tokens[0]!, "session-a", uploadRequest(Buffer.from("a"))), 204);
   assert.equal(await f.service.receive(tokens[0]!, "session-a", uploadRequest(Buffer.from("a"))), 404);
   assert.equal(await f.service.receive(tokens[1]!, "session-a", uploadRequest(Buffer.from("b"))), 204);
-  assert.equal(f.pasted.length, 2);
+  assert.deepEqual(f.pasteCalls.flat().map(text => text === " " ? " " : "path"), ["path", " ", "path"]);
 });
 
 test("progress only advances after the writer confirms bytes, and duplicate batches cannot overlap a window", async t => {
@@ -300,19 +300,50 @@ test("closed native windows and failed paste callbacks retain complete files wit
   }
 });
 
-test("cancellation uses the owning socket and prevents a delayed paste", async t => {
-  const paste = gate(), f = fixture(t, { beforePaste: () => paste.promise });
+test("cancellation uses the owning socket and prevents a pending paste", async t => {
+  const writing = gate(), f = fixture(t, { beforeWrite: () => writing.promise });
   const [token] = await f.begin([{ name: "one", size: 3 }]);
   f.service.cancel(f.other as never, "batch");
   const receiving = f.service.receive(token!, "session-a", uploadRequest(Buffer.from("one")));
-  while (!f.files.size) await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
   f.service.cancel(f.socket as never, "batch");
-  paste.resolve();
+  writing.resolve();
   assert.equal(await receiving, 409);
   await f.service.closeAll();
   assert.equal(f.files.size, 0);
   assert.deepEqual(f.pasted, []);
   assert.equal(f.socket.messages.at(-1)?.state, "cancelled");
+});
+
+test("cancellation after the last write but before the paste starts inserts nothing", async t => {
+  const checking = gate(), f = fixture(t, { beforeResources: () => checking.promise });
+  const [token] = await f.begin([{ name: "one", size: 3 }]);
+  const receiving = f.service.receive(token!, "session-a", uploadRequest(Buffer.from("one")));
+  while (!f.files.size) await new Promise(resolve => setImmediate(resolve));
+  f.service.cancel(f.socket as never, "batch");
+  checking.resolve();
+  assert.equal(await receiving, 409);
+  await f.service.closeAll();
+  assert.equal(f.files.size, 0);
+  assert.deepEqual(f.pasted, []);
+  assert.equal(f.socket.messages.at(-1)?.state, "cancelled");
+});
+
+test("a started paste is committed: cancellation and disconnects cannot split it", async t => {
+  const paste = gate(), f = fixture(t, { beforePaste: () => paste.promise });
+  const [token] = await f.begin([{ name: "one", size: 3 }], "window-a", "committed", ["Before ", { file: 0, format: "path" }, " after"]);
+  const receiving = f.service.receive(token!, "session-a", uploadRequest(Buffer.from("one")));
+  while (!f.files.size) await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+  f.service.cancel(f.socket as never, "committed");
+  f.service.disconnected(f.socket as never);
+  await f.service.begin(f.source, "window-a", f.socket as never, "session-a", { id: "overlap", files: [{ name: "two", size: 3 }] });
+  assert.equal(f.socket.messages.at(-1)?.state, "failed", "a committed paste still owns its window");
+  paste.resolve();
+  assert.equal(await receiving, 204);
+  assert.deepEqual(f.pasteCalls, [["Before ", shellQuote([...f.files.keys()][0]!), " after"]]);
+  assert.equal(f.files.size, 1);
+  assert.equal(f.socket.messages.filter(message => message.id === "committed").at(-1)?.state, "completed");
 });
 
 test("network request abort and source failure retain completed files without inserting partial paths", async t => {
@@ -413,9 +444,11 @@ test('real native terminal receives no upload paths until the whole batch succee
   if (!binary) { t.skip('Set CANVAS_TEST_HERDR_SERVER_BINARY for an isolated official server'); return; }
   for (const bracketed of [false, true]) await t.test(bracketed ? 'agent paste events' : 'ordinary shell spacing', async t => {
   const root = mkdtempSync(join(tmpdir(), 'cv-upload-batch-')), config = join(root, 'config');
-  const input = join(root, 'input.bin'), receiver = join(root, 'receiver');
+  const input = join(root, 'input.bin'), reads = join(root, 'reads.log'), receiver = join(root, 'receiver');
   mkdirSync(join(config, 'herdr'), { recursive: true });
-  writeFileSync(receiver, `#!/usr/bin/python3\nimport os,tty\ntty.setraw(0)\nprint('${bracketed ? '\\x1b[?2004h' : ''}UPLOAD_READY',flush=True)\nwith open(${JSON.stringify(input)},'ab',buffering=0) as output:\n while True:\n  data=os.read(0,4096)\n  if not data:break\n  output.write(data)\n`, { mode: 0o700 });
+  // Like an agent, a pasted path is processed asynchronously before its
+  // placeholder appears. Every read is logged with its arrival time.
+  writeFileSync(receiver, `#!/usr/bin/python3\nimport os,time,tty\ntty.setraw(0)\nprint('${bracketed ? '\\x1b[?2004h' : ''}UPLOAD_READY',flush=True)\nwith open(${JSON.stringify(input)},'ab',buffering=0) as output,open(${JSON.stringify(reads)},'a') as log:\n while True:\n  data=os.read(0,4096)\n  if not data:break\n  output.write(data)\n  log.write('%f %d\\n'%(time.monotonic(),len(data)));log.flush()\n  if b'/' in data:time.sleep(0.2);os.write(1,b'[file]')\n  else:os.write(1,b'.')\n`, { mode: 0o700 });
   writeFileSync(join(config, 'herdr/config.toml'), `onboarding=false\n[terminal]\ndefault_shell=${JSON.stringify(receiver)}\nshell_mode="non_login"\n`);
   const env = { PATH: process.env.PATH, HOME: root, XDG_CONFIG_HOME: config, XDG_STATE_HOME: join(root, 'state'), LANG: 'C.UTF-8' };
   const source: Source = { id: randomUUID(), name: 'Native fixture', transport: 'local',
@@ -477,10 +510,10 @@ test('real native terminal receives no upload paths until the whole batch succee
   assert.deepEqual(actualInput(), baseline, 'No path was inserted while any file was incomplete');
   writing.resolve(); assert.equal(await last, 204);
   const paste = (text: string) => bracketed ? `\x1b[200~${text}\x1b[201~` : text;
-  const inserted = Buffer.from(files.map(path => paste(shellQuote(path))).join(' '));
+  const inserted = Buffer.from(files.map(path => paste(shellQuote(path))).join(paste(' ')));
   await waitFor(() => actualInput().length === baseline.length + inserted.length, 'The complete batch reaches native input');
   assert.deepEqual(actualInput(), Buffer.concat([baseline, inserted]));
-  if (bracketed) assert.equal(actualInput().subarray(baseline.length).toString().split('\x1b[200~').length - 1, files.length, 'one native paste operation per uploaded path');
+  if (bracketed) assert.equal(actualInput().subarray(baseline.length).toString().split('\x1b[200~').filter(event => event.includes('/')).length, files.length, 'one native paste operation per uploaded path');
   assert(!inserted.includes(10) && !inserted.includes(13));
   const richParts: PastePart[] = ["Image: ", { file: 0, format: "markdown", image: true, label: "图.png" },
     " File: ", { file: 1, format: "path" }, " Done."];
@@ -489,10 +522,16 @@ test('real native terminal receives no upload paths until the whole batch succee
   assert.deepEqual(actualInput(), richBaseline, 'Rich text also waits until every attachment succeeds');
   assert.equal(await service.receive(rich[1]!, 'session', uploadRequest(Buffer.from('pdf'))), 204);
   const richSegments = renderPasteSegments(richParts, files.slice(-2));
-  const richInserted = Buffer.from(richSegments.map(paste).join(""));
+  const richInserted = Buffer.from(richSegments.map(segment => paste(segment.text)).join(""));
   await waitFor(() => actualInput().length === richBaseline.length + richInserted.length, 'Rich content reaches the original native input');
   assert.deepEqual(actualInput(), Buffer.concat([richBaseline, richInserted]));
   if (bracketed) assert.equal(richInserted.toString().split("\x1b[200~").length - 1, richSegments.length, 'mixed file references have individual paste events');
+  // Text after each attachment waits for that attachment's delayed output to settle.
+  let received = 0;
+  const arrivals = readFileSync(reads, 'utf8').trim().split('\n').map(line => line.split(' ').map(Number) as [number, number])
+    .filter(([, length]) => (received += length) > richBaseline.length);
+  assert(arrivals.length >= 3, 'paced groups arrive as separate native reads');
+  assert(arrivals.at(-1)![0] - arrivals[0]![0] >= 2 * (0.2 + PASTE_SETTLE_QUIET_MS / 1000) - 0.05, 'each following group waits for settled output');
   const failed = await start('failure', ['retained.txt', 'broken.txt']);
   assert.equal(await service.receive(failed[0]!, 'session', uploadRequest(Buffer.from('yes'))), 204);
   const beforeFailure = actualInput(), retained = files.at(-1)!;
