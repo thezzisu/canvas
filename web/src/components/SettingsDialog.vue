@@ -35,7 +35,7 @@ const versionFeedback = ref<'copied' | 'failed'>()
 let copyTimer: ReturnType<typeof setTimeout> | undefined
 let copyAttempt = 0
 function clearVersionFeedback() { copyAttempt++; clearTimeout(copyTimer); versionFeedback.value = undefined }
-function copyVersion() {
+async function copyVersion() {
   const attempt = ++copyAttempt
   const feedback = (value: 'copied' | 'failed') => {
     if (disposed || attempt !== copyAttempt || !props.open) return
@@ -43,7 +43,7 @@ function copyVersion() {
     clearTimeout(copyTimer)
     copyTimer = setTimeout(() => { versionFeedback.value = undefined }, 1800)
   }
-  if (copyText(JSON.stringify(frontendBuild, null, 2), () => feedback('failed'))) feedback('copied')
+  feedback(await copyText(JSON.stringify(frontendBuild, null, 2)) ? 'copied' : 'failed')
 }
 watch(() => props.open, clearVersionFeedback)
 watch(() => props.open, open => { if (open) refreshNotificationPermission() }, { immediate: true })

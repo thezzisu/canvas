@@ -20,10 +20,9 @@ watch([() => props.link, retry], async ([link], _, onCleanup) => {
   } catch { if (current) failed.value = true }
 }, { immediate: true })
 
-function copy() {
+async function copy() {
   const link = props.link
-  copied.value = 'copied'
-  copyText(link, () => { if (props.link === link) copied.value = 'failed' })
+  copied.value = await copyText(link) ? 'copied' : 'failed'
 }
 </script>
 

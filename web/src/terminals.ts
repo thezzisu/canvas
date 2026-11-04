@@ -1010,7 +1010,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       const result = await api<{ text: string }>(`/api/sources/${segment(sourceId)}/spaces/${segment(spaceId)}/windows/${segment(windowId)}/text`, { signal }, mountingContext)
       return result.text
     },
-    copySelection(text = current.term.getSelection()) { return current.clipboard?.copyText(text) ?? false },
+    copySelection(text = current.term.getSelection()) { return current.clipboard?.copyText(text) ?? Promise.resolve(false) },
     canPasteText,
     pasteText(text: string) {
       if (!text || !canPasteText()) return false

@@ -68,8 +68,8 @@ function copyResult(value: 'copied' | 'failed') {
   clearTimeout(copyTimer); copied.value = value
   copyTimer = setTimeout(() => { copied.value = '' }, 2200)
 }
-function copyNote() {
-  if (copyText(content.value, () => copyResult('failed'))) copyResult('copied')
+async function copyNote() {
+  copyResult(await copyText(content.value) ? 'copied' : 'failed')
 }
 function dragNote(event: DragEvent) {
   if (!writeNoteTransfer(event.dataTransfer, content.value)) event.preventDefault()

@@ -15,7 +15,7 @@ const props = defineProps<{
   modifiers: TerminalModifiers
   touchMode: TouchMode
   readText(signal: AbortSignal): Promise<string>
-  copyText(text?: string): boolean
+  copyText(text?: string): Promise<boolean>
 }>()
 const emit = defineEmits<{
   key: [key: string, modifiers?: Partial<TerminalModifiers>]
@@ -216,11 +216,11 @@ function updateSelection() {
   const area = textArea.value
   selected.value = !!area && area.selectionStart !== area.selectionEnd
 }
-function copy(all: boolean) {
+async function copy(all: boolean) {
   const area = textArea.value
   const text = all ? snapshot.value : area?.value.slice(area.selectionStart, area.selectionEnd) || ''
   if (!text) return
-  copyResult.value = props.copyText(text) ? 'copied' : 'failed'
+  copyResult.value = await props.copyText(text) ? 'copied' : 'failed'
   clearTimeout(copyTimer)
   copyTimer = setTimeout(() => { copyResult.value = '' }, 1800)
 }

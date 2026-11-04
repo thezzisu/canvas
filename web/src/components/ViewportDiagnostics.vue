@@ -45,10 +45,9 @@ watch(open, (value, _, cleanup) => {
     window.removeEventListener('pointerdown', outside, true)
   })
 })
-function copy() {
+async function copy() {
   const snapshot = collectViewportDiagnostics(props.settings)
-  const failed = () => { feedback.value = 'failed' }
-  if (copyText(JSON.stringify(snapshot, null, 2), failed)) feedback.value = 'copied'
+  feedback.value = await copyText(JSON.stringify(snapshot, null, 2)) ? 'copied' : 'failed'
   clearTimeout(timer)
   timer = setTimeout(() => { feedback.value = '' }, 2000)
 }

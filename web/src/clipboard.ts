@@ -1,6 +1,7 @@
 import type { Terminal } from '@xterm/xterm'
 import { isPasteShortcut } from './clipboard-shortcuts'
 import { clearCopiedFile } from './file-clipboard'
+import { notifyCopyFeedback } from './copy-feedback'
 
 const MAX_COPY_BYTES = 1024 * 1024
 const COPY_GESTURE_MS = 3000
@@ -8,9 +9,11 @@ let restoringFocus = false
 export const clipboardRestoringFocus = () => restoringFocus
 
 /** A user copy works on HTTP as well as secure origins. Never read the clipboard. */
-export function copyText(text: string, failed: () => void): boolean {
-  if (!text) return false
-  if (new TextEncoder().encode(text).length > MAX_COPY_BYTES) { failed(); return false }
+export async function copyText(text: string): Promise<boolean> {
+  if (!text || new TextEncoder().encode(text).length > MAX_COPY_BYTES) {
+    notifyCopyFeedback('failed')
+    return false
+  }
   clearCopiedFile()
   const documentSelection = document.getSelection()
   const ranges = documentSelection ? Array.from({ length: documentSelection.rangeCount }, (_, index) => documentSelection.getRangeAt(index).cloneRange()) : []
@@ -54,19 +57,18 @@ export function copyText(text: string, failed: () => void): boolean {
     finally { restoringFocus = false }
   }
   if (!copied && navigator.clipboard?.writeText) {
-    void navigator.clipboard.writeText(text).catch(failed)
-    return true
+    try { await navigator.clipboard.writeText(text); copied = true } catch { copied = false }
   }
-  if (!copied) failed()
+  notifyCopyFeedback(copied ? 'copied' : 'failed')
   return copied
 }
 
-export type ClipboardNotice = 'failed' | 'macPaste'
+export type ClipboardNotice = 'macPaste'
 
 interface ClipboardOptions {
   visible(): boolean
   controlsInput(): boolean
-  copyError(value: ClipboardNotice | undefined): void
+  copyError?(value: ClipboardNotice | undefined): void
 }
 
 /** Copy is authorized only by a real gesture in this terminal, never by replay. */
@@ -99,20 +101,19 @@ export class TerminalClipboard {
     if (!text) return false
     this.copyUntil = 0
     this.lastCopiedSelection = text
-    return this.copy(text)
+    void this.copy(text)
+    return true
   }
-  private copy(text: string) {
+  private async copy(text: string) {
     clearTimeout(this.noticeTimer)
-    this.options.copyError(undefined)
-    return copyText(text, () => this.notice('failed'))
+    return copyText(text)
   }
-  copyText(text: string): boolean { return this.ready() && this.copy(text) }
+  copyText(text: string): Promise<boolean> { return this.ready() ? this.copy(text) : Promise.resolve(false) }
   touchSelectionCompleted(): void { this.allowProgramCopy() }
   private notice(message: ClipboardNotice) {
     if (this.disposed) return
     clearTimeout(this.noticeTimer)
-    this.options.copyError(message)
-    this.noticeTimer = setTimeout(() => this.options.copyError(undefined), 5000)
+    this.options.copyError?.(message)
   }
 
   key(event: KeyboardEvent): boolean {

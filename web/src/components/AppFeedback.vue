@@ -2,11 +2,12 @@
 import { onBeforeUnmount, watch } from 'vue'
 import { useToast, type Toast } from '@nuxt/ui/composables/useToast'
 import { useI18n } from 'vue-i18n'
+import { copyFeedback } from '../copy-feedback'
 
 const props = defineProps<{ error: string; success: string }>()
 const emit = defineEmits<{ dismiss: [] }>()
-const { locale } = useI18n(), toast = useToast()
-let current: Toast | undefined
+const { locale, t } = useI18n(), toast = useToast()
+let current: Toast | undefined, copyCurrent: Toast | undefined
 watch([() => props.error, () => props.success, locale], ([error, success]) => {
   if (current) { toast.remove(current.id); current = undefined }
   const message = error || success
@@ -17,7 +18,13 @@ watch([() => props.error, () => props.success, locale], ([error, success]) => {
   })
   current = entry
 }, { immediate: true })
-onBeforeUnmount(() => { if (current) toast.remove(current.id) })
+watch([copyFeedback, locale], ([feedback]) => {
+  if (copyCurrent) { toast.remove(copyCurrent.id); copyCurrent = undefined }
+  if (!feedback) return
+  const title = feedback.kind === 'canvas' ? t('fileTransfer.copied') : t(`terminal.clipboard.${feedback.kind}`)
+  copyCurrent = toast.add({ id: 'copy-feedback', title, color: feedback.kind === 'failed' ? 'error' : 'success', duration: feedback.kind === 'failed' ? 5000 : 1500, type: 'background' })
+}, { immediate: true })
+onBeforeUnmount(() => { if (current) toast.remove(current.id); if (copyCurrent) toast.remove(copyCurrent.id) })
 </script>
 
 <template><span hidden /></template>

@@ -139,7 +139,7 @@ function readText(signal: AbortSignal) { return terminal?.readText(signal) ?? Pr
 function paneContext(x: number, y: number, signal: AbortSignal) { return terminal?.paneContext(x, y, signal) ?? Promise.resolve(null) }
 function paneAction(pane: PaneContext, command: PaneAction) { return terminal?.paneAction(pane, command) ?? Promise.reject(new Error(t('terminal.unavailable'))) }
 function allowsContextMenu() { return terminal?.allowsContextMenu() ?? true }
-function copyText(text?: string) { return terminal?.copySelection(text) ?? false }
+function copyText(text?: string) { return terminal?.copySelection(text) ?? Promise.resolve(false) }
 function reading(active: boolean) { if (active) terminal?.blur() }
 function mobileKey(key: string, modifiers?: Partial<TerminalModifiers>) { terminal?.sendKey(key, modifiers) }
 function mobileModifiers(value: TerminalModifiers) { terminal?.setModifiers(value) }
@@ -249,7 +249,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <div v-if="noteDrag || fileDrag" class="terminal-file-drop terminal-note-drop" :class="{ 'note-drop-unavailable': !noteDropAvailable }" aria-hidden="true">{{ !noteDropAvailable ? noteDropLabel : fileDrag ? t(status.fileReading ? 'fileTransfer.preparing' : 'fileTransfer.drop') : noteDropLabel }}</div>
     <span v-if="status.upload?.rejected" class="terminal-copy-notice copy-failed" role="alert">{{ status.upload.rejected }}</span>
     <span v-if="status.fileReading && !fileDrag" class="terminal-copy-notice" role="status">{{ t('fileTransfer.preparing') }}</span>
-    <span v-if="status.clipboardError" class="terminal-copy-notice" :class="{ 'copy-failed': status.clipboardError === 'failed' }" role="status">{{ t(`terminal.clipboard.${status.clipboardError}`) }}</span>
+    <span v-if="status.clipboardError" class="terminal-copy-notice" role="status">{{ t(`terminal.clipboard.${status.clipboardError}`) }}</span>
     <div v-if="status.upload" class="terminal-upload nodrag nopan" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :class="{ 'upload-failed': status.upload.state === 'failed' }" :data-upload-id="status.upload.id" :data-upload-state="status.upload.state" @pointerdown.stop @mousedown.stop>
       <div class="terminal-upload-row"><span class="terminal-upload-name" :title="uploadName">{{ uploadName }}</span><small v-if="status.upload.queued">+{{ status.upload.queued }}</small><span class="terminal-upload-status" role="status">{{ uploadLabel }}</span><button :aria-label="uploadActive ? t('terminal.upload.cancel') : t('terminal.upload.close')" :disabled="status.upload.cancelling" @click.stop="terminal?.cancelUpload()"><Icon name="close" :size="13" /></button></div>
       <div v-if="uploadActive" class="terminal-upload-track" role="progressbar" :aria-valuenow="status.upload.transferred" :aria-valuemin="0" :aria-valuemax="status.upload.total" :aria-valuetext="`${uploadPercent}%`" :aria-label="t('terminal.upload.progress')"><span :style="{ width: `${uploadPercent}%` }" /></div>

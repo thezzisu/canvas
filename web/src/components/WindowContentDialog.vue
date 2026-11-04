@@ -123,12 +123,10 @@ async function openLink(item: Extract<WindowContentItem, { kind: 'link' }>) {
     if (!current.signal.aborted && result.value === snapshot) error.value = reason instanceof Error ? reason : 'panels.scan.openFailed'
   } finally { if (fileRequest === current) { fileRequest = undefined; opening.value = '' } }
 }
-function copy(item: WindowContentItem) {
+async function copy(item: WindowContentItem) {
   clearTimeout(copyTimer)
-  const owner = result.value
   const value = item.kind === 'link' ? item.url : item.path || item.label
-  const failed = () => { if (result.value === owner) copied.value = { id: item.id, failed: true } }
-  if (copyText(value, failed)) copied.value = { id: item.id, failed: false }
+  copied.value = { id: item.id, failed: !(await copyText(value)) }
   copyTimer = setTimeout(() => { copied.value = undefined }, 1800)
 }
 const modalContent = { onCloseAutoFocus: (event: Event) => event.preventDefault(), onEscapeKeyDown: (event: Event) => event.stopPropagation() }
