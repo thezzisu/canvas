@@ -80,6 +80,7 @@ interface Session {
   keyboard?: ReturnType<typeof bindMobileKeyboard>
   mobileInput?: ReturnType<typeof bindMobileInput>
   keyHandler?: (event: KeyboardEvent) => boolean
+  composing?: boolean
   suppressInput?: boolean
   nativeKey?: { id: string; virtual: TerminalModifiers }
   keyboardLock?: ReturnType<typeof bindTerminalKeyboardLock>
@@ -823,7 +824,13 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       if (!interactive(current)) return false
       if (document.activeElement !== (current.mobile ? current.mobileInput?.element : current.term.textarea)) return true
       if (current.clipboard?.key(event) === false) { current.nativeKey = undefined; return false }
-      if (event.isComposing || event.keyCode === 229 || ['Process', 'Dead', 'AltGraph'].includes(event.key) || event.getModifierState('AltGraph')) {
+      if (event.isComposing || current.composing) {
+        // The IME owns every key of an active composition. Some Linux IME
+        // bridges report real key codes here; xterm would treat those as a
+        // commit and send the unfinished preedit before the final text.
+        current.nativeKey = undefined; setModifiers(current); return false
+      }
+      if (event.keyCode === 229 || ['Process', 'Dead', 'AltGraph'].includes(event.key) || event.getModifierState('AltGraph')) {
         current.nativeKey = undefined; setModifiers(current); return true
       }
       const id = event.code || event.key
@@ -881,8 +888,10 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       if (!interactive(current)) { event.preventDefault(); event.stopImmediatePropagation(); return }
       current.nativeKey = undefined; setModifiers(current); claimFocus(current)
     }, { capture: true })
-    session.term.textarea?.addEventListener('compositionstart', () => { current.nativeKey = undefined; setModifiers(current) })
-    session.term.textarea?.addEventListener('blur', () => { current.nativeKey = undefined; setModifiers(current) })
+    session.term.textarea?.addEventListener('compositionstart', () => { current.composing = true; current.nativeKey = undefined; setModifiers(current) })
+    session.term.textarea?.addEventListener('compositionend', () => { current.composing = false })
+    session.term.textarea?.addEventListener('focus', () => { current.composing = false })
+    session.term.textarea?.addEventListener('blur', () => { current.composing = false; current.nativeKey = undefined; setModifiers(current) })
     const removeTouch = bindTerminalTouch(session.surface, session.term, {
       active: () => current.mobile && current.magnified && current.state.status === 'connected' && !current.state.readOnly,
       mode: () => current.touchMode,
