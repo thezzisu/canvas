@@ -286,7 +286,7 @@ function pruneReadingPreferences() {
   pruneFileViews(activeInstance.value.id, state.canvases, undefined, removalUndo.value?.fileViews())
   pruneCardZooms(state.instanceId, state.canvases, undefined, removalUndo.value?.zooms())
 }
-const notificationToasts = useToast().toasts
+const { toasts: notificationToasts, add: addToast } = useToast()
 // Nuxt UI can enqueue after nextTick; reject stale account notices when published.
 watch([notificationToasts, apiRevision, authenticated, () => latestState.value?.instanceId], ([items, revision, signedIn, backend]) => {
   const prefix = `notification:${revision}:${backend}:`
@@ -884,6 +884,17 @@ async function restoreViewport() {
   const initialized = new Set(getNodesInitialized.value.map(node => node.id))
   if (nodes.value.some(node => !initialized.has(node.id))) return
   if (requested && (requested.location.instance !== instance || requested.location.canvas !== id && canvases.value.some(canvas => canvas.id === requested.location.canvas))) return
+  const target = requested?.fitNodeId ? nodes.value.find(node => node.id === requested.fitNodeId) : undefined
+  if (target) {
+    const camera = cameraFromViewport(pageViewport({ ...target.position, width: target.data.width, height: target.data.height },
+      { width: frame.clientWidth, height: frame.clientHeight }), { width: frame.clientWidth, height: frame.clientHeight })
+    pendingViewport = ''
+    cameraFrame = canvasFrame(frame)
+    navigation.restored(requested, { instance, canvas: id, camera })
+    navigationFit.value = { canvasId: id, id: target.id, pending: false }
+    return
+  }
+  if (requested?.fitNodeId) addToast({ title: t('app.connectionNotVisible'), color: 'neutral', duration: 3500, type: 'background' })
   const ownLocation = parseCanvasLocation(window.location.hash)
   const saved = requested ? resolveCanvasLocation(requested.location, canvases.value.map(canvas => canvas.id))
     : ownLocation?.instance === instance && ownLocation.canvas === id && !!ownLocation.view === overviewPaged.value ? ownLocation
@@ -1186,14 +1197,14 @@ watch(pageLayout, async () => { if (paging.value) { await nextTick(); await fitP
 watch(overviewInteraction, value => { if (value) lastOverviewInteraction = value; if (isOverview.value) rebuildNodes() })
 watch([overviewSelected, overviewOrder], async () => { preferredPageX.value = undefined; if (isOverview.value) { rebuildNodes(); await nextTick(); if (paging.value) await fitPage(); else void fitView({ padding: .14, maxZoom: 1, duration: 150 }) } })
 watch(activeId, async () => { if (!authenticated.value) return; scanTarget.value = null; preferredPageX.value = undefined; cancelCreatedReveal(); lastOverviewInteraction = undefined; overviewMenuOpen.value = false; layoutGesture = ''; resizingCard = undefined; focused.value = null; focusedCardId.value = ''; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
-function switchCanvas(id: string) {
+function switchCanvas(id: string, fitNodeId?: string) {
   if (notificationReveal.value?.canvasId !== id) cancelNotificationReveal()
   clearContentFocus(); cancelCreatedReveal()
   if (focused.value) void closeFocus()
   if (focusedCardId.value) void closeCardFocus()
   sidebarOpen.value = false
-  if (id === activeId.value && !unknownInstance.value && !navigation.requested.value) return
-  void flushNotes(activeId.value); saveViewport(); navigation.visit(activeInstance.value.id, id)
+  if (id === activeId.value && !unknownInstance.value && !navigation.requested.value && !fitNodeId) return
+  void flushNotes(activeId.value); saveViewport(); navigation.visit(activeInstance.value.id, id, fitNodeId)
 }
 function backgroundSaved(_updated: Canvas) { void syncState().catch(showError) }
 function openSettings() { settingsDialog.value = true; sidebarOpen.value = false; canvasMenu.value = false; sourcePanel.value = false }
@@ -1936,7 +1947,7 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
         </nav>
         <div class="sidebar-divider" role="separator" />
         <div class="nav-section-label"><span>{{ t('app.connections') }}</span><button class="icon-button" :title="t('app.addConnection')" :aria-label="t('app.addConnection')" @click="openSource()"><Icon name="plus" :size="16" /></button></div>
-        <div class="source-nav"><SidebarList :key="activeInstanceId" :items="orderedSources" @reorder="ids => rememberSidebarOrder('sources', ids)"><template #default="{ item: source, hint }"><button :aria-description="hint" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" class="source-nav-item" :title="`${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}${resources.find(item => item.id === source.id)?.serverVersion ? ` · herdr ${resources.find(item => item.id === source.id)!.serverVersion}` : ''}`" @click="sourcePanel = true; expandedSource = source.id"><span data-reorder-handle :title="hint"><Icon class="source-nav-icon" name="server" :size="16" /></span><span class="source-nav-name">{{ source.name }}</span><span data-reorder-handle :title="hint" class="source-nav-status"><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : resources.find(item => item.id === source.id)?.status === 'online' ? 'connected' : ''" /></span></button></template></SidebarList><button v-if="latestState && !sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="16" /><span class="source-empty-label">{{ t('app.addConnection') }}</span></button></div>
+        <div class="source-nav"><SidebarList :key="activeInstanceId" :items="orderedSources" @reorder="ids => rememberSidebarOrder('sources', ids)"><template #default="{ item: source, hint }"><button :aria-description="hint" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" class="source-nav-item" :title="`${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}${resources.find(item => item.id === source.id)?.serverVersion ? ` · herdr ${resources.find(item => item.id === source.id)!.serverVersion}` : ''}`" @click="sourcePanel = false; switchCanvas('overview', `source:${source.id}`)"><span data-reorder-handle :title="hint"><Icon class="source-nav-icon" name="server" :size="16" /></span><span class="source-nav-name">{{ source.name }}</span><span data-reorder-handle :title="hint" class="source-nav-status"><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : resources.find(item => item.id === source.id)?.status === 'online' ? 'connected' : ''" /></span></button></template></SidebarList><button v-if="latestState && !sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="16" /><span class="source-empty-label">{{ t('app.addConnection') }}</span></button></div>
       </div>
       <div class="sidebar-footer">
         <UDropdownMenu v-model:open="accountMenuOpen" :modal="false" :items="accountMenu" :portal="appElement || false"

@@ -1,7 +1,7 @@
 import { onScopeDispose, shallowRef, type Ref } from 'vue'
 import { bindCanvasHistory, recallCanvasLocation, recallLastCanvasLocation, rememberCanvasLocation, type CanvasLocation } from './canvas-location'
 
-export interface CanvasNavigation { location: CanvasLocation; revision: number }
+export interface CanvasNavigation { location: CanvasLocation; revision: number; fitNodeId?: string }
 interface Options {
   instanceId: Readonly<Ref<string>>
   hasInstance(id: string): boolean
@@ -14,8 +14,8 @@ export function useCanvasLocation(options: Options) {
   const requested = shallowRef<CanvasNavigation>()
   const unknownInstance = shallowRef<string>()
   let revision = 0, initial = true
-  const stage = (location: CanvasLocation | undefined) => {
-    requested.value = location ? { location, revision: ++revision } : undefined
+  const stage = (location: CanvasLocation | undefined, fitNodeId?: string) => {
+    requested.value = location ? { location, revision: ++revision, ...(fitNodeId ? { fitNodeId } : {}) } : undefined
     unknownInstance.value = location && !options.hasInstance(location.instance) ? location.instance : undefined
     if (location && !unknownInstance.value && location.instance !== options.instanceId.value) options.selectInstance(location.instance)
   }
@@ -36,13 +36,13 @@ export function useCanvasLocation(options: Options) {
       history.read()
     },
     saved: (instance: string, canvas: string) => recallCanvasLocation(localStorage, instance, canvas),
-    visit(instance: string, canvas?: string) {
+    visit(instance: string, canvas?: string, fitNodeId?: string) {
       if (!options.hasInstance(instance)) return false
-      const location = canvas
+      const location = fitNodeId ? { instance, canvas: canvas || 'overview' } : canvas
         ? recallCanvasLocation(localStorage, instance, canvas) || { instance, canvas }
         : recallLastCanvasLocation(localStorage, instance) || { instance, canvas: 'overview' }
       history.write(location, 'push')
-      stage(location)
+      stage(location, fitNodeId)
       return true
     },
     fallback(instance: string) {
