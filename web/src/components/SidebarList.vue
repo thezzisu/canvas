@@ -1,6 +1,6 @@
 <script setup lang="ts" generic="T extends { id: string; name: string }">
 import { computed, ref } from 'vue'
-import { useSortable, insertNodeAt, removeNode } from '@vueuse/integrations/useSortable'
+import { useSortable, insertNodeAt, removeNode, type UseSortableOptions } from '@vueuse/integrations/useSortable'
 import { orderedItems } from '../sidebar-order'
 import { useI18n } from 'vue-i18n'
 
@@ -16,7 +16,9 @@ function changed(proposed: string[], moved: string) {
   if (item) announcement.value = t('app.itemReordered', { name: item.name, position: ids.indexOf(moved) + 1, count: ids.length })
 }
 useSortable(root, computed(() => props.items), {
-  handle: '[data-reorder-handle]', animation: 150, direction: 'vertical',
+  animation: 150, direction: 'vertical', delay: 200, delayOnTouchOnly: true,
+  // Native touchmove keeps scrolling available until the long press starts a drag.
+  supportPointer: false,
   draggable: '.sidebar-sortable-item', ghostClass: 'sidebar-sortable-ghost', chosenClass: 'sidebar-sortable-chosen',
   fallbackTolerance: 5, touchStartThreshold: 5,
   onUpdate(event) {
@@ -28,7 +30,7 @@ useSortable(root, computed(() => props.items), {
     insertNodeAt(event.from, event.item, index)
     changed(ids, id)
   },
-})
+} satisfies UseSortableOptions & { supportPointer: boolean })
 function keydown(event: KeyboardEvent) {
   if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return
   const element = (event.target as HTMLElement).closest<HTMLElement>('[data-order-id]')
@@ -52,8 +54,7 @@ function keydown(event: KeyboardEvent) {
 </template>
 
 <style scoped>
-.sidebar-sortable :deep([data-reorder-handle]){display:flex;align-items:center;justify-content:center;align-self:stretch;width:100%;cursor:grab;touch-action:none}
-.sidebar-sortable-chosen :deep([data-reorder-handle]){cursor:grabbing}
+.sidebar-sortable-chosen :deep(button){cursor:grabbing}
 .sidebar-sortable-ghost{opacity:.3}
 .sidebar-sortable-chosen{background:#e9b1880a;border-radius:5px}
 </style>

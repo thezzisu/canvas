@@ -59,8 +59,7 @@
   .app-shell:not(.sidebar-drawer) .sidebar { width: 52px; min-width: 52px; padding: 0 5px; }
   .app-shell:not(.sidebar-drawer) .sidebar>.brand { grid-template-columns: minmax(0,1fr); justify-items: center; margin-bottom: 6px; }
   .app-shell:not(.sidebar-drawer) .sidebar :is(.instance-trigger,.nav-item,.source-nav-item,.source-empty,.nav-section-label) { grid-template-columns: minmax(0,1fr); justify-items: center; padding-inline: 0; gap: 0; }
-  .app-shell:not(.sidebar-drawer) :is(.sidebar>.brand>span:nth-child(2),.instance-trigger>span,.sidebar .instance-trigger>svg:last-child,.nav-section-label>span,.nav-item>span:not([data-reorder-handle]),.source-nav-icon,.source-nav-name,.source-empty-label,.sidebar-account>span:nth-child(2)) { display: none; }
-  .app-shell:not(.sidebar-drawer) .source-nav-item>[data-reorder-handle]:first-child { display: none; }
+  .app-shell:not(.sidebar-drawer) :is(.sidebar>.brand>span:nth-child(2),.instance-trigger>span,.sidebar .instance-trigger>svg:last-child,.nav-section-label>span,.nav-item>span,.source-nav-icon,.source-nav-name,.source-empty-label,.sidebar-account>span:nth-child(2)) { display: none; }
   .app-shell:not(.sidebar-drawer) .nav-section-label { height: 25px; }
   .app-shell:not(.sidebar-drawer) .nav-section-label .icon-button { width: 25px; height: 23px; }
   .app-shell:not(.sidebar-drawer) .sidebar-divider { margin: 11px 5px 7px; }
