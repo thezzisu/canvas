@@ -26,7 +26,7 @@ const content = computed(() => ({ ...props.content,
 // Put notifications inside the active dialog's native focus/ARIA boundary.
 watch([element, open], ([node, active], _previous, cleanup) => {
   if (node && active) cleanup(registerNotificationSurface(node))
-}, { flush: 'post' })
+}, { flush: 'sync' })
 </script>
 
 <template>

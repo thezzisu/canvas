@@ -1,21 +1,44 @@
 <script setup lang="ts">
-import { computed, watchPostEffect } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useEventListener } from '@vueuse/core'
 import { notificationPortal, notificationSurface } from '../notification-surface'
 
 const props = defineProps<{ portal?: HTMLElement }>()
 const target = computed(() => notificationSurface.value || props.portal || document.body)
+let host: HTMLElement | undefined
 function show() {
-  const host = notificationPortal.value
   if (host?.isConnected && !host.matches(':popover-open')) host.showPopover()
 }
-watchPostEffect(() => { void target.value; show() })
-useEventListener(document, 'fullscreenchange', () => { notificationPortal.value?.hidePopover(); show() })
+function relocate() {
+  const parent = target.value as HTMLElement & { moveBefore?(node: Node, child: Node | null): void }
+  if (!host || !parent.isConnected) return
+  if (host.parentElement !== parent) {
+    // Reparent the empty portal without restarting descendant animations,
+    // focus or popover state. Nuxt UI still owns the toasts and their timers.
+    if (host.isConnected && parent.moveBefore) {
+      // Initialize a newly mounted modal's CSS animation before adopting the
+      // popover; otherwise Chromium restarts its descendants' animations.
+      parent.getAnimations()
+      parent.moveBefore(host, null)
+    } else parent.appendChild(host)
+  }
+  show()
+}
+watch(target, relocate, { flush: 'sync' })
+onMounted(() => {
+  host = document.createElement('div')
+  host.className = 'canvas-notification-host'
+  host.popover = 'manual'; host.setAttribute('aria-live', 'off')
+  relocate(); notificationPortal.value = host
+})
+onBeforeUnmount(() => {
+  if (notificationPortal.value === host) notificationPortal.value = undefined
+  host?.remove()
+})
+useEventListener(document, 'fullscreenchange', () => { host?.hidePopover(); show() })
 </script>
 
-<template>
-  <Teleport :to="target"><div ref="notificationPortal" popover="manual" aria-live="off" class="canvas-notification-host" /></Teleport>
-</template>
+<template><span hidden /></template>
 
 <style>
 /* The browser's top layer escapes modal transforms and clipping without
