@@ -74,7 +74,6 @@ function insert(value: NoteInsertion) {
   const tr = current.state.tr.replaceRange(from, to, slice)
   closeHistory(tr); current.view.dispatch(tr)
   current.view.dispatch(closeHistory(current.state.tr))
-  emit('flush')
   return true
 }
 watch(task, (current, previous) => {
@@ -99,9 +98,8 @@ function copy(event: ClipboardEvent, cut = false) {
   const content = current.state.doc.textBetween(from, to, '\n', node => node.type.name === 'noteAttachment' ? attachmentToken(node.attrs.id) : '\n')
   try {
     const note = noteClipboard(content, assets.value, apiContext())
-    if (!note.parts.some(part => typeof part !== 'string')) return false
     data.setData('text/plain', clipboardText(note))
-    data.setData(NOTE_CLIPBOARD_TYPE, JSON.stringify(note))
+    if (note.parts.some(part => typeof part !== 'string')) data.setData(NOTE_CLIPBOARD_TYPE, JSON.stringify(note))
     event.preventDefault()
     if (cut) current.commands.deleteSelection()
     beginCopyFeedback()('copied')
@@ -121,10 +119,23 @@ function paste(event: ClipboardEvent) {
     const length = note.parts.reduce((size, part) => size + (typeof part === 'string' ? part.length : 38), 0)
     if (serializeNote(current.state.doc.toJSON()).length - (end - offset) + length > 200_000) { fail('panels.note.tooLong'); return true }
     const replaced = serializeNote(current.state.doc.toJSON()).slice(offset, end)
-    void pasteNoteAttachments(props.canvasId, props.noteId, note, offset, end, replaced, props.insertAttachment)
+    void pasteNoteAttachments(props.canvasId, props.noteId, note, offset, end, replaced,
+      value => { if (!insert(value)) props.insertAttachment(value) }, assets.value)
     return true
   }
-  if (!hasFileTransfer(data)) return false
+  if (!hasFileTransfer(data)) {
+    const text = data?.getData('text/plain'), current = editor()
+    if (!text || !current || props.readOnly) return false
+    event.preventDefault()
+    // Notes store plain paragraphs. Use clipboard text rather than importing
+    // HTML block spacing or the rich editor's double-newline serialization.
+    const content = current.schema.nodeFromJSON(noteDocument(text.replace(/\r\n?/g, '\n'))).content
+    const tr = current.state.tr.replaceSelection(new Slice(content, 1, 1)).scrollIntoView()
+      .setMeta('paste', true).setMeta('uiEvent', 'paste')
+    current.view.dispatch(closeHistory(tr))
+    current.view.dispatch(closeHistory(current.state.tr))
+    return true
+  }
   event.preventDefault()
   const incoming = readFileTransfer(data)
   if (incoming.error) fail(incoming.error === 'folders' ? 'terminal.upload.foldersUnsupported' : 'panels.file.unreadableTransfer')
@@ -171,7 +182,7 @@ defineExpose({ chooseFiles, pending })
     :on-transaction="transaction"
     :on-blur="() => emit('flush')" @update:model-value="changed" />
   </div>
-  <span v-if="pending" class="note-upload-status" role="status">{{ t('panels.file.adding') }}</span>
+  <span v-if="task?.uploading" class="note-upload-status" role="status">{{ t('panels.file.adding') }}</span>
 </template>
 
 <style scoped>

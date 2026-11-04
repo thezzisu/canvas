@@ -628,7 +628,6 @@ function noteData(node: NoteCanvasNode, focus = false): NoteData {
       const content = insertNoteContent(latest.content, value)
       if (content.length > 200_000) { reportError(t('panels.note.tooLong')); return }
       editNote(canvas.id, node.id, { content })
-      void flushNotes(canvas.id)
     },
     onChange: (id, patch) => editNote(canvasId, id, patch), onFlush: () => void flushNotes(canvasId),
     onAction: (action, id) => { if (action === 'remove') void removeNode(id); else cardAction(action, id) } }
@@ -1631,16 +1630,16 @@ function editNote(canvasId: string, id: string, patch: NotePatch) {
   pendingNotes.set(key, { canvasId, id, patch: { ...pendingNotes.get(key)?.patch, ...changed } })
   checkpointEdits()
   clearTimeout(noteTimers.get(key))
-  noteTimers.set(key, setTimeout(() => { noteTimers.delete(key); void flushNotes(canvasId) }, 400))
+  noteTimers.set(key, setTimeout(() => { noteTimers.delete(key); void flushNotes(canvasId, false) }, 400))
   if (activeId.value === canvasId) saveState.value = 'saving'
   const visible = currentCanvas.value?.nodes.find((item): item is NoteCanvasNode => item.id === id && item.type === 'note')
   if (visible) setNodes(nodes.value.map(flow => flow.id === id ? { ...flow, data: { ...flow.data, ...visible },
     style: { ...flow.style, height: `${visible.height}px` } } : flow))
 }
-async function flushNotes(canvasId?: string): Promise<boolean> {
+async function flushNotes(canvasId?: string, force = true): Promise<boolean> {
   const context = apiContext()
-  if (noteSave) { if (!await noteSave || !isCurrentApi(context)) return false; return flushNotes(canvasId) }
-  const batch = [...pendingNotes.entries()].filter(([, edit]) => !canvasId || edit.canvasId === canvasId)
+  if (noteSave) { if (!await noteSave || !isCurrentApi(context)) return false; return flushNotes(canvasId, force) }
+  const batch = [...pendingNotes.entries()].filter(([key, edit]) => (!canvasId || edit.canvasId === canvasId) && (force || !noteTimers.has(key)))
   if (!batch.length) return true
   for (const [key, edit] of batch) {
     clearTimeout(noteTimers.get(key)); noteTimers.delete(key); pendingNotes.delete(key); savingNotes.set(key, edit)
@@ -1666,13 +1665,13 @@ async function flushNotes(canvasId?: string): Promise<boolean> {
     checkpointEdits()
     await syncState().catch(showError)
     if (!isCurrentApi(context)) return false
-    if (!canvasId || activeId.value === canvasId) saveState.value = failed ? 'saveFailed' : 'saved'
+    if (!canvasId || activeId.value === canvasId) saveState.value = failed ? 'saveFailed' : [...pendingNotes.values()].some(edit => edit.canvasId === activeId.value) ? 'saving' : 'saved'
     return !failed
   })()
   let saved = false
   try { saved = await noteSave } finally { if (isCurrentApi(context)) noteSave = undefined }
   if (!saved || !isCurrentApi(context)) return false
-  return flushNotes(canvasId)
+  return force ? flushNotes(canvasId) : true
 }
 async function flushLayout(canvasId: string) {
   const context = apiContext()
