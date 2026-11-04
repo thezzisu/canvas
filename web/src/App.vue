@@ -91,7 +91,7 @@ import { insertNoteContent } from './note-document'
 import type { Canvas, CanvasNode, FileCanvasNode, FileData, NoteCanvasNode, NoteData, NotePatch, SharedState, Source, SourceResource, TerminalCanvasNode, TerminalData, WindowSize } from './types'
 
 const { t, n, locale } = useI18n()
-const { fitView, zoomIn, zoomOut, setViewport, getViewport, getNodesInitialized, ariaLiveMessage, applyNodeChanges } = useVueFlow()
+const { fitView, zoomIn, zoomOut, setViewport, getViewport, getNodesInitialized, ariaLiveMessage, applyNodeChanges, nodes, setNodes } = useVueFlow()
 const { hasSafeTop } = useDisplayCutout()
 const ViewportDiagnostics = defineAsyncComponent(() => import('./components/ViewportDiagnostics.vue'))
 const mobile = useMobileLayout()
@@ -147,7 +147,6 @@ const navigation = useCanvasLocation({ instanceId: activeInstanceId, hasInstance
   canRemember: () => pageVisible.value })
 const { unknownInstance } = navigation
 const indicators = computed(() => resourcesLoaded.value && !undiscoveredSources.value.length ? canvasIndicators(canvases.value, resources.value) : {})
-const nodes = shallowRef<Node[]>([])
 const graphKey = ref(0)
 const refreshedAt = ref(0)
 const refreshedTime = computed(() => refreshedAt.value ? new Date(refreshedAt.value).toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit' }) : '')
@@ -373,6 +372,7 @@ function guardPageDrag(event: MouseEvent) {
   }
 }
 function fitViewport() {
+  if (!nodes.value.length) return
   navigationFit.value = undefined
   if (paging.value) { void fitPage(true); return }
   const target = fitTarget.value, frame = graphSurface.value
@@ -531,7 +531,12 @@ function clearContentFocus() {
 }
 watch([activeId, apiRevision], clearContentFocus, { flush: 'sync' })
 watch(navigation.requested, request => {
-  if (request) { clearContentFocus(); cancelCreatedReveal() }
+  if (request) {
+    // Stop the previous graph's animation before navigation can detach it.
+    // An immediate public viewport write interrupts VueFlow's D3 transition.
+    void setViewport(getViewport())
+    clearContentFocus(); cancelCreatedReveal()
+  }
 }, { flush: 'sync' })
 function selectLogicalTerminal(event: Event) {
   if (!(event.target instanceof Element) || event instanceof PointerEvent && event.button !== 0) return
@@ -720,7 +725,7 @@ function announceNodeMove(changes: NodeChange[]) {
 function rebuildNodes() {
   if (!resourcesLoaded.value) return
   const previous = new Map(nodes.value.map(node => [node.id, node as Node & { selected?: boolean }]))
-  nodes.value = (isOverview.value ? overviewNodes() : (currentCanvas.value?.nodes || []).map(flowNode)).map(node => accessibleNode({ ...node, selected: previous.get(node.id)?.selected }))
+  setNodes((isOverview.value ? overviewNodes() : (currentCanvas.value?.nodes || []).map(flowNode)).map(node => accessibleNode({ ...node, selected: previous.get(node.id)?.selected })))
 }
 function applySettings(value: GlobalSettings) {
   settings.value = value
@@ -970,7 +975,7 @@ watch(resources, (next, previous) => {
   else {
     // Status updates preserve the current drag, selection and card geometry.
     const updated = new Map((isOverview.value ? overviewNodes() : (currentCanvas.value?.nodes || []).map(flowNode)).map(node => [node.id, node.data]))
-    nodes.value = nodes.value.map(node => ({ ...node, data: updated.get(node.id) || node.data }))
+    setNodes(nodes.value.map(node => ({ ...node, data: updated.get(node.id) || node.data })))
   }
   resourceLayoutSignature = layoutSignature
 })
@@ -1080,7 +1085,7 @@ function clearInstanceRuntime() {
   addDialog.value = false; shareCard.value = undefined; windowMenu.value = null; backgroundCanvas.value = null; settingsDialog.value = false; accountDialog.value = false
   sidebarOpen.value = false; overviewMenuOpen.value = false; canvasMenu.value = false; accountMenuOpen.value = false
   settings.value = null; fontRevision++; fontSignature = ''; latestState.value = undefined
-  sources.value = []; polledResources.value = []; canvases.value = []; nodes.value = []; windowSizes.value = {}
+  sources.value = []; polledResources.value = []; canvases.value = []; setNodes([]); windowSizes.value = {}
   resourcesFresh.value = false; resourcesLoaded.value = false; loadFailure.value = undefined
   overviewBackground.value = null; resourceSignature = ''; resourceLayoutSignature = ''; resourceRequest = undefined
   currentPage.value = undefined; overviewPaged.value = false; preferredPageX.value = undefined
@@ -1152,14 +1157,14 @@ watch(() => `${activeInstance.value.id}:${activeInstance.value.base}`, () => {
 
 watch(locale, () => {
   ariaLiveMessage.value = ''
-  nodes.value = nodes.value.map(node => {
+  setNodes(nodes.value.map(node => {
     if (node.type === 'terminal') return accessibleNode({ ...node, data: terminalData(node.data, isOverview.value) })
     if (node.type === 'group' && node.data.kind === 'source') {
       const source = sources.value.find(source => `source:${source.id}` === node.id)
       return accessibleNode({ ...node, data: { ...node.data, subtitle: source?.transport === 'local' ? t('app.local') : 'SSH' } })
     }
     return accessibleNode(node)
-  })
+  }))
   if (backgroundCanvas.value?.id === 'overview') backgroundCanvas.value = { ...backgroundCanvas.value, name: t('app.overview') }
 })
 watch([navigation.requested, resourcesLoaded, latestState], ([requested, loaded], [, wasLoaded]) => {
@@ -1175,7 +1180,7 @@ watch(unknownInstance, async value => {
   clearInstanceRuntime(); checkingInstance.value = false; ready.value = true
 })
 watch(freshStatuses, () => {
-  nodes.value = nodes.value.map(node => node.type === 'terminal' ? { ...node, data: terminalData(node.data, isOverview.value) } : node)
+  setNodes(nodes.value.map(node => node.type === 'terminal' ? { ...node, data: terminalData(node.data, isOverview.value) } : node))
 })
 watch(pageLayout, async () => { if (paging.value) { await nextTick(); await fitPage() } })
 watch(overviewInteraction, value => { if (value) lastOverviewInteraction = value; if (isOverview.value) rebuildNodes() })
@@ -1618,8 +1623,8 @@ function editNote(canvasId: string, id: string, patch: NotePatch) {
   noteTimers.set(key, setTimeout(() => { noteTimers.delete(key); void flushNotes(canvasId) }, 400))
   if (activeId.value === canvasId) saveState.value = 'saving'
   const visible = currentCanvas.value?.nodes.find((item): item is NoteCanvasNode => item.id === id && item.type === 'note')
-  if (visible) nodes.value = nodes.value.map(flow => flow.id === id ? { ...flow, data: { ...flow.data, ...visible },
-    style: { ...flow.style, height: `${visible.height}px` } } : flow)
+  if (visible) setNodes(nodes.value.map(flow => flow.id === id ? { ...flow, data: { ...flow.data, ...visible },
+    style: { ...flow.style, height: `${visible.height}px` } } : flow))
 }
 async function flushNotes(canvasId?: string): Promise<boolean> {
   const context = apiContext()
@@ -1695,7 +1700,7 @@ async function addNote() {
       if (mobile.value) { cardAction('focus', added.id); return }
       pendingNoteFocus = added.id
       await nextTick()
-      nodes.value = nodes.value.map(node => ({ ...node, selected: node.id === added.id }))
+      setNodes(nodes.value.map(node => ({ ...node, selected: node.id === added.id })))
       await nextTick()
       requestAnimationFrame(() => focusNewNote())
     }
@@ -1966,7 +1971,7 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
         <img v-if="currentBackground && backgroundUrl" class="canvas-background" :src="backgroundUrl" :style="{ opacity: currentBackground.opacity }" alt="" aria-hidden="true" />
         <span id="canvas-card-select-help" hidden>{{ t('app.cardSelectHelp') }}</span>
         <span id="canvas-card-move-help" hidden>{{ t('app.cardMoveHelp') }}</span>
-        <VueFlow :style="{ '--card-resize-hit': `${8 / Math.min(getViewport().zoom, 1)}px` }" :snap-to-grid="false" :apply-default="false" v-if="nodes.length && !hasFocus" :key="graphKey" v-model:nodes="nodes" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && !mobile" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag="snapDraggedCards" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized" @nodes-change="changeNodes"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><template #node-create="nodeProps"><OverviewCreateNode v-bind="nodeProps" /></template><CanvasMiniMap v-if="showMinimap" :aria-label="t('app.windowNavigation')" @node-click="navigateMinimap" :node-class-name="node => node.type === 'terminal' ? `minimap-card minimap-window${node.data.statusFresh && needsAttention(node.data.status) ? ' minimap-pulse' : ''}${paging && currentPage?.id === `${node.data.sourceId}/${node.data.windowId}` ? ' minimap-current' : ''}` : node.type === 'note' || node.type === 'file' ? 'minimap-card' : 'minimap-decoration'" :pannable="!paging" :zoomable="!mobile && !paging" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? noteColor(node.data.color) : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
+        <VueFlow :style="{ '--card-resize-hit': `${8 / Math.min(getViewport().zoom, 1)}px` }" :snap-to-grid="false" :apply-default="false" v-if="nodes.length && !hasFocus" :key="graphKey" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && !mobile" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @node-drag-start="layoutStarted" @node-drag="snapDraggedCards" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized" @nodes-change="changeNodes"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><template #node-create="nodeProps"><OverviewCreateNode v-bind="nodeProps" /></template><CanvasMiniMap v-if="showMinimap" :aria-label="t('app.windowNavigation')" @node-click="navigateMinimap" :node-class-name="node => node.type === 'terminal' ? `minimap-card minimap-window${node.data.statusFresh && needsAttention(node.data.status) ? ' minimap-pulse' : ''}${paging && currentPage?.id === `${node.data.sourceId}/${node.data.windowId}` ? ' minimap-current' : ''}` : node.type === 'note' || node.type === 'file' ? 'minimap-card' : 'minimap-decoration'" :pannable="!paging" :zoomable="!mobile && !paging" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? noteColor(node.data.color) : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
         <div v-if="workspacePending || !nodes.length && undiscoveredSources.length" class="workspace-status" :class="loadFailure ? 'workspace-error' : 'workspace-loading'" role="status">
           <template v-if="loadFailure"><span :title="loadFailure instanceof Error ? loadFailure.message : undefined">{{ t('app.loadFailed') }}</span><button class="button subtle" @click="load">{{ t('common.retry') }}</button></template>
           <template v-else><span class="spinner" />{{ t('common.loading') }}</template>
@@ -1974,7 +1979,7 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
         <div v-else-if="!nodes.length && isOverview" class="empty-state"><Icon name="server" :size="32" /><h2>{{ windowCount && overviewFiltered ? t('app.noMatchingWindows') : sources.length ? t('app.noWindows') : t('app.noConnections') }}</h2><button v-if="windowCount && overviewFiltered" class="button subtle" @click="overviewSelected = [...overviewStatuses]">{{ t('app.clearFilters') }}</button><button v-else class="button primary" @click="sources.length ? sourcePanel = true : openSource()"><Icon :name="sources.length ? 'server' : 'plus'" :size="17" />{{ sources.length ? t('app.connections') : t('app.addConnection') }}</button></div>
         <div v-else-if="!nodes.length && !isOverview" class="empty-state"><Icon name="canvas" :size="32" /><h2>{{ t('app.emptyCanvas') }}</h2><button class="button primary" @click="openAdd()"><Icon name="layers" :size="17" />{{ t('app.addWindows') }}</button></div>
         <button v-if="canvasFullscreen && !showNavigation && !focused" class="icon-button canvas-fullscreen-exit" :title="t('app.exitFullscreen')" :aria-label="t('app.exitFullscreen')" @click="exitFullscreen"><Icon name="collapse" :size="19" /></button>
-        <div v-if="!workspacePending && showNavigation && !focused" ref="fitToolbar" class="canvas-toolbar"><button v-if="canvasFullscreen" :title="t('app.openCanvasList')" :aria-label="t('app.openCanvasList')" aria-controls="canvas-sidebar" :aria-expanded="sidebarOpen" @click="sidebarOpen = !sidebarOpen"><Icon name="menu" :size="17" /></button><button :title="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-label="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-pressed="canvasFullscreen" @click="toggleFullscreen"><Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button><button v-if="isOverview" :title="t('app.pagedBrowsing')" :aria-label="t('app.pagedBrowsing')" :aria-pressed="overviewPaged" @click="togglePaging"><Icon name="pages" :size="17" /></button><button v-if="!isOverview" :title="t('app.snapToGrid')" :aria-label="t('app.snapToGrid')" :aria-pressed="!!currentCanvas?.snapToGrid" @click="toggleSnap"><Icon name="grid" :size="15" /></button><template v-if="paging"><button v-for="item in pageDirections" :key="item.direction" :title="item.label" :aria-label="item.label" :disabled="!pageNeighbor(item.direction)" @pointerdown.prevent @click="movePage(item.direction)"><Icon :name="item.icon" :size="16" :style="{ transform: item.rotation }" /></button></template><button v-if="!paging" :title="t('app.zoomOut')" :aria-label="t('app.zoomOut')" @click="clearFitContext(); zoomOut({ duration: 150 })"><Icon name="minus" :size="17" /></button><button class="canvas-fit" data-preserve-content-focus :title="t(paging ? 'app.centerWindow' : fitFocusedCard ? 'app.fitWindow' : 'app.fitCanvas')" :aria-label="t(paging ? 'app.centerWindow' : fitFocusedCard ? 'app.fitWindow' : 'app.fitCanvas')" @pointerdown.prevent @click="fitViewport"><Icon :name="fitFocusedCard ? 'fit-window' : 'fit'" :size="17" /></button><button v-if="!paging" :title="t('app.zoomIn')" :aria-label="t('app.zoomIn')" @click="clearFitContext(); zoomIn({ duration: 150 })"><Icon name="plus" :size="17" /></button></div>
+        <div v-if="!workspacePending && showNavigation && !focused" ref="fitToolbar" class="canvas-toolbar"><button v-if="canvasFullscreen" :title="t('app.openCanvasList')" :aria-label="t('app.openCanvasList')" aria-controls="canvas-sidebar" :aria-expanded="sidebarOpen" @click="sidebarOpen = !sidebarOpen"><Icon name="menu" :size="17" /></button><button :title="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-label="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-pressed="canvasFullscreen" @click="toggleFullscreen"><Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button><button v-if="isOverview" :title="t('app.pagedBrowsing')" :aria-label="t('app.pagedBrowsing')" :aria-pressed="overviewPaged" @click="togglePaging"><Icon name="pages" :size="17" /></button><button v-if="!isOverview" :title="t('app.snapToGrid')" :aria-label="t('app.snapToGrid')" :aria-pressed="!!currentCanvas?.snapToGrid" @click="toggleSnap"><Icon name="grid" :size="15" /></button><template v-if="paging"><button v-for="item in pageDirections" :key="item.direction" :title="item.label" :aria-label="item.label" :disabled="!pageNeighbor(item.direction)" @pointerdown.prevent @click="movePage(item.direction)"><Icon :name="item.icon" :size="16" :style="{ transform: item.rotation }" /></button></template><button v-if="!paging" :title="t('app.zoomOut')" :aria-label="t('app.zoomOut')" @click="clearFitContext(); zoomOut({ duration: 150 })"><Icon name="minus" :size="17" /></button><button class="canvas-fit" :disabled="!nodes.length" data-preserve-content-focus :title="t(paging ? 'app.centerWindow' : fitFocusedCard ? 'app.fitWindow' : 'app.fitCanvas')" :aria-label="t(paging ? 'app.centerWindow' : fitFocusedCard ? 'app.fitWindow' : 'app.fitCanvas')" @pointerdown.prevent @click="fitViewport"><Icon :name="fitFocusedCard ? 'fit-window' : 'fit'" :size="17" /></button><button v-if="!paging" :title="t('app.zoomIn')" :aria-label="t('app.zoomIn')" @click="clearFitContext(); zoomIn({ duration: 150 })"><Icon name="plus" :size="17" /></button></div>
       </div>
     </main>
     <Transition name="slide"><aside v-if="sourcePanel" ref="sourcePanelElement" class="source-panel"><header><div><h2>{{ t('app.connectionsWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeConnections')" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />{{ t('app.addConnection') }}</button><div class="source-panel-content"><p v-if="!latestState" class="panel-empty" role="status">{{ loadFailure ? t('app.loadFailed') : t('common.loading') }}</p><div v-for="source in orderedSources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small><span class="source-address">{{ source.transport === 'local' ? t('app.local') : source.target }}</span><span v-if="resources.find(item => item.id === source.id)?.serverVersion" class="source-version" :title="`${source.runtime === 'core' ? 'herdr-core' : 'herdr'} ${resources.find(item => item.id === source.id)!.serverVersion}`">{{ source.runtime === 'core' ? 'herdr-core' : 'herdr' }} {{ resources.find(item => item.id === source.id)!.serverVersion }}</span></small></span></button><button class="icon-button" :title="t('app.editConnection')" :aria-label="t('app.editConnection')" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" :title="t('app.removeConnection')" :aria-label="t('app.removeConnection')" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><p v-if="undiscoveredSources.some(item => item.id === source.id)" class="panel-empty" role="status">{{ loadFailure ? t('app.loadFailed') : t('common.loading') }}</p><div v-else-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" :title="t('app.newWindow')" :aria-label="t('app.newWindow')" @click="windowAction({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="tab-plus" :size="14" /></button><button class="icon-button" :title="t('app.renameSpace')" :aria-label="t('app.renameSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" :title="t('app.closeSpace')" :aria-label="t('app.closeSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :style="{ '--program-color': statusColor(window.status) }" :title="statusLabel(window.status)" /><WindowTitle :window="window" /><button class="icon-button" :title="t('app.addToCanvas')" :aria-label="t('app.addToCanvas')" @click="openAdd({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, ...windowSize({ sourceId: source.id, windowId: window.id }) })"><Icon name="layers" :size="14" /></button><button class="icon-button" :title="t('app.windowActions')" :aria-label="t('app.windowActions')" @click="windowMenu = { name: window.name, node: { type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, ...windowSize({ sourceId: source.id, windowId: window.id }) } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" :disabled="!resources.some(item => item.id === source.id && !item.error)" @click="spaceAction(resources.find(item => item.id === source.id)!, undefined, 'create')"><Icon name="plus" :size="14" />{{ t('app.newSpace') }}</button></template></div><p v-if="latestState && !sources.length" class="panel-empty">{{ t('app.noConnections') }}</p></div></aside></Transition>
