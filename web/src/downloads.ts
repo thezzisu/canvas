@@ -23,6 +23,7 @@ export function dismissDownloadPreview() { previews.value = previews.value.slice
 export async function presentDownload(file: Omit<DownloadPreview, 'preview'>, download = false) {
   const preview = filePreview(file)
   if (!download && preview !== 'file') {
+    if (previews.value.some(item => item.id === file.id && item.url === file.url)) return
     previews.value = [...previews.value, { ...file, preview }]
     return
   }

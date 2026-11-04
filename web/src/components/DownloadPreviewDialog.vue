@@ -39,6 +39,8 @@ const cutoutActive = inject(cutoutActiveKey, ref(false))
 const mobile = useMobileLayout()
 const markdown = computed(() => downloadPreview.value?.preview === 'text' && isMarkdownFile(downloadPreview.value.filename))
 const imageSize = ref<{ width: number; height: number }>()
+const preparing = computed(() => ['image', 'video'].includes(downloadPreview.value?.preview || '') &&
+  !imageSize.value && !error.value && !ticketError.value)
 const { viewport } = useMobileViewport(ref(true))
 const mobileHeader = computed(() => mobile.value || viewport.value.width <= 600)
 const compact = useCompactHeader(header, () => cutoutActive.value && mobileHeader.value && expanded.value)
@@ -60,6 +62,9 @@ const modalStyle = computed(() => {
     const scale = Math.min(1, Math.max(1, width - 2) / image.width, Math.max(1, height - chrome) / image.height)
     width = Math.min(width, Math.max(300, image.width * scale + 2))
     height = Math.min(height, Math.max(126, image.height * scale + chrome))
+  } else if (['image', 'video'].includes(downloadPreview.value?.preview || '') && (error.value || ticketError.value)) {
+    width = Math.min(width, 480)
+    height = Math.min(height, 200)
   } else if (downloadPreview.value?.preview === 'audio') {
     width = Math.min(width, 560)
     height = Math.min(height, 160)
@@ -92,11 +97,15 @@ watch(downloadPreview, preview => {
   text.value = ''; error.value = ''; truncated.value = false
   expanded.value = false; imageSize.value = undefined
   rendered.value = true; wrap.value = false
-  loading.value = preview?.preview === 'image'
+  loading.value = preview?.preview === 'image' || preview?.preview === 'video'
   if (preview?.preview === 'text') void loadText()
 }, { immediate: true })
 function imageLoaded(id: string, width: number, height: number) {
   if (id !== downloadPreview.value?.id) return
+  loading.value = false
+  imageSize.value = { width, height }
+}
+function mediaLoaded(width: number, height: number) {
   loading.value = false
   imageSize.value = { width, height }
 }
@@ -110,36 +119,37 @@ function stopEscape(event: Event) {
   event.stopPropagation()
   if (expanded.value) { event.preventDefault(); expanded.value = false }
 }
-const modalContent = computed(() => ({ style: modalStyle.value, onCloseAutoFocus: preventReturnFocus, onEscapeKeyDown: stopEscape }))
+const modalContent = computed(() => ({ style: modalStyle.value, 'aria-busy': preparing.value, onCloseAutoFocus: preventReturnFocus, onEscapeKeyDown: stopEscape }))
 onBeforeUnmount(() => request?.abort())
 </script>
 
 <template>
   <UModal v-if="downloadPreview" :key="downloadPreview.id" :open="true" :title="downloadPreview.filename" :portal="portal || false" :fullscreen="expanded" :transition="false"
     :close="false" :content="modalContent"
-    :ui="{ content: `download-preview-modal${expanded ? ' download-preview-fullscreen' : ''}${mobileHeader ? ' download-preview-mobile' : ''}`, overlay: 'download-preview-overlay', header: 'download-preview-header-slot', body: 'download-preview-body' }"
+    :ui="{ content: `download-preview-modal${preparing ? ' download-preview-preparing' : ''}${expanded ? ' download-preview-fullscreen' : ''}${mobileHeader ? ' download-preview-mobile' : ''}`, overlay: 'download-preview-overlay', header: 'download-preview-header-slot', body: 'download-preview-body' }"
     @update:open="openChanged">
     <template #header>
       <header ref="header" class="download-preview-header" :class="{ 'cutout-header': mobileHeader && expanded }" :data-cutout-position="mobileHeader && expanded && cutoutWidth > 0 ? cutoutPosition : undefined" :style="{ '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` }">
-        <DialogTitle class="download-preview-title" :class="{ 'cutout-title': mobileHeader && expanded }">{{ downloadPreview.filename }}<span v-if="downloadPreviewCount > 1" class="download-preview-count" :aria-label="t('panels.preview.remaining', downloadPreviewCount - 1)"> +{{ n(downloadPreviewCount - 1) }}</span></DialogTitle>
+        <span v-if="preparing" class="download-preview-pending" role="status"><span class="spinner" />{{ t('common.loading') }}</span>
+        <DialogTitle class="download-preview-title" :class="{ 'cutout-title': mobileHeader && expanded, 'sr-only': preparing }">{{ downloadPreview.filename }}<span v-if="downloadPreviewCount > 1" class="download-preview-count" :aria-label="t('panels.preview.remaining', downloadPreviewCount - 1)"> +{{ n(downloadPreviewCount - 1) }}</span></DialogTitle>
         <div class="download-preview-actions" :class="{ 'cutout-actions': mobileHeader && expanded }">
           <TextPreviewActions v-if="downloadPreview.preview === 'text' && !loading && !error && (!mobileHeader || markdown && !compact)" :filename="downloadPreview.filename" v-model:rendered="rendered" v-model:wrap="wrap" :hide-wrap="mobileHeader" />
-          <UButton v-if="!mobileHeader || !markdown && !compact" type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-download" :aria-label="t('panels.file.download')" :title="t('panels.file.download')" @click="download"><Icon name="download" :size="16" /></UButton>
-          <UDropdownMenu v-if="mobileHeader" v-model:open="menuOpen" :modal="false" :items="menu" :portal="portal || false" :content="{ align: 'end', ...menuDismiss }" :ui="{ content: 'card-action-menu download-preview-menu z-[90] min-w-[160px]' }">
+          <UButton v-if="!preparing && (!mobileHeader || !markdown && !compact)" type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-download" :aria-label="t('panels.file.download')" :title="t('panels.file.download')" @click="download"><Icon name="download" :size="16" /></UButton>
+          <UDropdownMenu v-if="mobileHeader && !preparing" v-model:open="menuOpen" :modal="false" :items="menu" :portal="portal || false" :content="{ align: 'end', ...menuDismiss }" :ui="{ content: 'card-action-menu download-preview-menu z-[90] min-w-[160px]' }">
             <UButton ref="menuTrigger" type="button" color="neutral" variant="ghost" class="download-preview-button" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></UButton>
           </UDropdownMenu>
-          <UButton v-else type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-expand" :aria-label="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :title="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :aria-pressed="expanded" @click="expanded = !expanded"><Icon :name="expanded ? 'collapse' : 'expand'" :size="16" /></UButton>
+          <UButton v-else-if="!preparing" type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-expand" :aria-label="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :title="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :aria-pressed="expanded" @click="expanded = !expanded"><Icon :name="expanded ? 'collapse' : 'expand'" :size="16" /></UButton>
           <UButton type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-close" :aria-label="t(mobileHeader && expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.close')" :title="t(mobileHeader && expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.close')" @click="mobileHeader && expanded ? expanded = false : dismissDownloadPreview()"><Icon :name="mobileHeader && expanded ? 'collapse' : 'close'" :size="17" /></UButton>
         </div>
       </header>
     </template>
     <template #body>
-      <div class="download-preview-content" :data-download-id="downloadPreview.id" :data-preview-kind="downloadPreview.preview">
+      <div class="download-preview-content" :inert="preparing || undefined" :aria-hidden="preparing || undefined" :data-download-id="downloadPreview.id" :data-preview-kind="downloadPreview.preview">
         <div v-if="ticketError && !previewUrl" class="download-preview-status" role="alert"><span>{{ t('panels.preview.unavailable') }}</span><button type="button" @click="retryTicket">{{ t('common.retry') }}</button></div>
         <div v-else-if="loading || (downloadPreview.preview !== 'text' && !previewUrl)" class="download-preview-status" role="status"><span class="spinner" /> {{ t('common.loading') }}</div>
-        <div v-if="error" class="download-preview-status" role="alert"><span>{{ error instanceof Error ? error.message : t(error) }}</span><button v-if="downloadPreview.preview === 'text'" type="button" @click="loadText">{{ t('common.retry') }}</button></div>
+        <div v-if="error && downloadPreview.preview !== 'audio' && downloadPreview.preview !== 'video'" class="download-preview-status" role="alert"><span>{{ error instanceof Error ? error.message : t(error) }}</span><button v-if="downloadPreview.preview === 'text'" type="button" @click="loadText">{{ t('common.retry') }}</button></div>
         <ImagePreview v-if="downloadPreview.preview === 'image' && previewUrl && !error" :key="downloadPreview.id" :id="downloadPreview.id" :src="previewUrl" :alt="downloadPreview.filename" @loaded="imageLoaded" @failed="imageFailed" />
-        <MediaPreview v-else-if="(downloadPreview.preview === 'audio' || downloadPreview.preview === 'video') && previewUrl" :key="downloadPreview.id" :kind="downloadPreview.preview" :src="previewUrl" :title="downloadPreview.filename" @download="download" @loaded="(width, height) => { if (width && height) imageSize = { width, height } }" />
+        <MediaPreview v-else-if="(downloadPreview.preview === 'audio' || downloadPreview.preview === 'video') && previewUrl" :key="downloadPreview.id" :kind="downloadPreview.preview" :src="previewUrl" :title="downloadPreview.filename" @download="download" @loaded="mediaLoaded" @failed="loading = false; error = 'panels.preview.mediaUnavailable'" />
         <template v-else-if="downloadPreview.preview === 'pdf'">
           <iframe v-if="pdfPreview && previewUrl" class="download-preview-pdf" :src="previewUrl" :title="downloadPreview.filename" referrerpolicy="no-referrer" />
           <div v-else class="download-preview-status">{{ t('panels.preview.pdfUnavailable') }}</div>
@@ -156,6 +166,11 @@ onBeforeUnmount(() => request?.abort())
 <style>
 .download-preview-overlay{z-index:84}
 .download-preview-modal{--preview-safe-top:var(--mobile-safe-top,var(--ui-safe-top));--preview-safe-bottom:var(--mobile-safe-bottom,var(--ui-safe-bottom));--preview-frame-width:var(--mobile-width,var(--preview-viewport-width));--preview-frame-height:var(--mobile-height,var(--preview-viewport-height));z-index:85;display:grid;grid-template-rows:auto minmax(0,1fr);gap:0;position:fixed;left:calc(var(--mobile-left,var(--preview-left)) + (var(--preview-frame-width) + var(--ui-safe-left) - var(--ui-safe-right))/2);top:calc(var(--mobile-top,var(--preview-top)) + (var(--preview-frame-height) + var(--preview-safe-top) - var(--preview-safe-bottom))/2);translate:-50% -50%;width:min(var(--preview-width),calc(var(--preview-frame-width) - 12px - var(--ui-safe-left) - var(--ui-safe-right)));max-width:none;height:min(var(--preview-height),calc(var(--preview-frame-height) - 24px - var(--preview-safe-top) - var(--preview-safe-bottom)));max-height:none;overflow:auto;overscroll-behavior:contain;background:#191d23;border:1px solid #3b424c;box-shadow:0 16px 60px #0005}
+/* Media stays mounted while the transparent loading row waits for intrinsic size. */
+.download-preview-modal.download-preview-preparing{width:auto;height:auto;min-width:160px;overflow:visible;background:transparent;border-color:transparent;box-shadow:none}
+.download-preview-preparing .download-preview-header{border:0;gap:8px}
+.download-preview-preparing .download-preview-body{position:absolute;inset:0;visibility:hidden;pointer-events:none}
+.download-preview-pending{display:flex;align-items:center;gap:8px;flex:1;font-size:13px;color:#d6dce5}
 .download-preview-modal.download-preview-fullscreen{box-sizing:border-box;left:var(--mobile-left,var(--preview-left));top:var(--mobile-top,var(--preview-top));right:auto;bottom:auto;translate:none;width:var(--preview-frame-width);height:var(--preview-frame-height);max-width:none;max-height:none;border:0;border-radius:0;padding:var(--preview-safe-top) var(--ui-safe-right) var(--preview-safe-bottom) var(--ui-safe-left)}
 .download-preview-header-slot{display:contents}
 .download-preview-header{--header-action-size:28px;display:flex;align-items:center;height:44px;min-height:44px;padding:0 8px 0 12px;gap:0;border-bottom:1px solid #343a43}

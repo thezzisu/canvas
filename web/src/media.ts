@@ -22,10 +22,10 @@ export function useMediaUrl(path: MaybeRefOrGetter<string | undefined>) {
   let request: AbortController | undefined, timer: ReturnType<typeof setTimeout> | undefined
   let serial = 0
   async function renew() {
-    request?.abort(); clearTimeout(timer)
+    request?.abort(); clearTimeout(timer); error.value = undefined
     const value = toValue(path), current = ++serial, context = apiContext()
     if (!value || !context.token) { url.value = ''; return }
-    const controller = request = new AbortController(); error.value = undefined
+    const controller = request = new AbortController()
     try {
       const ticket = await mediaTicket(value, false, context, controller.signal)
       if (current !== serial || !isCurrentApi(context)) return
