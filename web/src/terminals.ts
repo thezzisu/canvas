@@ -501,7 +501,8 @@ async function connect(session: Session, probe: boolean) {
         if (message.type === 'metadata' && isWindowMetadata(message.window) && message.window.id === session.resource.windowId) updateMetadata(session, message.window)
         else if (message.type === 'reset') {
           session.resetPending = true
-          session.parsedGrid = undefined; session.paintedGrid = undefined
+          // The existing DOM frame remains valid until replacement bytes arrive.
+          session.parsedGrid = undefined
           session.paintRevision = (session.paintRevision || 0) + 1
           session.parsedCompletion = undefined; session.paintedCompletion = undefined; session.readCompletion = undefined
           session.parsedLayout = undefined; session.paintedLayout = undefined
