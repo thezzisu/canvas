@@ -2,6 +2,7 @@
 import { ref, shallowRef } from 'vue'
 import { registerSW } from 'virtual:pwa-register'
 import { pwaUpdateActions } from './pwa-update'
+import { isBuildInfo, type BuildInfo } from '../../shared/build-info'
 
 interface InstallPrompt extends Event {
   prompt(): Promise<{ outcome: 'accepted' | 'dismissed' }>
@@ -12,14 +13,23 @@ export const updateAvailable = ref(false)
 export const updateDismissed = ref(false)
 export const pwaBusy = ref(false)
 export const pwaFailure = ref(false)
+/** The deployment that the waiting worker serves, when it could be identified. */
+export const updateBuild = shallowRef<BuildInfo>()
 let started = false, registration: ServiceWorkerRegistration | undefined
 let updateWorker: () => Promise<void> = async () => {}
 const updates = pwaUpdateActions({
   waiting: () => !!registration?.waiting,
   activate: () => updateWorker(),
   reload: () => window.location.reload(),
-  notify: () => { updateAvailable.value = true; updateDismissed.value = false },
+  notify: () => updateReady(),
 })
+function updateReady() {
+  updateAvailable.value = true; updateDismissed.value = false
+  void fetch(new URL('build-info.json', document.baseURI), { cache: 'no-store' })
+    .then(response => response.ok ? response.json() : undefined)
+    .then(value => { if (isBuildInfo(value)) updateBuild.value = value })
+    .catch(() => {})
+}
 export function initializePwa() {
   if (started || !import.meta.env.PROD || !window.isSecureContext || !('serviceWorker' in navigator)) return
   started = true
@@ -30,7 +40,7 @@ export function initializePwa() {
   })
   window.addEventListener('appinstalled', () => { installPrompt.value = undefined; canInstall.value = false })
   updateWorker = registerSW({
-    onNeedRefresh: () => { updateAvailable.value = true; updateDismissed.value = false },
+    onNeedRefresh: updateReady,
     onNeedReload: () => updates.activated(),
     onRegisteredSW: (_url, value) => { registration = value },
     // Offline/unavailable registration leaves the ordinary web application usable.

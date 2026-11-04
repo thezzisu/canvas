@@ -2,16 +2,20 @@
 import { onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast, type Toast } from '@nuxt/ui/composables/useToast'
-import { updateAvailable, updateDismissed, pwaBusy, pwaFailure, applyPwaUpdate } from '../pwa'
+import { updateAvailable, updateBuild, updateDismissed, pwaBusy, pwaFailure, applyPwaUpdate } from '../pwa'
 import { toastAction } from '../toast'
+import { frontendBuild } from '../build-info'
+import { buildLabel } from '../../../shared/build-info'
 const { t, locale } = useI18n(), toast = useToast()
 let current: Toast | undefined
-watch([updateAvailable, updateDismissed, pwaBusy, pwaFailure, locale], () => {
+watch([updateAvailable, updateBuild, updateDismissed, pwaBusy, pwaFailure, locale], () => {
   if (!updateAvailable.value || updateDismissed.value) {
     if (current) { toast.remove(current.id); current = undefined }
     return
   }
+  const from = buildLabel(frontendBuild), to = updateBuild.value && buildLabel(updateBuild.value)
   const notice = { title: t(pwaFailure.value ? 'settings.pwaFailed' : 'settings.updateReady'),
+    description: to && to !== from ? `${from} → ${to}` : undefined,
     color: 'neutral', duration: Infinity, type: 'background', class: 'pwa-update-prompt',
     actions: [{ ...toastAction, label: t('settings.updateApp'),
       loading: pwaBusy.value, closeOnClick: false, onClick: applyPwaUpdate }],
