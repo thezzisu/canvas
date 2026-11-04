@@ -31,6 +31,7 @@ import type { CanvasFileReference } from './file-reference'
 import { containTerminalScale, fitTerminalGrid, sameTerminalGrid, terminalBox, terminalFrameReady, terminalMetrics, type RenderedTerminalGrid, type TerminalGrid } from './terminal-geometry'
 import { TerminalReconnect, terminalInputHasFocus } from './terminal-reconnect'
 import { normalizeTerminalZoom } from './terminal-zoom'
+import { fillTerminalBackground } from './terminal-background'
 import type { SourceResource } from './types'
 import type { PaneAction, PaneContext } from '../../shared/pane-context'
 
@@ -758,6 +759,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       const next = { ...grid, cols: term.cols, rows: term.rows }
       current.metrics = terminalMetrics(current.metrics, previous, next)
       current.rendered = next
+      if (current.host && term.element && (grid.width !== current.host.clientWidth || grid.height !== current.host.clientHeight))
+        fillTerminalBackground(term.element, current.host)
       if (!current.state.screenReady && current.host?.isConnected && terminalFrameReady(current.parsedGrid, term, event)) {
         setState(current, { ...current.state, screenReady: true, transitioning: true })
       }
@@ -844,6 +847,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   if (!interactive(session)) { session.keyboard?.blur(); session.keyboardRequested = false; session.term.blur() }
   setModifiers(session)
   host.appendChild(session.surface)
+  if (session.opened && session.term.element) fillTerminalBackground(session.term.element, host)
   if (!session.opened) {
     session.term.open(session.surface); session.opened = true
     session.removeFontFeatures = applyTerminalFontFeatures(session.term, contentFont)
