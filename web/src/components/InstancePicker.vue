@@ -116,7 +116,7 @@ const items = computed<DropdownMenuItem[][]>(() => [
 <style>
 .instance-trigger{display:flex;align-items:center;gap:7px;min-width:0;width:100%;padding:8px 3px;color:#aeb9c7;text-align:left;font-size:11px}
 .instance-trigger>span{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.instance-trigger-label{display:flex;align-items:center;gap:4px;line-height:1.4}
+.instance-trigger-label{display:flex;align-items:center;gap:4px;line-height:1.4}.instance-trigger-label>*{text-box:trim-both cap alphabetic;padding-block:.3em}
 .instance-trigger-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .instance-trigger-version{flex:none;max-width:50%;overflow:hidden;text-overflow:ellipsis;color:#7d899a;font-size:9px;line-height:1.4;font-variant-numeric:tabular-nums}
 .instance-trigger>svg{flex:none;color:#7f8da0}.instance-trigger:hover{color:#e1d1c2}
