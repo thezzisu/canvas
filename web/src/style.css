@@ -201,3 +201,13 @@ html{zoom:var(--ui-zoom)}#app{position:fixed;inset:0;width:auto;height:auto}.app
 .note-content,.file-body :is(.text-preview-source,.text-preview-markdown){overscroll-behavior:contain}
 
 .canvas-create-menu{z-index:70}.header-actions>.canvas-create-trigger{display:inline-flex;flex:none}
+
+/* Canvas jumps keep the operated window still; the other content follows sidebar order. */
+.graph-wrap.canvas-morph-leave .vue-flow__node:not(.canvas-morph-anchor){animation:canvas-morph-leave 140ms cubic-bezier(.4,0,1,1) forwards}
+.graph-wrap.canvas-morph-enter .vue-flow__node:not(.canvas-morph-anchor){animation:canvas-morph-enter 220ms cubic-bezier(0,0,.2,1) both}
+.graph-wrap.canvas-morph-leave .canvas-background{animation:canvas-morph-fade-out 140ms ease-in forwards}
+.graph-wrap.canvas-morph-enter .canvas-background{animation:canvas-morph-fade-in 220ms ease-out both}
+@keyframes canvas-morph-leave{to{opacity:0;translate:calc(var(--canvas-morph-shift) * -1) 0}}
+@keyframes canvas-morph-enter{from{opacity:0;translate:var(--canvas-morph-shift) 0}}
+@keyframes canvas-morph-fade-out{to{opacity:0}}
+@keyframes canvas-morph-fade-in{from{opacity:0}}

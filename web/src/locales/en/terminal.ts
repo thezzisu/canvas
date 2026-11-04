@@ -23,6 +23,7 @@ export default {
     cancelMaximized: 'Cancel maximization',
     addToCanvas: 'Add to canvas', removeFromCanvas: 'Remove from canvas', focus: 'Focus window', hideKeyboard: 'Hide keyboard',
     showKeyboard: 'Show keyboard', windowActions: 'Window actions', restore: 'Restore window', openWindow: 'Open window {name}',
+    previousCanvas: 'Previous canvas', nextCanvas: 'Next canvas', canvasNamed: '{action}: {name}',
   },
   clipboard: { failed: 'Copy failed', copied: 'Copied', macPaste: 'Use ⌘V to paste' },
   keyboard: {

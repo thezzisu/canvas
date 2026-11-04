@@ -97,6 +97,15 @@ const uploadLabel = computed(() => {
   return upload.state === 'preparing' ? t('terminal.upload.preparing') : `${uploadPercent.value}%`
 })
 const label = computed(() => windowLabel(props.data, status.value.focusedPaneId))
+const canvasJumps = computed(() => props.data.focus || props.data.mobile || !props.data.canvasJump ? [] : (['previous', 'next'] as const).map(direction => {
+  const target = props.data.canvasJump!.neighbor(direction), action = t(`terminal.action.${direction}Canvas`)
+  return { direction, target, label: target ? t('terminal.action.canvasNamed', { action, name: target.name }) : action }
+}))
+const showCanvasJumps = computed(() => canvasJumps.value.some(jump => jump.target))
+// The button preserves terminal focus for pointers; keyboard use keeps button focus.
+function jumpCanvas(direction: 'previous' | 'next', event: MouseEvent) {
+  props.data.canvasJump?.go(direction, event.detail === 0 ? 'button' : inputFocused.value ? 'terminal' : undefined)
+}
 let terminal: ReturnType<typeof mountTerminal> | undefined
 watch(() => app.value?.id, () => { captureError.value = '' })
 watch(showApp, value => terminal?.setAppShowing(value))
@@ -228,6 +237,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
       <CardHeaderActions class="terminal-actions" :class="{ 'cutout-actions': mobileFocus }" :items="menu" :expanded="data.focus" :removable="!data.overview" :compact="compact" :disabled="closed && !data.focus"
         :add-label="t('terminal.action.addToCanvas')" :remove-label="t('terminal.action.removeFromCanvas')" :maximize-label="t('terminal.action.focus')" :restore-label="t('terminal.action.restore')" :more-label="t('terminal.action.windowActions')"
         @add="action('add')" @toggle="action(data.focus ? 'unfocus' : 'focus')" @remove="action('remove')">
+        <template v-if="showCanvasJumps"><button v-for="jump in canvasJumps" :key="jump.direction" type="button" class="card-header-action" :class="`card-${jump.direction}-canvas`" data-preserve-content-focus :disabled="!jump.target" :title="jump.label" :aria-label="jump.label" @pointerdown.prevent @click="jumpCanvas(jump.direction, $event)"><Icon name="chevron" :size="15" :style="{ transform: jump.direction === 'next' ? '' : 'rotate(180deg)' }" /></button></template>
         <button v-if="mobileFocus && !showApp" type="button" class="card-header-action terminal-keyboard" :title="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-label="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-pressed="status.keyboardRequested" @pointerdown.prevent @click="toggleKeyboard"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10" /></svg></button>
         <ContentZoom v-if="data.focus && !showApp" v-model="zoom" :mobile="data.mobile" :disabled="!data.available" :label="t('terminal.zoom.title')" />
       </CardHeaderActions>

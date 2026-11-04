@@ -1,7 +1,11 @@
 import { onScopeDispose, shallowRef, type Ref } from 'vue'
 import { bindCanvasHistory, recallCanvasLocation, recallLastCanvasLocation, rememberCanvasLocation, type CanvasLocation } from './canvas-location'
 
-export interface CanvasNavigation { location: CanvasLocation; revision: number; fitNodeId?: string }
+/** The screen position of a window's top-left corner that a canvas jump keeps fixed. */
+export interface CanvasAnchor { sourceId: string; windowId: string; x: number; y: number; zoom: number }
+/** A destination either fits one node or keeps an existing window in place. */
+export type CanvasTarget = { fitNodeId: string; anchor?: never } | { anchor: CanvasAnchor; fitNodeId?: never }
+export type CanvasNavigation = { location: CanvasLocation; revision: number } & Partial<CanvasTarget>
 interface Options {
   instanceId: Readonly<Ref<string>>
   hasInstance(id: string): boolean
@@ -14,8 +18,8 @@ export function useCanvasLocation(options: Options) {
   const requested = shallowRef<CanvasNavigation>()
   const unknownInstance = shallowRef<string>()
   let revision = 0, initial = true
-  const stage = (location: CanvasLocation | undefined, fitNodeId?: string) => {
-    requested.value = location ? { location, revision: ++revision, ...(fitNodeId ? { fitNodeId } : {}) } : undefined
+  const stage = (location: CanvasLocation | undefined, target?: CanvasTarget) => {
+    requested.value = location ? { location, revision: ++revision, ...target } : undefined
     unknownInstance.value = location && !options.hasInstance(location.instance) ? location.instance : undefined
     if (location && !unknownInstance.value && location.instance !== options.instanceId.value) options.selectInstance(location.instance)
   }
@@ -36,13 +40,13 @@ export function useCanvasLocation(options: Options) {
       history.read()
     },
     saved: (instance: string, canvas: string) => recallCanvasLocation(localStorage, instance, canvas),
-    visit(instance: string, canvas?: string, fitNodeId?: string) {
+    visit(instance: string, canvas?: string, target?: CanvasTarget) {
       if (!options.hasInstance(instance)) return false
-      const location = fitNodeId ? { instance, canvas: canvas || 'overview' } : canvas
+      const location = target ? { instance, canvas: canvas || 'overview' } : canvas
         ? recallCanvasLocation(localStorage, instance, canvas) || { instance, canvas }
         : recallLastCanvasLocation(localStorage, instance) || { instance, canvas: 'overview' }
       history.write(location, 'push')
-      stage(location, fitNodeId)
+      stage(location, target)
       return true
     },
     fallback(instance: string) {

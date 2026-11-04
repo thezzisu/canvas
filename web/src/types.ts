@@ -1,6 +1,7 @@
 import type { GlobalSettings } from '../../shared/settings'
 import type { ProgramStatus } from '../../shared/status'
 import type { CompletionToken } from '../../shared/completion'
+import type { CanvasDirection, CanvasEntry } from './canvas-jump'
 export type { ProgramStatus } from '../../shared/status'
 
 export interface Source {
@@ -98,6 +99,7 @@ export interface TerminalData {
   focus: boolean
   mobile?: boolean
   newTab?: { pending(): boolean; create(): void }
+  canvasJump?: { neighbor(direction: CanvasDirection): CanvasEntry | undefined; go(direction: CanvasDirection, focus: 'terminal' | 'button' | undefined): void }
   onAction: (action: string, id: string) => void
   onResize: (id: string, width: number, height: number, x?: number, y?: number) => void
   onResizeStart: (id: string, bounds: Omit<NodeLayout, 'id'>) => void

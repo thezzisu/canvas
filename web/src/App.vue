@@ -34,7 +34,8 @@ import { createLayoutSaves, type LayoutPatch } from './layout-saves'
 import { resizeFromDelta, snapCardPosition, snapCardResize, type CardBounds } from './card-alignment'
 import { createPendingEdits, retargetNoteEdit, type NoteEdit } from './pending-edits'
 import { cameraFromViewport, parseCanvasLocation, recallFreeCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type CanvasLocation } from './canvas-location'
-import { useCanvasLocation } from './use-canvas-location'
+import { useCanvasLocation, type CanvasAnchor, type CanvasTarget } from './use-canvas-location'
+import { adjacentCanvas, anchoredViewport, canvasAnchor, type CanvasDirection } from './canvas-jump'
 import { usePointerDismiss } from './pointer-dismiss'
 import { useDocumentFocus } from './document-focus'
 import { subscribeState } from './state-events'
@@ -251,6 +252,12 @@ const notificationReveal = shallowRef<{ canvasId: string; target: OverviewIntera
 const notificationFocus = shallowRef<{ canvasId: string; sourceId: string; spaceId: string; windowId: string }>()
 let notificationIntent = 0
 function cancelNotificationReveal() { notificationIntent++; notificationReveal.value = undefined; notificationFocus.value = undefined }
+// A window's canvas jump keeps that window fixed on screen while the remaining
+// content leaves and enters in sidebar order.
+type JumpFocus = 'terminal' | 'button' | undefined
+const windowJump = shallowRef<{ canvasId: string; anchor: CanvasAnchor; focus: JumpFocus; direction: CanvasDirection }>()
+const canvasMorph = shallowRef<{ phase: 'leave' | 'enter'; sourceId: string; windowId: string; shift: number }>()
+const morphDuration = { leave: 140, enter: 220 }
 function cancelCreatedReveal() { creationIntent++; pendingCreatedWindow.value = undefined }
 function creationNavigation(event: Event) {
   if (actionDialog.value && busy.value) return
@@ -476,6 +483,7 @@ const overviewInteraction = computed<OverviewInteraction | undefined>(() => {
   if (pendingCreatedWindow.value) return pendingCreatedWindow.value
   if (selectedTerminal.value) return selectedTerminal.value
   if (notificationReveal.value?.canvasId === 'overview') return notificationReveal.value.target
+  if (windowJump.value?.canvasId === 'overview') return windowJump.value.anchor
   if (focused.value) return { sourceId: focused.value.sourceId, windowId: focused.value.windowId }
   const card = activeElement.value?.closest<HTMLElement>('.terminal-card')
   if (card?.dataset.sourceId && card.dataset.windowId) return { sourceId: card.dataset.sourceId, windowId: card.dataset.windowId }
@@ -536,6 +544,7 @@ watch(navigation.requested, request => {
     // An immediate public viewport write interrupts VueFlow's D3 transition.
     void setViewport(getViewport())
     clearContentFocus(); cancelCreatedReveal()
+    if (!request.anchor) { windowJump.value = undefined; canvasMorph.value = undefined }
   }
 }, { flush: 'sync' })
 function selectLogicalTerminal(event: Event) {
@@ -610,9 +619,13 @@ function terminalData(node: TerminalCanvasNode, overview = false): TerminalData 
     pending: () => creating.has(creationId(node.sourceId, spaceId)),
     create: () => windowAction(node, 'create', { canvasId, anchor: { ...node }, focusedId: focused.value?.id }),
   } : undefined
+  const canvasJump = {
+    neighbor: (direction: CanvasDirection) => adjacentCanvas(windowCanvases(node.sourceId, node.windowId), activeId.value, direction),
+    go: (direction: CanvasDirection, focus: JumpFocus) => { void jumpWindowCanvas(node.id, direction, focus) },
+  }
   const visual = windowVisualState(found.source, found.window, freshStatuses.value)
   const closed = windowIsClosed(found.source, node.windowId, liveTerminalMetadata.value.get(`${node.sourceId}/${node.windowId}`))
-  return { ...node, preferenceKey: sourceConfig ? terminalIdentityKey(latestState.value?.instanceId || activeInstance.value.base, sourceConfig, node.windowId) : '', newTab, status: visual.status, statusFresh: visual.fresh, name: found.window?.name || cachedTerminalView(node.sourceId, node.windowId)?.name || t(closed ? 'app.closedWindow' : 'app.window'), subtitle: `${found.source?.name || sourceConfig?.name || t('app.unknownConnection')} / ${found.space?.name || t('app.space')}`, available: !!found.window && !found.source?.error, closed, sourceOffline: !!found.source?.error, panes: found.window?.panes || [], overview, focus: false, mobile: mobile.value, onAction: terminalAction, onResize: resizeNode, onResizeStart: resizeStarted }
+  return { ...node, preferenceKey: sourceConfig ? terminalIdentityKey(latestState.value?.instanceId || activeInstance.value.base, sourceConfig, node.windowId) : '', newTab, canvasJump, status: visual.status, statusFresh: visual.fresh, name: found.window?.name || cachedTerminalView(node.sourceId, node.windowId)?.name || t(closed ? 'app.closedWindow' : 'app.window'), subtitle: `${found.source?.name || sourceConfig?.name || t('app.unknownConnection')} / ${found.space?.name || t('app.space')}`, available: !!found.window && !found.source?.error, closed, sourceOffline: !!found.source?.error, panes: found.window?.panes || [], overview, focus: false, mobile: mobile.value, onAction: terminalAction, onResize: resizeNode, onResizeStart: resizeStarted }
 }
 function terminalFlowNode(node: TerminalCanvasNode, overview = false): Node {
   node = { ...node, ...windowSize(node) }
@@ -724,7 +737,8 @@ function announceNodeMove(changes: NodeChange[]) {
 function rebuildNodes() {
   if (!resourcesLoaded.value) return
   const previous = new Map(nodes.value.map(node => [node.id, node as Node & { selected?: boolean }]))
-  setNodes((isOverview.value ? overviewNodes() : (currentCanvas.value?.nodes || []).map(flowNode)).map(node => accessibleNode({ ...node, selected: previous.get(node.id)?.selected })))
+  setNodes((isOverview.value ? overviewNodes() : (currentCanvas.value?.nodes || []).map(flowNode)).map(node => accessibleNode({ ...node, selected: previous.get(node.id)?.selected,
+    ...(morphAnchor(node) ? { class: 'canvas-morph-anchor' } : {}) })))
 }
 function applySettings(value: GlobalSettings) {
   settings.value = value
@@ -880,9 +894,23 @@ async function restoreViewport() {
   if (request !== viewportRequest || id !== activeId.value || instance !== activeInstance.value.id || requested !== navigation.requested.value) return
   const frame = graphSurface.value
   if (!frame?.clientWidth || !frame.clientHeight) return
+  if (requested && (requested.location.instance !== instance || requested.location.canvas !== id && canvases.value.some(canvas => canvas.id === requested.location.canvas))) return
+  const anchor = requested?.anchor
+  const anchored = anchor && nodes.value.find(node => node.type === 'terminal' && node.data.sourceId === anchor.sourceId && node.data.windowId === anchor.windowId)
+  // Node positions are known before measurement, so the jump never paints the
+  // destination at another camera. Restoration completes once nodes are ready.
+  if (anchored) await setViewport(anchoredViewport(anchor, anchored.position))
+  else if (anchor) windowJump.value = undefined
   const initialized = new Set(getNodesInitialized.value.map(node => node.id))
   if (nodes.value.some(node => !initialized.has(node.id))) return
-  if (requested && (requested.location.instance !== instance || requested.location.canvas !== id && canvases.value.some(canvas => canvas.id === requested.location.canvas))) return
+  if (anchored) {
+    if (request !== viewportRequest || id !== activeId.value || instance !== activeInstance.value.id) return
+    pendingViewport = ''
+    cameraFrame = canvasFrame(frame)
+    navigation.restored(requested, currentLocation())
+    finishWindowJump(anchored)
+    return
+  }
   const target = requested?.fitNodeId ? nodes.value.find(node => node.id === requested.fitNodeId) : undefined
   if (target) {
     const camera = cameraFromViewport(pageViewport({ ...target.position, width: target.data.width, height: target.data.height },
@@ -1196,14 +1224,14 @@ watch(pageLayout, async () => { if (paging.value) { await nextTick(); await fitP
 watch(overviewInteraction, value => { if (value) lastOverviewInteraction = value; if (isOverview.value) rebuildNodes() })
 watch([overviewSelected, overviewOrder], async () => { preferredPageX.value = undefined; if (isOverview.value) { rebuildNodes(); await nextTick(); if (paging.value) await fitPage(); else void fitView({ padding: .14, maxZoom: 1, duration: 150 }) } })
 watch(activeId, async () => { if (!authenticated.value) return; scanTarget.value = null; preferredPageX.value = undefined; cancelCreatedReveal(); lastOverviewInteraction = undefined; overviewMenuOpen.value = false; layoutGesture = ''; resizingCard = undefined; focused.value = null; focusedCardId.value = ''; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
-function switchCanvas(id: string, fitNodeId?: string) {
+function switchCanvas(id: string, target?: CanvasTarget) {
   if (notificationReveal.value?.canvasId !== id) cancelNotificationReveal()
   clearContentFocus(); cancelCreatedReveal()
   if (focused.value) void closeFocus()
   if (focusedCardId.value) void closeCardFocus()
   sidebarOpen.value = false
-  if (id === activeId.value && !unknownInstance.value && !navigation.requested.value && !fitNodeId) return
-  void flushNotes(activeId.value); saveViewport(); navigation.visit(activeInstance.value.id, id, fitNodeId)
+  if (id === activeId.value && !unknownInstance.value && !navigation.requested.value && !target) return
+  void flushNotes(activeId.value); saveViewport(); navigation.visit(activeInstance.value.id, id, target)
 }
 function backgroundSaved(_updated: Canvas) { void syncState().catch(showError) }
 function openSettings() { settingsDialog.value = true; sidebarOpen.value = false; canvasMenu.value = false; sourcePanel.value = false }
@@ -1464,6 +1492,61 @@ async function openNotification(event: CanvasNotification) {
   }
   sidebarOpen.value = false; sourcePanel.value = false; saveViewport(); selectedTerminal.value = { sourceId: node.sourceId, windowId: node.windowId }; focused.value = node
   notificationFocus.value = { canvasId: activeId.value, sourceId: node.sourceId, spaceId: node.spaceId, windowId: node.windowId }
+}
+// Canvases holding each window, in sidebar order; live windows are also in Overview.
+const canvasesByWindow = computed(() => {
+  const result = new Map<string, { id: string; name: string }[]>(), overview = { id: 'overview', name: t('app.overview') }
+  for (const source of resources.value) for (const space of source.spaces) for (const window of space.windows) result.set(`${source.id}/${window.id}`, [overview])
+  for (const canvas of orderedCanvases.value) for (const key of new Set(canvas.nodes.filter(isTerminalNode).map(node => `${node.sourceId}/${node.windowId}`))) {
+    const list = result.get(key)
+    if (list) list.push(canvas); else result.set(key, [canvas])
+  }
+  return result
+})
+function windowCanvases(sourceId: string, windowId: string) { return canvasesByWindow.value.get(`${sourceId}/${windowId}`) || [] }
+function morphAnchor(node: Node) {
+  const morph = canvasMorph.value
+  return !!morph && node.type === 'terminal' && node.data.sourceId === morph.sourceId && node.data.windowId === morph.windowId
+}
+async function jumpWindowCanvas(nodeId: string, direction: CanvasDirection, focus: JumpFocus) {
+  const node = getCanvasNode(nodeId)
+  if (!node || hasFocus.value || navigation.requested.value || canvasMorph.value?.phase === 'leave' ||
+      !adjacentCanvas(windowCanvases(node.sourceId, node.windowId), activeId.value, direction)) return
+  const context = apiContext(), origin = activeId.value
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const leaving = canvasMorph.value = { sourceId: node.sourceId, windowId: node.windowId, shift: (direction === 'next' ? 48 : -48) / getViewport().zoom, phase: 'leave' }
+    rebuildNodes()
+    await new Promise(resolve => setTimeout(resolve, morphDuration.leave))
+    if (canvasMorph.value !== leaving) return
+    canvasMorph.value = undefined
+  }
+  // The camera may move during the leave phase; anchor the window where it is now.
+  const flow = nodes.value.find(item => item.id === nodeId), target = adjacentCanvas(windowCanvases(node.sourceId, node.windowId), origin, direction)
+  if (!isCurrentApi(context) || activeId.value !== origin || hasFocus.value || navigation.requested.value || !flow || !target) { rebuildNodes(); return }
+  const viewport = getViewport(), anchor = canvasAnchor(node, flow.position, viewport)
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const entering = canvasMorph.value = { sourceId: node.sourceId, windowId: node.windowId, shift: (direction === 'next' ? 48 : -48) / viewport.zoom, phase: 'enter' }
+    setTimeout(() => { if (canvasMorph.value === entering) canvasMorph.value = undefined }, morphDuration.enter + 100)
+  }
+  windowJump.value = { canvasId: target.id, anchor, focus, direction }
+  switchCanvas(target.id, { anchor })
+}
+function finishWindowJump(target: Node) {
+  const jump = windowJump.value
+  windowJump.value = undefined
+  if (!jump || jump.canvasId !== activeId.value) return
+  const { sourceId, windowId } = jump.anchor
+  selectedTerminal.value = { sourceId, windowId }
+  if (!jump.focus) return
+  // The cached terminal moves into the destination card; keep keyboard context there.
+  const restore = (attempt = 0) => {
+    if (windowJump.value || activeId.value !== jump.canvasId || hasFocus.value) return
+    const button = document.querySelector<HTMLButtonElement>(`.vue-flow__node[data-id="${CSS.escape(target.id)}"] .card-${jump.direction}-canvas`)
+    const done = jump.focus === 'terminal' ? focusWindow(sourceId, target.data.spaceId, windowId)
+      : !!button && (button.disabled ? button.closest<HTMLElement>('.vue-flow__node')?.focus({ preventScroll: true }) : button.focus({ preventScroll: true }), true)
+    if (!done && attempt < 30) requestAnimationFrame(() => restore(attempt + 1))
+  }
+  restore()
 }
 function terminalAction(action: string, id: string) {
   const node = getCanvasNode(id) || focused.value
@@ -1946,7 +2029,7 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
         </nav>
         <div class="sidebar-divider" role="separator" />
         <div class="nav-section-label"><span>{{ t('app.connections') }}</span><button class="icon-button" :title="t('app.addConnection')" :aria-label="t('app.addConnection')" @click="openSource()"><Icon name="plus" :size="16" /></button></div>
-        <div class="source-nav"><SidebarList :key="activeInstanceId" :items="orderedSources" @reorder="ids => rememberSidebarOrder('sources', ids)"><template #default="{ item: source, hint }"><button :aria-description="hint" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" class="source-nav-item" :title="`${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}${resources.find(item => item.id === source.id)?.serverVersion ? ` · herdr ${resources.find(item => item.id === source.id)!.serverVersion}` : ''}`" @click="sourcePanel = false; switchCanvas('overview', `source:${source.id}`)"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}</span><span class="source-nav-status"><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : resources.find(item => item.id === source.id)?.status === 'online' ? 'connected' : ''" /></span></button></template></SidebarList><button v-if="latestState && !sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="16" /><span class="source-empty-label">{{ t('app.addConnection') }}</span></button></div>
+        <div class="source-nav"><SidebarList :key="activeInstanceId" :items="orderedSources" @reorder="ids => rememberSidebarOrder('sources', ids)"><template #default="{ item: source, hint }"><button :aria-description="hint" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" class="source-nav-item" :title="`${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}${resources.find(item => item.id === source.id)?.serverVersion ? ` · herdr ${resources.find(item => item.id === source.id)!.serverVersion}` : ''}`" @click="sourcePanel = false; switchCanvas('overview', { fitNodeId: `source:${source.id}` })"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}</span><span class="source-nav-status"><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : resources.find(item => item.id === source.id)?.status === 'online' ? 'connected' : ''" /></span></button></template></SidebarList><button v-if="latestState && !sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="16" /><span class="source-empty-label">{{ t('app.addConnection') }}</span></button></div>
       </div>
       <div class="sidebar-footer">
         <UDropdownMenu v-model:open="accountMenuOpen" :modal="false" :items="accountMenu" :portal="appElement || false"
@@ -1976,7 +2059,7 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
           <button v-if="isOverview" class="button primary" :title="t('app.addConnection')" :aria-label="t('app.addConnection')" @click="openSource()"><Icon name="plus" :size="15" />{{ t('app.addConnection') }}</button><button v-else class="button primary" :title="t('app.addWindows')" :aria-label="t('app.addWindows')" @click="openAdd()"><Icon name="layers" :size="15" />{{ t('app.addWindows') }}</button>
         </div>
       </header>
-      <div ref="graphSurface" :inert="createMenuOpen || undefined" class="graph-wrap" :class="{ 'has-background': currentBackground, paged: paging }" :data-page-window="paging ? currentPage?.id : undefined" @focusout.capture="preserveFitTarget" @mousedown.capture="guardPageDrag" @wheel.capture="canvasWheel" @touchstart.capture="canvasTouchStart" @touchmove.capture="canvasTouchMove" @touchend.capture="canvasTouchEnd" @touchcancel.capture="canvasTouchCancel" @click.capture="canvasClick">
+      <div ref="graphSurface" :inert="createMenuOpen || undefined" class="graph-wrap" :class="[{ 'has-background': currentBackground, paged: paging }, canvasMorph && `canvas-morph-${canvasMorph.phase}`]" :style="canvasMorph && { '--canvas-morph-shift': `${canvasMorph.shift}px` }" :data-page-window="paging ? currentPage?.id : undefined" @focusout.capture="preserveFitTarget" @mousedown.capture="guardPageDrag" @wheel.capture="canvasWheel" @touchstart.capture="canvasTouchStart" @touchmove.capture="canvasTouchMove" @touchend.capture="canvasTouchEnd" @touchcancel.capture="canvasTouchCancel" @click.capture="canvasClick">
         <CanvasFileDrop ref="canvasFileDrop" :canvas-id="currentCanvas?.id" :canvas-name="currentCanvas?.name" :get-viewport="getViewport" />
         <img v-if="currentBackground && backgroundUrl" class="canvas-background" :src="backgroundUrl" :style="{ opacity: currentBackground.opacity }" alt="" aria-hidden="true" />
         <span id="canvas-card-select-help" hidden>{{ t('app.cardSelectHelp') }}</span>

@@ -22,6 +22,7 @@ export default {
     cancelMaximized: '取消最大化',
     addToCanvas: '加入画布', removeFromCanvas: '从画布移除', focus: '聚焦窗口', hideKeyboard: '隐藏键盘',
     showKeyboard: '打开键盘', windowActions: '窗口操作', restore: '退出放大', openWindow: '打开窗口 {name}',
+    previousCanvas: '上一个画布', nextCanvas: '下一个画布', canvasNamed: '{action}：{name}',
   },
   clipboard: { failed: '复制失败', copied: '已复制', macPaste: '使用 ⌘V 粘贴' },
   keyboard: {
