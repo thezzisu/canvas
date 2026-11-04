@@ -45,7 +45,8 @@ test('upload insertion positions survive paragraphs, hard breaks and atomic toke
 })
 
 test('upload fallback preserves existing capsules after another browser changes the body', async () => {
-  const { insertNoteAttachment } = await import('./note-document')
+  const { insertNoteContent } = await import('./note-document')
+  const insertNoteAttachment = (content: string, offset: number, id: string) => insertNoteContent(content, { content: attachmentToken(id), offset, end: offset, replaced: '' })
   const next = '29698b01-5c04-4f14-983a-0f4e2a9283f1'
   const content = `Short ${attachmentToken(id)} suffix`
   const inserted = insertNoteAttachment(content, 15, next)

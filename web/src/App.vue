@@ -87,7 +87,7 @@ import { noteColor, statusColor, statusLabel } from './status'
 import { overviewResources, overviewFocusStatuses, overviewLayoutKey, overviewStatuses, type OverviewInteraction, type OverviewOrder } from './overview'
 import { adjacentPage, pageViewport, retainPage, type OverviewPage, type PageDirection } from './overview-paging'
 import type { ProgramStatus } from '../../shared/status'
-import { attachmentToken, insertNoteAttachment } from './note-document'
+import { insertNoteContent } from './note-document'
 import type { Canvas, CanvasNode, FileCanvasNode, FileData, NoteCanvasNode, NoteData, NotePatch, SharedState, Source, SourceResource, TerminalCanvasNode, TerminalData, WindowSize } from './types'
 
 const { t, n, locale } = useI18n()
@@ -616,12 +616,13 @@ function terminalFlowNode(node: TerminalCanvasNode, overview = false): Node {
 function noteData(node: NoteCanvasNode, focus = false): NoteData {
   const canvasId = activeId.value
   return { ...node, canvasId, zoomKey: cardZoomKey(latestState.value?.instanceId || activeInstance.value.base, node.id), mobile: mobile.value, focus, onResize: resizeNode, onResizeStart: resizeStarted,
-    onAttachment: (asset, offset) => {
+    onAttachment: value => {
       const canvas = canvases.value.find(canvas => canvas.nodes.some(item => item.type === 'note' && item.id === node.id))
       const latest = canvas?.nodes.find((item): item is NoteCanvasNode => item.type === 'note' && item.id === node.id)
       if (!canvas || !latest) return
-      if (latest.content.length + attachmentToken(asset.id).length > 200_000) { reportError(t('panels.note.tooLong')); return }
-      editNote(canvas.id, node.id, { content: insertNoteAttachment(latest.content, offset, asset.id) })
+      const content = insertNoteContent(latest.content, value)
+      if (content.length > 200_000) { reportError(t('panels.note.tooLong')); return }
+      editNote(canvas.id, node.id, { content })
       void flushNotes(canvas.id)
     },
     onChange: (id, patch) => editNote(canvasId, id, patch), onFlush: () => void flushNotes(canvasId),

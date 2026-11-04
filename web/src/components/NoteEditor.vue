@@ -6,16 +6,20 @@ import UEditor from '@nuxt/ui/components/Editor.vue'
 import { Extension, Node, type Editor, type EditorOptions, type JSONContent } from '@tiptap/core'
 import { Plugin } from '@tiptap/pm/state'
 import { closeHistory } from '@tiptap/pm/history'
+import { Slice } from '@tiptap/pm/model'
 import { VueNodeViewRenderer } from '@tiptap/vue-3'
 import { apiContext, segment } from '../api'
 import { hasFileTransfer, readFileTransfer } from '../browser-file-input'
 import { presentDownload, reportDownloadError } from '../downloads'
-import { noteDocument, noteOffset, notePosition, serializeNote } from '../note-document'
-import { noteUpload, uploadNoteAttachment } from '../note-uploads'
+import { attachmentToken, noteDocument, noteOffset, notePosition, serializeNote } from '../note-document'
+import { noteUpload, uploadNoteAttachment, pasteNoteAttachments, type NoteInsertion } from '../note-uploads'
+import { clipboardText, noteClipboard, readNoteClipboard, NOTE_CLIPBOARD_TYPE } from '../note-clipboard'
+import { clearCopiedFile } from '../file-clipboard'
+import { beginCopyFeedback } from '../copy-feedback'
 import type { FileAsset } from '../types'
 import NoteAttachment from './NoteAttachment.vue'
 
-const props = defineProps<{ content: string; attachments: FileAsset[]; canvasId: string; noteId: string; readOnly: boolean; insertAttachment: (asset: FileAsset, offset: number) => void }>()
+const props = defineProps<{ content: string; attachments: FileAsset[]; canvasId: string; noteId: string; readOnly: boolean; insertAttachment: (value: NoteInsertion) => void }>()
 const emit = defineEmits<{ change: [content: string]; flush: [] }>()
 const { t } = useI18n()
 const input = ref<{ editor?: Editor }>()
@@ -55,15 +59,20 @@ function fail(key: string) { window.dispatchEvent(new CustomEvent('canvas:error'
 function editor() { return input.value?.editor }
 const transaction: EditorOptions['onTransaction'] = ({ transaction }) => {
   if (!task.value || !transaction.docChanged) return
-  const before = notePosition(transaction.before, task.value.offset)
+  const before = notePosition(transaction.before, task.value.offset), end = notePosition(transaction.before, task.value.end)
   task.value.offset = noteOffset(transaction.doc, transaction.mapping.map(before))
+  task.value.end = Math.max(task.value.offset, noteOffset(transaction.doc, transaction.mapping.map(end, -1)))
 }
-function insert(asset: FileAsset, offset: number) {
+function insert(value: NoteInsertion) {
   const current = editor()
   if (!current || current.isDestroyed) return false
-  uploaded.value = [...uploaded.value, asset]
-  current.chain().command(({ tr }) => { closeHistory(tr); return true })
-    .insertContentAt(notePosition(current.state.doc, offset), { type: 'noteAttachment', attrs: { id: asset.id } }).run()
+  uploaded.value = [...uploaded.value, ...value.assets]
+  const unchanged = serializeNote(current.state.doc.toJSON()).slice(value.offset, value.end) === value.replaced
+  const from = notePosition(current.state.doc, value.offset), to = unchanged ? notePosition(current.state.doc, value.end) : from
+  const content = current.schema.nodeFromJSON(noteDocument(value.content)).content
+  const slice = new Slice(content, 1, 1)
+  const tr = current.state.tr.replaceRange(from, to, slice)
+  closeHistory(tr); current.view.dispatch(tr)
   current.view.dispatch(closeHistory(current.state.tr))
   emit('flush')
   return true
@@ -81,6 +90,46 @@ function upload(files: File[], position?: number) {
   if (!current) return
   void uploadNoteAttachment(props.canvasId, props.noteId, file,
     noteOffset(current.state.doc, position ?? current.state.selection.from), props.insertAttachment)
+}
+function copy(event: ClipboardEvent, cut = false) {
+  const current = editor(), data = event.clipboardData
+  if (!current || !data || current.state.selection.empty || props.readOnly) return false
+  clearCopiedFile()
+  const { from, to } = current.state.selection
+  const content = current.state.doc.textBetween(from, to, '\n', node => node.type.name === 'noteAttachment' ? attachmentToken(node.attrs.id) : '\n')
+  try {
+    const note = noteClipboard(content, assets.value, apiContext())
+    if (!note.parts.some(part => typeof part !== 'string')) return false
+    data.setData('text/plain', clipboardText(note))
+    data.setData(NOTE_CLIPBOARD_TYPE, JSON.stringify(note))
+    event.preventDefault()
+    if (cut) current.commands.deleteSelection()
+    beginCopyFeedback()('copied')
+  } catch (error) { event.preventDefault(); reportDownloadError(error) }
+  return true
+}
+function paste(event: ClipboardEvent) {
+  const data = event.clipboardData
+  if (data?.types.includes(NOTE_CLIPBOARD_TYPE)) {
+    event.preventDefault()
+    const note = readNoteClipboard(data), current = editor()
+    if (!note || !current) { fail('fileTransfer.failed'); return true }
+    if (props.readOnly) return true
+    if (pending.value) { fail('panels.file.uploadBusy'); return true }
+    const { from, to } = current.state.selection
+    const offset = noteOffset(current.state.doc, from), end = noteOffset(current.state.doc, to)
+    const length = note.parts.reduce((size, part) => size + (typeof part === 'string' ? part.length : 38), 0)
+    if (serializeNote(current.state.doc.toJSON()).length - (end - offset) + length > 200_000) { fail('panels.note.tooLong'); return true }
+    const replaced = serializeNote(current.state.doc.toJSON()).slice(offset, end)
+    void pasteNoteAttachments(props.canvasId, props.noteId, note, offset, end, replaced, props.insertAttachment)
+    return true
+  }
+  if (!hasFileTransfer(data)) return false
+  event.preventDefault()
+  const incoming = readFileTransfer(data)
+  if (incoming.error) fail(incoming.error === 'folders' ? 'terminal.upload.foldersUnsupported' : 'panels.file.unreadableTransfer')
+  else void upload(incoming.files)
+  return true
 }
 const fileDialog = useFileDialog({ multiple: false, reset: true })
 let selection: { context: ReturnType<typeof apiContext>; canvasId: string; noteId: string } | undefined
@@ -116,13 +165,9 @@ defineExpose({ chooseFiles, pending })
   <div class="note-editor-shell" @dragenter="dragOver" @dragover="dragOver">
   <UEditor ref="input" :model-value="value" content-type="json" :starter-kit="false" :image="false" :mention="false" :extensions="[extension, sizeLimit]" :editable="!readOnly" :enable-input-rules="false" :enable-paste-rules="false" :placeholder="t('panels.note.placeholder')" class="note-editor"
     :ui="{ root: 'h-full min-h-0', content: 'h-full min-h-0', base: 'note-editor-content h-full min-h-0 outline-none' }"
-    :editor-props="{ attributes: { 'aria-label': t('panels.note.content'), role: 'textbox', 'aria-multiline': 'true' }, handleDrop: (_view, event) => drop(event), handlePaste: (_view, event) => {
-      if (!hasFileTransfer(event.clipboardData)) return false
-      event.preventDefault(); const incoming = readFileTransfer(event.clipboardData)
-      if (incoming.error) fail(incoming.error === 'folders' ? 'terminal.upload.foldersUnsupported' : 'panels.file.unreadableTransfer')
-      else void upload(incoming.files)
-      return true
-    } }"
+    :editor-props="{ attributes: { 'aria-label': t('panels.note.content'), role: 'textbox', 'aria-multiline': 'true' },
+      handleDOMEvents: { copy: (_view, event) => copy(event), cut: (_view, event) => copy(event, true) },
+      handleDrop: (_view, event) => drop(event), handlePaste: (_view, event) => paste(event) }"
     :on-transaction="transaction"
     :on-blur="() => emit('flush')" @update:model-value="changed" />
   </div>

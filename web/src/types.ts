@@ -109,7 +109,7 @@ export interface NoteData extends NoteCanvasNode {
   onResize: (id: string, width: number, height: number, x?: number, y?: number) => void
   onResizeStart: (id: string, bounds: Omit<NodeLayout, 'id'>) => void
   onChange: (id: string, patch: NotePatch) => void
-  onAttachment: (asset: FileAsset, offset: number) => void
+  onAttachment: (value: import('./note-uploads').NoteInsertion) => void
   onFlush: () => void
   onAction: (action: string, id: string) => void
 }

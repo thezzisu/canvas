@@ -52,10 +52,11 @@ export function noteOffset(document: ProseMirrorNode, position: number): number 
   return document.textBetween(0, position, '\n', node => node.type.name === 'noteAttachment' ? attachmentToken(node.attrs.id) : '\n').length
 }
 
-/** An upload may finish without a mounted editor; never split an existing atom. */
-export function insertNoteAttachment(content: string, offset: number, assetId: string): string {
-  let position = Math.max(0, Math.min(offset, content.length))
+/** Replace only a still-matching selection if an upload outlives its editor. */
+export function insertNoteContent(content: string, value: { content: string; offset: number; end: number; replaced: string }): string {
+  let start = Math.max(0, Math.min(value.offset, content.length))
   for (const match of content.matchAll(attachmentPattern))
-    if (position > match.index && position < match.index + match[0].length) { position = match.index + match[0].length; break }
-  return content.slice(0, position) + attachmentToken(assetId) + content.slice(position)
+    if (start > match.index && start < match.index + match[0].length) { start = match.index + match[0].length; break }
+  const end = start === value.offset && content.slice(start, value.end) === value.replaced ? value.end : start
+  return content.slice(0, start) + value.content + content.slice(end)
 }

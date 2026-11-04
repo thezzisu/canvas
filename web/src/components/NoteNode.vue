@@ -14,6 +14,9 @@ import { useContentZoom } from '../content-zoom'
 import CardPreview from './CardPreview.vue'
 import { noteColor } from '../status'
 import { copyText } from '../clipboard'
+import { clipboardText, noteClipboard, NOTE_CLIPBOARD_TYPE } from '../note-clipboard'
+import { apiContext } from '../api'
+import { reportDownloadError } from '../downloads'
 import { rejectNoteCardDrop, writeNoteTransfer } from '../note-transfer'
 import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
 import { usePointerDismiss } from '../pointer-dismiss'
@@ -67,7 +70,13 @@ function escapeColors(event: KeyboardEvent) {
   event.preventDefault(); event.stopPropagation(); colorOpen.value = false
 }
 function setColor(value: typeof colors[number]) { emitChange({ color: value }); colorOpen.value = false; flush() }
-function copyNote() { void copyText(copyContent.value) }
+function copyNote() {
+  try {
+    const note = noteClipboard(content.value, props.data.attachments || [], apiContext())
+    const formats = note.parts.some(part => typeof part !== 'string') ? { [NOTE_CLIPBOARD_TYPE]: JSON.stringify(note) } : undefined
+    void copyText(clipboardText(note), formats)
+  } catch (error) { reportDownloadError(error) }
+}
 function dragNote(event: DragEvent) {
   if (!writeNoteTransfer(event.dataTransfer, copyContent.value)) event.preventDefault()
   event.stopPropagation()

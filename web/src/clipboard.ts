@@ -9,7 +9,7 @@ let restoringFocus = false
 export const clipboardRestoringFocus = () => restoringFocus
 
 /** A user copy works on HTTP as well as secure origins. Never read the clipboard. */
-export async function copyText(text: string): Promise<boolean> {
+export async function copyText(text: string, formats: Record<string, string> = {}): Promise<boolean> {
   const feedback = beginCopyFeedback()
   if (!text || new TextEncoder().encode(text).length > MAX_COPY_BYTES) {
     feedback('failed')
@@ -30,6 +30,7 @@ export async function copyText(text: string): Promise<boolean> {
   const onCopy = (event: ClipboardEvent) => {
     if (!event.clipboardData) return
     event.clipboardData.setData('text/plain', text)
+    for (const [type, value] of Object.entries(formats)) event.clipboardData.setData(type, value)
     event.preventDefault()
     event.stopImmediatePropagation()
   }
@@ -57,8 +58,15 @@ export async function copyText(text: string): Promise<boolean> {
     } catch { /* Selection may have been removed while the copy event ran. */ }
     finally { restoringFocus = false }
   }
-  if (!copied && navigator.clipboard?.writeText) {
-    try { await navigator.clipboard.writeText(text); copied = true } catch { copied = false }
+  if (!copied && navigator.clipboard) {
+    try {
+      if (Object.keys(formats).length) {
+        const entries = { 'text/plain': new Blob([text], { type: 'text/plain' }),
+          ...Object.fromEntries(Object.entries(formats).map(([type, value]) => [`web ${type}`, new Blob([value], { type })])) }
+        await navigator.clipboard.write([new ClipboardItem(entries)])
+      } else await navigator.clipboard.writeText(text)
+      copied = true
+    } catch { copied = false }
   }
   feedback(copied ? 'copied' : 'failed')
   return copied

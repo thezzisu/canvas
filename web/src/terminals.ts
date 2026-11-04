@@ -27,6 +27,7 @@ import { bindMobileKeyboard } from './mobile-keyboard'
 import { bindMobileInput } from './mobile-input'
 import { copiedFile } from './file-clipboard'
 import { loadCanvasFile } from './file-transfer'
+import { readNoteClipboard, loadNoteClipboard, terminalNoteClipboard, NOTE_CLIPBOARD_TYPE, type NoteClipboard } from './note-clipboard'
 import type { CanvasFileReference } from './file-reference'
 import { containTerminalScale, fitTerminalGrid, sameTerminalGrid, terminalBox, terminalFrameReady, terminalMetrics, type RenderedTerminalGrid, type TerminalGrid } from './terminal-geometry'
 import { TerminalReconnect, terminalInputHasFocus } from './terminal-reconnect'
@@ -251,6 +252,29 @@ async function uploadReference(session: Session, reference: CanvasFileReference)
     if (!isCurrentApi(context) || controller.signal.aborted) return
     if (!acceptsFile(session)) throw new Error('terminal.upload.disconnected')
     session.uploads.enqueue([file])
+  } catch (reason) {
+    if (!isCurrentApi(context) || controller.signal.aborted) return
+    const message = reason instanceof Error && (reason.message.startsWith('fileTransfer.') || reason.message === 'terminal.upload.disconnected') ? t(reason.message) : t('fileTransfer.failed')
+    session.uploads.reject(message)
+  } finally {
+    if (session.fileRead === controller) { session.fileRead = undefined; setState(session, { ...session.state, fileReading: false }) }
+  }
+}
+async function pasteNote(session: Session, note: NoteClipboard) {
+  if (session.fileRead) { session.uploads.reject(t('panels.file.uploadBusy')); return }
+  if (!acceptsFile(session)) { session.uploads.reject(t('terminal.upload.disconnected')); return }
+  const context = apiContext(), socket = session.socket, controller = session.fileRead = new AbortController()
+  setState(session, { ...session.state, fileReading: true })
+  try {
+    const signal = AbortSignal.any([context.signal, controller.signal])
+    const { files, parts } = await loadNoteClipboard(note, reference => loadCanvasFile(reference, signal))
+    if (!isCurrentApi(context) || controller.signal.aborted || session.socket !== socket) return
+    if (!acceptsFile(session)) throw new Error('terminal.upload.disconnected')
+    if (files.length) {
+      // File-only clipboard selections retain separate path pastes for agents.
+      const paste = terminalNoteClipboard({ files, parts })
+      session.uploads.enqueue(paste.files, paste.parts)
+    } else { claimFocus(session); session.term.paste(parts.join('')) }
   } catch (reason) {
     if (!isCurrentApi(context) || controller.signal.aborted) return
     const message = reason instanceof Error && (reason.message.startsWith('fileTransfer.') || reason.message === 'terminal.upload.disconnected') ? t(reason.message) : t('fileTransfer.failed')
@@ -948,6 +972,12 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   const removeFileInput = bindFileInput(host, current.uploads, draggingFile => {
     if (current.host === host) setState(current, { ...current.state, draggingFile })
   }, data => {
+    if (data.types.includes(NOTE_CLIPBOARD_TYPE)) {
+      const note = readNoteClipboard(data)
+      if (note) void pasteNote(current, note)
+      else current.uploads.reject(t('fileTransfer.failed'))
+      return true
+    }
     const model = captureRichPaste(data)
     if (!model) return false
     if (!canPasteText()) { current.uploads.reject(t('terminal.upload.disconnected')); return true }
