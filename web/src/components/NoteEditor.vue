@@ -186,8 +186,9 @@ function chooseFiles() {
   fileDialog.open()
 }
 fileDialog.onChange(files => {
+  if (!files?.length) return
   const target = selection; selection = undefined
-  if (files?.length && target && !target.context.signal.aborted && target.canvasId === props.canvasId && target.noteId === props.noteId)
+  if (target && !target.context.signal.aborted && target.canvasId === props.canvasId && target.noteId === props.noteId)
     void upload([...files])
 })
 function dragOver(event: DragEvent) {
