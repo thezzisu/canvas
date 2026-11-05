@@ -60,10 +60,10 @@ export class WindowContentService {
   async scan(source: Source, spaceId: string, windowId: string, sessionId: string, signal = new AbortController().signal): Promise<WindowContentScan> {
     const sourceKey = sourceConnectionKey(source)
     const panes = await this.read(source, spaceId, windowId, sessionId)
-    const { references, ...candidates } = contentCandidates(panes)
+    const { fileChoices, ...candidates } = contentCandidates(panes)
     const scan = { id: randomUUID(), ...candidates }
-    const allPaths = [...new Set([...scan.panes.flatMap(pane => pane.items.flatMap(item => item.kind === 'file' && item.path ? [item.path] : [])), ...references.values()])]
-    const paths = allPaths.slice(0, 200)
+    const allPaths = [...new Set([...fileChoices.values()].flatMap(choice => [...choice.paths, ...choice.references]))]
+    const paths = allPaths.slice(0, 200), checked = new Set(paths)
     if (paths.length < allPaths.length) scan.truncated = true
     const controller = new AbortController(), abort = () => controller.abort()
     signal.throwIfAborted(); signal.addEventListener('abort', abort, { once: true })
@@ -79,12 +79,17 @@ export class WindowContentService {
         const seen = new Set<string>()
         const items = pane.items.flatMap<WindowContentItem>(item => {
           if (item.kind === 'link') return [item]
-          const exact = item.path && files.get(item.path)
-          const reference = references.get(item.id)
-          const path = exact || reference && files.get(reference)
-          if (!path || seen.has(path)) return []
+          const choice = fileChoices.get(item.id)!
+          const existing = (paths: string[]) => [...new Set(paths.flatMap(path => files.has(path) ? [files.get(path)!] : []))]
+          if (!choice.paths.every(path => checked.has(path))) return []
+          const exact = existing(choice.paths)
+          if (!exact.length && !choice.references.every(path => checked.has(path))) return []
+          const matches = exact.length ? exact : existing(choice.references)
+          if (matches.length !== 1) return []
+          const path = matches[0]!
+          if (seen.has(path)) return []
           seen.add(path)
-          return [{ ...item, path, ...(!exact ? { label: path } : {}) }]
+          return [{ ...item, path, ...(path !== item.path ? { label: path } : {}) }]
         })
         return items.length ? [{ ...pane, items }] : []
       })

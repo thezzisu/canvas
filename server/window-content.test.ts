@@ -732,3 +732,42 @@ test('logout or source replacement cancels an active pull and cleans partials', 
     assert.deepEqual(await readdir(join(f.root, 'tmp', 'staged')), [])
   })
 })
+
+test('inline tool paths reconstruct arbitrary measured hard wraps and keep special filename characters', async t => {
+  const f = await fixture(t), relative = 'dist/2026/11/05/canvas-note-ime-video/sheet-4.png'
+  await mkdir(join(f.root, 'dist/2026/11/05/canvas-note-ime-video'), { recursive: true })
+  await writeFile(join(f.root, relative), 'synthetic image')
+  for (const [prefix, end] of [['Reading ', 'canvas-note-ime'], ['└ ', 'canvas-note-ime-vide']] as const) {
+    const first = prefix + join(f.root, 'dist/2026/11/05', end)
+    f.setContent([{ ...pane([first, relative.slice(relative.indexOf(end) + end.length)], f.root), columns: terminalCellWidth(first) }])
+    assert.deepEqual((await f.scan()).panes.flatMap(pane => pane.items.flatMap(item => item.kind === 'file' ? [item.path] : [])), [join(f.root, relative)])
+  }
+  const relativeLong = 'docs/' + 'piece'.repeat(12) + '(最终)[1].png'
+  await mkdir(join(f.root, 'docs')); await writeFile(join(f.root, relativeLong), 'synthetic')
+  const start = '@docs/' + 'piece'.repeat(3), columns = start.length
+  const rest = relativeLong.slice(start.length - 1).match(new RegExp(`.{1,${columns}}`, 'gu'))!
+  f.setContent([{ ...pane([start, ...rest], f.root), columns }])
+  assert.deepEqual((await f.scan()).panes.flatMap(pane => pane.items.flatMap(item => item.kind === 'file' ? [item.path] : [])), [join(f.root, relativeLong)])
+})
+
+test('hard-wrap whitespace has at most two interpretations and ambiguous existing files are not guessed', async t => {
+  const f = await fixture(t)
+  await mkdir(join(f.root, 'docs'))
+  await writeFile(join(f.root, 'docs/real name.png'), 'spaced')
+  f.setContent([pane(['Image (docs/real', ' name.png)'], f.root)])
+  assert.deepEqual((await f.scan()).panes.flatMap(pane => pane.items.flatMap(item => item.kind === 'file' ? [item.path] : [])), [join(f.root, 'docs/real name.png')])
+  await writeFile(join(f.root, 'docs/realname.png'), 'unspaced')
+  assert.deepEqual((await f.scan()).panes, [], 'two existing interpretations do not select an arbitrary file')
+  const candidate = contentCandidates([pane(['Image (docs/long', ' part', ' name.png)'], f.root)])
+  assert([...candidate.fileChoices.values()].every(choice => choice.paths.length <= 2 && choice.references.length <= 2))
+  const authoritative = pane(['Image (docs/real', ' name.png)'], f.root)
+  authoritative.links = [{ label: 'Exact image', url: `file://${f.root}/docs/real%20name.png` }]
+  f.setContent([authoritative])
+  assert.deepEqual((await f.scan()).panes.flatMap(pane => pane.items.flatMap(item => item.kind === 'file' ? [item.path] : [])), [join(f.root, 'docs/real name.png')])
+})
+
+test('colored inline paths share token extraction instead of requiring a path-only color run', () => {
+  const path = '~/workspace/project/dist/2026/11/05/canvas-note-ime-video/sheet-4.png'
+  const content = { ...pane(['Reading ' + path.slice(0, -20), path.slice(-20)]), coloredText: ['Reading ' + path] }
+  assert(contentCandidates([content]).panes.flatMap(pane => pane.items).some(item => item.kind === 'file' && item.path === path))
+})

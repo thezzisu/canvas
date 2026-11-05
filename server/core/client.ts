@@ -549,14 +549,22 @@ class CoreWindowClient implements HerdrClientTransport {
     const { surface, shell, owners, layers } = rendered
     return surface.panes.toReversed().flatMap(pane => {
       const owner = layers.indexOf(pane.pane_id) + 1, rect = pane.inner_rect
-      if (!this.attached.has(pane.pane_id) || !owners.includes(owner)) return []
+      const native = this.attached.get(pane.pane_id)
+      if (!native || !owners.includes(owner)) return []
       const cells = Array.from({ length: rect.width * rect.height }, (_, index) => {
         const at = (rect.y + Math.floor(index / rect.width)) * surface.frame.width + rect.x + index % rect.width
         return owners[at] === owner ? surface.frame.cells[at]! : blank()
       })
       const local = { x: 0, y: 0, width: rect.width, height: rect.height }
+      const top = Math.max(0, native.emulator.buffer.active.baseY - native.scroll)
+      const visible = Array.from({ length: rect.height }, (_, row) => {
+        for (let col = 0; col < rect.width; col++) if (owners[(rect.y + row) * surface.frame.width + rect.x + col] !== owner) return false
+        return true
+      })
       return windowContent({ ...surface, frame: { ...surface.frame, width: rect.width, height: rect.height, cells, cursor: null },
-        panes: [{ ...pane, rect: local, inner_rect: local }], splits: [] }, shell, this.options.tabId)
+        panes: [{ ...pane, rect: local, inner_rect: local }], splits: [] }, shell, this.options.tabId,
+        (_id, row) => native.emulator.cols === rect.width && visible[row - 1] && visible[row]
+          && !!native.emulator.buffer.active.getLine(top + row)?.isWrapped)
     })
   }
   paneContext(point: PanePoint): PaneContext | undefined {

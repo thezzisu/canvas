@@ -292,9 +292,11 @@ test("native herdr transport works with an unmodified server: split rendering, k
     const hardLine = ` ${hardWrapped.slice(0, -1)}`;
     const coloredPath = `./${'测'.repeat(19)}a(1).md`; // The first displayed row fills the 53-column native pane.
     const coloredLines = `Video (\x1b[32m${coloredPath.slice(0, -1)}\x1b[0m\r\n  \x1b[32md\x1b[0m)\r\n`;
+    const inlinePath = '~/workspace/project/dist/2026/11/05/canvas-note-ime-video/sheet-4.png';
+    const inlineLines = `Reading ${inlinePath.slice(0, 45)}\r\n${inlinePath.slice(45)}\r\n`;
     const programDrawing = 'PROGRAM │─ BODY';
     const scanScript = join(root, 'scan-visible.py');
-    writeFileSync(scanScript, `import sys\nsys.stdout.write(${JSON.stringify(`${'SCROLLBACK\r\n'.repeat(80)}\x1b[2J\x1b[H${wrappedPath}\r\n${wrappedUrl}\r\n${hardLine}\r\n  d\r\n${coloredLines}HARD_ONE\r\nHARD_TWO\r\n${programDrawing}\r\nSCAN_DONE\r\n`)});sys.stdout.flush()\n`);
+    writeFileSync(scanScript, `import sys\nsys.stdout.write(${JSON.stringify(`${'SCROLLBACK\r\n'.repeat(80)}\x1b[2J\x1b[H${wrappedPath}\r\n${wrappedUrl}\r\n${hardLine}\r\n  d\r\n${coloredLines}${inlineLines}HARD_ONE\r\nHARD_TWO\r\n${programDrawing}\r\nSCAN_DONE\r\n`)});sys.stdout.flush()\n`);
     terminal.write(`python3 '${scanScript}'\r`);
     await waitFor(() => screenText().includes('SCAN_DONE'), 'native scan fixture did not print');
     const beforeScan = snapshot();
@@ -305,6 +307,7 @@ test("native herdr transport works with an unmodified server: split rendering, k
         return !!right?.lines.join('').includes(wrappedPath) && right.lines.join('').includes(wrappedUrl)
           && right.lines.includes('HARD_ONE') && right.lines.includes('HARD_TWO')
           && !!right.coloredText?.includes(coloredPath)
+          && contentCandidates([right]).panes.some(pane => pane.items.some(item => item.kind === 'file' && item.path === inlinePath))
           && contentCandidates([right]).panes.some(pane => pane.items.some(item => item.kind === 'file' && item.path?.endsWith(coloredPath.slice(1))))
           && contentCandidates([right]).panes.some(pane => pane.items.some(item => item.kind === 'file' && item.path?.endsWith(hardWrapped.slice(1))));
       } catch { return false; }

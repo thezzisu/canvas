@@ -29,7 +29,7 @@ function filePath(value: string, cwd?: string, reference = false): string | null
   // or a filename extension; the source later confirms each regular file.
   if (!reference && value.startsWith('@') || value.includes('<') || value.includes('>')) return
   if (!reference && !/^(?:\/|~\/|\.{1,2}\/)/u.test(value)
-      && !/[^/]+\.[\p{L}][\p{L}\p{N}_-]{0,15}$/u.test(withoutFileLocation(value))) return
+      && !/(?:^|\/)[^/]+\.[\p{L}][\p{L}\p{N}_-]{0,15}$/u.test(withoutFileLocation(value))) return
   if (value === '/' || value === './' || value === '../' || value === '~/') return
   if (value.startsWith('/')) return posix.normalize(value)
   if (value.startsWith('~/')) return value
@@ -53,58 +53,68 @@ function pathDisplay(value: string): boolean {
     && !/[<>"'`]/u.test(value) && !/\s+[^\s]*\//u.test(value) && !/^[a-z][a-z\d+.-]*:\/\//iu.test(value)
 }
 
-/** TUI word wrapping can break a path at a slash or literal hyphen before the
- * pane edge. Accept only a trailing path and consecutive single-token parts. */
-function wrappedPathTokens(lines: readonly string[], index: number, budget: { remaining: number; characters: number }): string | undefined {
-  const line = presentationPath(lines[index]!).value
-  const token = (value: string) => !!value && !/[\s<>"'`|;&\\\x00-\x1f\x7f-\x9f]/u.test(value)
-  let value = /(?:^|\s)(@?(?:\/|~\/|\.{1,2}\/)[^\s<>"'`|;&\\]+)$/u.exec(line)?.[1]
-    || (token(line) && pathDisplay(line) ? line : '')
-  if (!value || value.length > 8192 || !/[/-]$/u.test(value) || budget.remaining <= 0 || budget.characters <= 0) return
-  if (value.length > budget.characters) { budget.characters = 0; return }
-  budget.remaining--
-  budget.characters -= value.length
-  let joined = false
-  for (let row = index + 1; row < lines.length && /[/-]$/u.test(value); row++) {
-    const part = lines[row]!.trim().replace(/^(?:>\s*)+/u, '')
-    if (!token(part) || !/[\p{L}\p{N}_]/u.test(part) || /^(?:[\/@~+*•-]|\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:\/\/)/iu.test(part)) break
-    if (value.length + part.length > 8192) break
-    if (budget.characters < part.length) { budget.characters = 0; break }
-    budget.characters -= part.length
-    value += part
-    joined = true
-  }
-  return joined && !/[/-]$/u.test(value) ? value : undefined
-}
+interface PathSpan { values: string[] }
 
-/** Balanced wrappers distinguish inline paths from the prose around them. */
-function wrappedParenthesizedPaths(lines: readonly string[], index: number, budget: { remaining: number; characters: number }): string[] {
-  const pairs: Record<string, string> = { '(': ')', '（': '）' }
-  const results: string[] = [], line = lines[index]!
-  for (let start = 0; start < line.length && budget.remaining > 0 && budget.characters > 0; start++) {
-    const closing = pairs[line[start]!]
-    if (!closing) continue
-    budget.remaining--
-    const first = line.slice(start + 1, start + 8194).trimStart()
-    if (!/^@?(?:\/|~\/|\.{1,2}\/|[^\s()（）<>"'`]+\/)/u.test(first)) continue
-    const stack = [closing]
-    let value = '', valid = true
-    for (let offset = 0; index + offset < lines.length && valid && stack.length && budget.characters > 0; offset++) {
-      const part = (offset ? lines[index + offset]!.slice(0, 8193).trim().replace(/^(?:>\s*)+/u, '') : first).trimEnd()
-      if (!part || offset && /^(?:[-+*•]\s|\d{1,4}[.)]\s)/u.test(part)) break
-      for (const character of part) {
-        if (--budget.characters < 0) { valid = false; break }
-        if (pairs[character]) stack.push(pairs[character]!)
-        else if (character === ')' || character === '）') {
-          if (stack.pop() !== character) { valid = false; break }
-          if (!stack.length) { if (value) results.push(value); break }
+/** One bounded reader handles presentation wraps; native soft wraps are already logical lines. */
+function* pathSpans(lines: readonly string[], columns: number | undefined, budget: { remaining: number; characters: number }): Generator<PathSpan> {
+  const pairs: Record<string, string> = { '(': ')', '（': '）', '[': ']', '{': '}' }
+  const pathStart = (value: string) => /^@?(?:\/|~\/|\.{1,2}\/|[^\s<>"'`]+\/)/u.test(value)
+  for (let row = 0; row < lines.length && budget.remaining > 0 && budget.characters > 0; row++) {
+    const line = lines[row]!, seeds = new Map<number, string | undefined>()
+    for (const match of line.matchAll(/(`+|\*\*|__|["'(（])\s*/gu)) {
+      const offset = match.index + match[0].length
+      if (pathStart(line.slice(offset))) seeds.set(offset, pairs[match[1]!] || match[1])
+    }
+    for (const match of line.matchAll(/(?:^|\s)(@?(?:\/|~\/|\.{1,2}\/))/gu)) {
+      const offset = match.index + match[0].length - match[1]!.length
+      if (!seeds.has(offset)) seeds.set(offset, undefined)
+    }
+    const shown = presentationPath(line)
+    if (pathDisplay(shown.value.replace(/^@/u, ''))) {
+      const offset = line.indexOf(shown.value)
+      if (offset >= 0 && !seeds.has(offset)) seeds.set(offset, shown.closing)
+    }
+    for (const [offset, closing] of seeds) {
+      if (budget.remaining <= 0 || budget.characters <= 0) break
+      if (line.length - offset > 8192) continue
+      budget.remaining--
+      const stack = closing ? [closing] : []
+      let value = '', spaced = '', joined = false, finished = false
+      for (let next = row; next < lines.length; next++) {
+        const raw = next === row ? line.slice(offset) : lines[next]!.replace(/^\s*(?:>\s*)+/u, '')
+        const part = next === row ? raw : raw.trimStart()
+        if (!part || next > row && /^(?:[-+*•]\s|\d{1,4}[.)]\s)/u.test(part)) break
+        if (!closing && next > row && (/^(?:[\/@~+*•]|--|\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:\/\/)/iu.test(part)
+            || /\s/u.test(part) || !/[\p{L}\p{N}_]/u.test(part))) break
+        let segment = '', complete = false
+        for (let at = 0; at < part.length; at++) {
+          if (--budget.characters < 0 || value.length + segment.length >= 8192) break
+          const character = part[at]!
+          if (closing && stack.length === 1 && part.startsWith(closing, at)) { complete = true; break }
+          if (closing && pairs[character]) stack.push(pairs[character]!)
+          else if (closing && Object.values(pairs).includes(character)) {
+            if (stack.at(-1) !== character) break
+            stack.pop()
+          }
+          if (/[<>\x00-\x1f\x7f-\x9f]/u.test(character) || !closing && /["'`|;&\\]/u.test(character)) break
+          segment += character
         }
-        if (/[<>"'`\[\]{}]/u.test(character) || value.length >= 8192) { valid = false; break }
-        value += character
+        if (!segment || value.length + segment.length > 8192 || budget.characters < 0) break
+        // Keep observed whitespace as a second complete interpretation, never a combinatorial search.
+        const whitespace = next > row ? raw.slice(0, raw.length - part.length) : ''
+        value += segment; spaced += whitespace + segment
+        joined ||= next > row
+        if (complete) { finished = true; break }
+        if (closing) continue
+        const width = terminalCellWidth(lines[next]!.trimEnd())
+        if (!/[/-]$/u.test(segment) && (!columns || width < columns - 1 || width > columns)) { finished = true; break }
+        const following = lines[next + 1]?.trim()
+        if (following && !joined && /\.[\p{L}][\p{L}\p{N}_-]{0,15}$/u.test(value) && /^[^./\s]+\.[\p{L}][\p{L}\p{N}_-]*$/u.test(following)) { finished = true; break }
       }
+      if ((!closing || finished) && value && (joined || closing || offset === line.indexOf(shown.value) && pathDisplay(value.replace(/^@/u, ''))))
+        yield { values: [...new Set([value, spaced].map(text => closing ? text : trimPunctuation(text)))].filter(value => value.length <= 8192) }
     }
   }
-  return results
 }
 
 function linkedFile(value: string): string | undefined {
@@ -121,14 +131,14 @@ function linkedFile(value: string): string | undefined {
 }
 
 /** Parse bounded visible text, never shell syntax or adjacent pane rows. */
-export function contentCandidates(panes: NativeContentPane[]): { panes: WindowContentPane[]; truncated: boolean; incomplete?: boolean; references: Map<string, string> } {
+export function contentCandidates(panes: NativeContentPane[]): { panes: WindowContentPane[]; truncated: boolean; incomplete?: boolean; fileChoices: Map<string, { paths: string[]; references: string[] }> } {
   let count = 0, truncated = false
   const wrapBudget = { remaining: MAX_ITEMS, characters: 64 * 1024 }
-  const references = new Map<string, string>()
+  const fileChoices = new Map<string, { paths: string[]; references: string[] }>()
   const result: WindowContentPane[] = []
   for (const pane of panes) {
     const items: WindowContentItem[] = [], seen = new Set<string>()
-    const add = (label: string, exact = false, linkOnly = false, display?: string) => {
+    const add = (label: string, exact = false, linkOnly = false, display?: string, alternatives: string[] = []) => {
       const value = exact ? label : trimPunctuation(label)
       const reference = !linkOnly && value.startsWith('@') && value.length > 1 && !value.startsWith('@@')
         && !/[@<>]/u.test(value.slice(1)) && (exact || !/\s/u.test(value)) ? filePath(value.slice(1), pane.cwd, true) : undefined
@@ -139,13 +149,19 @@ export function contentCandidates(panes: NativeContentPane[]): { panes: WindowCo
       seen.add(identity)
       if (count >= MAX_ITEMS) { truncated = true; return }
       const id = String(++count)
-      if (reference) references.set(id, reference)
+      if (!url) {
+        const variants = [value, ...alternatives]
+        const paths = variants.flatMap(value => { const path = linkOnly ? linkedFile(value) : filePath(value, pane.cwd, reference !== undefined); return path ? [path] : [] })
+        const references = reference === undefined ? [] : variants.flatMap(value => { const path = filePath(value.slice(1), pane.cwd, true); return path ? [path] : [] })
+        fileChoices.set(id, { paths: [...new Set(paths)], references: [...new Set(references)] })
+      }
       const title = display?.trim() || value
       items.push(url ? { id, kind: 'link', label: title, url } : { id, kind: 'file', label: title, path: path! })
     }
     for (const link of pane.links) add(link.url, true, true, link.label)
     for (const value of pane.coloredText || []) if (pathDisplay(value)) add(value, true)
-    for (const line of pane.lines) {
+    const lines = [...(pane.coloredText || []), ...pane.lines]
+    for (const line of lines) {
       const occupied: Array<[number, number]> = []
       for (const match of line.matchAll(/https?:\/\/[^\s<>"'`]+/giu)) {
         add(match[0]); occupied.push([match.index, match.index + match[0].length])
@@ -160,30 +176,10 @@ export function contentCandidates(panes: NativeContentPane[]): { panes: WindowCo
         add(match[0].replace(/\\([\\ "'`])/gu, '$1'))
       }
     }
-    const display = (value: string) => {
-      if (pathDisplay(value)) add(value, true)
-    }
-    for (const [index, line] of pane.lines.entries()) {
-      const wrapped = wrappedPathTokens(pane.lines, index, wrapBudget)
-      if (wrapped) add(wrapped, true)
-      for (const wrapped of wrappedParenthesizedPaths(pane.lines, index, wrapBudget)) add(wrapped, true)
-      const { value, closing } = presentationPath(line)
-      const width = pane.columns
-      const occupied = terminalCellWidth(line.trimEnd())
-      if (value !== line.trim()) display(value)
-      // Native soft wrapping is already handled by herdr. Join a short TUI
-      // continuation only at the measured pane edge; file existence is checked later.
-      const tail = pane.lines[index + 1]
-      if (!width || width < 2 || tail === undefined || !pathDisplay(value)) continue
-      const parsedTail = presentationPath(tail).value
-      const continuation = closing && parsedTail.endsWith(closing) ? parsedTail.slice(0, -closing.length) : parsedTail
-      if (occupied < width - 1 || occupied > width || terminalCellWidth(continuation) > 32
-          || !/^[\p{L}\p{N}_.-]+$/u.test(continuation)
-          || /^[^.]+\.[\p{L}][\p{L}\p{N}_-]*$/u.test(continuation)) continue
-      display(value + continuation)
-    }
+    for (const span of pathSpans(pane.lines, pane.columns, wrapBudget))
+      add(span.values[0]!, true, false, undefined, span.values.slice(1))
     if (items.length) result.push({ id: pane.id, name: pane.name, ...(pane.cwd ? { cwd: pane.cwd } : {}), items })
   }
   truncated ||= wrapBudget.remaining === 0 || wrapBudget.characters <= 0
-  return { panes: result, truncated, references, ...(panes.some(pane => pane.incomplete) ? { incomplete: true } : {}) }
+  return { panes: result, truncated, fileChoices, ...(panes.some(pane => pane.incomplete) ? { incomplete: true } : {}) }
 }

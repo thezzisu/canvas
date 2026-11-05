@@ -362,3 +362,17 @@ test('coalesced native repaint never marks an unverified turn read and a fresh a
     assert.equal(reconnected.terminal.labels['herdr.seen'], '2', 'fresh native attach and complete paint establish the new baseline')
   } finally { fresh.kill() }
 })
+
+test('core scans recover native soft wraps without removing real filename spaces or hard newlines', async () => {
+  const f = fixture(); f.terminal.cols = 20; f.terminal.rows = 8
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 8 })
+  const path = '/tmp/' + 'a'.repeat(14) + ' file.png'
+  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[32m' + path + '\x1b[0m\r\nHARD_ONE\r\nHARD_TWO\x1b[?9001l') })
+  const client = await opening
+  try {
+    const content = await client.content()
+    assert.equal(content?.[0]?.lines[0], path, 'space at the wrap boundary is part of the filename')
+    assert(!content?.[0]?.coloredText?.includes(path.replace(' ', '')), 'color hints cannot silently delete filename spaces')
+    assert.deepEqual(content?.[0]?.lines.slice(1, 3), ['HARD_ONE', 'HARD_TWO'])
+  } finally { client.kill() }
+})

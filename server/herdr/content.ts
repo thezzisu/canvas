@@ -17,7 +17,7 @@ const clean = (value: string) => value.replace(/[\x00-\x1f\x7f-\x9f]/gu, ' ')
 const validCwd = (value: unknown): value is string => typeof value === 'string' && value.startsWith('/') && value.length <= 8192
   && !/[\x00-\x1f\x7f-\x9f]/u.test(value)
 
-function readPane(frame: FrameData, rect: SurfaceRect): Pick<NativeContentPane, 'lines' | 'links' | 'coloredText'> {
+function readPane(frame: FrameData, rect: SurfaceRect, wrapped?: (row: number) => boolean): Pick<NativeContentPane, 'lines' | 'links' | 'coloredText'> {
   const lines: string[] = [], links: NativeContentPane['links'] = []
   const coloredText: string[] = []
   let previous: { color: number; index: number; row: number; joined: boolean } | undefined
@@ -50,7 +50,9 @@ function readPane(frame: FrameData, rect: SurfaceRect): Pick<NativeContentPane, 
       x += width - 1
     }
     if (link) links.push(link)
-    lines.push(line.trimEnd())
+    const text = wrapped?.(y - rect.y + 1) ? line : line.trimEnd()
+    if (lines.length && wrapped?.(y - rect.y)) lines[lines.length - 1] += text
+    else lines.push(text)
     let next: typeof previous
     for (const part of runs) {
       const text = part.text.trim()
@@ -68,11 +70,13 @@ function readPane(frame: FrameData, rect: SurfaceRect): Pick<NativeContentPane, 
     }
     previous = next
   }
-  return { lines, links, ...(coloredText.length ? { coloredText } : {}) }
+  const current = lines.map(line => line.trim()).join('')
+  const hints = wrapped ? coloredText.filter(text => current.includes(text)) : coloredText
+  return { lines, links, ...(hints.length ? { coloredText: hints } : {}) }
 }
 
 /** Read only the already-rendered window, retaining pane boundaries and OSC 8 targets. */
-export function windowContent(surface: PaneSurfaceFrame, snapshot: ClientShellSnapshot, tabId: string): NativeContentPane[] {
+export function windowContent(surface: PaneSurfaceFrame, snapshot: ClientShellSnapshot, tabId: string, wrapped?: (pane: string, row: number) => boolean): NativeContentPane[] {
   if (surface.popup) {
     const popup = surface.popup, rect = popupInnerRect(surface)
     return rect ? [{ id: popup.terminal_id, name: clean(popup.title), columns: rect.width,
@@ -83,7 +87,7 @@ export function windowContent(surface: PaneSurfaceFrame, snapshot: ClientShellSn
     if (!metadata) return []
     const cwd = validCwd(metadata.foreground_cwd) ? metadata.foreground_cwd : validCwd(metadata.cwd) ? metadata.cwd : undefined
     const name = typeof metadata.label === 'string' ? clean(metadata.label).slice(0, 200) : ''
-    return [{ id: pane.pane_id, name, columns: pane.inner_rect.width, ...(cwd ? { cwd } : {}), ...readPane(surface.frame, pane.inner_rect) }]
+    return [{ id: pane.pane_id, name, columns: pane.inner_rect.width, ...(cwd ? { cwd } : {}), ...readPane(surface.frame, pane.inner_rect, wrapped && (row => wrapped(pane.pane_id, row))) }]
   })
 }
 
