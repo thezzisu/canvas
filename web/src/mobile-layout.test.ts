@@ -67,8 +67,14 @@ test('shared layout reacts to preferences and media changes, persists choices an
   execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', String.raw`
     import assert from 'node:assert/strict'
     const values = new Map([['canvas:input-mode', 'invalid']])
-    const storage = { getItem: key => values.get(key) ?? null,
-      setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) }
+    class Storage {
+      getItem(key) { return values.get(key) ?? null }
+      setItem(key, value) { values.set(key, value) }
+      removeItem(key) { values.delete(key) }
+    }
+    class StorageEvent extends Event { constructor(type, options) { super(type); Object.assign(this, options) } }
+    Object.assign(globalThis, { Storage, StorageEvent })
+    const storage = new Storage()
     class Query extends EventTarget {
       matches = true
       listeners = new Set()
