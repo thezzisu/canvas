@@ -65,5 +65,6 @@ onBeforeUnmount(() => controller.abort())
   </UApp>
 </template>
 <style>
+html.document-mode{font-family:'DM Sans','Noto Sans SC',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;font-synthesis:none;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased}
 html,body,#app{margin:0;min-height:100%;height:100%}.document-preview{height:100dvh;display:flex;flex-direction:column;overflow:hidden;background:#14191f;color:#cdd5e1}.document-preview>header{flex:none;min-height:44px;display:flex;align-items:center;gap:4px;padding:4px 8px;border-bottom:1px solid #343740}.document-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.document-preview>p{padding:12px;font-size:13px}.document-touch .document-action{width:44px;height:44px;justify-content:center;flex:none}
 </style>
