@@ -7,6 +7,9 @@ export class LayoutDraft {
   constructor(readonly canvasId: string, nodes: Array<{ id: string } & LayoutGeometry>) {
     this.baseline = new Map(nodes.map(({ id, x, y, width, height }) => [id, { x, y, width, height }]))
   }
+  capture(id: string, geometry: LayoutGeometry) {
+    if (!this.baseline.has(id)) this.baseline.set(id, { ...geometry })
+  }
   update(id: string, value: Partial<LayoutGeometry>) {
     const before = this.baseline.get(id)
     if (!before) return

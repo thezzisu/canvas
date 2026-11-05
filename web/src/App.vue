@@ -1868,6 +1868,7 @@ function layoutStarted(event?: { node: Node }) {
   layoutGesture = activeId.value
   if (layoutEditing.value) {
     layoutGestureBefore = nodes.value.map(cardBounds)
+    for (const { id, ...geometry } of layoutGestureBefore) layoutDraft.value?.capture(id, geometry)
     if (event?.node) layoutSelected.value = event.node.id
   }
 }
