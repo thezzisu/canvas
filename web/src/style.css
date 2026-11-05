@@ -113,7 +113,7 @@ html{zoom:var(--ui-zoom)}#app{position:fixed;inset:0;width:auto;height:auto}.app
 .mobile-layout .canvas-menu{width:188px;padding:5px;max-height:calc(var(--mobile-height,var(--ui-viewport-height)) - 60px - var(--ui-safe-top));overflow-y:auto}
 .mobile-layout .canvas-menu button{height:42px;font-size:13px}
 .mobile-layout .graph-wrap{min-height:0;overscroll-behavior:none;touch-action:none}
-.mobile-layout .vue-flow__resize-control{display:none!important}
+
 .mobile-layout .vue-flow__node-note,.mobile-layout .vue-flow__node-file{pointer-events:auto!important}
 .mobile-layout .terminal-card:not(.focused) .terminal-host{cursor:default;user-select:none;-webkit-user-select:none}
 .mobile-layout .terminal-card:not(.focused) .xterm{pointer-events:none}
