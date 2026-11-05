@@ -229,7 +229,7 @@ html{zoom:var(--ui-zoom)}#app{position:fixed;inset:0;width:auto;height:auto}.app
 /* Only native desktop window controls reserve a complete strip. A phone's
    fullscreen punch hole continues to use the existing cutout header layout. */
 @media(display-mode:window-controls-overlay){
-  :root{--window-controls-height:calc((env(titlebar-area-y,0px) + env(titlebar-area-height,0px)) / var(--ui-zoom))}
+  :root{--window-controls-height:max(46px,calc((env(titlebar-area-y,0px) + env(titlebar-area-height,0px)) / var(--ui-zoom)))}
   .app-shell,.login-screen{
     --desktop-titlebar-height:max(46px,var(--window-controls-height));
     --desktop-titlebar-left:calc(env(titlebar-area-x,0px) / var(--ui-zoom));
