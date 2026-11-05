@@ -11,6 +11,7 @@ function links(resources?: MarkdownResources): ComarkPlugin { return {
       const key = node[0] === 'a' ? 'href' : 'src'
       let url: URL | undefined
       const value = String(node[1][key] || '')
+      if (resources && node[0] === 'a' && value.startsWith('#')) return
       try {
         if (resources) {
           const root = new URL(resources.root), base = new URL(resources.document)

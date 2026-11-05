@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import ProseA from '@nuxt/ui/components/prose/A.vue'
 import { requestTrustedPreview } from '../trusted-preview'
+import { documentLinkNeedsTrust } from '../document-link'
 defineOptions({ inheritAttrs: false })
 const props = defineProps<{ href?: string }>()
 function follow(event: MouseEvent) {
   if (!props.href) return
   const url = new URL(props.href, location.href)
-  if (url.origin !== location.origin || !/\/api\/capture\/[A-Za-z0-9_-]{43}\/.*\.html?$/iu.test(url.pathname)) return
+  if (!documentLinkNeedsTrust(url.href, location.href)) return
   event.preventDefault()
-  requestTrustedPreview(decodeURIComponent(url.pathname.split('/').at(-1) || ''), () => {
+  requestTrustedPreview(url.pathname.split('/').at(-1) || url.hostname, () => {
     window.open(url.href, '_blank', 'noopener,noreferrer')
   })
 }

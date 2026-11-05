@@ -269,7 +269,9 @@ export class CaptureService {
     const requestedMode = url.searchParams.get('canvas')
     const mode = capture.preview === 'static' && ['raw', 'download'].includes(requestedMode || '') ? requestedMode : null
     const pathname = url.pathname.slice(PREFIX.length + capture.id.length)
-    const document = /\.(?:md|markdown|mdown|mkdn?|mdx)$/iu.test(pathname)
+    let document = false
+    try { document = /\.(?:md|markdown|mdown|mkdn?|mdx)$/iu.test(decodeURIComponent(pathname)) }
+    catch { response.writeHead(404).end(unavailable); return true }
     if (capture.preview === 'static' && document && !mode && request.headers['sec-fetch-mode'] === 'navigate') {
       const viewer = new URL(capture.publicUrl.href.replace(/\/api\/capture\/([^/]+)\/$/u, '/api/document/$1/'))
       viewer.searchParams.set('path', pathname)
