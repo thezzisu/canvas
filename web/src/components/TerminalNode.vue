@@ -6,6 +6,12 @@ import UButton from '@nuxt/ui/components/Button.vue'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import { NodeResizer } from '@vue-flow/node-resizer'
 import Icon from './Icon.vue'
+import CardLayoutControls from './CardLayoutControls.vue'
+import { useLayoutCard } from '../layout-editing'
+import { requestTrustedPreview } from '../trusted-preview'
+import { captureTrusted, trustCapture } from '../capture-trust'
+import { isMarkdownFile } from '../markdown'
+import { apiContext, isCurrentApi } from '../api'
 import WindowTitle from './WindowTitle.vue'
 import { windowLabel } from '../window-title'
 import PaneIndicators from './PaneIndicators.vue'
@@ -33,13 +39,28 @@ import { contentZoomMenu } from '../content-zoom-menu'
 import type { TerminalData } from '../types'
 const { t } = useI18n()
 const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>>()
+const layoutRoot = ref<HTMLElement>()
+const { editing } = useLayoutCard(layoutRoot)
 const host = ref<HTMLElement>()
 const header = ref<HTMLElement>()
 const app = computed(() => capturedApp(props.data.sourceId, props.data.windowId))
 const captureHost = ref<HTMLElement>()
-useRetainedFrame(captureHost, () => app.value && !mobilePreview.value ? { key: `capture:${app.value.id}`, src: app.value.url, attributes: {
-  class: 'capture-frame', title: app.value.title, sandbox: 'allow-scripts allow-forms allow-same-origin allow-downloads', referrerpolicy: 'no-referrer' } } : undefined)
-const showApp = computed(() => !!app.value?.visible && !mobilePreview.value && !closed.value && !maximizedElsewhere.value && status.value.status === 'connected')
+const trustedApp = computed(() => !!app.value && (captureTrusted(app.value.id) || app.value.preview === 'static' && isMarkdownFile(new URL(app.value.url).pathname)))
+function withTrustedApp(run: (url: string) => void) {
+  const current = app.value, context = apiContext()
+  if (!current) return
+  const execute = () => {
+    if (!isCurrentApi(context) || app.value?.id !== current.id) return
+    trustCapture(current.id); run(current.url)
+  }
+  if (trustedApp.value) execute(); else requestTrustedPreview(current.title, execute)
+}
+function activateApp() { withTrustedApp(() => showCapturedApp()) }
+function openApp() { withTrustedApp(url => window.open(url, '_blank', 'noopener,noreferrer')) }
+
+useRetainedFrame(captureHost, () => app.value && trustedApp.value ? { key: `capture:${app.value.id}`, src: app.value.url, attributes: {
+  class: 'capture-frame', title: app.value.title, sandbox: 'allow-scripts allow-forms allow-same-origin allow-downloads allow-popups', referrerpolicy: 'no-referrer' } } : undefined)
+const showApp = computed(() => !!app.value?.visible && !closed.value && !maximizedElsewhere.value && status.value.status === 'connected')
 function showCapturedApp() { setCaptureVisible(props.data.sourceId, props.data.windowId, true) }
 function returnToTerminal() {
   setCaptureVisible(props.data.sourceId, props.data.windowId, false)
@@ -113,6 +134,7 @@ function jumpCanvas(direction: 'previous' | 'next', event: MouseEvent) {
 let terminal: ReturnType<typeof mountTerminal> | undefined
 watch(() => app.value?.id, () => { captureError.value = '' })
 watch(showApp, value => terminal?.setAppShowing(value))
+watch(editing, value => terminal?.setEditing(value), { flush: 'sync' })
 let ownedPresentation = false
 let previewTap: { id: number; x: number; y: number; at: number } | undefined
 let previewEligible = false
@@ -133,7 +155,7 @@ function previewEnd(event: PointerEvent) {
   previewEligible = tap?.id === event.pointerId && performance.now() - tap.at < 600 && Math.hypot(event.clientX - tap.x, event.clientY - tap.y) <= 6
 }
 function previewClick(event: MouseEvent) {
-  const eligible = previewEligible || event.detail === 0
+  const eligible = !editing.value && (previewEligible || event.detail === 0)
   clearPreviewTap()
   if (eligible) action('focus')
 }
@@ -194,6 +216,7 @@ function mount() {
     if (superseded) props.data.onAction('unfocus', props.id)
   }, { magnified: props.data.focus, mobile: props.data.mobile, zoom: zoom.value, closed: !!props.data.closed, settings: settings.value })
   terminal?.setAppShowing(showApp.value)
+  terminal?.setEditing(editing.value)
   if (mobileFocus.value && !showApp.value) { terminal?.setTouchMode('scroll'); terminal?.focus({ keyboard: false }) }
 }
 onMounted(() => { mount(); document.addEventListener('dragend', clearNoteDrag); window.addEventListener('blur', clearNoteDrag) })
@@ -220,21 +243,20 @@ const menu = computed<DropdownMenuItem[]>(() => [
   { label: t('app.closeWindow'), icon: 'i-lucide-trash', color: 'error', disabled: !props.data.available || closed.value, onSelect: () => action('close') },
 ])
 function resizeStarted(event: { params: { x: number; y: number; width: number; height: number } }) {
-  terminal?.setResizing(true)
+  if (!editing.value) terminal?.setResizing(true)
   props.data.onResizeStart(props.id, event.params)
 }
 async function resized(event: { params: { width: number; height: number; x: number; y: number } }) {
   if (props.data.overview || props.data.focus) return
   await nextTick()
-  terminal?.setResizing(false)
-  terminal?.resize()
+  if (!editing.value) { terminal?.setResizing(false); terminal?.resize() }
   const { width, height, x, y } = event.params
   props.data.onResize(props.id, width, height, x, y)
 }
 </script>
 <template>
   <NodeResizer v-if="!data.mobile && !data.overview && !data.focus && !maximizedElsewhere" :min-width="360" :min-height="220" :max-width="4000" :max-height="3000" @resize-start="resizeStarted" @resize-end="resized" />
-  <article tabindex="-1" class="terminal-card" :class="[{ selected, 'terminal-transition': status.transitioning, unavailable: !closed && !keepTerminal, focused: data.focus, 'input-focused': inputFocused, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview, closed }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="closed ? 'closed' : keepTerminal ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :data-content-mode="showApp ? 'app' : 'terminal'" :data-input-focused="inputFocused" :data-note-drop="noteDrag ? noteDropAvailable ? 'ready' : 'unavailable' : undefined" @dragenter.capture="noteDragOver" @dragover.capture="noteDragOver" @dragleave="noteDragLeave" @drop.capture="dropNote" :style="{ '--program-color': statusColor(frameStatus), width: dimensions || mobileFocus ? '100%' : `${data.width}px`, height: dimensions || mobileFocus ? '100%' : `${data.height}px` }" :aria-label="`${label} · ${data.subtitle}`">
+  <article ref="layoutRoot" tabindex="-1" class="terminal-card" :class="[{ selected, 'terminal-transition': status.transitioning, unavailable: !closed && !keepTerminal, focused: data.focus, 'input-focused': inputFocused, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview, closed }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="closed ? 'closed' : keepTerminal ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :data-content-mode="showApp ? 'app' : 'terminal'" :data-input-focused="inputFocused" :data-note-drop="noteDrag ? noteDropAvailable ? 'ready' : 'unavailable' : undefined" @dragenter.capture="noteDragOver" @dragover.capture="noteDragOver" @dragleave="noteDragLeave" @drop.capture="dropNote" :style="{ '--program-color': statusColor(frameStatus), width: dimensions || mobileFocus ? '100%' : `${data.width}px`, height: dimensions || mobileFocus ? '100%' : `${data.height}px` }" :aria-label="`${label} · ${data.subtitle}`">
     <header ref="header" class="terminal-header drag-handle" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :class="{ 'cutout-header': mobileFocus }" :data-cutout-position="mobileFocus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="mobileFocus ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))`, '--cutout-controls': data.overview ? '176px' : '264px' } : undefined">
       <PaneIndicators :panes="data.panes" :status="data.status" :available="keepTerminal" :connection="closed ? 'closed' : status.status" :error="status.error" :read-only="status.readOnly" :pulse="statusPulse" />
       <WindowTitle class="terminal-name" :class="{ 'cutout-title': mobileFocus }" :window="data" :pane-id="status.focusedPaneId" :description="data.subtitle" />
@@ -246,17 +268,19 @@ async function resized(event: { params: { width: number; height: number; x: numb
         <ContentZoom v-if="data.focus && !showApp" v-model="zoom" :mobile="data.mobile" :disabled="!data.available" :label="t('terminal.zoom.title')" />
       </CardHeaderActions>
     </header>
-    <div v-if="app && !mobilePreview" class="capture-toolbar nodrag nopan" @pointerdown.stop @mousedown.stop>
+    <div v-if="app" :inert="mobilePreview || editing || undefined" class="capture-toolbar nodrag nopan" @pointerdown.stop @mousedown.stop>
       <span class="capture-title">{{ app.title }}</span>
-      <UButton type="button" color="neutral" variant="ghost" :size="mobileFocus ? 'sm' : 'xs'" :ui="{ base: mobileFocus ? 'min-h-[44px]' : undefined }" :disabled="status.status !== 'connected' || closed || maximizedElsewhere" @click="showApp ? returnToTerminal() : showCapturedApp()">{{ showApp ? t('terminal.capture.terminal') : t('terminal.capture.app') }}</UButton>
+      <UButton v-if="data.focus" type="button" color="neutral" variant="ghost" :size="mobileFocus ? 'sm' : 'xs'" :ui="{ base: mobileFocus ? 'min-h-[44px]' : undefined }" :disabled="status.status !== 'connected' || closed || maximizedElsewhere" @click="showApp ? returnToTerminal() : activateApp()">{{ showApp ? t('terminal.capture.terminal') : t('terminal.capture.app') }}</UButton>
+      <UButton type="button" color="neutral" variant="ghost" :size="mobileFocus ? 'sm' : 'xs'" :ui="{ base: mobileFocus ? 'min-h-[44px]' : undefined }" @click="openApp">{{ t('terminal.capture.open') }}</UButton>
       <span v-if="captureError" class="capture-error" role="alert" :title="captureError">{{ captureError }}</span>
       <UButton type="button" color="neutral" variant="ghost" :size="mobileFocus ? 'sm' : 'xs'" :ui="{ base: mobileFocus ? 'min-h-[44px]' : undefined }" :loading="stoppingApp" :disabled="stoppingApp" @click="stopCapturedApp">{{ t('terminal.capture.stop') }}</UButton>
     </div>
-    <div v-if="app && !mobilePreview" v-show="showApp" ref="captureHost" class="capture-body card-content nodrag nopan nowheel" @pointerdown.stop @mousedown.stop @wheel.stop />
+    <div v-if="app" v-show="showApp && trustedApp" ref="captureHost" :inert="mobilePreview || editing || undefined" class="capture-body card-content nodrag nopan nowheel" @pointerdown.stop @mousedown.stop @wheel.stop />
+    <div v-if="showApp && !trustedApp" class="capture-trust-prompt card-content" :inert="mobilePreview || editing || undefined"><Icon name="globe" :size="32" /><span>{{ app?.title }}</span><UButton v-if="!mobilePreview" color="neutral" variant="outline" @click="activateApp">{{ t('terminal.capture.app') }}</UButton></div>
     <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || closed || showApp || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop><div class="terminal-transition-surface" aria-hidden="true" /></div>
     <PaneContextMenu :host="host" :enabled="!showApp && keepTerminal && !mobilePreview && !closed && !maximizedElsewhere && status.status === 'connected'" :allows-menu="allowsContextMenu" :lookup="paneContext" :action="paneAction" />
     <TerminalSettingsDialog v-model="settings" :open="settingsOpen" :portal="portal" @close="settingsOpen = false" />
-    <div v-if="mobilePreview && !closed" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: label })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
+    <div v-if="mobilePreview && !closed && !editing" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: label })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
     <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">{{ t('terminal.upload.file') }}</div>
     <div v-if="noteDrag || fileDrag" class="terminal-file-drop terminal-note-drop" :class="{ 'note-drop-unavailable': !noteDropAvailable }" aria-hidden="true">{{ !noteDropAvailable ? noteDropLabel : fileDrag ? t(status.fileReading ? 'fileTransfer.preparing' : 'fileTransfer.drop') : noteDropLabel }}</div>
     <span v-if="status.upload?.rejected" class="terminal-copy-notice copy-failed" role="alert">{{ status.upload.rejected }}</span>
@@ -276,6 +300,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <div v-if="!closed && keepTerminal && !maximizedElsewhere && (status.status === 'connecting' || status.status === 'connected' && !status.screenReady)" class="terminal-loading nodrag" :class="{ 'terminal-loading-initial': !status.screenReady }" role="status"><span class="spinner" />{{ status.retryAttempt ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt }) : t('common.loading') }}</div>
     <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :read-text="readText" :copy-text="copyText" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @files="mobileFiles" @paste="mobilePaste" @paste-file="pasteFile" @reading="reading" />
   </article>
+  <CardLayoutControls :id="id" :label="label" :kind="app ? 'app' : 'terminal'" :width="data.width" :height="data.height" :waiting="!!status.layoutRestoring && !showApp && !closed && status.status === 'connected'" />
 </template>
 
 <style scoped>
@@ -329,5 +354,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
 </style>
 
 <style scoped>
+.terminal-mobile-preview .capture-body,.terminal-mobile-preview .capture-toolbar{pointer-events:none}.terminal-mobile-preview .terminal-preview-button{z-index:10}
+.capture-trust-prompt{position:absolute;inset:64px 0 0;z-index:6;background:#1b1f26;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#a4afbe}
 .capture-toolbar{position:absolute;z-index:6;top:30px;left:0;right:0;height:34px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#252a33;color:#d5d7dd;font-size:12px}.capture-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.capture-error{max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.capture-body{position:absolute;z-index:5;inset:64px 0 0;background:#fff}.capture-body :deep(.capture-frame){display:block;width:100%;height:100%;border:0}.terminal-mobile.focused .capture-toolbar{top:var(--terminal-header-height);height:44px}.terminal-mobile.focused .capture-body{top:calc(var(--terminal-header-height) + 44px)}
 </style>

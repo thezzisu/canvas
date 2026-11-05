@@ -1,3 +1,4 @@
+import { LayoutConflict } from './state.ts';
 import type { CompletionReads } from './completion-reads.ts';
 import { Hono } from "hono";
 import { Readable } from "node:stream";
@@ -63,7 +64,7 @@ const layoutSchema = z
         nodeLayoutSchema
           .pick({ id: true, x: true, y: true, width: true, height: true })
           .partial()
-          .required({ id: true }),
+          .required({ id: true }).extend({ expected: nodeLayoutSchema.omit({ id: true }).partial().optional() }).refine(value => !value.expected || Object.keys(value.expected).length > 0 && ['x', 'y', 'width', 'height'].every(field => (value[field as keyof typeof value] !== undefined) === (value.expected?.[field as keyof typeof value.expected] !== undefined))),
       )
       .max(500),
   })
@@ -606,24 +607,13 @@ export function createApp(
     if (id === "overview")
       return c.json({ error: "Overview is read-only" }, 403);
     const { nodes } = layoutSchema.parse(await c.req.json());
-    const canvas = store.get<Canvas>("canvas", id);
-    if (!canvas) return c.json({ error: "Canvas not found" }, 404);
-    const changes = new Map(nodes.map((node) => [node.id, node]));
-    for (const node of canvas.nodes) {
-      const patch = changes.get(node.id);
-      if (isTerminalNode(node) && patch && (patch.width !== undefined || patch.height !== undefined))
-        store.setWindowSize(node.sourceId, node.windowId, {
-          ...(patch.width === undefined ? {} : { width: patch.width }),
-          ...(patch.height === undefined ? {} : { height: patch.height }),
-        });
+    try {
+      const canvas = store.applyLayout(id, nodes);
+      return canvas ? c.json(store.canvasView(canvas)) : c.json({ error: "Canvas not found" }, 404);
+    } catch (error) {
+      if (error instanceof LayoutConflict) return c.json({ error: 'Layout changed on another device', code: 'layout-conflict' }, 409);
+      throw error;
     }
-    canvas.nodes = canvas.nodes.map((node) => ({
-      ...node,
-      ...changes.get(node.id),
-    }));
-    return c.json(
-      store.canvasView(store.put("canvas", canvasSchema.parse(canvas))),
-    );
   });
   app.delete("/api/canvases/:id/nodes/:node", (c) => {
     const id = c.req.param("id");

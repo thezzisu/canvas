@@ -8,6 +8,7 @@ import { z } from "zod";
 import { defaultSettings, type GlobalSettings } from "../shared/settings.ts";
 import { defaultWindowSize } from "../shared/window-size.ts";
 import { settingsPatchSchema } from "./settings.ts";
+import { layoutFields, type LayoutUpdate, type LayoutGeometry } from "../shared/layout.ts";
 import { getMimeType } from "hono/utils/mime";
 import { CARD_REMOVAL_UNDO_MS, type CardRemovalUndo } from '../shared/card-removal.ts';
 
@@ -128,6 +129,8 @@ export type SharedState = {
   overviewBackground: CanvasBackground | null;
   windowSizes: Record<string, WindowSize>;
 };
+export class LayoutConflict extends Error {}
+
 export class Store extends EventEmitter {
   db: DatabaseSync;
   readonly instanceId = randomUUID();
@@ -319,6 +322,50 @@ export class Store extends EventEmitter {
           }
         : null,
     };
+  }
+  /** Compare only edited geometry, then publish one committed layout snapshot. */
+  applyLayout(id: string, changes: LayoutUpdate[]): Canvas | undefined {
+    let result: Canvas | undefined;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const canvas = this.get<Canvas>('canvas', id);
+      if (!canvas) { this.db.exec("ROLLBACK"); return; }
+      const byId = new Map(changes.map(change => [change.id, change]));
+      if (byId.size !== changes.length) throw new Error('Duplicate layout node');
+      const sizes = new Map<string, Partial<WindowSize>>();
+      for (const change of changes) {
+        const node = canvas.nodes.find(node => node.id === change.id);
+        if (!node) { if (change.expected) throw new LayoutConflict(); else continue; }
+        const geometry = isTerminalNode(node) ? { ...node, ...this.windowSize(node.sourceId, node.windowId) } : node;
+        for (const field of layoutFields) {
+          if (change.expected?.[field] !== undefined && geometry[field] !== change.expected[field] && geometry[field] !== change[field]) throw new LayoutConflict();
+        }
+        if (isTerminalNode(node)) {
+          const key = `${node.sourceId}/${node.windowId}`, patch = sizes.get(key) || {};
+          for (const field of ['width', 'height'] as const) if (change[field] !== undefined) {
+            if (patch[field] !== undefined && patch[field] !== change[field]) throw new LayoutConflict();
+            patch[field] = change[field];
+          }
+          sizes.set(key, patch);
+        }
+      }
+      const nodes = canvas.nodes.map(node => {
+        const patch = byId.get(node.id);
+        if (!patch) return node;
+        const geometry: Partial<LayoutGeometry> = {};
+        for (const field of layoutFields) if (patch[field] !== undefined) geometry[field] = patch[field];
+        return { ...node, ...geometry };
+      });
+      result = { ...canvasSchema.parse({ ...canvas, nodes }), id };
+      for (const [key, patch] of sizes) if (Object.keys(patch).length) {
+        const node = canvas.nodes.find(node => isTerminalNode(node) && `${node.sourceId}/${node.windowId}` === key)! as TerminalNode;
+        this.setWindowSize(node.sourceId, node.windowId, patch);
+      }
+      this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?").run(JSON.stringify(result), id);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    this.changed();
+    return result;
   }
   windowSize(sourceId: string, windowId: string): WindowSize {
     const stored = this.get<WindowSize>("window-size", `${sourceId}/${windowId}`);

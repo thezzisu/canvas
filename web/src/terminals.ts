@@ -37,6 +37,7 @@ import type { SourceResource } from './types'
 import type { PaneAction, PaneContext } from '../../shared/pane-context'
 
 export type TerminalStatus = {
+  layoutRestoring?: boolean
   status: 'connecting' | 'connected' | 'disconnected' | 'closed'
   screenReady?: boolean
   transitioning?: boolean
@@ -59,6 +60,9 @@ interface FocusResize { token: string; suspended: boolean; requested?: { cols: n
 interface CompletionFrame { generation: number; layout?: string; focusedPaneId?: string; panes: Array<{ id: string; completion?: CompletionToken }> }
 interface Session {
   appShowing?: boolean
+  editing?: boolean
+  resumePaint?: number
+  resumeReset?: boolean
   readGeneration?: number
   readGesture?: boolean
   parsedCompletion?: CompletionFrame
@@ -233,7 +237,7 @@ function syncViewVisibility(session: Session) {
 }
 function reportViewState(session: Session) {
   if (session.state.status !== 'connected' || session.socket?.readyState !== WebSocket.OPEN) return
-  const visible = !!session.host?.isConnected && session.viewVisible !== false && !document.hidden
+  const visible = !!session.host?.isConnected && session.viewVisible !== false && !document.hidden && !session.editing
   const focus = terminalReadFocus.value
   const focused = visible && !!focus && focus.sourceId === session.resource.sourceId && focus.windowId === session.resource.windowId
   if (session.reportedVisible === visible && session.reportedFocused === focused) return
@@ -383,7 +387,7 @@ function setState(session: Session, state: TerminalStatus) {
   session.listeners.forEach(listener => listener(next))
   refreshReadFocus()
 }
-function interactive(session: Session) { return !session.appShowing && (!session.mobile || session.magnified) }
+function interactive(session: Session) { return !session.editing && !session.resumePaint && !session.appShowing && (!session.mobile || session.magnified) }
 function setModifiers(session: Session, modifiers: Partial<TerminalModifiers> = {}) {
   session.modifiers = { shift: modifiers.shift === true, ctrl: modifiers.ctrl === true, alt: modifiers.alt === true, meta: modifiers.meta === true }
   setState(session, { ...session.state, modifiers: session.modifiers })
@@ -532,6 +536,7 @@ async function connect(session: Session, probe: boolean) {
           // The existing DOM frame remains valid until replacement bytes arrive.
           session.parsedGrid = undefined
           session.paintRevision = (session.paintRevision || 0) + 1
+          if (session.resumePaint !== undefined) { session.resumePaint = session.paintRevision; session.resumeReset = true }
           session.parsedCompletion = undefined; session.paintedCompletion = undefined; session.readCompletion = undefined
           session.parsedLayout = undefined; session.paintedLayout = undefined
           present(session)
@@ -588,6 +593,7 @@ async function connect(session: Session, probe: boolean) {
             session.parsedGrid = undefined; session.paintedGrid = undefined
             session.parsedCompletion = undefined; session.paintedCompletion = undefined
             session.paintRevision = (session.paintRevision || 0) + 1
+            if (session.resumeReset) session.resumePaint = session.paintRevision
             session.cardFit = undefined
           }
           session.term.resize(message.cols, message.rows)
@@ -671,6 +677,7 @@ function setTerminalZoom(session: Session, percent: number) {
 }
 function proposedSize(session: Session) {
   if (!session.host?.isConnected || !session.opened) return
+  if (session.editing) return
   const available = availableSize(session.host)
   if (!session.metrics) return
   if (!(available.width > 0 && available.height > 0)) return
@@ -699,7 +706,7 @@ function endFocusSize(session: Session) {
   setState(session, { ...session.state, focusResize: undefined })
 }
 function resize(session: Session, explicit = true) {
-  if (session.magnified || session.resizing || session.state.status !== 'connected' || session.state.presentation?.maximized) return
+  if (session.editing || session.magnified || session.resizing || session.state.status !== 'connected' || session.state.presentation?.maximized) return
   const proposed = proposedSize(session)
   if (!proposed || !session.host || !session.metrics || session.socket?.readyState !== WebSocket.OPEN) return
   const available = availableSize(session.host), previous = session.cardFit
@@ -777,6 +784,11 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       const grid = terminalGeometry(current)
       if (!grid) return
       const frameReady = event.start === 0 && event.end === term.rows - 1
+      if (frameReady && current.resumeReset && current.resumePaint === current.paintRevision && sameTerminalGrid(current.parsedGrid, term)) {
+        current.resumePaint = undefined; current.resumeReset = false
+        current.term.options.disableStdin = !interactive(current)
+        setState(current, { ...current.state, layoutRestoring: false })
+      }
       if (frameReady) {
         current.paintedGrid = { cols: term.cols, rows: term.rows }
         current.paintedLayout = current.parsedLayout
@@ -1043,6 +1055,20 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     async paneAction(pane: PaneContext, command: PaneAction) {
       if (!canPasteText()) throw new Error(t('terminal.unavailable'))
       await api(`${windowPath}/pane-action`, { method: 'POST', body: JSON.stringify({ pane: { paneId: pane.paneId, bootId: pane.bootId }, command }) }, mountingContext)
+    },
+    setEditing(value: boolean) {
+      if (current.editing === value) return
+      current.editing = value
+      if (value) {
+        current.term.blur(); current.keyboard?.blur()
+        current.resumePaint = undefined; current.resumeReset = false
+      } else if (current.state.status === 'connected') {
+        current.resumePaint = (current.paintRevision || 0) + 1; current.resumeReset = false
+      }
+      current.term.options.disableStdin = !interactive(current)
+      setState(current, { ...current.state, layoutRestoring: !value && current.resumePaint !== undefined })
+      syncViewVisibility(current)
+      if (!value) schedulePresentation(current)
     },
     setAppShowing(value: boolean) { current.appShowing = value; if (value) { current.term.blur(); current.keyboard?.blur() }; current.term.options.disableStdin = !interactive(current); present(current); refreshReadFocus() },
     focus(options: { keyboard?: boolean } = {}) { focusTerminal(current, options.keyboard) },

@@ -16,12 +16,15 @@ export function useCanvasNavigation(options: {
   beforeFullscreen(): void
   onError(reason: unknown): void
   mobile(): boolean
+  editing?(): boolean
+  gestureCancelled?(): void
   onNavigate?(): void
   paging?: { enabled(): boolean; canMove(direction: PageDirection): boolean; move(direction: PageDirection): void; recenter(animate?: boolean): Promise<unknown> }
 }) {
   const surface = ref<HTMLElement>()
   const app = ref<HTMLElement>()
   const fullscreen = ref(false)
+  let layoutTouch: { id: number; x: number; y: number; moved: boolean; ended?: boolean } | undefined
   let previous: { canvasId: string; viewport: Viewport; width: number; height: number; frame?: CanvasFrame } | undefined
   let changing = false
   let gesture: { count: number; viewport: Viewport; point: TouchPosition; distance: number; paged: boolean; multi: boolean; latest: TouchPosition; axis?: 'x' | 'y' } | undefined
@@ -71,6 +74,7 @@ export function useCanvasNavigation(options: {
   }
   watch([options.getCanvasId, () => options.paging?.enabled(), options.blocked], () => {
     wheelOwner.reset()
+    if (layoutTouch) { options.gestureCancelled?.(); layoutTouch = undefined }
     cancelFeedback(false)
     if (!options.paging?.enabled()) { pageWheel.reset(); gesture = undefined }
   }, { flush: 'sync' })
@@ -86,6 +90,18 @@ export function useCanvasNavigation(options: {
   function touchStart(event: TouchEvent) {
     if (!options.mobile() || options.blocked() || !surface.value || !event.touches.length) return
     const target = event.target instanceof Element ? event.target : undefined
+    if (options.editing?.() && !gesture && target?.closest('.card-layout-mask, .layout-resize-control')) {
+      if (!layoutTouch && event.touches.length === 1) {
+        const first = event.touches[0]!
+        layoutTouch = { id: first.identifier, x: first.clientX, y: first.clientY, moved: false }
+        return
+      }
+      if (layoutTouch?.moved) { event.stopPropagation(); return }
+      if (event.touches.length > 1) {
+        options.gestureCancelled?.(); layoutTouch = undefined
+        event.stopPropagation()
+      }
+    }
     // A fresh touch is an independent tap, even immediately after panning.
     if (!gesture && event.touches.length === 1) suppressClickUntil = 0
     if (!gesture && !target?.closest('.terminal-preview-button, .overview-create') &&
@@ -109,6 +125,12 @@ export function useCanvasNavigation(options: {
     if (gesture.count > 1) { moved = true; suppressClickUntil = performance.now() + 500; if (gesture.paged) cancelFeedback() }
   }
   function touchMove(event: TouchEvent) {
+    if (layoutTouch) {
+      const finger = [...event.touches].find(touch => touch.identifier === layoutTouch!.id)
+      if (layoutTouch.ended || !finger || event.touches.length > 1) { event.preventDefault(); event.stopPropagation(); return }
+      layoutTouch.moved ||= Math.hypot(finger.clientX - layoutTouch.x, finger.clientY - layoutTouch.y) >= 6
+      return
+    }
     if (!gesture || !options.mobile() || options.blocked() || !surface.value || !event.touches.length) return
     const current = touchPosition(event.touches)
     if (gesture.paged) {
@@ -138,6 +160,12 @@ export function useCanvasNavigation(options: {
     void options.setViewport(touchViewport(gesture.viewport, gesture.point, current.point, gesture.distance, current.distance))
   }
   function touchEnd(event: TouchEvent) {
+    if (layoutTouch) {
+      if (layoutTouch.moved) suppressClickUntil = performance.now() + 500
+      if (![...event.touches].some(touch => touch.identifier === layoutTouch!.id)) layoutTouch.ended = true
+      if (!event.touches.length) layoutTouch = undefined
+      return
+    }
     if (!gesture) return
     const paged = gesture.paged
     if (paged && event.touches.length) return
@@ -157,6 +185,7 @@ export function useCanvasNavigation(options: {
       ? { ...gesture, ...touchPosition(event.touches), viewport: { ...options.getViewport() } } : undefined
   }
   function touchCancel() {
+    if (layoutTouch) { options.gestureCancelled?.(); layoutTouch = undefined }
     if (gesture && moved && !gesture.paged) options.saveViewport()
     gesture = undefined
     cancelFeedback()

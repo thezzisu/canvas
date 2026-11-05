@@ -6,6 +6,8 @@ import { NodeResizer } from '@vue-flow/node-resizer'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import type { FileData } from '../types'
 import Icon from './Icon.vue'
+import CardLayoutControls from './CardLayoutControls.vue'
+import { useLayoutCard } from '../layout-editing'
 import CardPreview from './CardPreview.vue'
 import { BinaryFileError, readTextPreview } from '../text-preview'
 import { filePreview } from '../file-preview'
@@ -34,6 +36,8 @@ import { useRetainedFrame } from '../retained-frame'
 const { t, n } = useI18n()
 
 const props = withDefaults(defineProps<Pick<NodeProps<FileData>, 'id' | 'data'> & { selected?: boolean }>(), { selected: false })
+const layoutRoot = ref<HTMLElement>()
+const { editing } = useLayoutCard(layoutRoot)
 const binary = ref(false)
 const preview = computed(() => binary.value ? 'file' : filePreview(props.data.asset))
 watch(() => props.data.assetId, () => { binary.value = false })
@@ -126,7 +130,7 @@ const size = computed(() => {
 
 <template>
   <NodeResizer v-if="!data.mobile && !data.focus" :node-id="id" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="event => data.onResizeStart(id, event.params)" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
-  <article class="file-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus, 'input-focused': contentActive }" :data-asset-id="data.assetId" :data-preview-kind="preview">
+  <article ref="layoutRoot" class="file-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus, 'input-focused': contentActive }" :data-asset-id="data.assetId" :data-preview-kind="preview">
     <header ref="header" class="file-header drag-handle" :class="{ 'cutout-header': data.focus && data.mobile }" :data-cutout-position="data.focus && data.mobile && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus && data.mobile ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))`, '--cutout-controls': '264px' } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
       <span class="file-icon" :class="{ 'cutout-status': data.focus }"><Icon name="file" :size="13" /></span>
       <span class="file-title" :class="{ 'cutout-title': data.focus }" :title="`${data.asset.filename} · ${size}`">{{ data.asset.filename }}</span>
@@ -156,8 +160,9 @@ const size = computed(() => {
       </template>
       <button v-else type="button" class="file-download" @click="download" :aria-label="t('panels.file.downloadNamed', { name: data.asset.filename })"><Icon name="file" :size="42" /><span>{{ data.asset.filename }}</span></button>
     </div>
-    <CardPreview v-if="mobilePreview" :label="t('common.openCard', { name: data.asset.filename })" @open="data.onAction?.('focus', id)" />
+    <CardPreview v-if="mobilePreview && !editing" :label="t('common.openCard', { name: data.asset.filename })" @open="data.onAction?.('focus', id)" />
   </article>
+  <CardLayoutControls :id="id" :label="data.asset.filename" :kind="'file'" :width="data.width" :height="data.height" />
 </template>
 
 <style scoped>

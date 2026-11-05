@@ -6,6 +6,8 @@ import { NodeResizer } from '@vue-flow/node-resizer'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import type { NoteData, NotePatch } from '../types'
 import Icon from './Icon.vue'
+import CardLayoutControls from './CardLayoutControls.vue'
+import { useLayoutCard } from '../layout-editing'
 import { noteText } from '../note-document'
 import ContentZoom from './ContentZoom.vue'
 import CardHeaderActions from './CardHeaderActions.vue'
@@ -26,6 +28,8 @@ const NoteEditor = defineAsyncComponent(() => import('./NoteEditor.vue'))
 const { t } = useI18n()
 
 const props = withDefaults(defineProps<Pick<NodeProps<NoteData>, 'id' | 'data'> & { selected?: boolean }>(), { selected: false })
+const layoutRoot = ref<HTMLElement>()
+const { editing } = useLayoutCard(layoutRoot)
 const zoom = useContentZoom(() => props.data.zoomKey)
 const mobilePreview = computed(() => !!props.data.mobile && !props.data.focus)
 const noteBody = ref<HTMLElement>()
@@ -85,7 +89,7 @@ function dragNote(event: DragEvent) {
 
 <template>
   <NodeResizer v-if="!data.mobile && !data.focus" :node-id="id" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="event => data.onResizeStart(id, event.params)" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
-  <article class="note-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus, 'input-focused': contentActive }" :data-note-id="id" :style="{ '--note-color': noteColor(color), '--content-zoom': data.focus ? zoom / 100 : 1 }" @dragenter.capture="rejectNoteCardDrop" @dragover.capture="rejectNoteCardDrop" @drop.capture="rejectNoteCardDrop">
+  <article ref="layoutRoot" class="note-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus, 'input-focused': contentActive }" :data-note-id="id" :style="{ '--note-color': noteColor(color), '--content-zoom': data.focus ? zoom / 100 : 1 }" @dragenter.capture="rejectNoteCardDrop" @dragover.capture="rejectNoteCardDrop" @drop.capture="rejectNoteCardDrop">
     <header ref="header" class="note-header drag-handle" :class="{ 'cutout-header': data.focus && data.mobile }" :data-cutout-position="data.focus && data.mobile && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus && data.mobile ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))`, '--cutout-controls': '264px' } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
       <div ref="colorPicker" class="note-color-picker nodrag" :class="{ 'cutout-status': data.focus }">
         <button class="note-color-dot" :title="t('panels.note.color')" :aria-label="t('panels.note.color')" :aria-expanded="colorOpen" @click.stop="colorOpen = !colorOpen" @keydown.esc="escapeColors" />
@@ -104,8 +108,9 @@ function dragNote(event: DragEvent) {
     <div ref="noteBody" class="note-content card-content nodrag nowheel" :data-content-active="contentActive" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.stop="contentPointerDown" @wheel.stop @dblclick.stop>
       <NoteEditor ref="noteEditor" :content="content" :attachments="data.attachments || []" :canvas-id="data.canvasId" :note-id="id" :scroll-key="data.scrollKey" :read-only="mobilePreview" :insert-attachment="data.onAttachment" @change="value => { content = value; emitChange({ content: value }) }" @flush="flush" />
     </div>
-    <CardPreview v-if="mobilePreview" :label="t('common.openCard', { name: title || t('panels.note.name') })" @open="data.onAction('focus', id)" />
+    <CardPreview v-if="mobilePreview && !editing" :label="t('common.openCard', { name: title || t('panels.note.name') })" @open="data.onAction('focus', id)" />
   </article>
+  <CardLayoutControls :id="id" :label="title || t('panels.note.name')" :kind="'note'" :width="data.width" :height="data.height" />
 </template>
 
 <style scoped>

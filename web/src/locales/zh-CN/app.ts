@@ -1,4 +1,17 @@
 export default {
+  layoutEdit: "调整布局",
+  layoutApply: "应用",
+  layoutSelect: "选择卡片",
+  layoutWidth: "调整宽度",
+  layoutHeight: "调整高度",
+  layoutSize: "调整尺寸",
+  layoutUnsaved: "布局尚未应用",
+  layoutLeave: "离开前，请应用布局或丢弃修改。",
+  layoutStay: "继续编辑",
+  layoutDiscard: "丢弃修改",
+  layoutConflict: "其他设备已修改布局。可取消编辑以重新加载当前布局。",
+  layoutFailed: "未能确认布局是否保存，请检查连接后重试应用。",
+
   connectionNotVisible: '此连接在总览中没有可显示的内容。',
   reorderHint: '拖动排序；触屏请长按后拖动。也可按 Alt + 上 / 下方向键。', itemReordered: '{name}：第 {position} 项，共 {count} 项',
   cardRemoved: '已移除 {name}', undoRemoval: '撤销', undoUnavailable: '已无法撤销此次移除。',

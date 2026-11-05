@@ -1,4 +1,17 @@
 export default {
+  layoutEdit: "Adjust layout",
+  layoutApply: "Apply",
+  layoutSelect: "Select card",
+  layoutWidth: "Resize width",
+  layoutHeight: "Resize height",
+  layoutSize: "Resize card",
+  layoutUnsaved: "Unapplied layout",
+  layoutLeave: "Apply this layout or discard the changes before leaving.",
+  layoutStay: "Keep editing",
+  layoutDiscard: "Discard changes",
+  layoutConflict: "Layout changed on another device. Cancel to reload the current layout.",
+  layoutFailed: "Could not confirm the layout. Retry Apply or cancel after checking the connection.",
+
   connectionNotVisible: 'This connection has no visible content in Overview.',
   reorderHint: 'Drag to reorder; on touch, press and hold. Or press Alt + Up / Down.', itemReordered: '{name}: position {position} of {count}',
   cardRemoved: 'Removed {name}', undoRemoval: 'Undo', undoUnavailable: 'This removal can no longer be undone.',

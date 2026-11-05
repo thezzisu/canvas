@@ -1,6 +1,7 @@
 <script setup lang="ts" generic="T extends { id: string; name: string }">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useSortable, insertNodeAt, removeNode, type UseSortableOptions } from '@vueuse/integrations/useSortable'
+import { useReducedMotion } from '../reduced-motion'
 import { orderedItems } from '../sidebar-order'
 import { useI18n } from 'vue-i18n'
 
@@ -15,8 +16,9 @@ function changed(proposed: string[], moved: string) {
   const item = props.items.find(item => item.id === moved)
   if (item) announcement.value = t('app.itemReordered', { name: item.name, position: ids.indexOf(moved) + 1, count: ids.length })
 }
+const reducedMotion = useReducedMotion()
 const sortableOptions: UseSortableOptions & { supportPointer: boolean } = {
-  animation: 150, direction: 'vertical', delay: 200, delayOnTouchOnly: true,
+  animation: reducedMotion.value ? 0 : 150, direction: 'vertical', delay: 200, delayOnTouchOnly: true,
   // Native touchmove keeps scrolling available until the long press starts a drag.
   supportPointer: false,
   draggable: '.sidebar-sortable-item', ghostClass: 'sidebar-sortable-ghost', chosenClass: 'sidebar-sortable-chosen',
@@ -31,7 +33,8 @@ const sortableOptions: UseSortableOptions & { supportPointer: boolean } = {
     changed(ids, id)
   },
 }
-useSortable(root, computed(() => props.items), sortableOptions)
+const sortable = useSortable(root, computed(() => props.items), sortableOptions)
+watch(reducedMotion, value => sortable.option('animation', value ? 0 : 150))
 function keydown(event: KeyboardEvent) {
   if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return
   const element = (event.target as HTMLElement).closest<HTMLElement>('[data-order-id]')
