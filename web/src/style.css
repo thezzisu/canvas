@@ -223,21 +223,23 @@ html{zoom:var(--ui-zoom)}#app{position:fixed;inset:0;width:auto;height:auto}.app
 }
 /* Installed desktop PWAs place the existing header in the native titlebar's usable strip. */
 @media(display-mode:window-controls-overlay){
-  .app-shell:not(.mobile-layout):not(.canvas-fullscreen){
+  .app-shell:not(.canvas-fullscreen){
+    --desktop-sidebar-width:var(--sidebar-width,168px);
     --desktop-titlebar-height:max(46px,calc(env(titlebar-area-height,46px) / var(--ui-zoom)));
     --desktop-titlebar-left:calc(env(titlebar-area-x,0px) / var(--ui-zoom));
     --desktop-titlebar-right:calc((100vw - env(titlebar-area-x,0px) - env(titlebar-area-width,100vw)) / var(--ui-zoom));
   }
-  .app-shell:not(.mobile-layout):not(.canvas-fullscreen)>.sidebar>.brand{
+  .app-shell.sidebar-drawer{--desktop-sidebar-width:0px}
+  .app-shell:not(.canvas-fullscreen)>.sidebar>.brand{
     height:var(--desktop-titlebar-height);min-height:var(--desktop-titlebar-height);
     padding-left:min(var(--desktop-titlebar-left),calc(100% - 12px));-webkit-app-region:drag;app-region:drag;
   }
-  .app-shell:not(.mobile-layout):not(.canvas-fullscreen)>.workspace>.workspace-header{
+  .app-shell:not(.canvas-fullscreen)>.workspace>.workspace-header{
     height:var(--desktop-titlebar-height);min-height:var(--desktop-titlebar-height);
-    padding-left:max(16px,calc(var(--desktop-titlebar-left) - var(--sidebar-width,168px) + 8px));
+    padding-left:max(16px,calc(var(--desktop-titlebar-left) - var(--desktop-sidebar-width) + 8px));
     padding-right:max(16px,calc(var(--desktop-titlebar-right) + 8px));-webkit-app-region:drag;app-region:drag;
   }
-  .app-shell:not(.mobile-layout):not(.canvas-fullscreen)>.focus-overlay{padding-top:max(16px,calc(env(titlebar-area-height,0px) / var(--ui-zoom) + 8px))}
-  .app-shell:not(.mobile-layout):not(.canvas-fullscreen)>.source-panel{padding-top:max(28px,calc(env(titlebar-area-height,0px) / var(--ui-zoom) + 8px))}
-  .app-shell:not(.mobile-layout):not(.canvas-fullscreen) :is(.brand,.workspace-header) :is(button,a,input,select,[role=menu]){-webkit-app-region:no-drag;app-region:no-drag}
+  .app-shell:not(.canvas-fullscreen)>.focus-overlay{padding-top:max(16px,calc(env(titlebar-area-height,0px) / var(--ui-zoom) + 8px))}
+  .app-shell:not(.canvas-fullscreen)>.source-panel{padding-top:max(28px,calc(env(titlebar-area-height,0px) / var(--ui-zoom) + 8px))}
+  .app-shell:not(.canvas-fullscreen) :is(.brand,.workspace-header) :is(button,a,input,select,[role=menu]){-webkit-app-region:no-drag;app-region:no-drag}
 }
