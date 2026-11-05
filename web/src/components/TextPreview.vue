@@ -34,8 +34,9 @@ watch([() => props.text, () => props.filename, () => props.formatted, () => prop
     if (result.highlightError) emit('update:highlighted', false)
     if (result.formatError || result.highlightError) toast.add({ title: t(result.formatError ? 'panels.preview.formatFailed' : 'panels.preview.highlightFailed'), color: 'warning' })
   } catch {
+    // A transient worker or chunk failure shows plain text without changing preferences.
     if (controller.signal.aborted) return
-    emit('update:formatted', false); emit('update:highlighted', false)
+    code.value = undefined
     toast.add({ title: t(props.formatted ? 'panels.preview.formatFailed' : 'panels.preview.highlightFailed'), color: 'warning' })
   } finally { if (!controller.signal.aborted) processing.value = false }
 }, { immediate: true })

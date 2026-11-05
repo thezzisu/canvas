@@ -11,13 +11,14 @@ function storage(): Storage {
 }
 
 test('file view defaults and stored values contain only view preferences and bounded numeric positions', () => {
-  assert.deepEqual(fileView(undefined, true), { mode: 'rendered', wrap: false, formatted: false, highlighted: false, source: { x: 0, y: 0 }, rendered: { x: 0, y: 0 } })
+  assert.deepEqual(fileView(undefined, true), { mode: 'rendered', wrap: false, formatted: false, highlighted: true, source: { x: 0, y: 0 }, rendered: { x: 0, y: 0 } })
   assert.equal(fileView(undefined, false).mode, 'source')
   const clean = fileView({ mode: 'source', wrap: true, source: { x: -1, y: Infinity }, rendered: { x: 12.5, y: 30 },
     text: 'private content', url: 'https://private.example', token: 'DUMMY_TOKEN' }, true)
-  assert.deepEqual(clean, { mode: 'source', wrap: true, formatted: false, highlighted: false, source: { x: 0, y: 0 }, rendered: { x: 12.5, y: 30 } })
+  assert.deepEqual(clean, { mode: 'source', wrap: true, formatted: false, highlighted: true, source: { x: 0, y: 0 }, rendered: { x: 12.5, y: 30 } })
   assert.equal(fileView({ mode: 'rendered' }, false).mode, 'source')
   assert.deepEqual(fileView({ source: { x: 1e20, y: NaN } }, true).source, { x: 0, y: 0 })
+  assert.equal(fileView({ highlighted: false }, false).highlighted, false, 'an explicit opt-out is retained')
 })
 
 test('card and fullscreen mounts restore separate source/rendered reading positions without rewriting defaults', () => {

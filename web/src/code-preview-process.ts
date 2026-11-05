@@ -26,6 +26,7 @@ async function format(text: string, language: string): Promise<string> {
   if (language === 'yaml') plugins.push(await import('prettier/plugins/yaml'))
   return format(text, { parser: parsers[language], plugins, printWidth: 100, tabWidth: 2, proseWrap: 'preserve' })
 }
+export const MAX_HIGHLIGHT_TOKENS = 20_000
 let highlighter: Promise<HighlighterCore> | undefined
 function getHighlighter() {
   return highlighter ??= Promise.all([import('shiki/core'), import('shiki/engine/javascript'), import('shiki/themes/github-dark.mjs')])
@@ -60,9 +61,12 @@ export async function processCode(request: CodePreviewRequest): Promise<CodePrev
         for (const token of line) append(token.content, token.color)
         if (endings[index]) append(endings[index]!)
       })
-      // Keep both source fidelity and the number of DOM spans bounded.
-      if (tokens.length > 20_000 || tokens.map(token => token.text).join('') !== result.text) result.highlightError = true
-      else result.tokens = tokens
+      if (tokens.map(token => token.text).join('') !== result.text) result.highlightError = true
+      else {
+        // Bound DOM spans: long (often formatted) files keep the rest as plain text.
+        const shown = tokens.slice(0, MAX_HIGHLIGHT_TOKENS), rest = tokens.slice(MAX_HIGHLIGHT_TOKENS).map(token => token.text).join('')
+        result.tokens = rest ? [...shown, { text: rest }] : shown
+      }
     } catch { result.highlightError = true }
   }
   return result

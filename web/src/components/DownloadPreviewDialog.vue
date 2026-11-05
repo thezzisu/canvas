@@ -33,7 +33,7 @@ const loading = ref(false)
 const error = ref<string | Error>('')
 const truncated = ref(false)
 const expanded = ref(false)
-const rendered = ref(true), wrap = ref(false), formatted = ref(false), highlighted = ref(false)
+const rendered = ref(true), wrap = ref(false), formatted = ref(false), highlighted = ref(true)
 const sitePreview = useSourcePreview()
 const previewBusy = sitePreview.busy
 function previewSite() { const item = downloadPreview.value; if (item?.sourcePreview) void sitePreview.open(item.url, item.filename) }
@@ -107,7 +107,7 @@ watch(downloadPreview, preview => {
   request?.abort(); request = undefined
   text.value = ''; error.value = ''; truncated.value = false
   expanded.value = false; imageSize.value = undefined
-  rendered.value = true; wrap.value = false; formatted.value = false; highlighted.value = false
+  rendered.value = true; wrap.value = false; formatted.value = false; highlighted.value = true
   loading.value = preview?.preview === 'image' || preview?.preview === 'video'
   if (preview?.preview === 'text') void loadText()
 }, { immediate: true })

@@ -20,7 +20,7 @@ const position = (value: unknown): ReadingPosition => {
 export function fileView(value: unknown, markdown: boolean): FileView {
   const saved = value as Partial<FileView> | undefined
   return { mode: markdown && saved?.mode !== 'source' ? 'rendered' : 'source', wrap: saved?.wrap === true,
-    formatted: saved?.formatted === true, highlighted: saved?.highlighted === true,
+    formatted: saved?.formatted === true, highlighted: saved?.highlighted !== false,
     source: position(saved?.source), rendered: position(saved?.rendered) }
 }
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { textCapabilities, processCodePreview, type CodePreviewRequest, type CodePreviewResult } from './code-preview'
-import { processCode } from './code-preview-process'
+import { MAX_HIGHLIGHT_TOKENS, processCode } from './code-preview-process'
 
 const request = (filename: string, text: string, format = false, highlight = false) => ({ filename, text, format, highlight })
 
@@ -93,6 +93,16 @@ test('highlight tokens preserve leading/trailing and mixed newlines plus literal
   assert.equal(result.text, text)
   assert.equal(result.tokens?.map(token => token.text).join(''), text)
   assert(result.tokens?.every(token => typeof token.text === 'string' && (!token.color || /^#[\da-f]{3,8}$/iu.test(token.color))))
+})
+
+test('long formatted files highlight a bounded prefix and keep the rest as exact plain text', async () => {
+  const text = '<!doctype html><html><head><style>' + Array.from({ length: 4000 }, (_, i) => `.c${i}{color:#${(i % 4096).toString(16).padStart(3, '0')};margin:${i}px}`).join('') + '</style></head><body></body></html>'
+  const result = await processCode(request('large.html', text, true, true))
+  assert.equal(result.formatError, undefined)
+  assert.equal(result.highlightError, undefined)
+  assert.equal(result.tokens?.length, MAX_HIGHLIGHT_TOKENS + 1)
+  assert.equal(result.tokens?.at(-1)?.color, undefined)
+  assert.equal(result.tokens?.map(token => token.text).join(''), result.text)
 })
 
 test('malformed code reports a formatting failure and still highlights the original content', async () => {
