@@ -56,4 +56,6 @@ test('source documents resolve adjacent resources within their root and preserve
   assert(html.includes(`href="${root}docs/next.md"`)); assert(html.includes(`href="${root}docs/page.html"`))
   assert(!html.includes('outside.png')); assert(!html.includes('href="https://canvas.test/prefix/api/state'))
   assert(html.includes('href="#heading"')); assert(html.includes('id="heading"'))
+  assert.match(html, /target="_self"/u)
+  assert.doesNotMatch(html, /target="_blank"/u)
 })

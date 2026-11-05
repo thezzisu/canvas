@@ -118,6 +118,6 @@ watch([() => props.text, renderMarkdown, () => props.resources], async () => {
 .text-preview-wrap{white-space:pre-wrap;overflow-wrap:anywhere}
 .text-preview-lines{display:block;min-width:100%;width:max-content}.text-preview-wrap .text-preview-lines{width:100%}
 .text-preview-markdown{font-family:var(--content-font-family,monospace);font-feature-settings:var(--content-font-features);font-size:13px;line-height:1.65;overflow-wrap:anywhere}
-.text-preview-document :deep(>div>*:first-child){margin-top:0}.text-preview-document :deep(>div>*:last-child){margin-bottom:0}.text-preview-markdown :deep(p){font-size:inherit;line-height:inherit;margin-block:10px}.text-preview-markdown :deep(pre){font-size:12px;max-width:100%;overflow:auto}.text-preview-markdown :deep(img){max-width:100%;height:auto}.text-preview-markdown :deep(a){overflow-wrap:anywhere}.text-preview-markdown :deep(table){font-size:12px}
+.text-preview-document :deep(>div>*:first-child){margin-top:0}.text-preview-document :deep(>div>*:last-child){margin-bottom:0}.text-preview-markdown :deep(p){font-size:inherit;line-height:inherit;margin-block:10px}.text-preview-markdown :deep(pre){font-size:12px;max-width:100%;overflow:auto}.text-preview-markdown :deep(img){width:auto;max-width:100%;height:auto}.text-preview-markdown :deep(a){overflow-wrap:anywhere}.text-preview-markdown :deep(table){font-size:12px}
 .text-preview-status{display:flex;align-items:center;justify-content:center;gap:8px;min-height:80px;color:#8392a5;font-size:11px}
 </style>

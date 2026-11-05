@@ -11,7 +11,7 @@ function links(resources?: MarkdownResources): ComarkPlugin { return {
       const key = node[0] === 'a' ? 'href' : 'src'
       let url: URL | undefined
       const value = String(node[1][key] || '')
-      if (resources && node[0] === 'a' && value.startsWith('#')) return
+      if (resources && node[0] === 'a' && value.startsWith('#')) { node[1].target = '_self'; return }
       try {
         if (resources) {
           const root = new URL(resources.root), base = new URL(resources.document)
@@ -29,7 +29,7 @@ function links(resources?: MarkdownResources): ComarkPlugin { return {
       node[1][key] = url.href
       node[1].referrerpolicy = 'no-referrer'
       if (node[0] === 'a') {
-        if (!resources || url.origin !== new URL(resources.root).origin) node[1].target = '_blank'
+        node[1].target = resources && url.origin === new URL(resources.root).origin ? '_self' : '_blank'
         node[1].rel = 'noopener noreferrer'
       }
       else node[1].zoom = false

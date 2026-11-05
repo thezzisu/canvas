@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import UApp from '@nuxt/ui/components/App.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
+import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import TextPreview from './TextPreview.vue'
 import TextPreviewActions from './TextPreviewActions.vue'
 import TrustedPreviewDialog from './TrustedPreviewDialog.vue'
@@ -10,12 +12,25 @@ import { readTextPreview } from '../text-preview'
 import { requestTrustedPreview } from '../trusted-preview'
 import { uiLocale } from '../i18n'
 import { documentLocation } from '../document-location'
+import { useMobileLayout } from '../mobile-layout'
+import { textCapabilities } from '../code-preview'
 const { t } = useI18n()
 const document = documentLocation(location.href), filename = document?.filename || ''
 const resources = document?.resources
+const mobile = useMobileLayout(), narrow = useMediaQuery('(max-width: 600px)')
+const compact = computed(() => mobile.value || narrow.value)
 const rendered = ref(true), wrap = ref(false), formatted = ref(false), highlighted = ref(true)
 const text = ref(''), loading = ref(true), error = ref(false), truncated = ref(false)
 const controller = new AbortController()
+const capabilities = textCapabilities(filename)
+const menu = computed<DropdownMenuItem[]>(() => [
+  { label: t('panels.preview.source'), icon: 'i-lucide-code', type: 'checkbox', checked: !rendered.value, onUpdateChecked: checked => { rendered.value = !checked } },
+  ...(!rendered.value ? [
+    ...(capabilities.format ? [{ label: t('panels.preview.format'), icon: 'i-lucide-list-tree', type: 'checkbox' as const, checked: formatted.value, onUpdateChecked: (checked: boolean) => { formatted.value = checked } }] : []),
+    ...(capabilities.highlight ? [{ label: t('panels.preview.highlight'), icon: 'i-lucide-palette', type: 'checkbox' as const, checked: highlighted.value, onUpdateChecked: (checked: boolean) => { highlighted.value = checked } }] : []),
+    { label: t('panels.preview.wrap'), icon: 'i-lucide-wrap-text', type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } },
+  ] : []),
+])
 async function load() {
   try {
     if (!document) throw new Error('Invalid source path')
@@ -36,8 +51,12 @@ onBeforeUnmount(() => controller.abort())
 </script>
 <template>
   <UApp :locale="uiLocale">
-    <main class="document-preview">
-      <header><span class="document-name" :title="filename">{{ filename }}</span><TextPreviewActions :filename="filename" v-model:rendered="rendered" v-model:wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :source-preview="/\.html?$/i.test(filename)" :hide-site="!/\.html?$/i.test(filename)" @preview="openOriginal" /><UButton :href="document?.raw.href" :disabled="!document" icon="i-lucide-file-code" color="neutral" variant="ghost" :title="t('panels.preview.raw')" :aria-label="t('panels.preview.raw')" /><UButton :href="document?.download.href" :disabled="!document" icon="i-lucide-download" color="neutral" variant="ghost" :title="t('panels.file.download')" :aria-label="t('panels.file.download')" /></header>
+    <main class="document-preview" :class="{ 'document-touch': mobile }">
+      <header><span class="document-name" :title="filename">{{ filename }}</span>
+        <TextPreviewActions v-if="!compact" :filename="filename" v-model:rendered="rendered" v-model:wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :source-preview="/\.html?$/i.test(filename)" :hide-site="!/\.html?$/i.test(filename)" @preview="openOriginal" />
+        <UDropdownMenu v-else :items="menu" :modal="false"><UButton class="document-action" icon="i-lucide-ellipsis" color="neutral" variant="ghost" :aria-label="t('common.more')" /></UDropdownMenu>
+        <UButton class="document-action" :href="document?.raw.href" :disabled="!document" icon="i-lucide-file-code" color="neutral" variant="ghost" :title="t('panels.preview.raw')" :aria-label="t('panels.preview.raw')" /><UButton class="document-action" :href="document?.download.href" :disabled="!document" icon="i-lucide-download" color="neutral" variant="ghost" :title="t('panels.file.download')" :aria-label="t('panels.file.download')" />
+      </header>
       <p v-if="loading || error" role="status">{{ t(error ? 'panels.preview.unavailable' : 'common.loading') }}</p>
       <TextPreview v-else :text="text" :filename="filename" :resources="resources" :rendered="rendered" :wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" />
       <p v-if="truncated" role="status">{{ t('panels.preview.truncated') }}</p>
@@ -46,5 +65,5 @@ onBeforeUnmount(() => controller.abort())
   </UApp>
 </template>
 <style>
-html,body,#app{margin:0;min-height:100%;height:100%}.document-preview{height:100dvh;display:flex;flex-direction:column;overflow:hidden;background:#14191f;color:#cdd5e1}.document-preview>header{flex:none;min-height:44px;display:flex;align-items:center;gap:4px;padding:4px 8px;border-bottom:1px solid #343740}.document-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.document-preview>p{padding:12px;font-size:13px}
+html,body,#app{margin:0;min-height:100%;height:100%}.document-preview{height:100dvh;display:flex;flex-direction:column;overflow:hidden;background:#14191f;color:#cdd5e1}.document-preview>header{flex:none;min-height:44px;display:flex;align-items:center;gap:4px;padding:4px 8px;border-bottom:1px solid #343740}.document-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.document-preview>p{padding:12px;font-size:13px}.document-touch .document-action{width:44px;height:44px;justify-content:center;flex:none}
 </style>
