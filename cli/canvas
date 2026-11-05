@@ -820,7 +820,10 @@ def main():
     if sys.argv[1:2] == ["--serve-preview"]:
         if len(sys.argv) != 3:
             return 2
-        serve_preview(sys.argv[2])
+        try:
+            serve_preview(sys.argv[2])
+        except KeyboardInterrupt:
+            return 130
         return 0
     if os.environ.get("CANVAS_HELPER_DIRECT") != "1":
         installed = installed_canvas(sys.argv[1:2] in (["open"], ["capture"], ["preview"]))

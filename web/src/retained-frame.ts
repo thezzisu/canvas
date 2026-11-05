@@ -1,4 +1,6 @@
 import { onBeforeUnmount, watch, type Ref } from 'vue'
+import { useMobileLayout } from './mobile-layout'
+import { bindDocumentInput } from './document-input'
 
 /** One iframe per resource survives card remounts, maximize and canvas switches.
  * `moveBefore` keeps the frame's document alive while it changes parent; browsers
@@ -30,8 +32,11 @@ function destroy(key: string) {
 
 export function useRetainedFrame(host: Ref<HTMLElement | undefined>, spec: () => RetainedFrame | undefined) {
   const owner = Symbol('frame owner')
+  const touch = useMobileLayout()
+  let releaseInput: (() => void) | undefined
   let current: string | undefined
   const release = () => {
+    releaseInput?.(); releaseInput = undefined
     const entry = current === undefined ? undefined : frames.get(current)
     if (entry?.owner === owner) {
       const rect = entry.frame.getBoundingClientRect()
@@ -54,6 +59,7 @@ export function useRetainedFrame(host: Ref<HTMLElement | undefined>, spec: () =>
       entry = { frame }; frames.set(value.key, entry)
     }
     clearTimeout(entry.timer); entry.timer = undefined
+    releaseInput ??= bindDocumentInput(entry.frame, touch)
     for (const [name, attribute] of Object.entries(value.attributes)) entry.frame.setAttribute(name, attribute)
     entry.frame.style.width = ''; entry.frame.style.height = ''
     entry.owner = owner; current = value.key

@@ -13,11 +13,12 @@ import { requestTrustedPreview } from '../trusted-preview'
 import { uiLocale } from '../i18n'
 import { documentLocation } from '../document-location'
 import { useMobileLayout } from '../mobile-layout'
+import { useDocumentInputMode } from '../document-input'
 import { textCapabilities } from '../code-preview'
 const { t } = useI18n()
 const document = documentLocation(location.href), filename = document?.filename || ''
 const resources = document?.resources
-const mobile = useMobileLayout(), narrow = useMediaQuery('(max-width: 600px)')
+const mobile = useDocumentInputMode(useMobileLayout()), narrow = useMediaQuery('(max-width: 600px)')
 const compact = computed(() => mobile.value || narrow.value)
 const rendered = ref(true), wrap = ref(false), formatted = ref(false), highlighted = ref(true)
 const text = ref(''), loading = ref(true), error = ref(false), truncated = ref(false)
