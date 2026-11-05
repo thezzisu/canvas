@@ -1451,7 +1451,7 @@ function getCanvasNode(id: string): TerminalCanvasNode | undefined {
   const node = nodes.value.find(item => item.id === id)
   return node?.type === 'terminal' ? { type: 'terminal', id, sourceId: node.data.sourceId, spaceId: node.data.spaceId, windowId: node.data.windowId, x: node.position.x, y: node.position.y, width: node.data.width, height: node.data.height } : undefined
 }
-const notificationActionsAvailable = computed(() => !busy.value && (!notificationSurface.value || notificationSurface.value.classList.contains('settings-modal')))
+const notificationActionsAvailable = computed(() => !layoutBusy.value && !busy.value && (!notificationSurface.value || notificationSurface.value.classList.contains('settings-modal')))
 function prepareNotificationAction() {
   if (!notificationActionsAvailable.value) return false
   clearContentFocus()
@@ -1465,6 +1465,7 @@ watch([notificationFocus, terminalReadFocus], ([target, ready]) => {
   if (focusWindow(target.sourceId, target.spaceId, target.windowId, false)) notificationFocus.value = undefined
 }, { flush: 'post' })
 async function goToNotification(event: CanvasNotification) {
+  if (!await leaveLayout()) return
   if (!prepareNotificationAction()) return
   cancelNotificationReveal()
   const target = notificationTarget(event, resources.value), source = sources.value.find(item => item.id === event.sourceId)
@@ -1507,6 +1508,7 @@ async function revealNotificationWindow() {
   if (mobile.value) terminalAction('focus', target.id)
 }
 async function openNotification(event: CanvasNotification) {
+  if (!await leaveLayout()) return
   if (!prepareNotificationAction()) return
   cancelNotificationReveal()
   const target = notificationTarget(event, resources.value)
@@ -1877,9 +1879,10 @@ function cancelLayoutGesture() {
 async function startLayout() {
   canvasMenu.value = false
   if (!mobile.value || isOverview.value || layoutBusy.value || !currentCanvas.value) return
-  if (!await flushInstanceEdits()) return
+  const canvasId = activeId.value, context = apiContext()
+  if (!await flushInstanceEdits() || !isCurrentApi(context) || activeId.value !== canvasId || !mobile.value || isOverview.value || !currentCanvas.value) return
   clearContentFocus(); layoutSelected.value = ''; layoutError.value = ''
-  layoutDraft.value = new LayoutDraft(activeId.value, nodes.value.map(cardBounds))
+  layoutDraft.value = new LayoutDraft(canvasId, nodes.value.map(cardBounds))
   rebuildNodes()
 }
 function discardLayout() {
@@ -2024,7 +2027,6 @@ function resizeNode(id: string, width: number, height: number, x?: number, y?: n
   rebuildNodes()
 }
 function keydown(event: KeyboardEvent) {
-  if (layoutEditing.value && event.key === 'Escape') { event.preventDefault(); void leaveLayout(); return }
   if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
   if (notificationSurface.value || appDialogOpen.value) return
   if (event.key === 'Escape' && event.composedPath().some(target => target instanceof Element && target.getAttribute('role') === 'menu')) return
@@ -2033,6 +2035,7 @@ function keydown(event: KeyboardEvent) {
   if (backgroundCanvas.value) return
   if (settingsDialog.value || accountDialog.value) return
   if (scanTarget.value) return
+  if (layoutEditing.value && event.key === 'Escape' && !sidebarOpen.value && !canvasMenu.value && !sourcePanel.value) { event.preventDefault(); void leaveLayout(); return }
   const target = event.target instanceof Element ? event.target : undefined
   if (!modalOpen.value && (target?.closest('.xterm') || target?.closest('.note-card input, .note-card [contenteditable="true"]')
     && !(focusedCardId.value && event.key === 'Escape'))) return
