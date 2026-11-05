@@ -313,6 +313,7 @@ let contentFont = defaultContentFont()
 let fontPresentation: FontPresentation = { family: 'monospace', features: '"calt" 0, "liga" 0, "dlig" 0' }
 export function setContentFont(settings: ContentFontSettings, presentation: FontPresentation) {
   contentFont = { ...settings, stack: settings.stack.map(font => ({ ...font })) }
+  if (fontPresentation.family === presentation.family && fontPresentation.features === presentation.features) return
   fontPresentation = presentation
   for (const session of sessions.values()) {
     session.rendered = undefined
