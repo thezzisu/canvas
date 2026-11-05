@@ -33,6 +33,7 @@ async function toggle(event: MouseEvent) {
   stopLeave(); pinned.value = !pinned.value; open.value = pinned.value
   if (open.value && event.detail === 0) {
     await nextTick()
+    if (!open.value) return
     ;(panel.value?.querySelector<HTMLButtonElement>('button:not(:disabled)') || panel.value)?.focus({ preventScroll: true })
   }
 }
@@ -41,6 +42,7 @@ function go(agent: CanvasAgent) {
   close(); emit('go', { sourceId: agent.sourceId, windowId: agent.windowId })
 }
 watch(open, value => { if (!value) pinned.value = false })
+watch(() => props.indicator?.status, value => { if (!value) close() })
 const content = computed(() => ({ 'aria-label': t('canvasUi.agentsInCanvas', { name: props.name }),
   side: 'right' as const, align: 'start' as const, sideOffset: 8, collisionPadding: 8,
   onPointerenter: enter, onPointerleave: () => leave(),
@@ -57,7 +59,7 @@ const content = computed(() => ({ 'aria-label': t('canvasUi.agentsInCanvas', { n
       <Icon :name="overview ? 'grid' : 'canvas'" :size="16" />
       <span class="canvas-nav-name"><span>{{ name }}</span><small v-if="indicator" class="canvas-nav-count">{{ n(indicator.count) }}</small></span>
     </button>
-    <button v-if="indicator?.status" ref="trigger" type="button" class="canvas-nav-status canvas-agent-trigger" data-no-reorder :aria-label="t('canvasUi.agentsInCanvas', { name })" :aria-expanded="open" :aria-controls="panelId" @pointerenter="enter" @pointerleave="leave()" @click.stop="toggle" @keydown.esc.stop.prevent="close">
+    <button v-if="indicator?.status" ref="trigger" type="button" class="canvas-nav-status canvas-agent-trigger" aria-haspopup="dialog" data-no-reorder :aria-label="t('canvasUi.agentsInCanvas', { name })" :aria-expanded="open" :aria-controls="panelId" @pointerenter="enter" @pointerleave="leave()" @click.stop="toggle" @keydown.esc.stop.prevent="close">
       <i class="program-dot" :style="{ '--program-color': statusColor(indicator.status) }" />
     </button>
     <UPopover v-model:open="open" :modal="false" :reference="trigger" :portal="portal" :content="content"

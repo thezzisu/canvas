@@ -2144,7 +2144,7 @@ watch(graphSurface, element => {
 watch(visibleViewport, () => { if (mobile.value) void nextTick(windowResize) })
 watch(uiZoom, () => { void nextTick(windowResize) })
 watch(mobile, () => { if (layoutEditing.value) return; sidebarOpen.value = false; canvasTouchCancel(); rebuildNodes() })
-watch(sidebarDrawer, drawer => { if (!drawer) sidebarOpen.value = false })
+watch(sidebarDrawer, drawer => { openCanvasAgents.value = ''; if (!drawer) sidebarOpen.value = false })
 watch(sourcePanel, value => { if (value && sidebarDrawer.value) sidebarOpen.value = false })
 watch(sidebarOpen, value => { if (!value) openCanvasAgents.value = ''; if (value) { canvasMenu.value = false; overviewMenuOpen.value = false; createMenuOpen.value = false } })
 watch([canvasMenu, overviewMenuOpen, createMenuOpen], values => { if (values.some(Boolean)) sidebarOpen.value = false })
