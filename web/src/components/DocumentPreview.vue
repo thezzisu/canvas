@@ -55,7 +55,7 @@ onBeforeUnmount(() => controller.abort())
     <main class="document-preview" :class="{ 'document-touch': mobile }">
       <header><span class="document-name" :title="filename">{{ filename }}</span>
         <TextPreviewActions v-if="!compact" :filename="filename" v-model:rendered="rendered" v-model:wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :source-preview="/\.html?$/i.test(filename)" :hide-site="!/\.html?$/i.test(filename)" @preview="openOriginal" />
-        <UDropdownMenu v-else :items="menu" :modal="false"><UButton class="document-action" icon="i-lucide-ellipsis" color="neutral" variant="ghost" :aria-label="t('common.more')" /></UDropdownMenu>
+        <UDropdownMenu v-else :items="menu" :modal="false" :ui="mobile ? { item: 'min-h-[44px] items-center' } : undefined"><UButton class="document-action" icon="i-lucide-ellipsis" color="neutral" variant="ghost" :aria-label="t('common.more')" /></UDropdownMenu>
         <UButton class="document-action" :href="document?.raw.href" :disabled="!document" icon="i-lucide-file-code" color="neutral" variant="ghost" :title="t('panels.preview.raw')" :aria-label="t('panels.preview.raw')" /><UButton class="document-action" :href="document?.download.href" :disabled="!document" icon="i-lucide-download" color="neutral" variant="ghost" :title="t('panels.file.download')" :aria-label="t('panels.file.download')" />
       </header>
       <p v-if="loading || error" role="status">{{ t(error ? 'panels.preview.unavailable' : 'common.loading') }}</p>
