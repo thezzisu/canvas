@@ -2,7 +2,7 @@
   --sidebar-rail: 27px;
   --sidebar-icon: 16px;
   --sidebar-gap: 2px;
-  width: 168px; min-width: 168px; display: flex; flex-direction: column;
+  width: var(--sidebar-width,168px); min-width: var(--sidebar-width,168px); display: flex; flex-direction: column;
   padding: 0 4px; background: #1a1c21; border-right: 1px solid #292d34; z-index: 3;
 }
 .sidebar>.brand { height: 46px; min-height: 46px; padding: 0; margin-bottom: 12px; font-size: 20px; letter-spacing: -1px; }
@@ -59,6 +59,7 @@
 .sidebar-account>.avatar { justify-self: center; }
 
 @media(max-width:620px) {
+  .app-shell:not(.sidebar-drawer) { --sidebar-width:52px; }
   .app-shell:not(.sidebar-drawer) .sidebar { width: 52px; min-width: 52px; padding: 0 5px; }
   .app-shell:not(.sidebar-drawer) .sidebar>.brand { grid-template-columns: minmax(0,1fr); justify-items: center; margin-bottom: 6px; }
   .app-shell:not(.sidebar-drawer) .sidebar :is(.instance-trigger,.nav-item,.source-nav-item,.source-empty,.nav-section-label) { grid-template-columns: minmax(0,1fr); justify-items: center; padding-inline: 0; gap: 0; }

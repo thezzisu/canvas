@@ -69,5 +69,5 @@ const checkboxUi = { root: 'picker-checkbox', base: 'picker-checkbox-base' }
 .picker-window-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
 .picker-added{flex:none;color:#728296;font-size:10px}.picker-checkbox{display:flex;align-items:center;flex:none}
 .picker-checkbox-base{width:15px;height:15px;border-radius:3px;padding:0;gap:0}.picker-checkbox-base:disabled{cursor:default}.picker-empty{padding:28px 16px;text-align:center;color:#7d8a9d;font-size:12px}
-@media(pointer:coarse){.picker-group-row,.picker-window-row{min-height:42px}.picker-window-name,.picker-group-row strong{font-size:12px}.picker-checkbox-base{width:18px;height:18px}}
+:global(.mobile-layout) .picker-group-row,:global(.mobile-layout) .picker-window-row{min-height:44px}:global(.mobile-layout) .picker-window-name,:global(.mobile-layout) .picker-group-row strong{font-size:12px}:global(.mobile-layout) .picker-checkbox-base{width:18px;height:18px}
 </style>

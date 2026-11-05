@@ -37,6 +37,7 @@ test('install manifest uses neutral start URL and real 192, 512, maskable and Ap
   assert(manifest)
   assert.equal(manifest.name, 'Canvas'); assert.equal(manifest.start_url, './')
   assert.equal(manifest.scope, './'); assert.equal(manifest.display, 'standalone')
+  assert.deepEqual(manifest.display_override, ['window-controls-overlay'])
   for (const icon of [...manifest.icons!, { src: 'icons/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }]) {
     const bytes = await readFile(new URL(`./web/public/${icon.src}`, import.meta.url))
     const [width, height] = icon.sizes!.split('x').map(Number)

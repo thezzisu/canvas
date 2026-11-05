@@ -195,5 +195,5 @@ onBeforeUnmount(() => {
 .image-preview-tools button:hover:not(:disabled){background:#ffffff0d;color:#e5c9b3}.image-preview-tools button:disabled{opacity:.35;cursor:default}
 .image-preview-tools button:focus-visible{outline:1px solid #d4ac8e;outline-offset:0}
 .image-preview-scale{min-width:39px;padding:0 3px;font-size:10px;font-variant-numeric:tabular-nums;text-align:center;color:#a1afc0}
-@media(pointer:coarse){.image-preview-tools button{width:38px;min-width:38px;height:34px}}
+:global(.mobile-layout) .image-preview-tools button{width:44px;min-width:44px;height:44px}
 </style>

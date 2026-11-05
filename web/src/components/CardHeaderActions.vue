@@ -34,6 +34,6 @@ const portal = computed(() => trigger.value?.closest<HTMLElement>('.app-shell') 
 .card-header-action[aria-pressed=true],.card-header-action[aria-expanded=true]{background:var(--toggle-bg);color:var(--toggle-fg)}
 .mobile-layout :is(.terminal-card.focused,.card-focused) .card-header-actions{gap:0;opacity:1;pointer-events:auto}
 .mobile-layout :is(.terminal-card.focused,.card-focused) .card-header-action{width:44px;min-width:44px;height:44px;flex-basis:44px}
-@media(hover:none),(pointer:coarse){.card-header-actions{opacity:1;pointer-events:auto}}
+.mobile-layout .card-header-actions{opacity:1;pointer-events:auto}
 @media(prefers-reduced-motion:reduce){.card-header-actions{transition:none}}
 </style>

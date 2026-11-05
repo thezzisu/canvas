@@ -36,7 +36,7 @@ export function initializePwa() {
   window.addEventListener('beforeinstallprompt', event => {
     event.preventDefault()
     installPrompt.value = event as InstallPrompt
-    canInstall.value = !matchMedia('(display-mode: standalone)').matches
+    canInstall.value = !matchMedia('(display-mode: standalone), (display-mode: window-controls-overlay)').matches
   })
   window.addEventListener('appinstalled', () => { installPrompt.value = undefined; canInstall.value = false })
   updateWorker = registerSW({

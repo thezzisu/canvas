@@ -14,7 +14,7 @@ export const pwaOptions: Partial<VitePWAOptions> = {
   includeManifestIcons: false,
   manifest: {
     id: './', name: 'Canvas', short_name: 'Canvas', start_url: './', scope: './',
-    display: 'standalone', theme_color: '#17191d', background_color: '#17191d',
+    display: 'standalone', display_override: ['window-controls-overlay'], theme_color: '#17191d', background_color: '#17191d',
     icons: [
       { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
       { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
