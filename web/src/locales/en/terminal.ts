@@ -13,7 +13,7 @@ export default {
     timeout: 'Terminal connection timed out', connecting: 'Connecting', interrupted: 'Connection lost', reconnect: 'Reconnect', reconnecting: 'Reconnecting {attempt}/3',
   },
   upload: {
-    file: 'Upload files', failed: 'Upload failed', disconnected: 'Terminal is not connected', invalidSize: 'Invalid file size', files: '{count} files',
+    file: 'Upload files', drop: 'Drop to upload and insert paths', failed: 'Upload failed', disconnected: 'Terminal is not connected', invalidSize: 'Invalid file size', files: '{count} files',
     preparing: 'Preparing upload…', prepareTimeout: 'Upload preparation timed out', invalidUrl: 'Invalid upload URL', cancelling: 'Cancelling…',
     cancelled: 'Cancelled', pathInserted: 'Path inserted', cancel: 'Cancel upload', close: 'Dismiss upload status', progress: 'File upload progress',
     foldersUnsupported: 'Folders are not supported', unreadable: 'Could not read the selected files',

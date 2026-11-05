@@ -25,13 +25,13 @@ test('notifications target their pane after a move rather than the window aggreg
   assert.equal(notificationTarget({ ...event, sourceId: 'other' }, resources), undefined)
   assert.notEqual(notificationKey(event), notificationKey({ ...event, paneId: 'pane1' }))
 })
-test('displayed completion presence is independent of current status and temporary connection availability', () => {
+test('displayed completion survives read acknowledgement, but not a new task', () => {
   const completion = { bootId: 'fixture', sequence: 1 }, done = { ...event, completion }
   for (const status of ['done', 'idle', 'working', 'attention'] as const) {
     const current = structuredClone(resources)
     const pane = current[0]!.spaces[0]!.windows[0]!.panes![1]!
     Object.assign(pane, { status, completion })
-    assert(notificationPresent(done, current), 'The target still exists for the displayed event')
+    assert.equal(notificationPresent(done, current), status === 'done' || status === 'idle', 'Only the same completed task remains actionable')
     assert(notificationTarget(done, current), 'Navigation remains possible while the live target is online')
     assert.equal(notificationCurrent(done, current), status === 'done' || status === 'idle', 'New stale events still fail entry/effect validation')
     current[0]!.status = 'offline'
@@ -46,6 +46,9 @@ test('displayed completion presence is independent of current status and tempora
   assert.equal(notificationPresent(done, []), false)
   assert.equal(notificationPresent({ ...done, paneId: 'removed' }, resources), false)
   assert.equal(notificationPresent({ ...done, paneId: undefined, windowId: 'removed' }, resources), false)
+  const newer = structuredClone(resources)
+  Object.assign(newer[0]!.spaces[0]!.windows[0]!.panes![1]!, { status: 'done', completion: { ...completion, sequence: 2 } })
+  assert.equal(notificationPresent(done, newer), false, 'A different completed task cannot keep the prior toast actionable')
 })
 test('notification frames require known kinds and string identity and content', () => {
   assert(isCanvasNotification(event))

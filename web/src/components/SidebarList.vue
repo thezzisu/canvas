@@ -21,7 +21,7 @@ const sortableOptions: UseSortableOptions & { supportPointer: boolean } = {
   animation: reducedMotion.value ? 0 : 150, direction: 'vertical', delay: 200, delayOnTouchOnly: true,
   // Native touchmove keeps scrolling available until the long press starts a drag.
   supportPointer: false,
-  draggable: '.sidebar-sortable-item', ghostClass: 'sidebar-sortable-ghost', chosenClass: 'sidebar-sortable-chosen',
+  draggable: '.sidebar-sortable-item', ghostClass: 'sidebar-sortable-ghost', chosenClass: 'sidebar-sortable-chosen', fallbackClass: 'sidebar-sortable-drag',
   fallbackTolerance: 5, touchStartThreshold: 5, filter: '[data-no-reorder]', preventOnFilter: false,
   onUpdate(event) {
     const ids = [...event.from.children].map(item => (item as HTMLElement).dataset.orderId!).filter(Boolean)
@@ -59,7 +59,7 @@ function keydown(event: KeyboardEvent) {
 </template>
 
 <style scoped>
-.sidebar-sortable-chosen :deep(button){cursor:grabbing}
+.sidebar-sortable-ghost :deep(button),.sidebar-sortable-drag :deep(button){cursor:grabbing}
 .sidebar-sortable-ghost{opacity:.3}
 .sidebar-sortable-chosen{background:#e9b1880a;border-radius:5px}
 </style>

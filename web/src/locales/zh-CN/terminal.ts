@@ -13,7 +13,7 @@ export default {
     timeout: '终端连接超时', connecting: '连接中', interrupted: '连接中断', reconnect: '重连', reconnecting: '重连中 {attempt}/3',
   },
   upload: {
-    file: '上传文件', failed: '上传失败', disconnected: '终端未连接', invalidSize: '文件大小无效', files: '{count} 个文件',
+    file: '上传文件', drop: '松开以上传并插入路径', failed: '上传失败', disconnected: '终端未连接', invalidSize: '文件大小无效', files: '{count} 个文件',
     preparing: '准备上传…', prepareTimeout: '上传准备超时', invalidUrl: '上传地址无效', cancelling: '取消中…',
     cancelled: '已取消', pathInserted: '已插入路径', cancel: '取消上传', close: '关闭上传状态', progress: '文件上传进度',
     foldersUnsupported: '不支持文件夹', unreadable: '无法读取所选文件', fileFailed: '{name}：{error}',

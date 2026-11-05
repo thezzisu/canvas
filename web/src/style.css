@@ -207,6 +207,8 @@ html{zoom:var(--ui-zoom)}#app{position:fixed;inset:0;width:auto;height:auto}.app
 .graph-wrap.canvas-morph-enter .canvas-background{animation:canvas-morph-fade-in 220ms ease-out both}
 @keyframes canvas-morph-leave{to{opacity:0;translate:0 calc(var(--canvas-morph-shift) * -1)}}
 @keyframes canvas-morph-enter{from{opacity:0;translate:0 var(--canvas-morph-shift)}}
+.graph-wrap.canvas-morph-wait .vue-flow__node:not(.canvas-morph-anchor),.graph-wrap.canvas-morph-wait .canvas-background{opacity:0}
+.focus-overlay.canvas-morph-leave>article{animation:canvas-morph-leave 140ms cubic-bezier(.4,0,1,1) forwards}
 /* Jump buttons hide while their window moves, so a fast double click cannot skip a canvas. */
 .graph-wrap:is(.canvas-morph-leave,.canvas-morph-enter) :is(.card-previous-canvas,.card-next-canvas){animation:canvas-morph-fade-out 100ms ease-in forwards;pointer-events:none}
 .graph-wrap:not(.canvas-morph-leave,.canvas-morph-enter) :is(.card-previous-canvas,.card-next-canvas){animation:canvas-morph-fade-in 180ms ease-out both}

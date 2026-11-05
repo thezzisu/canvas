@@ -9,23 +9,23 @@ import type { WindowMetadata } from '../../shared/window-metadata.ts'
 const tick = () => new Promise<void>(resolve => setImmediate(resolve))
 const report = (state: string) => `\x1b]7501;state=${state}:app=fixture\x1b\\`
 
-function fixture(split = false) {
+function fixture(split = false, subscriptionSeq = 0) {
   const terminal = { address: 't1', labels: {} as Record<string, string>, state: 'live', status: { state: 'working' }, turn: 0, cols: 80, rows: 10, cwd: '/tmp', pid: 123 }
   const terminals = split ? [terminal, { ...terminal, address: 't2', pid: 124 }] : [terminal]
   const document: CoreDocument = { spaces: [{ id: 'space', name: 'Space', folder: '/tmp', tabs: [{ id: 'tab', name: 'Tab', root: { id: 'tab', type: 'row', children: [{ id: 'pane', type: 'block', content: { terminal: 't1' } }] } }] }] }
   if (split) document.spaces[0]!.tabs[0]!.root.children!.push({ id: 'second', type: 'block', content: { terminal: 't2' } })
   let onEvent: ((event: CoreNotification) => void | Promise<void>) | undefined
   const failures: Error[] = [], sent: Array<{ channel: number; kind: number; data: Buffer }> = [], attached: string[] = [], streams: CoreStream[] = []
-  const controls: { attachGate?: Promise<void>; failAttach?: boolean; documentVersion: number } = { documentVersion: 1 }
+  const controls: { attachGate?: Promise<void>; failAttach?: boolean; labelGate?: Promise<void>; labelStarted?(): void; documentVersion: number; listCalls: number } = { documentVersion: 1, listCalls: 0 }
   const rpc = {
     connected: true,
     hello: { core: { id: 'core', name: 'Fixture' }, version: '0.1.17' },
     async call(method: string, params: Record<string, unknown>) {
       if (method === 'server.status') return { core: { id: 'core' }, version: '0.1.17' }
-      if (method === 'terminal.list') return { terminals: structuredClone(terminals) }
+      if (method === 'terminal.list') { controls.listCalls++; return { terminals: structuredClone(terminals) } }
       if (method === 'doc.get') return { value: structuredClone(document), version: controls.documentVersion }
       if (method === 'terminal.get') return structuredClone(terminal)
-      if (method === 'terminal.label') { Object.assign(terminal.labels, params.labels); return structuredClone(terminal) }
+      if (method === 'terminal.label') { controls.labelStarted?.(); await controls.labelGate; Object.assign(terminal.labels, params.labels); return structuredClone(terminal) }
       throw new Error('Unexpected fixture method: ' + method)
     },
     async attach(params: { terminal: string }) {
@@ -36,16 +36,189 @@ function fixture(split = false) {
       if (controls.failAttach) throw new Error('Attach unavailable')
       return { terminal: structuredClone(pane), channel: next.channel, stream: next }
     },
-    async subscribe(_params: unknown, callback: typeof onEvent) { onEvent = callback; return { snapshot: { seq: 0, terminals: [structuredClone(terminal)] }, start() {}, close() {} } },
+    async subscribe(_params: unknown, callback: typeof onEvent) { onEvent = callback; return { snapshot: { seq: subscriptionSeq, terminals: structuredClone(terminals) }, start() {}, close() {} } },
     onClose() { return { dispose() {} } },
     send(channel: number, kind: number, data: Buffer) { sent.push({ channel, kind, data }) },
     retire() {},
     fail(error: Error) { failures.push(error) },
   } as unknown as CoreRpc
   const stream = new CoreStream(1, rpc), layout = new CoreLayout(rpc)
-  const event = async (type: string, data: Record<string, unknown>) => { await onEvent?.({ method: 'event', params: { seq: 1, terminal: 't1', type, data } }); await tick() }
-  return { rpc, stream, streams, attached, controls, layout, terminal, terminals, document, sent, failures, event }
+  let eventSequence = subscriptionSeq
+  const notification = async (method: CoreNotification['method'], params: Record<string, unknown>, seq = ++eventSequence) => {
+    eventSequence = Math.max(eventSequence, seq); await onEvent?.({ method, params: { ...params, seq } }); await tick()
+  }
+  const event = (type: string, data: Record<string, unknown>, seq?: number) => notification('event', { terminal: 't1', type, data }, seq)
+  return { rpc, stream, streams, attached, controls, layout, terminal, terminals, document, sent, failures, event, notification }
 }
+
+test('subscription sequence waterline rejects stale Core events after the initial snapshot', async () => {
+  const f = fixture(false, 103)
+  f.terminal.turn = 0; f.terminal.status = { state: 'working' }
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
+  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?9001l') })
+  const client = await opening
+  try {
+    const notifications: unknown[] = []
+    client.onNotification(value => notifications.push(value))
+    await f.event('status', { status: { state: 'idle' } }, 101)
+    await f.event('turn', { turn: 1 }, 102)
+    assert.equal(notifications.length, 0, 'the older idle/turn backlog after the subscription snapshot cannot synthesize Done')
+    const frame = await client.completionSnapshot()
+    assert.equal(frame?.windows[0]?.status, 'working')
+    assert.equal(f.terminal.turn, 0)
+    assert.equal(f.controls.listCalls, 0, 'the sequence and terminal data come from the same subscription snapshot')
+    await f.event('status', { status: { state: 'idle' } }, 104)
+    await f.event('turn', { turn: 1 }, 105)
+    assert.equal(notifications.length, 1, 'a live completion after the snapshot is still delivered')
+    await f.event('turn', { turn: 1 }, 105)
+    await f.event('status', { status: { state: 'working' } }, 104)
+    assert.equal(notifications.length, 1, 'duplicate sequence numbers cannot repeat a completion')
+    assert.equal(client.completionSnapshot()?.windows[0]?.status, 'done')
+  } finally { client.kill() }
+})
+
+test('an initial completed snapshot is state, not a new completion notification', async () => {
+  const f = fixture(false, 20)
+  f.terminal.turn = 3; f.terminal.status.state = 'idle'
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
+  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from(report('idle') + '\x1b[?9001l') })
+  const client = await opening
+  try {
+    const notifications: unknown[] = []
+    client.onNotification(value => notifications.push(value))
+    await f.event('turn', { turn: 3 }, 20)
+    assert.equal(client.completionSnapshot()?.windows[0]?.status, 'done')
+    assert.equal(notifications.length, 0)
+  } finally { client.kill() }
+})
+
+test('heartbeat sequence rejects earlier events without changing native state', async () => {
+  const f = fixture(false, 20)
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
+  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?9001l') })
+  const client = await opening
+  try {
+    const notifications: unknown[] = []
+    client.onNotification(value => notifications.push(value))
+    await f.notification('heartbeat', {}, 30)
+    await f.event('status', { status: { state: 'idle' } }, 29)
+    await f.event('turn', { turn: 1 }, 30)
+    assert.equal(client.completionSnapshot()?.windows[0]?.status, 'working')
+    assert.equal(notifications.length, 0)
+    await f.event('status', { status: { state: 'idle' } }, 31)
+    await f.event('turn', { turn: 1 }, 32)
+    assert.equal(notifications.length, 1)
+  } finally { client.kill() }
+})
+
+test('missed-event recovery uses its own snapshot and does not replay old completion events', async () => {
+  const f = fixture(false, 20)
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
+  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?9001l') })
+  const client = await opening
+  try {
+    const notifications: unknown[] = []
+    client.onNotification(value => notifications.push(value))
+    const snapshot = { ...structuredClone(f.terminal), turn: 5 }
+    f.terminal.status.state = 'idle'; f.terminal.turn = 8
+    await f.notification('missed', { terminals: [snapshot] }, 50)
+    assert.equal(f.controls.listCalls, 0, 'a separately sampled list cannot replace the sequenced snapshot')
+    assert.equal(client.completionSnapshot()?.windows[0]?.status, 'working')
+    await f.event('status', { status: { state: 'idle' } }, 49)
+    await f.event('turn', { turn: 6 }, 50)
+    assert.equal(notifications.length, 0)
+    assert.equal(client.completionSnapshot()?.windows[0]?.status, 'working')
+    await f.event('status', { status: { state: 'idle' } }, 51)
+    await f.event('turn', { turn: 6 }, 52)
+    assert.equal(notifications.length, 1)
+    await f.notification('missed', { terminals: [{ ...snapshot, turn: 1 }] }, 50)
+    assert.equal(client.completionSnapshot()?.windows[0]?.panes[0]?.completion?.sequence, 6)
+    await assert.rejects(f.notification('missed', { terminals: null }, 53), /Invalid core recovery snapshot/u)
+    assert.equal(f.controls.listCalls, 0, 'invalid protocol recovery cannot silently fall back to an unsequenced snapshot')
+  } finally { client.kill() }
+})
+
+test('document refresh and pane-action results cannot replace the ordered terminal mirror with a future list', async () => {
+  const f = fixture(false, 20)
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
+  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?9001l') })
+  const client = await opening
+  try {
+    f.terminal.turn = 5
+    await f.event('doc', {}, 21)
+    assert.equal(f.controls.listCalls, 0, 'document events read documents, not unsequenced terminal lists')
+    assert.equal(client.completionSnapshot()?.windows[0]?.panes[0]?.stateSequence, 0)
+    f.layout.paneAction = async () => f.layout.snapshot()
+    await client.paneAction({ bootId: 'core', paneId: 'pane', name: '' }, { action: 'rename', name: 'Renamed' })
+    assert.equal(f.controls.listCalls, 1, 'the independent action can consult current native facts')
+    assert.equal(client.completionSnapshot()?.windows[0]?.panes[0]?.stateSequence, 0, 'its unsequenced terminal list cannot overwrite the event mirror')
+    await f.event('status', { status: { state: 'idle' } }, 22)
+    await f.event('turn', { turn: 1 }, 23)
+    assert.equal(client.completionSnapshot()?.windows[0]?.panes[0]?.stateSequence, 1)
+    await f.event('status', { status: { state: 'working' } }, 24)
+    await f.event('doc', {}, 25)
+    assert.equal(client.completionSnapshot()?.windows[0]?.status, 'working')
+    assert.equal(client.completionSnapshot()?.windows[0]?.panes[0]?.stateSequence, 1)
+  } finally { client.kill() }
+})
+
+test('native lifecycle events preserve unrelated terminals, replace restarted streams and remove synthetic tabs', async () => {
+  const f = fixture(false, 20)
+  f.document.spaces = []
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'core:unplaced', tabId: 't1', cols: 20, rows: 6 })
+  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('BEFORE\x1b[?9001l') })
+  const client = await opening
+  try {
+    const exits: unknown[] = []; client.onExit(value => exits.push(value))
+    f.terminal.turn = 5
+    const other = { ...structuredClone(f.terminal), address: 't2', turn: 7 }
+    await f.notification('event', { terminal: 't2', type: 'created', data: other }, 21)
+    const windows = client.completionSnapshot()!.windows
+    assert.equal(windows.find(window => window.id === 't1')?.panes[0]?.stateSequence, 0)
+    assert.equal(windows.find(window => window.id === 't2')?.panes[0]?.stateSequence, 7)
+    assert.equal(f.controls.listCalls, 0, 'lifecycle records do not sample unrelated future state')
+    await f.event('status', { status: null }, 22)
+    await f.event('lost', { reason: 'signaled', exit_code: null, signal: 9, finished_ms: null }, 23)
+    assert.equal(client.completionSnapshot()?.windows.find(window => window.id === 't1')?.status, 'unknown')
+    await f.notification('event', { terminal: 't2', type: 'finished', data: { reason: 'exited', exit_code: 0, signal: null, finished_ms: 100 } }, 24)
+    assert(!client.completionSnapshot()?.windows.some(window => window.id === 't2'), 'finished records leave the synthetic live-terminal layout')
+    Object.assign(f.terminal, { turn: 2, status: { state: 'working' }, pid: 999 })
+    await f.event('restarted', structuredClone(f.terminal), 25)
+    assert.deepEqual(f.attached, ['t1', 't1'])
+    assert(f.sent.some(frame => frame.channel === 1 && frame.kind === 2), 'the old attach stream is closed')
+    f.streams[1]!.receive({ kind: 'data', data: Buffer.from('AFTER\x1b[?9001l') })
+    await tick(); await tick()
+    assert.equal((await client.content())?.[0]?.lines[0]?.trim(), 'AFTER')
+    await f.event('removed', {}, 26)
+    assert.deepEqual(exits, [{ exitCode: 0, reason: 'removed' }], 'removing the last synthetic native tab closes its view')
+  } finally { client.kill() }
+})
+
+test('a delayed seen-label write cannot replace newer event state with its response-time snapshot', async () => {
+  const f = fixture(false, 20)
+  f.terminal.turn = 1; f.terminal.status.state = 'idle'
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
+  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from(report('idle') + '\x1b[?9001l') })
+  const client = await opening
+  try {
+    client.onData(() => {}); await tick(); await client.completionFence()
+    let release!: () => void
+    const started = new Promise<void>(resolve => { f.controls.labelStarted = resolve })
+    f.controls.labelGate = new Promise<void>(resolve => { release = resolve })
+    const acknowledgement = client.acknowledgeCompletion!('pane', { bootId: 'core', sequence: 1 })
+    await started
+    await f.event('status', { status: { state: 'working' } }, 21)
+    await f.event('turn', { turn: 2 }, 22)
+    f.terminal.status.state = 'idle'; f.terminal.turn = 3
+    release(); await acknowledgement
+    assert.equal(f.terminal.labels['herdr.seen'], '1')
+    assert.equal(f.controls.listCalls, 0)
+    assert.equal(client.completionSnapshot()?.windows[0]?.status, 'working')
+    assert.equal(client.completionSnapshot()?.windows[0]?.panes[0]?.stateSequence, 2)
+    await f.event('labels', { labels: { 'herdr.seen': '1' } }, 23)
+    assert.equal(client.completionSnapshot()?.windows[0]?.status, 'working', 'the actual ordered label event does not read a later task')
+  } finally { client.kill() }
+})
 
 test('widening a narrow core view attaches newly exposed panes before publishing the expanded frame', async () => {
   const f = fixture(true)

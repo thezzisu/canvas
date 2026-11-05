@@ -3,8 +3,8 @@ import { bindCanvasHistory, recallCanvasLocation, recallLastCanvasLocation, reme
 
 /** The screen position of a window's top-left corner that a canvas jump keeps fixed. */
 export interface CanvasAnchor { sourceId: string; windowId: string; x: number; y: number; zoom: number }
-/** A destination either fits one node or keeps an existing window in place. */
-export type CanvasTarget = { fitNodeId: string; anchor?: never } | { anchor: CanvasAnchor; fitNodeId?: never }
+/** Explicit targets bypass the saved camera: fit all/one, or retain a window's screen position. */
+export type CanvasTarget = { fitNodeId: string; anchor?: never; fitAll?: never } | { anchor: CanvasAnchor; fitNodeId?: never; fitAll?: never } | { fitAll: true; anchor?: never; fitNodeId?: never }
 export type CanvasNavigation = { location: CanvasLocation; revision: number } & Partial<CanvasTarget>
 interface Options {
   instanceId: Readonly<Ref<string>>

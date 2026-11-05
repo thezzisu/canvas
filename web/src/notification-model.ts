@@ -29,10 +29,11 @@ export function notificationTarget(event: CanvasNotification, resources: readonl
   return target?.source.status === 'online' && !target.source.error ? target : undefined
 }
 
-/** A displayed completion is an event, even after focus or live status changes. */
+/** Read acknowledgements retain Done; a newer task invalidates its notification. */
 export function notificationPresent(event: CanvasNotification, resources: readonly SourceResource[]): boolean {
   const source = resources.find(source => source.id === event.sourceId)
-  return !!source && (source.status !== 'online' || !!source.error || !!notificationLocation(event, resources))
+  return !!source && (source.status !== 'online' || !!source.error ||
+    (event.kind === 'done' ? notificationCurrent(event, resources) : !!notificationLocation(event, resources)))
 }
 
 export function attentionSummary(resources: readonly SourceResource[]) {

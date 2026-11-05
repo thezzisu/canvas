@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useFileDialog } from '@vueuse/core'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { useEventListener, useFileDialog } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import UProgress from '@nuxt/ui/components/Progress.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
@@ -14,25 +14,26 @@ const marker = ref<HTMLElement>()
 const dragging = ref(false)
 const progress = ref<{ name: string; canvasId: string; canvasName: string }>()
 const error = ref('')
-let host: HTMLElement | null = null, current: AbortController | undefined
+const host = computed(() => marker.value?.parentElement)
+let current: AbortController | undefined
 const blank = (target: EventTarget | null) => target instanceof Element &&
   !target.closest('.vue-flow__node,.vue-flow__minimap,.canvas-toolbar,.vue-flow__controls,button,input,textarea')
-function over(event: DragEvent) {
-  if (!hasFileTransfer(event.dataTransfer)) return
-  // The terminal owns its source-machine transfer, independently of canvas files.
-  if ((event.target as Element)?.closest('.terminal-card')) return
-  event.preventDefault(); event.stopPropagation()
-  const allowed = !!props.canvasId && !current && blank(event.target)
-  dragging.value = allowed
-  if (event.dataTransfer) event.dataTransfer.dropEffect = allowed ? 'copy' : 'none'
-  if (!allowed && props.canvasId) error.value = t(current ? 'panels.file.uploadBusy' : 'panels.file.dropOnCanvas')
+// Observe before child editors stop bubbling, but never claim their drop.
+function track(event: DragEvent) {
+  if (hasFileTransfer(event.dataTransfer)) dragging.value = !!props.canvasId && !current && blank(event.target)
 }
+function over(event: DragEvent) {
+  if (!hasFileTransfer(event.dataTransfer) || !blank(event.target)) return
+  event.preventDefault(); event.stopPropagation()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = props.canvasId && !current ? 'copy' : 'none'
+}
+function clearDrag() { dragging.value = false }
 function preventNavigation(event: DragEvent) {
-  if (!hasFileTransfer(event.dataTransfer)) return
+  if (!hasFileTransfer(event.dataTransfer) || event.defaultPrevented) return
   event.preventDefault()
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'none'
 }
-function leave(event: DragEvent) { if (!(event.relatedTarget instanceof Node) || !host?.contains(event.relatedTarget)) dragging.value = false }
+function leave(event: DragEvent) { if (!(event.relatedTarget instanceof Node) || !host.value?.contains(event.relatedTarget)) dragging.value = false }
 function cancel() { current?.abort(); current = undefined; progress.value = undefined; dragging.value = false }
 function admission(files: File[]) {
   if (files.some(file => file.webkitRelativePath)) return 'terminal.upload.foldersUnsupported'
@@ -48,13 +49,14 @@ function targetAt(x: number, y: number): Target | undefined {
     position: { x: (x - viewport.x) / viewport.zoom, y: (y - viewport.y) / viewport.zoom } }
 }
 async function drop(event: DragEvent) {
-  if (!hasFileTransfer(event.dataTransfer) || (event.target as Element)?.closest('.terminal-card')) return
+  if (!hasFileTransfer(event.dataTransfer) || event.defaultPrevented ||
+    event.target instanceof Element && event.target.closest('.terminal-card,.note-editor-content')) return
   event.preventDefault(); event.stopPropagation(); dragging.value = false
-  if (!props.canvasId || !host) return
+  if (!props.canvasId || !host.value) return
   if (!blank(event.target)) { error.value = t('panels.file.dropOnCanvas'); return }
   const incoming = readFileTransfer(event.dataTransfer)
   if (incoming.error) { error.value = t(incoming.error === 'folders' ? 'terminal.upload.foldersUnsupported' : 'panels.file.unreadableTransfer'); return }
-  const bounds = host.getBoundingClientRect(), target = targetAt(event.clientX - bounds.left, event.clientY - bounds.top)
+  const bounds = host.value.getBoundingClientRect(), target = targetAt(event.clientX - bounds.left, event.clientY - bounds.top)
   if (target) await upload(incoming.files, target)
 }
 async function upload(files: File[], target: Target) {
@@ -75,9 +77,9 @@ async function upload(files: File[], target: Target) {
 const fileDialog = useFileDialog({ multiple: false, reset: true })
 let selection: Target | undefined
 function chooseFiles() {
-  if (!props.canvasId || !host) return
+  if (!props.canvasId || !host.value) return
   if (current) { error.value = t('panels.file.uploadBusy'); return }
-  const bounds = host.getBoundingClientRect(), viewport = props.getViewport()
+  const bounds = host.value.getBoundingClientRect(), viewport = props.getViewport()
   selection = targetAt(bounds.width / 2 - 160 * viewport.zoom, bounds.height / 2 - 120 * viewport.zoom)
   fileDialog.open()
 }
@@ -87,19 +89,17 @@ fileDialog.onChange(files => {
   if (!target || target.context.signal.aborted) return
   void upload([...files], target)
 })
+fileDialog.onCancel(() => { selection = undefined })
 defineExpose({ chooseFiles, uploading: computed(() => !!progress.value) })
 watch(apiRevision, () => { cancel(); selection = undefined; error.value = '' })
-onMounted(() => {
-  document.addEventListener('dragover', preventNavigation); document.addEventListener('drop', preventNavigation)
-  host = marker.value?.parentElement || null
-  host?.addEventListener('dragenter', over); host?.addEventListener('dragover', over)
-  host?.addEventListener('dragleave', leave); host?.addEventListener('drop', drop)
-})
-onBeforeUnmount(() => {
-  document.removeEventListener('dragover', preventNavigation); document.removeEventListener('drop', preventNavigation)
-  cancel(); host?.removeEventListener('dragenter', over); host?.removeEventListener('dragover', over)
-  host?.removeEventListener('dragleave', leave); host?.removeEventListener('drop', drop)
-})
+useEventListener(document, ['dragover', 'drop'], preventNavigation)
+useEventListener(document, ['drop', 'dragend'], clearDrag, { capture: true })
+useEventListener(window, 'blur', clearDrag)
+useEventListener(host, ['dragenter', 'dragover'], track, { capture: true })
+useEventListener(host, ['dragenter', 'dragover'], over)
+useEventListener(host, 'dragleave', leave)
+useEventListener(host, 'drop', drop)
+onBeforeUnmount(cancel)
 </script>
 
 <template>
@@ -117,7 +117,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .canvas-file-drop-layer{position:absolute;inset:0;z-index:7;pointer-events:none}
-.canvas-file-drop-mask{position:absolute;inset:12px;display:flex;align-items:center;justify-content:center;gap:10px;border:1px solid #d5aa8699;border-radius:10px;background:#171c25dd;color:#e8c5a7;font-size:13px;backdrop-filter:blur(3px)}
+.canvas-file-drop-mask{position:absolute;inset:12px;display:flex;align-items:center;justify-content:center;gap:10px;border:1px solid #d5aa8699;border-radius:10px;background:#171c2570;color:#e8c5a7;font-size:13px}
 .canvas-file-transfer{position:absolute;left:50%;bottom:56px;translate:-50% 0;width:min(340px,calc(100% - 32px));padding:7px 10px;border:1px solid #424b58;border-radius:8px;background:#242a34f5;color:#bec9d8;box-shadow:0 5px 24px #0004;pointer-events:auto;font-size:11px}
 .canvas-file-transfer>div{display:flex;align-items:center;gap:8px;min-width:0;margin-bottom:3px}.canvas-file-transfer-name{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.canvas-file-transfer-name small{display:block;color:#8c99ab;font-size:10px}
 </style>

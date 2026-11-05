@@ -11,7 +11,7 @@ import { windowContent, type NativeContentPane } from '../herdr/content.ts'
 import type { HerdrClientExit, HerdrClientTransport } from '../herdr/client.ts'
 import type { CellData, ClientMessage, ClientShellSnapshot, FrameData, PaneSurfaceFrame, PaneSurfacePane, PaneSurfaceSplit } from '../herdr/wire.ts'
 import { coreInput, type CoreInputModes } from './input.ts'
-import { CoreLayout, coreWindowMetadata, panes, projectTab, type CoreSnapshot, type CoreTab, type CoreTerminal } from './layout.ts'
+import { CoreLayout, coreWindowMetadata, panes, projectCoreSnapshot, projectTab, type CoreSnapshot, type CoreTab, type CoreTerminal } from './layout.ts'
 import { CoreRpc, type CoreNotification, type CoreStream } from './rpc.ts'
 
 const { Terminal } = headless
@@ -107,6 +107,8 @@ class CoreWindowClient implements HerdrClientTransport {
   private cols: number
   private rows: number
   private revision = 0
+  /** Highest subscription sequence reflected in the native snapshot. */
+  private eventSeq = 0
   private parseQueue: Promise<void> = Promise.resolve()
   private refreshQueue: Promise<void> = Promise.resolve()
   private readonly input: HerdrInputRouter
@@ -144,7 +146,8 @@ class CoreWindowClient implements HerdrClientTransport {
     // Subscribe before reading documents; doc changes are not part of the terminal snapshot.
     const subscription = await this.options.rpc.subscribe({}, event => this.event(event))
     this.subscription = subscription
-    await this.replace(await this.options.layout.snapshot())
+    this.eventSeq = subscription.snapshot.seq
+    await this.replace(await this.options.layout.snapshot(subscription.snapshot.terminals), true)
     subscription.start()
     const timeout = setTimeout(() => this.finish({ exitCode: 1 }), this.options.handshakeTimeoutMs ?? 15_000)
     timeout.unref()
@@ -168,9 +171,14 @@ class CoreWindowClient implements HerdrClientTransport {
     return next
   }
 
-  private async replace(state: CoreSnapshot): Promise<void> {
+  private async replace(state: CoreSnapshot, nativeSnapshot = false): Promise<void> {
     if (this.closed) return
-    if (this.state?.coreId === state.coreId && state.documentVersion < this.state.documentVersion) return
+    if (this.state?.coreId === state.coreId && state !== this.state) {
+      // Document requests/actions may resolve around newer native events. Only
+      // sequenced snapshots may replace terminals; document versions own layout.
+      const terminals = nativeSnapshot ? state.terminals : this.state.terminals
+      state = projectCoreSnapshot({ ...(state.documentVersion < this.state.documentVersion ? this.state : state), terminals })
+    }
     let tab: CoreTab
     try { tab = this.options.layout.findWindow(state, this.options.spaceId, this.options.tabId) }
     catch { this.finish({ exitCode: 0, reason: 'removed' }); return }
@@ -296,23 +304,53 @@ class CoreWindowClient implements HerdrClientTransport {
   }
 
   private async event(event: CoreNotification): Promise<void> {
-    if (this.closed || event.method === 'heartbeat') return
-    if (event.method === 'missed') { await this.refresh(); return }
-    const { type, terminal: address, data } = event.params
-    if (type === 'doc' || ['created', 'removed', 'restarted', 'lost', 'finished'].includes(String(type))) {
-      if (type === 'restarted' && typeof address === 'string') for (const [id, pane] of this.attached) if (pane.address === address) { this.disposePane(pane); this.attached.delete(id) }
-      await this.refresh(); return
+    if (this.closed) return
+    const seq = Number(event.params.seq)
+    if (!Number.isSafeInteger(seq) || seq <= this.eventSeq) return
+    this.eventSeq = seq
+    if (event.method === 'heartbeat') return
+    if (event.method === 'missed') {
+      // Core supplies the terminal records at this waterline; do not pair the
+      // sequence with a separately sampled terminal.list response.
+      const snapshot = event.params.terminals
+      if (!Array.isArray(snapshot) || !snapshot.every(value => value && typeof value === 'object' && !Array.isArray(value))) {
+        throw new Error('Invalid core recovery snapshot')
+      }
+      await this.refresh(() => this.options.layout.snapshot(snapshot as Record<string, unknown>[]), true)
+      return
     }
+    const { type, terminal: address, data } = event.params
+    if (type === 'doc') { await this.refresh(); return }
     if (typeof address !== 'string' || !this.state || data !== null && typeof data !== 'object') return
+    if (['created', 'removed', 'restarted', 'lost', 'finished'].includes(String(type))) {
+      const update = data as Record<string, unknown>, terminals = this.state.terminals.slice()
+      if (!update || Array.isArray(update)) throw new Error('Invalid core terminal event')
+      const index = terminals.findIndex(terminal => terminal.address === address)
+      if (type === 'created' || type === 'restarted') {
+        if (update.address !== address) throw new Error('Invalid core terminal event')
+        if (index < 0) terminals.push(update as CoreTerminal)
+        else terminals[index] = update as CoreTerminal
+        for (const [id, pane] of this.attached) if (pane.address === address && (type === 'restarted' || !pane.stream)) {
+          this.disposePane(pane); this.attached.delete(id)
+        }
+      } else if (index >= 0) {
+        if (type === 'removed') terminals.splice(index, 1)
+        else terminals[index] = { ...terminals[index]!, ...update, state: type === 'lost' ? 'live' : 'finished',
+          ...(type === 'lost' ? { pid: null } : {}), foreground: null }
+      }
+      await this.refresh(() => this.options.layout.snapshot(terminals), true)
+      return
+    }
     await this.enqueue(() => {
       const terminal = this.state?.terminals.find(terminal => terminal.address === address)
       if (!terminal) return
       const before = terminal.status?.state, priorTurn = terminal.turn
       const update = data && typeof data === 'object' ? data as Record<string, unknown> : {}
-      if (type === 'status') { terminal.status = update.status as CoreTerminal['status']; terminal.records = update.records }
+      if (type === 'status') { terminal.status = update.status as CoreTerminal['status']; terminal.records = update.records; terminal.reported = update.reported }
       else if (type === 'turn' && Number.isSafeInteger(update.turn)) terminal.turn = Number(update.turn)
       else if (type === 'labels' && update.labels && typeof update.labels === 'object') terminal.labels = update.labels as Record<string, string>
       else if (type === 'title' && typeof update.title === 'string') terminal.title = update.title
+      else if (type === 'keep' && typeof update.keep === 'boolean') terminal.keep = update.keep
       else if (type === 'foreground') terminal.foreground = data as CoreTerminal['foreground']
       else if (type === 'size' && Number.isInteger(update.cols) && Number.isInteger(update.rows)) {
         terminal.cols = Number(update.cols); terminal.rows = Number(update.rows)
@@ -339,8 +377,8 @@ class CoreWindowClient implements HerdrClientTransport {
     for (const listener of this.notificationListeners) listener(notification)
   }
 
-  private refresh(snapshot?: () => CoreSnapshot): Promise<void> {
-    const next = this.refreshQueue.then(async () => { if (!this.closed) await this.replace(snapshot ? snapshot() : await this.options.layout.snapshot()) })
+  private refresh(snapshot?: () => CoreSnapshot | Promise<CoreSnapshot>, nativeSnapshot = false): Promise<void> {
+    const next = this.refreshQueue.then(async () => { if (!this.closed) await this.replace(snapshot ? await snapshot() : await this.options.layout.snapshot(this.state?.terminals), nativeSnapshot) })
     this.refreshQueue = next.catch(() => this.finish({ exitCode: 1 }))
     return this.refreshQueue
   }
@@ -576,7 +614,7 @@ class CoreWindowClient implements HerdrClientTransport {
     const valid = () => authorized() && !this.closed && this.state?.coreId === context.bootId && !!this.tab && panes(this.tab).some(pane => pane.id === context.paneId)
     if (!valid()) throw new Error('Pane changed; open its menu again')
     if (action.action === 'zoom') {
-      await this.replace(await this.options.layout.snapshot())
+      await this.replace(await this.options.layout.snapshot(this.state?.terminals))
       if (!valid()) throw new Error('Pane changed; open its menu again')
       this.zoomed = this.zoomed === context.paneId ? undefined : context.paneId
       await this.replace(this.state!); this.resizeStreams(); return {}

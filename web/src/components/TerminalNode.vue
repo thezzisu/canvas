@@ -281,7 +281,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <PaneContextMenu :host="host" :enabled="!showApp && keepTerminal && !mobilePreview && !closed && !maximizedElsewhere && status.status === 'connected'" :allows-menu="allowsContextMenu" :lookup="paneContext" :action="paneAction" />
     <TerminalSettingsDialog v-model="settings" :open="settingsOpen" :portal="portal" @close="settingsOpen = false" />
     <div v-if="mobilePreview && !closed && !editing" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: label })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
-    <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">{{ t('terminal.upload.file') }}</div>
+    <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">{{ t('terminal.upload.drop') }}</div>
     <div v-if="noteDrag || fileDrag" class="terminal-file-drop terminal-note-drop" :class="{ 'note-drop-unavailable': !noteDropAvailable }" aria-hidden="true">{{ !noteDropAvailable ? noteDropLabel : fileDrag ? t(status.fileReading ? 'fileTransfer.preparing' : 'fileTransfer.drop') : noteDropLabel }}</div>
     <span v-if="status.upload?.rejected" class="terminal-copy-notice copy-failed" role="alert">{{ status.upload.rejected }}</span>
     <span v-if="status.fileReading && !fileDrag" class="terminal-copy-notice" role="status">{{ t('fileTransfer.preparing') }}</span>

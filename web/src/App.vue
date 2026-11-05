@@ -39,7 +39,7 @@ import { createLayoutSaves, type LayoutPatch } from './layout-saves'
 import { resizeFromDelta, snapCardPosition, snapCardResize, type CardBounds } from './card-alignment'
 import { createPendingEdits, retargetNoteEdit, type NoteEdit } from './pending-edits'
 import { cameraFromViewport, parseCanvasLocation, recallFreeCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type CanvasLocation } from './canvas-location'
-import { useCanvasLocation, type CanvasAnchor, type CanvasTarget } from './use-canvas-location'
+import { useCanvasLocation, type CanvasAnchor, type CanvasTarget, type CanvasNavigation } from './use-canvas-location'
 import { adjacentCanvas, anchoredViewport, canvasAnchor, type CanvasDirection } from './canvas-jump'
 import { usePointerDismiss } from './pointer-dismiss'
 import { useDocumentFocus } from './document-focus'
@@ -303,8 +303,9 @@ function cancelNotificationReveal() { notificationIntent++; notificationReveal.v
 type JumpFocus = 'terminal' | 'button' | undefined
 const windowJump = shallowRef<{ canvasId: string; anchor: CanvasAnchor; focus: JumpFocus; direction: CanvasDirection }>()
 // Canvas switches move content along sidebar order; a jumping window stays still.
-const canvasMorph = shallowRef<{ phase: 'leave' | 'enter'; shift: number; anchor?: { sourceId: string; windowId: string } }>()
-const morphDuration = { leave: 140, enter: 220 }
+const canvasMorph = shallowRef<{ request: CanvasNavigation; phase: 'leave' | 'wait' | 'enter'; shift: number; anchor?: { sourceId: string; windowId: string } }>()
+let canvasPresented = false
+let morphAnimations: Animation[] = []
 function cancelCreatedReveal() { creationIntent++; pendingCreatedWindow.value = undefined }
 function creationNavigation(event: Event) {
   if (actionDialog.value && busy.value) return
@@ -592,7 +593,7 @@ watch(navigation.requested, request => {
     void setViewport(getViewport())
     clearContentFocus(); cancelCreatedReveal()
     if (!request.anchor) windowJump.value = undefined
-    if (canvasMorph.value?.phase === 'leave') canvasMorph.value = undefined
+    cancelCanvasMorph()
   }
 }, { flush: 'sync' })
 function selectLogicalTerminal(event: Event) {
@@ -934,11 +935,25 @@ async function selectHashInstance(id: string) {
 async function applyRequestedLocation() {
   const requested = navigation.requested.value
   if (!requested || unknownInstance.value || requested.location.instance !== activeInstance.value.id || !authenticated.value || !latestState.value) return
+  if (canvasMorph.value?.request === requested && canvasMorph.value.phase === 'leave') return
   if (layoutEditing.value && !await leaveLayout()) { navigation.cancel(currentLocation()); return }
   if (navigation.requested.value !== requested) return
   const location = resolveCanvasLocation(requested.location, canvases.value.map(canvas => canvas.id))
   if (notificationFocus.value || notificationReveal.value && requested !== notificationReveal.value.request) cancelNotificationReveal()
   if (focusedCardId.value) void flushNotes(activeId.value)
+  if (activeId.value !== location.canvas && canvasPresented && resourcesLoaded.value && pageVisible.value && !reducedMotion.value &&
+      (isOverview.value || currentCanvas.value) && location.canvas === requested.location.canvas && (nodes.value.length || hasFocus.value)) {
+    const order = ['overview', ...orderedCanvases.value.map(canvas => canvas.id)]
+    const anchor = requested.anchor && { sourceId: requested.anchor.sourceId, windowId: requested.anchor.windowId }
+    const morph = canvasMorph.value = { request: requested, phase: 'leave', shift: order.indexOf(location.canvas) < order.indexOf(activeId.value) ? -48 : 48, anchor }
+    if (anchor) rebuildNodes()
+    await waitCanvasMorph()
+    if (navigation.requested.value !== requested) return
+    if (canvasMorph.value === morph) canvasMorph.value = { ...morph, phase: 'wait' }
+  }
+  if (navigation.requested.value !== requested) return
+  // A cross-canvas request exits directly into its destination, never briefly
+  // rebuilding the old graph beneath a maximized view.
   focused.value = null; focusedCardId.value = ''
   if (activeId.value !== location.canvas) {
     activeId.value = location.canvas
@@ -974,18 +989,22 @@ async function restoreViewport() {
     if (request !== viewportRequest || id !== activeId.value || instance !== activeInstance.value.id) return
     pendingViewport = ''
     cameraFrame = canvasFrame(frame)
-    navigation.restored(requested, currentLocation())
+    navigation.restored(requested, currentLocation()); completeCanvasMorph(requested)
     finishWindowJump(anchored)
     return
   }
-  const target = requested?.fitNodeId ? nodes.value.find(node => node.id === requested.fitNodeId) : undefined
+  const reveal = notificationReveal.value?.canvasId === id ? notificationReveal.value : undefined
+  const target = requested?.fitNodeId ? nodes.value.find(node => node.id === requested.fitNodeId)
+    : reveal ? nodes.value.find(node => node.type === 'terminal' && node.data.sourceId === reveal.target.sourceId && node.data.windowId === reveal.target.windowId) : undefined
   if (target) {
-    const camera = cameraFromViewport(pageViewport({ ...target.position, width: target.data.width, height: target.data.height },
-      { width: frame.clientWidth, height: frame.clientHeight }), { width: frame.clientWidth, height: frame.clientHeight })
-    pendingViewport = ''
-    cameraFrame = canvasFrame(frame)
-    navigation.restored(requested, { instance, canvas: id, camera })
+    const viewport = pageViewport({ ...target.position, width: target.data.width, height: target.data.height },
+      { width: frame.clientWidth, height: frame.clientHeight })
+    await setViewport(viewport)
+    if (request !== viewportRequest || navigation.requested.value !== requested) return
+    pendingViewport = ''; cameraFrame = canvasFrame(frame)
+    navigation.restored(requested, { instance, canvas: id, camera: cameraFromViewport(viewport, { width: frame.clientWidth, height: frame.clientHeight }) }); completeCanvasMorph(requested)
     navigationFit.value = { canvasId: id, id: target.id, pending: false }
+    if (reveal) void revealNotificationWindow()
     return
   }
   if (requested?.fitNodeId) addToast({ title: t('app.connectionNotVisible'), color: 'neutral', duration: 3500, type: 'background' })
@@ -1006,7 +1025,7 @@ async function restoreViewport() {
   if (request !== viewportRequest || id !== activeId.value || instance !== activeInstance.value.id) return
   pendingViewport = ''
   cameraFrame = canvasFrame(frame)
-  navigation.restored(requested, currentLocation())
+  navigation.restored(requested, currentLocation()); completeCanvasMorph(requested)
   revealNotificationWindow()
 }
 let pendingNoteFocus = ''
@@ -1181,6 +1200,7 @@ async function logout() {
   await write('/api/logout', 'POST'); if (isCurrentApi(context)) clearAuthentication()
 }
 function clearInstanceRuntime() {
+  cancelCanvasMorph(); canvasPresented = false
   closeTrustedPreview(); clearCaptureTrust()
   layoutDraft.value = undefined; layoutSelected.value = ''; layoutExitOpen.value = false; resolveLayoutExit?.(false)
   removalUndo.value?.clear()
@@ -1298,8 +1318,10 @@ watch(activeId, async () => { if (!authenticated.value) return; scanTarget.value
 function switchCanvas(id: string, target?: CanvasTarget) {
   if (notificationReveal.value?.canvasId !== id) cancelNotificationReveal()
   clearContentFocus(); cancelCreatedReveal()
-  if (focused.value) void closeFocus()
-  if (focusedCardId.value) void closeCardFocus()
+  if (id === activeId.value) {
+    if (focused.value) void closeFocus()
+    if (focusedCardId.value) void closeCardFocus()
+  }
   sidebarOpen.value = false
   if (id === activeId.value && !unknownInstance.value && !navigation.requested.value && !target) return
   void flushNotes(activeId.value); saveViewport(); navigation.visit(activeInstance.value.id, id, target)
@@ -1512,8 +1534,10 @@ async function goToCanvasWindow(canvasId: string, target: WindowFocus) {
   if (!await leaveLayout() || !isCurrentApi(context) || !prepareNotificationAction()) return
   cancelNotificationReveal()
   const intent = notificationIntent
-  if (focusedCardId.value) await closeCardFocus()
-  if (focused.value) await closeFocus()
+  if (canvasId === activeId.value) {
+    if (focusedCardId.value) await closeCardFocus()
+    if (focused.value) await closeFocus()
+  }
   if (!isCurrentApi(context) || intent !== notificationIntent) return
   const source = resources.value.find(source => source.id === target.sourceId && source.status === 'online' && !source.error)
   if (!source?.spaces.some(space => space.windows.some(window => window.id === target.windowId))) return
@@ -1584,45 +1608,40 @@ function morphAnchor(node: Node) {
   const anchor = canvasMorph.value?.anchor
   return !!anchor && node.type === 'terminal' && node.data.sourceId === anchor.sourceId && node.data.windowId === anchor.windowId
 }
-const morphShift = (direction: CanvasDirection) => direction === 'next' ? 48 : -48
-/** Leaves for a short exit; resolves false when another navigation took over. */
-async function leaveCanvas(direction: CanvasDirection, anchor?: { sourceId: string; windowId: string }) {
-  if (reducedMotion.value) return true
-  const leaving = canvasMorph.value = { shift: morphShift(direction), anchor, phase: 'leave' }
-  if (anchor) rebuildNodes()
-  await new Promise(resolve => setTimeout(resolve, morphDuration.leave))
-  if (canvasMorph.value !== leaving) return false
-  canvasMorph.value = undefined
-  return true
+function cancelCanvasMorph() {
+  for (const animation of morphAnimations) animation.cancel()
+  morphAnimations = []; canvasMorph.value = undefined
 }
-function enterCanvas(direction: CanvasDirection, anchor?: { sourceId: string; windowId: string }) {
-  if (reducedMotion.value) return
-  const entering = canvasMorph.value = { shift: morphShift(direction), anchor, phase: 'enter' }
-  setTimeout(() => { if (canvasMorph.value === entering) canvasMorph.value = undefined }, morphDuration.enter + 100)
+async function waitCanvasMorph() {
+  await nextTick()
+  // Native animation completion follows reduced motion and cancellation. There
+  // is no independent timer racing node initialization or a newer navigation.
+  const roots = [graphSurface.value, focusViewportElement.value].filter(Boolean) as HTMLElement[]
+  const animations = roots.flatMap(root => root.getAnimations({ subtree: true }))
+    .filter(animation => animation instanceof CSSAnimation && animation.animationName.startsWith('canvas-morph-'))
+  morphAnimations = animations
+  await Promise.allSettled(animations.map(animation => animation.finished))
+  if (morphAnimations === animations) morphAnimations = []
 }
-/** Sidebar switches move along the sidebar order: later canvases enter from below. */
+function completeCanvasMorph(request?: CanvasNavigation) {
+  canvasPresented = true
+  const morph = canvasMorph.value
+  if (!morph || morph.request !== request || morph.phase !== 'wait') return
+  if (reducedMotion.value || !pageVisible.value) { cancelCanvasMorph(); return }
+  const entering = canvasMorph.value = { ...morph, phase: 'enter' }
+  void waitCanvasMorph().then(() => { if (canvasMorph.value === entering) canvasMorph.value = undefined })
+}
+watch([reducedMotion, pageVisible], () => { if (reducedMotion.value || !pageVisible.value) cancelCanvasMorph() })
+/** Every explicit same-instance canvas request receives the same presentation. */
 async function navigateCanvas(id: string, target?: CanvasTarget) {
-  if (!await leaveLayout()) return
-  if (id === activeId.value || hasFocus.value || navigation.requested.value || canvasMorph.value?.phase === 'leave' || !nodes.value.length) { switchCanvas(id, target); return }
-  const order = ['overview', ...orderedCanvases.value.map(canvas => canvas.id)]
-  const direction: CanvasDirection = order.indexOf(id) < order.indexOf(activeId.value) ? 'previous' : 'next', origin = activeId.value, context = apiContext()
-  sidebarOpen.value = false
-  if (!await leaveCanvas(direction)) return
-  if (!isCurrentApi(context) || activeId.value !== origin || navigation.requested.value) { rebuildNodes(); return }
-  enterCanvas(direction)
-  switchCanvas(id, target)
+  if (await leaveLayout()) switchCanvas(id, target)
 }
 async function jumpWindowCanvas(nodeId: string, direction: CanvasDirection, focus: JumpFocus) {
-  const node = getCanvasNode(nodeId)
-  if (!node || hasFocus.value || navigation.requested.value || canvasMorph.value?.phase === 'leave' ||
-      !adjacentCanvas(windowCanvases(node.sourceId, node.windowId), activeId.value, direction)) return
-  const context = apiContext(), origin = activeId.value, window = { sourceId: node.sourceId, windowId: node.windowId }
-  if (!await leaveCanvas(direction, window)) return
-  // The camera may move during the leave phase; anchor the window where it is now.
-  const flow = nodes.value.find(item => item.id === nodeId), target = adjacentCanvas(windowCanvases(node.sourceId, node.windowId), origin, direction)
-  if (!isCurrentApi(context) || activeId.value !== origin || hasFocus.value || navigation.requested.value || !flow || !target) { rebuildNodes(); return }
+  const node = getCanvasNode(nodeId), flow = nodes.value.find(item => item.id === nodeId)
+  if (!node || !flow || hasFocus.value) return
+  const target = adjacentCanvas(windowCanvases(node.sourceId, node.windowId), activeId.value, direction)
+  if (!target) return
   const anchor = canvasAnchor(node, flow.position, getViewport())
-  enterCanvas(direction, window)
   windowJump.value = { canvasId: target.id, anchor, focus, direction }
   switchCanvas(target.id, { anchor })
 }
@@ -1767,7 +1786,7 @@ async function submitAdd() {
     if (!current()) return
     await syncState()
     if (!current()) return
-    addDialog.value = false; switchCanvas(canvas.id); rebuildNodes(); void fitView({ padding: .15, maxZoom: 1, duration: reducedMotion.value ? 0 : 200 }); notify(t('app.addedToCanvas', { name: canvas.name }))
+    addDialog.value = false; switchCanvas(canvas.id, { fitAll: true }); notify(t('app.addedToCanvas', { name: canvas.name }))
   } catch (reason) { if (current()) dialogError.value = reason instanceof Error ? reason.message : String(reason) }
   finally { if (current()) busy.value = false }
 }
@@ -2172,7 +2191,7 @@ onMounted(async () => {
   else await activateInstance()
   refreshTimer = setInterval(() => { if (!document.hidden) void refreshResources(true) }, 2000)
 })
-onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('pointerdown', selectLogicalTerminal, true); window.removeEventListener('keydown', selectLogicalTerminal, true); document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload) })
+onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.removeEventListener('pointerdown', selectLogicalTerminal, true); window.removeEventListener('keydown', selectLogicalTerminal, true); document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload) })
 </script>
 
 <template>
@@ -2270,7 +2289,7 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
       </div>
     </main>
     <Transition name="slide"><aside v-if="sourcePanel" ref="sourcePanelElement" class="source-panel"><header><div><h2>{{ t('app.connectionsWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeConnections')" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />{{ t('app.addConnection') }}</button><div class="source-panel-content"><p v-if="!latestState" class="panel-empty" role="status">{{ loadFailure ? t('app.loadFailed') : t('common.loading') }}</p><div v-for="source in orderedSources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small><span class="source-address">{{ source.transport === 'local' ? t('app.local') : source.target }}</span><span v-if="resources.find(item => item.id === source.id)?.serverVersion" class="source-version" :title="`${source.runtime === 'core' ? 'herdr-core' : 'herdr'} ${resources.find(item => item.id === source.id)!.serverVersion}`">{{ source.runtime === 'core' ? 'herdr-core' : 'herdr' }} {{ resources.find(item => item.id === source.id)!.serverVersion }}</span></small></span></button><button class="icon-button" :title="t('app.editConnection')" :aria-label="t('app.editConnection')" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" :title="t('app.removeConnection')" :aria-label="t('app.removeConnection')" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><p v-if="undiscoveredSources.some(item => item.id === source.id)" class="panel-empty" role="status">{{ loadFailure ? t('app.loadFailed') : t('common.loading') }}</p><div v-else-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" :title="t('app.newWindow')" :aria-label="t('app.newWindow')" @click="windowAction({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="tab-plus" :size="14" /></button><button class="icon-button" :title="t('app.renameSpace')" :aria-label="t('app.renameSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" :title="t('app.closeSpace')" :aria-label="t('app.closeSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :style="{ '--program-color': statusColor(window.status) }" :title="statusLabel(window.status)" /><WindowTitle :window="window" /><button class="icon-button" :title="t('app.addToCanvas')" :aria-label="t('app.addToCanvas')" @click="openAdd({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, ...windowSize({ sourceId: source.id, windowId: window.id }) })"><Icon name="layers" :size="14" /></button><button class="icon-button" :title="t('app.windowActions')" :aria-label="t('app.windowActions')" @click="windowMenu = { name: window.name, node: { type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, ...windowSize({ sourceId: source.id, windowId: window.id }) } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" :disabled="!resources.some(item => item.id === source.id && !item.error)" @click="spaceAction(resources.find(item => item.id === source.id)!, undefined, 'create')"><Icon name="plus" :size="14" />{{ t('app.newSpace') }}</button></template></div><p v-if="latestState && !sources.length" class="panel-empty">{{ t('app.noConnections') }}</p></div></aside></Transition>
-    <div v-if="contentFontReady && (focused || focusedCard)" ref="focusViewportElement" class="focus-overlay" :class="{ 'card-focus-overlay': focusedCard }">
+    <div v-if="contentFontReady && (focused || focusedCard)" ref="focusViewportElement" class="focus-overlay" :class="[{ 'card-focus-overlay': focusedCard }, canvasMorph && `canvas-morph-${canvasMorph.phase}`]" :style="canvasMorph && { '--canvas-morph-shift': `${canvasMorph.shift}px` }">
       <TerminalNode v-if="focused" :key="focused.id" :id="focused.id" :data="{ ...terminalData(focused, isOverview), overview: isOverview, focus: true }" />
       <NoteNode v-else-if="focusedCard?.type === 'note'" :key="focusedCard.id" :id="focusedCard.id" :selected="false" :data="noteData(focusedCard, true)" />
       <FileNode v-else-if="focusedCard?.type === 'file'" :key="focusedCard.id" :id="focusedCard.id" :selected="false" :data="fileData(focusedCard, true)" />

@@ -4,6 +4,8 @@ import { useFileDialog } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import UEditor from '@nuxt/ui/components/Editor.vue'
 import { Extension, Node, type Editor, type EditorOptions } from '@tiptap/core'
+import { dropCursor } from '@tiptap/pm/dropcursor'
+import type { EditorView } from '@tiptap/pm/view'
 import { Plugin } from '@tiptap/pm/state'
 import { closeHistory } from '@tiptap/pm/history'
 import { Slice } from '@tiptap/pm/model'
@@ -52,6 +54,12 @@ const sizeLimit = Extension.create({
     queueMicrotask(() => fail('panels.note.tooLong'))
     return false
   } })],
+})
+const fileDropCursor = Extension.create({
+  name: 'noteFileDropCursor',
+  addProseMirrorPlugins: () => [dropCursor({ color: 'var(--accent)', width: 2, class: 'note-file-dropcursor' })],
+  extendNodeSchema: () => ({ disableDropCursor: (_view: EditorView, _position: unknown, event: DragEvent) =>
+    props.readOnly || pending.value || !hasFileTransfer(event.dataTransfer) }),
 })
 // Contents this editor produced recently; a delayed copy of one is an echo, not a peer edit.
 const produced: string[] = []
@@ -217,7 +225,7 @@ defineExpose({ chooseFiles, pending })
 
 <template>
   <div ref="shell" class="note-editor-shell" @dragenter="dragOver" @dragover="dragOver">
-  <UEditor ref="input" :model-value="initial" content-type="json" :starter-kit="false" :image="false" :mention="false" :extensions="[extension, sizeLimit, NoteSelectionEnter]" :editable="!readOnly" :enable-input-rules="false" :enable-paste-rules="false" :placeholder="t('panels.note.placeholder')" class="note-editor"
+  <UEditor ref="input" :model-value="initial" content-type="json" :starter-kit="false" :image="false" :mention="false" :extensions="[extension, sizeLimit, NoteSelectionEnter, fileDropCursor]" :editable="!readOnly" :enable-input-rules="false" :enable-paste-rules="false" :placeholder="t('panels.note.placeholder')" class="note-editor"
     :ui="{ root: 'h-full min-h-0', content: 'h-full min-h-0', base: 'note-editor-content h-full min-h-0 outline-none' }"
     :editor-props="{ attributes: { 'aria-label': t('panels.note.content'), role: 'textbox', 'aria-multiline': 'true' },
       handleDOMEvents: { copy: (_view, event) => copy(event), cut: (_view, event) => copy(event, true), compositionend: compositionEnded },
@@ -229,7 +237,7 @@ defineExpose({ chooseFiles, pending })
 </template>
 
 <style scoped>
-.note-editor-shell{height:100%;min-height:0}
+.note-editor-shell{position:relative;height:100%;min-height:0}
 .note-editor :deep(.note-editor-content){padding:11px 12px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;overscroll-behavior:contain;font-family:var(--content-font-family);font-feature-settings:var(--content-font-features);font-size:inherit;line-height:inherit}
 .note-editor :deep(p){margin:0;min-height:1lh}
 .note-editor :deep(.is-editor-empty:first-child::before){content:attr(data-placeholder);float:left;height:0;pointer-events:none;color:#75808d}

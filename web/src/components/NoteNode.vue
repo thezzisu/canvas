@@ -115,5 +115,6 @@ function dragNote(event: DragEvent) {
 
 <style scoped>
 .note-content{position:relative;padding:0;overflow:hidden}.note-copy[draggable=true]{cursor:grab}.note-copy[draggable=true]:active{cursor:grabbing}
+.note-content:has(.note-file-dropcursor){box-shadow:inset 0 0 0 2px var(--accent)}
 .note-copy:disabled{cursor:default}
 </style>

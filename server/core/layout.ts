@@ -135,6 +135,21 @@ function qualifiedDocument(doc: CoreDocument, machine?: string): CoreSpace[] {
   return result
 }
 
+/** Layout projection is separate from the ordered native terminal mirror. */
+export function projectCoreSnapshot(snapshot: Omit<CoreSnapshot, 'spaces'>): CoreSnapshot {
+  const spaces = snapshot.documents.flatMap(item => qualifiedDocument(item.value, item.on))
+  const placed = new Set(spaces.flatMap(space => space.tabs.flatMap(tab => panes(tab).flatMap(pane => pane.terminal ? [pane.terminal] : []))))
+  const unplaced = snapshot.terminals.filter(item => item.state === 'live' && !placed.has(item.address))
+  if (unplaced.length) {
+    const tabs = unplaced.map(item => ({ id: item.address, name: item.name || item.title || item.address,
+      root: { id: item.address, type: 'row', children: [terminalNode(item.address, `core-pane:${item.address}`)] }, synthetic: true }))
+    const existing = spaces.find(space => space.id === UNPLACED)
+    if (existing) existing.tabs.push(...tabs)
+    else spaces.push({ id: UNPLACED, name: 'Terminals', folder: '', synthetic: true, tabs })
+  }
+  return { ...snapshot, spaces }
+}
+
 export function coreStatus(terminal?: CoreTerminal): ProgramStatus {
   const word = terminal?.status?.state
   if (!word) return 'unknown'
@@ -253,26 +268,17 @@ export class CoreLayout {
     return { on, value: parseDocument(response.value), version: Number(response.version) }
   }
 
-  async snapshot(): Promise<CoreSnapshot> {
-    const [status, list, document] = await Promise.all([this.rpc.call('server.status', {}), this.rpc.call('terminal.list', { all: true }), this.document()])
+  async snapshot(terminalSnapshot?: readonly Record<string, unknown>[]): Promise<CoreSnapshot> {
+    const [status, list, document] = await Promise.all([this.rpc.call('server.status', {}),
+      terminalSnapshot ? Promise.resolve({ terminals: terminalSnapshot }) : this.rpc.call('terminal.list', { all: true }), this.document()])
     if (!object(status.core) || !validId(status.core.id) || typeof status.version !== 'string' || !Array.isArray(list.terminals)) throw new Error('Invalid herdr-core snapshot')
     const terminals = list.terminals.filter(object).filter(value => typeof value.address === 'string' && !value.address.includes('/')).map(value => {
       if (!validId(value.address) || typeof value.state !== 'string' || !object(value.labels)) throw new Error('Invalid core terminal record')
       return { ...value, turn: Number.isSafeInteger(value.turn) && Number(value.turn) >= 0 ? Number(value.turn) : 0,
         labels: Object.fromEntries(Object.entries(value.labels).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) } as CoreTerminal
     })
-    const documents = [document]
-    const spaces = documents.flatMap(item => qualifiedDocument(item.value, item.on))
-    const placed = new Set(spaces.flatMap(space => space.tabs.flatMap(tab => panes(tab).flatMap(pane => pane.terminal ? [pane.terminal] : []))))
-    const unplaced = terminals.filter(item => item.state === 'live' && !placed.has(item.address))
-    if (unplaced.length) {
-      const tabs = unplaced.map(item => ({ id: item.address, name: item.name || item.title || item.address,
-        root: { id: item.address, type: 'row', children: [terminalNode(item.address, `core-pane:${item.address}`)] }, synthetic: true }))
-      const existing = spaces.find(space => space.id === UNPLACED)
-      if (existing) existing.tabs.push(...tabs)
-      else spaces.push({ id: UNPLACED, name: 'Terminals', folder: '', synthetic: true, tabs })
-    }
-    return { coreId: status.core.id, version: status.version, document: document.value, documentVersion: document.version, documents, terminals, spaces }
+    return projectCoreSnapshot({ coreId: status.core.id, version: status.version,
+      document: document.value, documentVersion: document.version, documents: [document], terminals })
   }
 
   resources(snapshot: CoreSnapshot) {

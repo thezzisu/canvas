@@ -12,6 +12,7 @@ import { attentionSummary, faviconStatus, isCanvasNotification, notificationKey,
 import { deliverNotificationEffects, holdNotificationOwner, isBadgeOwnerChange, syncNotificationFocus, updateNotificationBadge } from '../notification-effects'
 import { notificationSoundEnabled, refreshNotificationPermission, unlockNotificationSound } from '../notification-settings'
 import { statusColor } from '../status'
+import { windowLabel } from '../window-title'
 import { toastAction } from '../toast'
 import { formatCanvasLocation } from '../canvas-location'
 import canvasIcon from '../../public/icons/canvas.svg?raw'
@@ -24,7 +25,7 @@ const owner = uuid(), toastPrefix = `notification:${context.revision}:${props.ba
 let releaseOwner = holdNotificationOwner(owner), pageActive = true
 interface Notice { event: CanvasNotification; focus?: PaneFocus; dismissed?: boolean }
 const seen = new Set<string>(), active = new Map<string, Notice>()
-const pending = new Map<string, { event: CanvasNotification; expires: number; focus?: PaneFocus }>()
+const pending = new Map<string, { event: CanvasNotification; expires: number; notBefore?: number; focus?: PaneFocus }>()
 let timer: ReturnType<typeof setTimeout> | undefined, disposed = false
 const summary = computed(() => attentionSummary(props.displayResources))
 const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
@@ -60,7 +61,10 @@ function acceptsToast(id: string | number) {
   const notice = [...active.values()].find(notice => `${toastPrefix}${notice.event.id}` === id)
   return !!notice && toastValid(notice)
 }
-function actionAvailable(event: CanvasNotification) { return current() && props.actionsAvailable && !!notificationTarget(event, props.resources) }
+function actionAvailable(event: CanvasNotification) {
+  return current() && props.actionsAvailable && !!notificationTarget(event, props.resources) &&
+    (!['attention', 'done'].includes(event.kind) || notificationCurrent(event, props.resources))
+}
 function act(action: 'open' | 'go', event: CanvasNotification) {
   if (!actionAvailable(event)) return
   if (action === 'open') emit('open', event)
@@ -69,7 +73,7 @@ function act(action: 'open' | 'go', event: CanvasNotification) {
 function title(event: CanvasNotification) {
   const target = notificationTarget(event, props.resources)
   return target && (event.kind === 'attention' || event.kind === 'done')
-    ? `${target.window.name} · ${t(`notifications.${event.kind}`)}` : event.title
+    ? `${windowLabel(target.window, event.paneId)} · ${t(`notifications.${event.kind}`)}` : event.title
 }
 function description(event: CanvasNotification) {
   const target = notificationTarget(event, props.resources)
@@ -81,8 +85,8 @@ function show(event: CanvasNotification, focus?: PaneFocus) {
   if (important && previous?.event.kind === event.kind &&
       (event.kind !== 'done' || sameCompletion(previous.event.completion, event.completion))) return
   if (event.kind === 'attention' && interacting(event)) {
-    // A deliberately silent reminder must not dismiss a still-readable Done.
-    if (previous?.event.kind !== 'done') active.set(key, { event, focus, dismissed: true })
+    if (previous) toast.remove(`${toastPrefix}${previous.event.id}`)
+    active.set(key, { event, focus, dismissed: true })
     void deliverNotificationEffects(props.backendId, event, { title: '', body: '', url: '', quiet: true, valid: current })
     return
   }
@@ -90,8 +94,9 @@ function show(event: CanvasNotification, focus?: PaneFocus) {
   const notice: Notice = { event, focus }
   if (important) active.set(key, notice)
   const target = notificationTarget(event, props.resources)
+  const heading = title(event), body = description(event)
   if (document.hasFocus() && !document.hidden) toast.add({
-    id: `${toastPrefix}${event.id}`, title: title(event), description: focus ? undefined : description(event),
+    id: `${toastPrefix}${event.id}`, title: heading, description: focus ? undefined : body,
     color: event.kind === 'attention' ? 'error' : event.kind === 'done' ? 'success' : 'neutral',
     class: `notice-${event.kind}${focus ? ' notice-focused' : ''}`, duration: focus ? 3000 : event.kind === 'attention' ? Infinity : important ? 15000 : 3500,
     type: important ? 'foreground' : 'background',
@@ -104,7 +109,7 @@ function show(event: CanvasNotification, focus?: PaneFocus) {
   const url = new URL(location.href)
   url.hash = formatCanvasLocation({ instance: props.instanceId, canvas: 'overview', view: 'paged', page: `${event.sourceId}/${event.windowId}` })
   void deliverNotificationEffects(props.backendId, event, {
-    title: title(event), body: description(event), url: url.href, suppressSystem: !!focus,
+    title: heading, body, url: url.href, suppressSystem: !!focus,
     valid: () => active.get(key) === notice && noticeValid(notice),
   })
 }
@@ -123,11 +128,15 @@ function reconcile() {
     if (item.expires <= now || item.focus && !samePane(item.focus, props.focus)) { pending.delete(key); continue }
     const target = notificationTarget(item.event, props.resources)
     if (target && notificationCurrent(item.event, props.resources)) {
+      // Start the brief stability window only after the event matches live state.
+      item.notBefore ??= now + (item.event.kind === 'done' ? 250 : 0)
+      if (now < item.notBefore) continue
       if (item.focus && item.event.completion && !sameCompletion(item.event.completion, props.focus?.painted)) continue
       pending.delete(key); show({ ...item.event, windowId: target.window.id, spaceId: target.space.id }, item.focus)
-    } else if (!props.resources.some(source => source.id === item.event.sourceId && source.status === 'online' && !source.error)) pending.delete(key)
+    } else if (item.notBefore !== undefined || !props.resources.some(source => source.id === item.event.sourceId && source.status === 'online' && !source.error)) pending.delete(key)
   }
-  if (pending.size) timer = setTimeout(reconcile, Math.max(1, Math.min(...[...pending.values()].map(item => item.expires)) - Date.now()))
+  if (pending.size) timer = setTimeout(reconcile, Math.max(1, Math.min(...[...pending.values()].map(item =>
+    item.notBefore !== undefined && item.notBefore > now ? Math.min(item.notBefore, item.expires) : item.expires)) - now))
 }
 function receive(value: unknown) {
   if (!current() || !isCanvasNotification(value) || seen.has(value.id)) return
@@ -135,7 +144,9 @@ function receive(value: unknown) {
   seen.add(value.id)
   if (seen.size > 256) seen.delete(seen.values().next().value!)
   if (value.kind === 'attention' || value.kind === 'done') {
-    pending.set(notificationKey(value), { event: value, expires: Date.now() + 3000, ...(value.kind === 'done' && interacting(value) ? { focus: props.focus } : {}) })
+    const now = Date.now()
+    pending.set(notificationKey(value), { event: value, expires: now + 3000,
+      ...(value.kind === 'done' && interacting(value) ? { focus: props.focus } : {}) })
     if (pending.size > 32) pending.delete(pending.keys().next().value!)
     reconcile()
     if (pending.size) void props.refresh()
