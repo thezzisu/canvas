@@ -3,8 +3,8 @@ import { apiUrl } from './api'
 import { discardFrames } from './retained-frame'
 
 /** Whether a capture exists is shared server state; showing it is local to this browser. */
-export interface CapturedApp { id: string; url: string; title: string; paneId: string; visible: boolean }
-interface Capture { id: string; url: string; title: string; paneId: string }
+export interface CapturedApp { id: string; url: string; title: string; paneId: string; visible: boolean; preview?: 'static' }
+interface Capture { id: string; url: string; title: string; paneId: string; preview?: 'static' }
 const captures = shallowReactive(new Map<string, Capture>())
 // Per browser and capture: every card for this window shows the same view.
 const hidden = shallowReactive(new Set<string>())
@@ -46,7 +46,8 @@ export function receiveCapture(sourceId: string, windowId: string, message: Reco
     if (previous?.id === message.id && previous.url === url.href) return true
     if (previous && previous.id !== message.id) forget(entry)
     if (readHidden(message.id)) hidden.add(message.id)
-    captures.set(entry, { id: message.id, url: url.href, title: message.title.slice(0, 120), paneId: message.paneId })
+    captures.set(entry, { id: message.id, url: url.href, title: message.title.slice(0, 120), paneId: message.paneId,
+      ...(message.preview === 'static' ? { preview: 'static' } : {}) })
   } catch { /* Invalid capture messages never become iframe addresses. */ }
   return true
 }
