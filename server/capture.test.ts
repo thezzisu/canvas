@@ -234,8 +234,8 @@ test('capture cleanup runs once when its owner also closes the lease from onEnde
 
 test('only explicit static Markdown document navigations select the frontend, while raw files and HTML remain untouched', async t => {
   const f = await fixture(t)
-  const navigate = (url: string) => new Promise<{ status: number; headers: IncomingHttpHeaders }>((resolve, reject) => {
-    const req = request(url, { headers: { 'sec-fetch-mode': 'navigate' } }, response => {
+  const navigate = (url: string, headers: Record<string, string> = { 'sec-fetch-mode': 'navigate' }) => new Promise<{ status: number; headers: IncomingHttpHeaders }>((resolve, reject) => {
+    const req = request(url, { headers }, response => {
       response.resume(); resolve({ status: response.statusCode!, headers: response.headers })
     }); req.once('error', reject); req.end()
   })
@@ -248,6 +248,10 @@ test('only explicit static Markdown document navigations select the frontend, wh
   const viewer = new URL(navigation.headers.location!)
   assert.equal(viewer.pathname, `/operator/canvas/api/document/${preview.id}/`)
   assert.equal(viewer.searchParams.get('path'), '/docs/readme.md')
+  assert.equal((await navigate(target, { accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' })).status, 302,
+    'plain LAN HTTP browsers may omit Fetch Metadata headers')
+  assert.equal((await navigate(target, { 'sec-fetch-mode': 'cors', accept: 'text/html' })).status, 200,
+    'an explicit fetch is not document navigation')
   assert.equal(f.service.hasStaticPreview(preview.id), true)
   for (const path of ['page.html', 'docs/readme.md?canvas=raw', 'docs/readme.md?canvas=download'])
     assert.equal((await navigate(preview.publicUrl + path)).status, 200)

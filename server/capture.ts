@@ -272,7 +272,9 @@ export class CaptureService {
     let document = false
     try { document = /\.(?:md|markdown|mdown|mkdn?|mdx)$/iu.test(decodeURIComponent(pathname)) }
     catch { response.writeHead(404).end(unavailable); return true }
-    if (capture.preview === 'static' && document && !mode && request.headers['sec-fetch-mode'] === 'navigate') {
+    const browserNavigation = request.headers['sec-fetch-mode'] === 'navigate'
+      || !request.headers['sec-fetch-mode'] && /\btext\/html\b/iu.test(request.headers.accept || '')
+    if (capture.preview === 'static' && document && !mode && browserNavigation) {
       const viewer = new URL(capture.publicUrl.href.replace(/\/api\/capture\/([^/]+)\/$/u, '/api/document/$1/'))
       viewer.searchParams.set('path', pathname)
       response.writeHead(302, { Location: viewer.href, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }).end()
