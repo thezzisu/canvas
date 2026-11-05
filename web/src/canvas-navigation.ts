@@ -89,7 +89,7 @@ export function useCanvasNavigation(options: {
     // A fresh touch is an independent tap, even immediately after panning.
     if (!gesture && event.touches.length === 1) suppressClickUntil = 0
     if (!gesture && !target?.closest('.terminal-preview-button, .overview-create') &&
-        target?.closest('button, a, input, select, .file-preview, .canvas-toolbar, .vue-flow__minimap')) return
+        target?.closest('button, a, input, select, .file-preview-host, .canvas-toolbar, .vue-flow__minimap')) return
     if (!gesture) {
       moved = false
       if (options.paging?.enabled()) {

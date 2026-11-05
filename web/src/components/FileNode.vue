@@ -29,6 +29,7 @@ import { writeFileReference } from '../file-reference'
 import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
 import { useFileView } from '../file-view'
 import { useCardContentFocus } from '../card-content-focus'
+import { useRetainedFrame } from '../retained-frame'
 
 const { t, n } = useI18n()
 
@@ -72,6 +73,10 @@ watch(() => props.data.assetId, () => { imageFailed.value = false })
 function download() { void downloadMedia(path.value, props.data.asset.filename).catch(reportDownloadError) }
 const fileBody = ref<HTMLElement>()
 const { active: contentActive, focus: focusContent, pointerDown: contentPointerDown } = useCardContentFocus(fileBody, () => mobilePreview.value)
+// The PDF viewer keeps its page and zoom when the card remounts; renewed tickets do not reload it.
+const pdfHost = ref<HTMLElement>()
+useRetainedFrame(pdfHost, () => preview.value === 'pdf' && pdfPreview && url.value ? { key: `pdf:${props.data.instanceId}:${props.data.assetId}`, src: url.value, attributes: {
+  class: 'file-preview nowheel', title: props.data.asset.filename, referrerpolicy: 'no-referrer', tabindex: !props.data.mobile && !contentActive.value ? '-1' : '0' } } : undefined)
 const text = ref('')
 const textLoading = ref(false)
 const textError = ref<string | Error>('')
@@ -146,7 +151,7 @@ const size = computed(() => {
         <div v-if="truncated" class="file-text-truncated"><span>{{ t('panels.preview.truncated') }}</span><button type="button" @click="download">{{ t('panels.file.downloadOriginal') }}</button></div>
       </div>
       <template v-else-if="preview === 'pdf' && pdfPreview && url">
-        <iframe class="file-preview nowheel" :src="url" :title="data.asset.filename" :tabindex="!data.mobile && !contentActive ? -1 : 0" loading="lazy" referrerpolicy="no-referrer" />
+        <div ref="pdfHost" class="file-preview-host" />
         <div v-if="!data.mobile && !contentActive" class="file-preview-activate card-content-activate" role="button" tabindex="0" :aria-label="t('common.openCard', { name: data.asset.filename })" @click.stop="focusContent" @keydown.enter.stop.prevent="focusContent" @keydown.space.stop.prevent="focusContent" />
       </template>
       <button v-else type="button" class="file-download" @click="download" :aria-label="t('panels.file.downloadNamed', { name: data.asset.filename })"><Icon name="file" :size="42" /><span>{{ data.asset.filename }}</span></button>
@@ -163,7 +168,8 @@ const size = computed(() => {
 .file-copy{cursor:grab}.file-copy:active{cursor:grabbing}
 .file-download:focus-visible { outline: 2px solid #8c9ef8; outline-offset: -2px; }
 .file-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
-.file-preview { border: 0; width: 100%; height: 100%; background: #fff; color-scheme: light; }
+.file-preview-host { width: 100%; height: 100%; }
+.file-preview-host :deep(.file-preview) { display: block; border: 0; width: 100%; height: 100%; background: #fff; color-scheme: light; }
 .file-text-body { display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 0; background: #14191f; }
 .file-text-status { display: flex; flex: 1; align-items: center; justify-content: center; gap: 8px; padding: 12px; color: #8b98a9; font-size: 11px; }
 .file-text-status button { color: #d4ac8e; font-size: 11px; }

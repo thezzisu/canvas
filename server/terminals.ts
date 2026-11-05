@@ -13,6 +13,9 @@ import type { WindowMetadata } from "../shared/window-metadata.ts";
 import { randomUUID } from "node:crypto";
 import type { CanvasNotification } from "../shared/notification.ts";
 import type { PasteSegment } from "../shared/paste.ts";
+import type { CapturePresentation } from "./capture.ts";
+type CaptureMessage = CapturePresentation;
+type CaptureEnded = { type: 'capture-ended'; id: string };
 const { Terminal } = headless;
 const { SerializeAddon } = serialize;
 export type TerminalTarget = {
@@ -53,6 +56,8 @@ class LiveTerminal {
   private cursorVisible = true;
   private cursorShape = 0;
   private outputWaiters = new Set<() => void>();
+  // A captured application belongs to the native window: every viewer shows it.
+  private capture?: CaptureMessage;
   // Keyboard input typed during a paced paste follows the complete paste.
   private pasting?: Promise<void>;
   controller?: WebSocket;
@@ -188,6 +193,13 @@ class LiveTerminal {
     return !this.hidden.has(ws) && this.rendered.has(ws) &&
       (!this.maximized || !this.maximized.releasing && this.maximized.owner === ws);
   }
+  publishCapture(message: CaptureMessage | CaptureEnded) {
+    if (this.closed) return;
+    if (message.type === 'capture') this.capture = message;
+    else if (this.capture?.id === message.id) this.capture = undefined;
+    else return;
+    for (const ws of this.clients) json(ws, message);
+  }
   downloadRecipient(): WebSocket | undefined {
     const ws = this.downloadController;
     return ws && ws === this.controller && ws.readyState === 1 && this.clients.has(ws) &&
@@ -306,6 +318,7 @@ class LiveTerminal {
       this.clients.add(ws);
       if (!this.controller) this.controller = ws;
       if (this.metadata) json(ws, { type: "metadata", window: this.metadata });
+      if (this.capture) json(ws, this.capture);
       this.snapshot(ws);
       this.status();
       json(ws, this.geometry.state(ws));
@@ -601,6 +614,11 @@ export class TerminalManager {
     const socket = terminal?.downloadRecipient();
     if (!terminal || !socket) return;
     return { socket, isCurrent: () => terminal.downloadRecipient() === socket };
+  }
+  /** Captures follow the native window to all its viewers, including later ones. */
+  async publishCapture(sourceId: string, windowId: string, message: CaptureMessage | CaptureEnded) {
+    const terminal = await this.entries.get(`${sourceId}/${windowId}`)?.catch(() => undefined);
+    terminal?.publishCapture(message);
   }
   async content(source: Source, spaceId: string, windowId: string) {
     const terminal = await this.entries.get(`${source.id}/${windowId}`)?.catch(() => undefined);

@@ -57,7 +57,7 @@ const downloads = new OpenDownloadService({
     let lease: CaptureLease;
     try { lease = captures.prepareCapture(source, { windowId, paneId, session: recipient.sessionId, publicBase, port: Number(header.port), title: header.title,
       onStop: () => { if (!socket.destroyed) socket.write(JSON.stringify({ action: 'stop' }) + '\n') },
-      onEnded: message => { if (recipient.socket.readyState === 1) recipient.socket.send(JSON.stringify(message)); socket.destroy() },
+      onEnded: message => { void terminals.publishCapture(source.id, windowId, message); socket.destroy() },
     }); } catch (error) { reject(error instanceof CaptureError ? error.reason : 'capture-failed'); return; }
     socket.once('close', () => lease.close());
     socket.once('end', () => { lease.close(); socket.end() });
@@ -76,7 +76,7 @@ const downloads = new OpenDownloadService({
         void lease.ready(typeof value.bootstrapUrl === 'string' ? value.bootstrapUrl : undefined).then(presentation => {
           if (socket.destroyed) { lease.close(); return; }
           if (!recipient.isCurrent()) { reject('not-attached'); return; }
-          recipient.socket.send(JSON.stringify(presentation));
+          void terminals.publishCapture(source.id, windowId, presentation);
           socket.write(JSON.stringify({ ok: true, state: 'ready' }) + '\n');
         }).catch(error => { reject(error instanceof CaptureError ? error.reason : 'capture-failed'); });
       } catch { socket.destroy() }
