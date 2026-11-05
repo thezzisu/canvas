@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useFileDialog } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import UEditor from '@nuxt/ui/components/Editor.vue'
-import { Extension, Node, type Editor, type EditorOptions, type JSONContent } from '@tiptap/core'
+import { Extension, Node, type Editor, type EditorOptions } from '@tiptap/core'
 import { Plugin } from '@tiptap/pm/state'
 import { closeHistory } from '@tiptap/pm/history'
 import { Slice } from '@tiptap/pm/model'
@@ -18,12 +18,17 @@ import { clearCopiedFile } from '../file-clipboard'
 import { beginCopyFeedback } from '../copy-feedback'
 import type { FileAsset } from '../types'
 import NoteAttachment from './NoteAttachment.vue'
+import { useNoteScroll } from '../note-scroll'
 
-const props = defineProps<{ content: string; attachments: FileAsset[]; canvasId: string; noteId: string; readOnly: boolean; insertAttachment: (value: NoteInsertion) => void }>()
+const props = defineProps<{ content: string; attachments: FileAsset[]; canvasId: string; noteId: string; scrollKey: string; readOnly: boolean; insertAttachment: (value: NoteInsertion) => void }>()
 const emit = defineEmits<{ change: [content: string]; flush: [] }>()
 const { t } = useI18n()
 const input = ref<{ editor?: Editor }>()
-const value = shallowRef(noteDocument(props.content))
+// The editor owns its document. Its initial value is fixed: echoing editor output
+// back through v-model can replace the DOM under an active IME composition.
+const initial = noteDocument(props.content)
+const shell = ref<HTMLElement>()
+useNoteScroll(shell, '.note-editor-content', () => props.scrollKey)
 const uploaded = shallowRef<FileAsset[]>([])
 const assets = computed(() => [...props.attachments, ...uploaded.value.filter(asset => !props.attachments.some(item => item.id === asset.id))])
 const task = computed(() => noteUpload(props.noteId))
@@ -47,14 +52,45 @@ const sizeLimit = Extension.create({
     return false
   } })],
 })
-function changed(document: JSONContent) {
-  value.value = document
-  const content = serializeNote(document)
-  if (content !== props.content) emit('change', content)
+// Contents this editor produced recently; a delayed copy of one is an echo, not a peer edit.
+const produced: string[] = []
+// The last content both the editor and its owner agreed on.
+let synced = props.content
+function emitContent(content: string) {
+  produced.push(content); if (produced.length > 32) produced.shift()
+  synced = content
+  emit('change', content)
 }
-watch(() => props.content, content => {
-  if (serializeNote(value.value) !== content) value.value = noteDocument(content)
-})
+function changed() {
+  const current = editor()
+  // A composition is one edit: neither save nor publish its intermediate preedit.
+  if (!current || current.isDestroyed || current.view.composing) return
+  const content = serializeNote(current.getJSON())
+  if (content !== props.content) emitContent(content)
+}
+function synchronize() {
+  const current = editor(), content = props.content
+  // Applying a peer edit replaces the DOM; never do so under an active composition.
+  if (!current || current.isDestroyed || current.view.composing) return
+  const local = serializeNote(current.getJSON())
+  if (content === local) { produced.length = 0; synced = content; return }
+  if (produced.includes(content)) return
+  const position = current.state.selection.from
+  current.commands.setContent(noteDocument(content), { emitUpdate: false })
+  current.commands.setTextSelection(Math.min(position, current.state.doc.content.size))
+  synced = content
+}
+watch(() => props.content, synchronize)
+// ProseMirror finishes a composition shortly after compositionend. A composition
+// that changed nothing yields to a peer edit received meanwhile.
+function compositionEnded() {
+  setTimeout(() => {
+    const current = editor()
+    if (!current || current.isDestroyed || current.view.composing) return
+    if (serializeNote(current.getJSON()) === synced) synchronize(); else changed()
+  }, 30)
+  return false
+}
 function fail(key: string) { window.dispatchEvent(new CustomEvent('canvas:error', { detail: new Error(t(key)) })) }
 function editor() { return input.value?.editor }
 const transaction: EditorOptions['onTransaction'] = ({ transaction }) => {
@@ -173,11 +209,11 @@ defineExpose({ chooseFiles, pending })
 </script>
 
 <template>
-  <div class="note-editor-shell" @dragenter="dragOver" @dragover="dragOver">
-  <UEditor ref="input" :model-value="value" content-type="json" :starter-kit="false" :image="false" :mention="false" :extensions="[extension, sizeLimit]" :editable="!readOnly" :enable-input-rules="false" :enable-paste-rules="false" :placeholder="t('panels.note.placeholder')" class="note-editor"
+  <div ref="shell" class="note-editor-shell" @dragenter="dragOver" @dragover="dragOver">
+  <UEditor ref="input" :model-value="initial" content-type="json" :starter-kit="false" :image="false" :mention="false" :extensions="[extension, sizeLimit]" :editable="!readOnly" :enable-input-rules="false" :enable-paste-rules="false" :placeholder="t('panels.note.placeholder')" class="note-editor"
     :ui="{ root: 'h-full min-h-0', content: 'h-full min-h-0', base: 'note-editor-content h-full min-h-0 outline-none' }"
     :editor-props="{ attributes: { 'aria-label': t('panels.note.content'), role: 'textbox', 'aria-multiline': 'true' },
-      handleDOMEvents: { copy: (_view, event) => copy(event), cut: (_view, event) => copy(event, true) },
+      handleDOMEvents: { copy: (_view, event) => copy(event), cut: (_view, event) => copy(event, true), compositionend: compositionEnded },
       handleDrop: (_view, event) => drop(event), handlePaste: (_view, event) => paste(event) }"
     :on-transaction="transaction"
     :on-blur="() => emit('flush')" @update:model-value="changed" />

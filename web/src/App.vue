@@ -42,6 +42,7 @@ import { subscribeState } from './state-events'
 import { retainBackgrounds, useBackgroundUrl } from './backgrounds'
 import { pruneFileViews } from './file-view'
 import { cardZoomKey, pruneCardZooms } from './card-zoom'
+import { noteScrollKey, pruneNoteScrolls } from './note-scroll'
 import CardRemovalFeedback from './components/CardRemovalFeedback.vue'
 import type { CardRemovalResponse } from '../../shared/card-removal'
 import { pruneTerminalPreferences, terminalIdentityKey } from './terminal-identity'
@@ -256,7 +257,8 @@ function cancelNotificationReveal() { notificationIntent++; notificationReveal.v
 // content leaves and enters in sidebar order.
 type JumpFocus = 'terminal' | 'button' | undefined
 const windowJump = shallowRef<{ canvasId: string; anchor: CanvasAnchor; focus: JumpFocus; direction: CanvasDirection }>()
-const canvasMorph = shallowRef<{ phase: 'leave' | 'enter'; sourceId: string; windowId: string; shift: number }>()
+// Canvas switches move content along sidebar order; a jumping window stays still.
+const canvasMorph = shallowRef<{ phase: 'leave' | 'enter'; shift: number; anchor?: { sourceId: string; windowId: string } }>()
 const morphDuration = { leave: 140, enter: 220 }
 function cancelCreatedReveal() { creationIntent++; pendingCreatedWindow.value = undefined }
 function creationNavigation(event: Event) {
@@ -292,6 +294,7 @@ function pruneReadingPreferences() {
   if (!state) return
   pruneFileViews(activeInstance.value.id, state.canvases, undefined, removalUndo.value?.fileViews())
   pruneCardZooms(state.instanceId, state.canvases, undefined, removalUndo.value?.zooms())
+  pruneNoteScrolls(state.instanceId, state.canvases)
 }
 const { toasts: notificationToasts, add: addToast } = useToast()
 // Nuxt UI can enqueue after nextTick; reject stale account notices when published.
@@ -544,7 +547,8 @@ watch(navigation.requested, request => {
     // An immediate public viewport write interrupts VueFlow's D3 transition.
     void setViewport(getViewport())
     clearContentFocus(); cancelCreatedReveal()
-    if (!request.anchor) { windowJump.value = undefined; canvasMorph.value = undefined }
+    if (!request.anchor) windowJump.value = undefined
+    if (canvasMorph.value?.phase === 'leave') canvasMorph.value = undefined
   }
 }, { flush: 'sync' })
 function selectLogicalTerminal(event: Event) {
@@ -633,7 +637,8 @@ function terminalFlowNode(node: TerminalCanvasNode, overview = false): Node {
 }
 function noteData(node: NoteCanvasNode, focus = false): NoteData {
   const canvasId = activeId.value
-  return { ...node, canvasId, zoomKey: cardZoomKey(latestState.value?.instanceId || activeInstance.value.base, node.id), mobile: mobile.value, focus, onResize: resizeNode, onResizeStart: resizeStarted,
+  const instance = latestState.value?.instanceId || activeInstance.value.base
+  return { ...node, canvasId, zoomKey: cardZoomKey(instance, node.id), scrollKey: noteScrollKey(instance, canvasId, node.id), mobile: mobile.value, focus, onResize: resizeNode, onResizeStart: resizeStarted,
     onAttachment: value => {
       const canvas = canvases.value.find(canvas => canvas.nodes.some(item => item.type === 'note' && item.id === node.id))
       const latest = canvas?.nodes.find((item): item is NoteCanvasNode => item.type === 'note' && item.id === node.id)
@@ -1505,29 +1510,47 @@ const canvasesByWindow = computed(() => {
 })
 function windowCanvases(sourceId: string, windowId: string) { return canvasesByWindow.value.get(`${sourceId}/${windowId}`) || [] }
 function morphAnchor(node: Node) {
-  const morph = canvasMorph.value
-  return !!morph && node.type === 'terminal' && node.data.sourceId === morph.sourceId && node.data.windowId === morph.windowId
+  const anchor = canvasMorph.value?.anchor
+  return !!anchor && node.type === 'terminal' && node.data.sourceId === anchor.sourceId && node.data.windowId === anchor.windowId
+}
+const morphShift = (direction: CanvasDirection) => direction === 'next' ? 48 : -48
+/** Leaves for a short exit; resolves false when another navigation took over. */
+async function leaveCanvas(direction: CanvasDirection, anchor?: { sourceId: string; windowId: string }) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return true
+  const leaving = canvasMorph.value = { shift: morphShift(direction), anchor, phase: 'leave' }
+  if (anchor) rebuildNodes()
+  await new Promise(resolve => setTimeout(resolve, morphDuration.leave))
+  if (canvasMorph.value !== leaving) return false
+  canvasMorph.value = undefined
+  return true
+}
+function enterCanvas(direction: CanvasDirection, anchor?: { sourceId: string; windowId: string }) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  const entering = canvasMorph.value = { shift: morphShift(direction), anchor, phase: 'enter' }
+  setTimeout(() => { if (canvasMorph.value === entering) canvasMorph.value = undefined }, morphDuration.enter + 100)
+}
+/** Sidebar switches move along the sidebar order: later canvases enter from below. */
+async function navigateCanvas(id: string, target?: CanvasTarget) {
+  if (id === activeId.value || hasFocus.value || navigation.requested.value || canvasMorph.value?.phase === 'leave' || !nodes.value.length) { switchCanvas(id, target); return }
+  const order = ['overview', ...orderedCanvases.value.map(canvas => canvas.id)]
+  const direction: CanvasDirection = order.indexOf(id) < order.indexOf(activeId.value) ? 'previous' : 'next', origin = activeId.value, context = apiContext()
+  sidebarOpen.value = false
+  if (!await leaveCanvas(direction)) return
+  if (!isCurrentApi(context) || activeId.value !== origin || navigation.requested.value) { rebuildNodes(); return }
+  enterCanvas(direction)
+  switchCanvas(id, target)
 }
 async function jumpWindowCanvas(nodeId: string, direction: CanvasDirection, focus: JumpFocus) {
   const node = getCanvasNode(nodeId)
   if (!node || hasFocus.value || navigation.requested.value || canvasMorph.value?.phase === 'leave' ||
       !adjacentCanvas(windowCanvases(node.sourceId, node.windowId), activeId.value, direction)) return
-  const context = apiContext(), origin = activeId.value
-  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    const leaving = canvasMorph.value = { sourceId: node.sourceId, windowId: node.windowId, shift: (direction === 'next' ? 48 : -48) / getViewport().zoom, phase: 'leave' }
-    rebuildNodes()
-    await new Promise(resolve => setTimeout(resolve, morphDuration.leave))
-    if (canvasMorph.value !== leaving) return
-    canvasMorph.value = undefined
-  }
+  const context = apiContext(), origin = activeId.value, window = { sourceId: node.sourceId, windowId: node.windowId }
+  if (!await leaveCanvas(direction, window)) return
   // The camera may move during the leave phase; anchor the window where it is now.
   const flow = nodes.value.find(item => item.id === nodeId), target = adjacentCanvas(windowCanvases(node.sourceId, node.windowId), origin, direction)
   if (!isCurrentApi(context) || activeId.value !== origin || hasFocus.value || navigation.requested.value || !flow || !target) { rebuildNodes(); return }
-  const viewport = getViewport(), anchor = canvasAnchor(node, flow.position, viewport)
-  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    const entering = canvasMorph.value = { sourceId: node.sourceId, windowId: node.windowId, shift: (direction === 'next' ? 48 : -48) / viewport.zoom, phase: 'enter' }
-    setTimeout(() => { if (canvasMorph.value === entering) canvasMorph.value = undefined }, morphDuration.enter + 100)
-  }
+  const anchor = canvasAnchor(node, flow.position, getViewport())
+  enterCanvas(direction, window)
   windowJump.value = { canvasId: target.id, anchor, focus, direction }
   switchCanvas(target.id, { anchor })
 }
@@ -1892,7 +1915,7 @@ function keydown(event: KeyboardEvent) {
   if (settingsDialog.value || accountDialog.value) return
   if (scanTarget.value) return
   const target = event.target instanceof Element ? event.target : undefined
-  if (!modalOpen.value && (target?.closest('.xterm') || target?.closest('.note-card input, .note-card textarea')
+  if (!modalOpen.value && (target?.closest('.xterm') || target?.closest('.note-card input, .note-card [contenteditable="true"]')
     && !(focusedCardId.value && event.key === 'Escape'))) return
   if (paging.value && !focused.value && !modalOpen.value && !overviewMenuOpen.value && !canvasMenu.value && !sidebarOpen.value && !sourcePanel.value &&
       !event.ctrlKey && !event.altKey && !event.metaKey && !(event.target as HTMLElement)?.closest('input, textarea, select, button, a, [contenteditable="true"]')) {
@@ -2022,14 +2045,14 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
         <div class="sidebar-divider" role="separator" />
         <div class="nav-section-label canvas-label"><span>{{ t('app.canvases') }}</span><button class="icon-button" :title="t('app.newCanvas')" :aria-label="t('app.newCanvas')" @click="openCanvasDialog()"><Icon name="plus" :size="16" /></button></div>
         <nav class="canvas-nav" :aria-label="t('app.canvases')">
-          <CanvasNavItem :name="t('app.overview')" overview :active="isOverview" :indicator="indicators.overview" @select="switchCanvas('overview')" />
+          <CanvasNavItem :name="t('app.overview')" overview :active="isOverview" :indicator="indicators.overview" @select="navigateCanvas('overview')" />
           <SidebarList :key="activeInstanceId" :items="orderedCanvases" @reorder="ids => rememberSidebarOrder('canvases', ids)">
-            <template #default="{ item: canvas, hint }"><CanvasNavItem :name="canvas.name" :active="activeId === canvas.id" :indicator="indicators[canvas.id]" :aria-description="hint" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" @select="switchCanvas(canvas.id)" /></template>
+            <template #default="{ item: canvas, hint }"><CanvasNavItem :name="canvas.name" :active="activeId === canvas.id" :indicator="indicators[canvas.id]" :aria-description="hint" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" @select="navigateCanvas(canvas.id)" /></template>
           </SidebarList>
         </nav>
         <div class="sidebar-divider" role="separator" />
         <div class="nav-section-label"><span>{{ t('app.connections') }}</span><button class="icon-button" :title="t('app.addConnection')" :aria-label="t('app.addConnection')" @click="openSource()"><Icon name="plus" :size="16" /></button></div>
-        <div class="source-nav"><SidebarList :key="activeInstanceId" :items="orderedSources" @reorder="ids => rememberSidebarOrder('sources', ids)"><template #default="{ item: source, hint }"><button :aria-description="hint" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" class="source-nav-item" :title="`${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}${resources.find(item => item.id === source.id)?.serverVersion ? ` · herdr ${resources.find(item => item.id === source.id)!.serverVersion}` : ''}`" @click="sourcePanel = false; switchCanvas('overview', { fitNodeId: `source:${source.id}` })"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}</span><span class="source-nav-status"><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : resources.find(item => item.id === source.id)?.status === 'online' ? 'connected' : ''" /></span></button></template></SidebarList><button v-if="latestState && !sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="16" /><span class="source-empty-label">{{ t('app.addConnection') }}</span></button></div>
+        <div class="source-nav"><SidebarList :key="activeInstanceId" :items="orderedSources" @reorder="ids => rememberSidebarOrder('sources', ids)"><template #default="{ item: source, hint }"><button :aria-description="hint" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" class="source-nav-item" :title="`${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}${resources.find(item => item.id === source.id)?.serverVersion ? ` · herdr ${resources.find(item => item.id === source.id)!.serverVersion}` : ''}`" @click="sourcePanel = false; navigateCanvas('overview', { fitNodeId: `source:${source.id}` })"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}</span><span class="source-nav-status"><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : resources.find(item => item.id === source.id)?.status === 'online' ? 'connected' : ''" /></span></button></template></SidebarList><button v-if="latestState && !sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="16" /><span class="source-empty-label">{{ t('app.addConnection') }}</span></button></div>
       </div>
       <div class="sidebar-footer">
         <UDropdownMenu v-model:open="accountMenuOpen" :modal="false" :items="accountMenu" :portal="appElement || false"

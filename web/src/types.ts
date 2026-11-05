@@ -107,6 +107,7 @@ export interface TerminalData {
 export interface NoteData extends NoteCanvasNode {
   canvasId: string
   zoomKey: string
+  scrollKey: string
   mobile?: boolean
   focus?: boolean
   onResize: (id: string, width: number, height: number, x?: number, y?: number) => void

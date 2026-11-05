@@ -16,6 +16,7 @@ import { claimNoteDrop, readNoteTransfer } from '../note-transfer'
 import { isFileReference, readFileReference } from '../file-reference'
 import { copiedFile } from '../file-clipboard'
 import { capturedApp, setCaptureVisible } from '../capture'
+import { useRetainedFrame } from '../retained-frame'
 import { api } from '../api'
 import { cachedTerminalView, mountTerminal, type TerminalStatus } from '../terminals'
 import { emptyModifiers, type TerminalModifiers } from '../terminal-input'
@@ -35,6 +36,9 @@ const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial
 const host = ref<HTMLElement>()
 const header = ref<HTMLElement>()
 const app = computed(() => capturedApp(props.data.sourceId, props.data.windowId))
+const captureHost = ref<HTMLElement>()
+useRetainedFrame(captureHost, () => app.value && !mobilePreview.value ? { key: `capture:${app.value.id}`, src: app.value.url, attributes: {
+  class: 'capture-frame', title: app.value.title, sandbox: 'allow-scripts allow-forms allow-same-origin allow-downloads', referrerpolicy: 'no-referrer' } } : undefined)
 const showApp = computed(() => !!app.value?.visible && !mobilePreview.value && !closed.value && !maximizedElsewhere.value && status.value.status === 'connected')
 function showCapturedApp() { setCaptureVisible(props.data.sourceId, props.data.windowId, true) }
 function returnToTerminal() {
@@ -58,7 +62,7 @@ async function stopCapturedApp() {
 const headerCompact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined), undefined, () => (props.data.overview ? 5 : 6) - (showApp.value ? 2 : 0))
 const compact = computed(() => !!props.data.mobile && props.data.focus && headerCompact.value)
 const zoom = useTerminalZoom(() => props.data.preferenceKey)
-const rightClickMode = useTerminalSettings(() => props.data.preferenceKey)
+const settings = useTerminalSettings(() => props.data.preferenceKey)
 const settingsOpen = ref(false)
 const portal = computed(() => host.value?.closest<HTMLElement>('.app-shell') || undefined)
 const status = ref<TerminalStatus>({ status: 'connecting' })
@@ -188,14 +192,14 @@ function mount() {
     ownedPresentation = props.data.focus && state.presentation?.owned === true
     status.value = state
     if (superseded) props.data.onAction('unfocus', props.id)
-  }, { magnified: props.data.focus, mobile: props.data.mobile, zoom: zoom.value, closed: !!props.data.closed, rightClickMode: rightClickMode.value })
+  }, { magnified: props.data.focus, mobile: props.data.mobile, zoom: zoom.value, closed: !!props.data.closed, settings: settings.value })
   terminal?.setAppShowing(showApp.value)
   if (mobileFocus.value && !showApp.value) { terminal?.setTouchMode('scroll'); terminal?.focus({ keyboard: false }) }
 }
 onMounted(() => { mount(); document.addEventListener('dragend', clearNoteDrag); window.addEventListener('blur', clearNoteDrag) })
 watch(() => props.data.closed, value => { if (value) terminal?.close() })
 watch([zoom, () => props.data.focus], () => { terminal?.setZoom(zoom.value) })
-watch(rightClickMode, value => terminal?.setRightClickMode(value), { flush: 'sync' })
+watch(settings, value => terminal?.setSettings(value), { flush: 'sync' })
 watch([keepTerminal, () => props.data.mobile, () => props.data.focus], async () => { terminal?.dispose(); terminal = undefined; await nextTick(); mount() })
 onBeforeUnmount(() => { clearPreviewTap(); terminal?.dispose(); document.removeEventListener('dragend', clearNoteDrag); window.removeEventListener('blur', clearNoteDrag) })
 function action(name: string) {
@@ -237,7 +241,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
       <CardHeaderActions class="terminal-actions" :class="{ 'cutout-actions': mobileFocus }" :items="menu" :expanded="data.focus" :removable="!data.overview" :compact="compact" :disabled="closed && !data.focus"
         :add-label="t('terminal.action.addToCanvas')" :remove-label="t('terminal.action.removeFromCanvas')" :maximize-label="t('terminal.action.focus')" :restore-label="t('terminal.action.restore')" :more-label="t('terminal.action.windowActions')"
         @add="action('add')" @toggle="action(data.focus ? 'unfocus' : 'focus')" @remove="action('remove')">
-        <template v-if="showCanvasJumps"><button v-for="jump in canvasJumps" :key="jump.direction" type="button" class="card-header-action" :class="`card-${jump.direction}-canvas`" data-preserve-content-focus :disabled="!jump.target" :title="jump.label" :aria-label="jump.label" @pointerdown.prevent @click="jumpCanvas(jump.direction, $event)"><Icon name="chevron" :size="15" :style="{ transform: jump.direction === 'next' ? '' : 'rotate(180deg)' }" /></button></template>
+        <template v-if="showCanvasJumps"><button v-for="jump in canvasJumps" :key="jump.direction" type="button" class="card-header-action" :class="`card-${jump.direction}-canvas`" data-preserve-content-focus :disabled="!jump.target" :title="jump.label" :aria-label="jump.label" @pointerdown.prevent @click="jumpCanvas(jump.direction, $event)"><Icon name="down" :size="15" :style="{ transform: jump.direction === 'next' ? '' : 'rotate(180deg)' }" /></button></template>
         <button v-if="mobileFocus && !showApp" type="button" class="card-header-action terminal-keyboard" :title="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-label="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-pressed="status.keyboardRequested" @pointerdown.prevent @click="toggleKeyboard"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10" /></svg></button>
         <ContentZoom v-if="data.focus && !showApp" v-model="zoom" :mobile="data.mobile" :disabled="!data.available" :label="t('terminal.zoom.title')" />
       </CardHeaderActions>
@@ -248,12 +252,10 @@ async function resized(event: { params: { width: number; height: number; x: numb
       <span v-if="captureError" class="capture-error" role="alert" :title="captureError">{{ captureError }}</span>
       <UButton type="button" color="neutral" variant="ghost" :size="mobileFocus ? 'sm' : 'xs'" :ui="{ base: mobileFocus ? 'min-h-[44px]' : undefined }" :loading="stoppingApp" :disabled="stoppingApp" @click="stopCapturedApp">{{ t('terminal.capture.stop') }}</UButton>
     </div>
-    <div v-if="app && !mobilePreview" v-show="showApp" class="capture-body card-content nodrag nopan nowheel" @pointerdown.stop @mousedown.stop @wheel.stop>
-      <iframe :key="app.id" :src="app.url" :title="app.title" class="capture-frame" sandbox="allow-scripts allow-forms allow-same-origin allow-downloads" referrerpolicy="no-referrer" />
-    </div>
+    <div v-if="app && !mobilePreview" v-show="showApp" ref="captureHost" class="capture-body card-content nodrag nopan nowheel" @pointerdown.stop @mousedown.stop @wheel.stop />
     <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || closed || showApp || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop><div class="terminal-transition-surface" aria-hidden="true" /></div>
     <PaneContextMenu :host="host" :enabled="!showApp && keepTerminal && !mobilePreview && !closed && !maximizedElsewhere && status.status === 'connected'" :allows-menu="allowsContextMenu" :lookup="paneContext" :action="paneAction" />
-    <TerminalSettingsDialog v-model="rightClickMode" :open="settingsOpen" :portal="portal" @close="settingsOpen = false" />
+    <TerminalSettingsDialog v-model="settings" :open="settingsOpen" :portal="portal" @close="settingsOpen = false" />
     <div v-if="mobilePreview && !closed" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: label })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
     <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">{{ t('terminal.upload.file') }}</div>
     <div v-if="noteDrag || fileDrag" class="terminal-file-drop terminal-note-drop" :class="{ 'note-drop-unavailable': !noteDropAvailable }" aria-hidden="true">{{ !noteDropAvailable ? noteDropLabel : fileDrag ? t(status.fileReading ? 'fileTransfer.preparing' : 'fileTransfer.drop') : noteDropLabel }}</div>
@@ -327,5 +329,5 @@ async function resized(event: { params: { width: number; height: number; x: numb
 </style>
 
 <style scoped>
-.capture-toolbar{position:absolute;z-index:6;top:30px;left:0;right:0;height:34px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#252a33;color:#d5d7dd;font-size:12px}.capture-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.capture-error{max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.capture-body{position:absolute;z-index:5;inset:64px 0 0;background:#fff}.capture-frame{display:block;width:100%;height:100%;border:0}.terminal-mobile.focused .capture-toolbar{top:var(--terminal-header-height);height:44px}.terminal-mobile.focused .capture-body{top:calc(var(--terminal-header-height) + 44px)}
+.capture-toolbar{position:absolute;z-index:6;top:30px;left:0;right:0;height:34px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#252a33;color:#d5d7dd;font-size:12px}.capture-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.capture-error{max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.capture-body{position:absolute;z-index:5;inset:64px 0 0;background:#fff}.capture-body :deep(.capture-frame){display:block;width:100%;height:100%;border:0}.terminal-mobile.focused .capture-toolbar{top:var(--terminal-header-height);height:44px}.terminal-mobile.focused .capture-body{top:calc(var(--terminal-header-height) + 44px)}
 </style>

@@ -207,7 +207,10 @@ html{zoom:var(--ui-zoom)}#app{position:fixed;inset:0;width:auto;height:auto}.app
 .graph-wrap.canvas-morph-enter .vue-flow__node:not(.canvas-morph-anchor){animation:canvas-morph-enter 220ms cubic-bezier(0,0,.2,1) both}
 .graph-wrap.canvas-morph-leave .canvas-background{animation:canvas-morph-fade-out 140ms ease-in forwards}
 .graph-wrap.canvas-morph-enter .canvas-background{animation:canvas-morph-fade-in 220ms ease-out both}
-@keyframes canvas-morph-leave{to{opacity:0;translate:calc(var(--canvas-morph-shift) * -1) 0}}
-@keyframes canvas-morph-enter{from{opacity:0;translate:var(--canvas-morph-shift) 0}}
+@keyframes canvas-morph-leave{to{opacity:0;translate:0 calc(var(--canvas-morph-shift) * -1)}}
+@keyframes canvas-morph-enter{from{opacity:0;translate:0 var(--canvas-morph-shift)}}
+/* Jump buttons hide while their window moves, so a fast double click cannot skip a canvas. */
+.graph-wrap:is(.canvas-morph-leave,.canvas-morph-enter) :is(.card-previous-canvas,.card-next-canvas){animation:canvas-morph-fade-out 100ms ease-in forwards;pointer-events:none}
+.graph-wrap:not(.canvas-morph-leave,.canvas-morph-enter) :is(.card-previous-canvas,.card-next-canvas){animation:canvas-morph-fade-in 180ms ease-out both}
 @keyframes canvas-morph-fade-out{to{opacity:0}}
 @keyframes canvas-morph-fade-in{from{opacity:0}}
