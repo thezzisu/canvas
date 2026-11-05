@@ -58,14 +58,23 @@ interface PathSpan { values: string[] }
 /** One bounded reader handles presentation wraps; native soft wraps are already logical lines. */
 function* pathSpans(lines: readonly string[], columns: number | undefined, budget: { remaining: number; characters: number }): Generator<PathSpan> {
   const pairs: Record<string, string> = { '(': ')', '（': '）', '[': ']', '{': '}' }
-  const pathStart = (value: string) => /^@?(?:\/|~\/|\.{1,2}\/|[^\s<>"'`]+\/)/u.test(value)
+  const pathStart = (line: string, offset: number) => {
+    if (line.length - offset > 8192) return false
+    if (budget.remaining <= 0 || budget.characters <= 0) return false
+    budget.remaining--
+    const value = line.slice(offset, offset + Math.min(8192, budget.characters))
+    budget.characters -= value.length
+    return /^@?(?:\/|~\/|\.{1,2}\/|[^\s<>"'`]+\/)/u.test(value)
+  }
   for (let row = 0; row < lines.length && budget.remaining > 0 && budget.characters > 0; row++) {
     const line = lines[row]!, seeds = new Map<number, string | undefined>()
     for (const match of line.matchAll(/(`+|\*\*|__|["'(（])\s*/gu)) {
       const offset = match.index + match[0].length
-      if (pathStart(line.slice(offset))) seeds.set(offset, pairs[match[1]!] || match[1])
+      if (budget.remaining <= 0 || budget.characters <= 0) break
+      if (pathStart(line, offset)) seeds.set(offset, pairs[match[1]!] || match[1])
     }
     for (const match of line.matchAll(/(?:^|\s)(@?(?:\/|~\/|\.{1,2}\/))/gu)) {
+      if (budget.remaining <= 0 || budget.characters <= 0) break
       const offset = match.index + match[0].length - match[1]!.length
       if (!seeds.has(offset)) seeds.set(offset, undefined)
     }

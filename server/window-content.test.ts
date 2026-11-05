@@ -771,3 +771,10 @@ test('colored inline paths share token extraction instead of requiring a path-on
   const content = { ...pane(['Reading ' + path.slice(0, -20), path.slice(-20)]), coloredText: ['Reading ' + path] }
   assert(contentCandidates([content]).panes.flatMap(pane => pane.items).some(item => item.kind === 'file' && item.path === path))
 })
+
+
+test('path seed discovery shares the reconstruction budget on delimiter-heavy text', () => {
+  const result = contentCandidates([pane(['('.repeat(8000) + 'word', 'Later (/tmp/unreached/', 'file.png)'])])
+  assert.equal(result.truncated, true)
+  assert(!result.panes.flatMap(pane => pane.items).some(item => item.kind === 'file' && item.path === '/tmp/unreached/file.png'))
+})
