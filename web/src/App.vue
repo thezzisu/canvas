@@ -1299,6 +1299,7 @@ async function submitCanvas() {
   finally { if (current()) busy.value = false }
 }
 function deleteCanvas() {
+  if (layoutEditing.value) { void leaveLayout().then(allowed => { if (allowed) deleteCanvas() }); return }
   const canvas = currentCanvas.value
   if (!canvas) return
   actionDialog.value = { get title() { return t('app.deleteNamed', { name: canvas.name }) }, get description() { return t('app.deleteCanvasDescription') }, value: '', danger: true, get button() { return t('app.deleteCanvas') }, submit: async () => {
@@ -1693,6 +1694,7 @@ async function removeNode(id: string) {
   finally { if (!offered) feedback.release(removal) }
 }
 function openAdd(node?: TerminalCanvasNode) {
+  if (layoutEditing.value) { void leaveLayout().then(allowed => { if (allowed) openAdd(node) }); return }
   addDialogRevision++
   const candidates = node ? canvases.value.filter(canvas => !canvas.nodes.some(item => isTerminalNode(item) && item.sourceId === node.sourceId && item.windowId === node.windowId)) : canvases.value
   addTarget.value = candidates.find(canvas => canvas.id === currentCanvas.value?.id)?.id || candidates[0]?.id || ''
@@ -1830,6 +1832,7 @@ function scheduleSave() {
   }, 450))
 }
 async function addNote() {
+  if (!await leaveLayout()) return
   const canvas = currentCanvas.value
   if (!canvas || busy.value) return
   busy.value = true
@@ -2190,7 +2193,7 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
     <main class="workspace" :inert="!!focusedCard || undefined" :aria-hidden="!!focusedCard || undefined">
       <header class="workspace-header">
         <div class="header-context"><button v-if="mobile" class="icon-button mobile-menu-trigger" :aria-label="t('app.openCanvasList')" aria-controls="canvas-sidebar" :aria-expanded="sidebarOpen" @click="sidebarOpen = !sidebarOpen"><Icon name="menu" :size="21" /></button><div class="breadcrumb"><h1 v-if="latestState" :title="currentName">{{ currentName }}</h1></div><span v-if="!workspacePending && !undiscoveredSources.length" class="header-counts">{{ canvasCounts }}</span><button class="icon-button refresh-button" :title="refreshedAt ? t('app.refreshUpdated', { time: refreshedTime }) : t('app.refresh')" :aria-label="t('app.refresh')" :disabled="loading || workspacePending" @click="refreshResources()"><Icon name="refresh" :size="14" :class="{ spinning: loading }" /></button></div>
-        <div class="header-actions" :inert="workspacePending || undefined">
+        <div class="header-actions" :inert="workspacePending || layoutEditing || undefined">
           <UDropdownMenu v-if="isOverview" v-model:open="overviewMenuOpen" :modal="false" :items="overviewMenu" :portal="appElement || false" :content="{ align: 'end', ...overviewDismiss }" :ui="{ content: 'overview-display-menu w-[180px] z-[60]' }">
             <button ref="overviewTrigger" class="icon-button overview-display-trigger" :class="{ active: overviewChanged }" :title="t('app.filterSort')" :aria-label="t('app.overviewFilterSort')"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg><i v-if="overviewChanged" /></button>
             <template #item-leading="{ item }"><span class="overview-display-leading" aria-hidden="true"><i v-if="item.status" class="program-dot" :style="{ '--program-color': statusColor(item.status) }" /></span></template>
