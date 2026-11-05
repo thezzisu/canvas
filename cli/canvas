@@ -664,7 +664,8 @@ def capture_application(args, parser, launch_path=None):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.connect(entry["socket"])
             send(connection, {"version": 1, "secret": entry["secret"], "nativeSocket": native_socket, "paneId": pane,
-                              "kind": "capture", "port": port, "title": (args.title or Path(command[0]).name)[:120]})
+                              "kind": "capture", "port": port, "title": (args.title or Path(command[0]).name)[:120],
+                              **({"preview": "static"} if launch_path is not None else {})})
             response = line(connection)
             public_url = response.get("publicUrl")
             if response.get("ok") is not True or response.get("state") != "prepared" or not isinstance(public_url, str):
@@ -698,7 +699,7 @@ def capture_application(args, parser, launch_path=None):
                     ready = port_open(port)
                 else:
                     status = probe_http(port, args.probe or "/", public, deadline)
-                    ready = status is not None and (200 <= status < 300 if args.probe else 200 <= status < 500)
+                    ready = status is not None and (200 <= status < 400 if launch_path is not None else 200 <= status < 300 if args.probe else 200 <= status < 500)
                 if ready and time.monotonic() < deadline:
                     ready_url = public_url.rstrip("/") + launch_path if launch_path is not None else bootstrap_file(args.bootstrap_file, public_url, port)
                     if ready_url is not False:
@@ -738,12 +739,23 @@ def serve_preview(directory, managed_path=None):
         def send_head(self):
             target = Path(self.translate_path(self.path))
             try:
-                if target.is_dir():
-                    target = next((target / name for name in ("index.html", "index.htm") if (target / name).is_file()), target)
                 if os.path.commonpath((str(root), str(target.resolve()))) != str(root):
                     raise ValueError()
             except (OSError, ValueError, RuntimeError):
                 self.send_error(404)
+                return None
+            if target.is_dir():
+                parts = urlsplit(self.path)
+                if not parts.path.endswith("/"):
+                    location = parts._replace(path=parts.path + "/").geturl()
+                elif (target / "index.html").is_file():
+                    location = parts._replace(path=parts.path + "index.html").geturl()
+                else:
+                    return self.list_directory(str(target))
+                self.send_response(302)
+                self.send_header("Location", location)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
                 return None
             return super().send_head()
 
@@ -768,8 +780,8 @@ def serve_preview(directory, managed_path=None):
 
 def serve_file_preview(path):
     target = Path(path).expanduser().resolve(strict=True)
-    if not target.is_file() or target.suffix.lower() not in (".html", ".htm"):
-        raise CanvasError("HTML source file unavailable")
+    if not target.is_file():
+        raise CanvasError("Source file unavailable")
     serve_preview(target.parent, "/" + quote(target.name, safe=""))
 
 
@@ -786,6 +798,17 @@ def preview_application(args, parser):
         root, launch_path = target.parent, "/" + quote(target.name, safe="")
     else:
         parser.error("preview requires a directory; use canvas open --preview for a file")
+    if args.preview_root:
+        try:
+            root = Path(args.preview_root).expanduser().resolve(strict=True)
+            if not root.is_dir():
+                raise ValueError()
+            relative = target.relative_to(root)
+        except (OSError, ValueError):
+            raise CanvasError("preview path must be inside the selected preview root") from None
+        launch_path = "/" + quote(relative.as_posix(), safe="/")
+        if target.is_dir():
+            launch_path = "/" if relative == Path(".") else launch_path + "/"
     options = argparse.Namespace(command=[sys.executable, str(Path(__file__).resolve()), "--serve-preview", str(root)],
         shell=None, port=None, timeout=120, probe=launch_path, probe_command=None, ready="http", env=[],
         bootstrap_file=None, title=target.name or str(target))
@@ -814,11 +837,13 @@ def main():
         "A daemon must receive the originating pane's values for each invocation.")
     opened.add_argument("--runtime", choices=["core", "tui"], help="select the originating runtime in nested terminals")
     opened.add_argument("--preview", action="store_true", help="serve a local file or directory in this terminal using capture")
+    opened.add_argument("--preview-root", help="explicit resource root for --preview (default: the selected file's directory)")
     opened.add_argument("path", help="file, folder or HTTP(S) address")
     preview = commands.add_parser("preview", help="serve a directory and preview its static website", epilog=
         "Uses capture in a connected single-pane tab. Return keeps the server running; Stop app or Ctrl+C stops it. "
         "Relative URLs work under the capture prefix; root-relative URLs require site support for that prefix.")
     preview.add_argument("--runtime", choices=["core", "tui"], help="explicit identity for nested terminal environments")
+    preview.add_argument("--preview-root", help="explicit resource root (default: the selected directory)")
     preview.add_argument("path", nargs="?", default=".", help="directory to serve (default: current directory)")
     capture = commands.add_parser("capture", help="run a command and display its Web UI", epilog=
         "Capture requires a single-pane tab connected in Canvas. Split-pane tabs are not supported. "
@@ -843,6 +868,8 @@ def main():
             return capture_application(arguments, capture)
         if arguments.subcommand == "preview" or arguments.preview:
             return preview_application(arguments, preview if arguments.subcommand == "preview" else opened)
+        if arguments.preview_root:
+            opened.error("--preview-root requires --preview")
         if arguments.path.lower().startswith(("http://", "https://")):
             open_url(arguments.path)
         else:

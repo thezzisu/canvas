@@ -7,18 +7,18 @@ import { isMarkdownFile } from '../markdown'
 import { textCapabilities } from '../code-preview'
 
 const props = defineProps<{ filename: string; rendered: boolean; wrap: boolean; formatted: boolean; highlighted: boolean;
-  sourcePreview?: boolean; previewBusy?: boolean }>()
+  sourcePreview?: boolean; previewBusy?: boolean; hideSite?: boolean }>()
 const emit = defineEmits<{ 'update:rendered': [value: boolean]; 'update:wrap': [value: boolean];
   'update:formatted': [value: boolean]; 'update:highlighted': [value: boolean]; preview: [] }>()
 const { t } = useI18n()
-const markdown = computed(() => isMarkdownFile(props.filename))
+const markup = computed(() => isMarkdownFile(props.filename) || /\.html?$/iu.test(props.filename))
 const capabilities = computed(() => textCapabilities(props.filename))
-const source = computed(() => !markdown.value || !props.rendered)
+const source = computed(() => !markup.value || !props.rendered)
 </script>
 
 <template>
   <div class="text-preview-actions nodrag nopan" @pointerdown.stop @click.stop @dblclick.stop>
-    <UButton v-if="markdown" type="button" :color="!rendered ? 'primary' : 'neutral'" :variant="rendered ? 'ghost' : 'soft'" size="xs" class="text-preview-action"
+    <UButton v-if="markup" type="button" :color="!rendered ? 'primary' : 'neutral'" :variant="rendered ? 'ghost' : 'soft'" size="xs" class="text-preview-action"
       :aria-label="t('panels.preview.source')" :title="t(rendered ? 'panels.preview.source' : 'panels.preview.rendered')" :aria-pressed="!rendered"
       @click="emit('update:rendered', !rendered)"><Icon name="code" :size="15" /></UButton>
     <template v-if="source">
@@ -29,7 +29,7 @@ const source = computed(() => !markdown.value || !props.rendered)
       <UButton type="button" :color="wrap ? 'primary' : 'neutral'" :variant="wrap ? 'soft' : 'ghost'" size="xs" class="text-preview-action"
         :aria-label="t('panels.preview.wrap')" :title="t('panels.preview.wrap')" :aria-pressed="wrap" @click="emit('update:wrap', !wrap)"><Icon name="wrap" :size="15" /></UButton>
     </template>
-    <UButton v-if="capabilities.html" icon="i-lucide-square-arrow-out-up-right" type="button" color="neutral" variant="ghost" size="xs" class="text-preview-action"
+    <UButton v-if="!hideSite && (capabilities.html || isMarkdownFile(filename))" icon="i-lucide-square-arrow-out-up-right" type="button" color="neutral" variant="ghost" size="xs" class="text-preview-action"
       :aria-label="t('panels.preview.site')" :title="t(sourcePreview ? 'panels.preview.site' : 'panels.preview.noSource')" :disabled="!sourcePreview" :loading="previewBusy" @click="emit('preview')" />
   </div>
 </template>

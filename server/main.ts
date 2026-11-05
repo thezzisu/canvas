@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { getRequestListener } from "@hono/node-server";
 import { fileURLToPath } from 'node:url';
 import { serveCanvasStatic } from './static.ts';
+import { Hono } from 'hono';
 import { WebSocketServer } from "ws";
 import { Store, sourceConnectionKey, type Source } from "./state.ts";
 import { createApp } from "./app.ts";
@@ -56,6 +57,7 @@ const downloads = new OpenDownloadService({
     }
     let lease: CaptureLease;
     try { lease = captures.prepareCapture(source, { windowId, paneId, session: recipient.sessionId, publicBase, port: Number(header.port), title: header.title,
+      ...(header.preview === 'static' ? { preview: 'static' } : {}),
       onStop: () => { if (!socket.destroyed) socket.write(JSON.stringify({ action: 'stop' }) + '\n') },
       onEnded: message => { void terminals.publishCapture(source.id, windowId, message); socket.destroy() },
     }); } catch (error) { reject(error instanceof CaptureError ? error.reason : 'capture-failed'); return; }
@@ -134,6 +136,14 @@ app.use("*", async (c, next) => {
   return next();
 });
 const staticDir = resolve(process.env.CANVAS_STATIC_DIR ?? fileURLToPath(new URL('../web/', import.meta.url)));
+const documents = new Hono();
+documents.use('/api/document/:id/*', async (c, next) => {
+  if (!captures.hasStaticPreview(c.req.param('id')!)) return c.notFound();
+  c.header('Referrer-Policy', 'no-referrer');
+  c.header('Cache-Control', 'no-store');
+  return serveCanvasStatic(staticDir, `/api/document/${c.req.param('id')}`)(c, next);
+});
+const documentListener = getRequestListener(documents.fetch);
 app.use('*', serveCanvasStatic(staticDir));
 const requestListener = getRequestListener(app.fetch);
 const wss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
@@ -246,6 +256,7 @@ const servers = hosts.map(host => {
     if (request.headers['x-forwarded-prefix'] && !request.url?.startsWith('/api/')) {
       response.writeHead(404).end('Not found'); return;
     }
+    if (request.url?.startsWith('/api/document/')) { void documentListener(request, response); return; }
     if (!captures.handle(request, response) && !urlForwards.handle(request, response)) void requestListener(request, response);
   });
   server.on("upgrade", upgrade);

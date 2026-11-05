@@ -17,26 +17,26 @@ const position = (value: unknown): ReadingPosition => {
   const coordinate = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1e8 ? value : 0
   return { x: coordinate(point?.x), y: coordinate(point?.y) }
 }
-export function fileView(value: unknown, markdown: boolean): FileView {
+export function fileView(value: unknown, renderable: boolean): FileView {
   const saved = value as Partial<FileView> | undefined
-  return { mode: markdown && saved?.mode !== 'source' ? 'rendered' : 'source', wrap: saved?.wrap === true,
+  return { mode: renderable && saved?.mode !== 'source' ? 'rendered' : 'source', wrap: saved?.wrap === true,
     formatted: saved?.formatted === true, highlighted: saved?.highlighted !== false,
     source: position(saved?.source), rendered: position(saved?.rendered) }
 }
 
 /** Each mounted view reads once; another browser tab must not move its reader. */
-export function useFileView(instance: string, canvas: string, node: string, markdown: boolean, canPersist = () => true, storage?: Storage) {
-  const view = useStorage(fileViewKey(instance, canvas, node), fileView(undefined, markdown), storage, {
+export function useFileView(instance: string, canvas: string, node: string, renderable: boolean, canPersist = () => true, storage?: Storage) {
+  const view = useStorage(fileViewKey(instance, canvas, node), fileView(undefined, renderable), storage, {
     listenToStorageChanges: false, writeDefaults: false, flush: 'sync', shallow: true,
     serializer: {
-      read(raw) { try { return fileView(JSON.parse(raw), markdown) } catch { return fileView(undefined, markdown) } },
-      write(value) { return JSON.stringify(fileView(value, markdown)) },
+      read(raw) { try { return fileView(JSON.parse(raw), renderable) } catch { return fileView(undefined, renderable) } },
+      write(value) { return JSON.stringify(fileView(value, renderable)) },
     },
     onError() { /* A blocked or full browser store must not prevent reading. */ },
   })
   const update = (next: FileView) => { if (canPersist()) view.value = next }
   return {
-    rendered: computed({ get: () => view.value.mode === 'rendered', set: (value: boolean) => update({ ...view.value, mode: markdown && value ? 'rendered' : 'source' }) }),
+    rendered: computed({ get: () => view.value.mode === 'rendered', set: (value: boolean) => update({ ...view.value, mode: renderable && value ? 'rendered' : 'source' }) }),
     wrap: computed({ get: () => view.value.wrap, set: (value: boolean) => update({ ...view.value, wrap: value }) }),
     formatted: computed({ get: () => view.value.formatted, set: (value: boolean) => update({ ...view.value, formatted: value }) }),
     highlighted: computed({ get: () => view.value.highlighted, set: (value: boolean) => update({ ...view.value, highlighted: value }) }),

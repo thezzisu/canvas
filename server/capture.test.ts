@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
 import { once } from 'node:events'
 import { randomUUID } from 'node:crypto'
-import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
+import { createServer, request, type IncomingHttpHeaders, type Server } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -230,6 +230,31 @@ test('capture cleanup runs once when its owner also closes the lease from onEnde
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(ended, 1)
   assert.equal(f.endpointsClosed(), 1)
+})
+
+test('only explicit static Markdown document navigations select the frontend, while raw files and HTML remain untouched', async t => {
+  const f = await fixture(t)
+  const navigate = (url: string) => new Promise<{ status: number; headers: IncomingHttpHeaders }>((resolve, reject) => {
+    const req = request(url, { headers: { 'sec-fetch-mode': 'navigate' } }, response => {
+      response.resume(); resolve({ status: response.statusCode!, headers: response.headers })
+    }); req.once('error', reject); req.end()
+  })
+  const options = { publicBase: f.base + '/operator/canvas/', session: 'first', port: f.target.port }
+  const preview = f.service.prepareCapture(f.source, { ...options, preview: 'static' })
+  await preview.ready()
+  const target = preview.publicUrl + 'docs/readme.md'
+  const navigation = await navigate(target)
+  assert.equal(navigation.status, 302)
+  const viewer = new URL(navigation.headers.location!)
+  assert.equal(viewer.pathname, `/operator/canvas/api/document/${preview.id}/`)
+  assert.equal(viewer.searchParams.get('path'), '/docs/readme.md')
+  assert.equal(f.service.hasStaticPreview(preview.id), true)
+  for (const path of ['page.html', 'docs/readme.md?canvas=raw', 'docs/readme.md?canvas=download'])
+    assert.equal((await navigate(preview.publicUrl + path)).status, 200)
+  assert.equal((await fetch(target)).status, 200, 'fetch receives original bytes')
+  const ordinary = f.service.prepareCapture(f.source, options); await ordinary.ready()
+  assert.equal((await navigate(ordinary.publicUrl + 'readme.md')).status, 200)
+  f.store.removeSession('first'); assert.equal(f.service.hasStaticPreview(preview.id), false)
 })
 
 test('capture failures preserve their specific public category', async t => {

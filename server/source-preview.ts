@@ -6,7 +6,7 @@ import { sourceConnectionKey, type FileOrigin, type Source, type Store } from '.
 
 export class SourcePreviewError extends Error {
   constructor(readonly code: 'source-preview-unavailable' | 'source-preview-start-failed') {
-    super(code === 'source-preview-unavailable' ? 'Original HTML source is unavailable; open the file again from its source' : 'Could not start the original HTML preview')
+    super(code === 'source-preview-unavailable' ? 'Original source is unavailable; open the file again from its source' : 'Could not start the original preview')
   }
 }
 interface Preview {
@@ -43,7 +43,7 @@ export class SourcePreviewService {
     }
   }
   async open(origin: FileOrigin | undefined, session: string, publicBase: string): Promise<{ id: string; url: string }> {
-    if (!origin || !/\.html?$/iu.test(origin.path)) throw new SourcePreviewError('source-preview-unavailable')
+    if (!origin || !/\.(?:html?|md|markdown|mdown|mkdn?|mdx)$/iu.test(origin.path)) throw new SourcePreviewError('source-preview-unavailable')
     const source = this.source(origin, session), base = normalizeCapturePublicBase(publicBase)
     const key = JSON.stringify([session, origin.sourceKey, origin.path, base])
     const existing = this.previews.get(key)
@@ -95,6 +95,7 @@ export class SourcePreviewService {
         if (stopped) throw new SourcePreviewError('source-preview-unavailable')
         this.source(origin, session)
         preview.lease = this.captures.prepareCapture(source, { publicBase: base, port, session,
+          preview: 'static',
           idleTtlMs: this.idleTtlMs, onStop: preview.stop, onEnded: preview.stop })
         const ready = await preview.lease.ready(`http://127.0.0.1:${port}${path}`)
         return { id: ready.id, url: ready.url }

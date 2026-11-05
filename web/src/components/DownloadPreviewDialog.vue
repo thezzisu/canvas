@@ -43,7 +43,7 @@ const menuDismiss = usePointerDismiss(menuOpen, menuTrigger)
 const header = ref<HTMLElement>()
 const cutoutActive = inject(cutoutActiveKey, ref(false))
 const mobile = useMobileLayout()
-const markdown = computed(() => downloadPreview.value?.preview === 'text' && isMarkdownFile(downloadPreview.value.filename))
+const markup = computed(() => downloadPreview.value?.preview === 'text' && (isMarkdownFile(downloadPreview.value.filename) || /\.html?$/iu.test(downloadPreview.value.filename)))
 const imageSize = ref<{ width: number; height: number }>()
 const preparing = computed(() => ['image', 'video'].includes(downloadPreview.value?.preview || '') &&
   !imageSize.value && !error.value && !ticketError.value)
@@ -52,13 +52,13 @@ const mobileHeader = computed(() => mobile.value || viewport.value.width <= 600)
 const compact = useCompactHeader(header, () => cutoutActive.value && mobileHeader.value && expanded.value)
 function download() { const preview = downloadPreview.value; if (preview) void downloadMedia(preview.url, preview.filename).catch(reportDownloadError) }
 const menu = computed<DropdownMenuItem[]>(() => [
-  ...(markdown.value ? [{ label: t('panels.preview.source'), icon: 'i-lucide-code', type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
-  ...(downloadPreview.value?.preview === 'text' && (!markdown.value || !rendered.value) ? [
+  ...(markup.value ? [{ label: t('panels.preview.source'), icon: 'i-lucide-code', type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
+  ...(downloadPreview.value?.preview === 'text' && (!markup.value || !rendered.value) ? [
     ...(capabilities.value.format ? [{ label: t('panels.preview.format'), icon: 'i-lucide-list-tree', type: 'checkbox' as const, checked: formatted.value, onUpdateChecked: (checked: boolean) => { formatted.value = checked } }] : []),
     ...(capabilities.value.highlight ? [{ label: t('panels.preview.highlight'), icon: 'i-lucide-palette', type: 'checkbox' as const, checked: highlighted.value, onUpdateChecked: (checked: boolean) => { highlighted.value = checked } }] : []),
     { label: t('panels.preview.wrap'), icon: 'i-lucide-wrap-text', type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } },
   ] : []),
-  ...(capabilities.value.html ? [{ label: t('panels.preview.site'), icon: 'i-lucide-square-arrow-out-up-right', description: !downloadPreview.value?.sourcePreview ? t('panels.preview.noSource') : undefined, disabled: !downloadPreview.value?.sourcePreview || previewBusy.value, onSelect: previewSite }] : []),
+  ...((capabilities.value.html || markup.value) ? [{ label: t('panels.preview.site'), icon: 'i-lucide-square-arrow-out-up-right', description: !downloadPreview.value?.sourcePreview ? t('panels.preview.noSource') : undefined, disabled: !downloadPreview.value?.sourcePreview || previewBusy.value, onSelect: previewSite }] : []),
   { label: t('panels.file.download'), icon: 'i-lucide-download', onSelect: download },
   { label: t(expanded.value ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen'), icon: expanded.value ? 'i-lucide-minimize' : 'i-lucide-maximize', onSelect: () => { expanded.value = !expanded.value } },
   ...(expanded.value ? [{ label: t('panels.preview.close'), icon: 'i-lucide-x', onSelect: dismissDownloadPreview }] : []),
@@ -145,12 +145,12 @@ onBeforeUnmount(() => request?.abort())
         <DialogTitle class="download-preview-title" :class="{ 'cutout-title': mobileHeader && expanded, 'sr-only': preparing }">{{ downloadPreview.filename }}<span v-if="downloadPreviewCount > 1" class="download-preview-count" :aria-label="t('panels.preview.remaining', downloadPreviewCount - 1)"> +{{ n(downloadPreviewCount - 1) }}</span></DialogTitle>
         <div class="download-preview-actions" :class="{ 'cutout-actions': mobileHeader && expanded }">
           <TextPreviewActions v-if="downloadPreview.preview === 'text' && !loading && !error && !mobileHeader" :filename="downloadPreview.filename" v-model:rendered="rendered" v-model:wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :source-preview="downloadPreview.sourcePreview" :preview-busy="previewBusy" @preview="previewSite" />
-          <UButton v-if="!preparing && (!mobileHeader || !markdown && !compact)" type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-download" :aria-label="t('panels.file.download')" :title="t('panels.file.download')" @click="download"><Icon name="download" :size="16" /></UButton>
+          <UButton v-if="!preparing && (!mobileHeader || !markup && !compact)" type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-download" :aria-label="t('panels.file.download')" :title="t('panels.file.download')" @click="download"><Icon name="download" :size="16" /></UButton>
           <UDropdownMenu v-if="mobileHeader && !preparing" v-model:open="menuOpen" :modal="false" :items="menu" :portal="portal || false" :content="{ align: 'end', ...menuDismiss }" :ui="{ content: 'card-action-menu download-preview-menu z-[90] min-w-[160px]' }">
             <UButton ref="menuTrigger" type="button" color="neutral" variant="ghost" class="download-preview-button" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></UButton>
           </UDropdownMenu>
           <UButton v-else-if="!preparing" type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-expand" :aria-label="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :title="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :aria-pressed="expanded" @click="expanded = !expanded"><Icon :name="expanded ? 'collapse' : 'expand'" :size="16" /></UButton>
-          <UButton type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-close" :aria-label="t(mobileHeader && expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.close')" :title="t(mobileHeader && expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.close')" @click="mobileHeader && expanded ? expanded = false : dismissDownloadPreview()"><Icon :name="mobileHeader && expanded ? 'collapse' : 'close'" :size="17" /></UButton>
+          <UButton type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-close" :aria-label="t(mobile && expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.close')" :title="t(mobile && expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.close')" @click="mobile && expanded ? expanded = false : dismissDownloadPreview()"><Icon :name="mobile && expanded ? 'collapse' : 'close'" :size="17" /></UButton>
         </div>
       </header>
     </template>

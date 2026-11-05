@@ -2,11 +2,16 @@ import { ref } from 'vue'
 import { useToast } from '@nuxt/ui/composables/useToast'
 import { api, apiContext, apiUrl, isCurrentApi } from './api'
 import { t } from './i18n'
+import { requestTrustedPreview } from './trusted-preview'
 
 /** Open synchronously so an authenticated request cannot consume the browser's user gesture. */
 export function useSourcePreview() {
   const busy = ref(false), toast = useToast()
-  async function open(path: string, filename: string) {
+  function open(path: string, filename: string) {
+    if (/\.html?$/iu.test(filename)) requestTrustedPreview(filename, () => { void launch(path, filename) })
+    else void launch(path, filename)
+  }
+  async function launch(path: string, filename: string) {
     if (busy.value) return
     const tab = window.open('about:blank', '_blank')
     if (!tab) { toast.add({ title: t('panels.preview.popupBlocked'), color: 'warning' }); return }

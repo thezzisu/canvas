@@ -358,3 +358,37 @@ test('preview defaults to the current directory and rejects invalid inputs befor
   assert.equal(await (await fetch(`http://127.0.0.1:${f.messages[0]!.port}/`)).text(), 'current directory')
   f.peer()!.write(JSON.stringify({ action: 'stop' }) + '\n'); assert.equal(await run.exit, 0)
 })
+
+test('Markdown preview serves raw bytes and explicit resource roots remain bounded after symlink resolution', { timeout: 15000 }, async t => {
+  const f = await fixture(t), docs = join(f.root, 'docs')
+  await mkdir(docs); await mkdir(join(f.root, 'images'))
+  await writeFile(join(docs, 'readme.md'), '# Markdown\n\n![Image](../images/one.txt)')
+  await writeFile(join(f.root, 'images/one.txt'), 'adjacent resource')
+  const run = f.run(['--preview', '--preview-root', f.root, join(docs, 'readme.md')], {}, 'open')
+  await until(() => run.stderr().includes('Web view ready'), 'Markdown preview did not become ready')
+  assert.equal(f.messages[0]!.preview, 'static')
+  assert.equal(f.messages[1]!.bootstrapUrl, f.publicUrl + 'docs/readme.md')
+  const base = `http://127.0.0.1:${f.messages[0]!.port}`
+  assert.equal(await (await fetch(base + '/docs/readme.md')).text(), '# Markdown\n\n![Image](../images/one.txt)')
+  assert.equal(await (await fetch(base + '/images/one.txt')).text(), 'adjacent resource')
+  f.peer()!.write(JSON.stringify({ action: 'stop' }) + '\n'); assert.equal(await run.exit, 0)
+  await symlink(join(f.root, 'images'), join(docs, 'outside'))
+  for (const target of [join(f.root, 'images/one.txt'), join(docs, 'outside/one.txt')]) {
+    const invalid = f.run(['--preview', '--preview-root', docs, target], {}, 'open')
+    assert.equal(await invalid.exit, 1); assert.match(invalid.stderr(), /inside the selected preview root/)
+  }
+})
+
+test('static directory indexes use index.html only; README and index.htm remain explicit file links', { timeout: 15000 }, async t => {
+  const f = await fixture(t)
+  await writeFile(join(f.root, 'README.md'), '# Read me')
+  await writeFile(join(f.root, 'index.htm'), '<h1>Not an implicit index</h1>')
+  const run = f.run([], {}, 'preview')
+  await until(() => run.stderr().includes('Web view ready'), 'directory preview did not become ready')
+  const url = `http://127.0.0.1:${f.messages[0]!.port}/`
+  assert.match(await (await fetch(url)).text(), /Directory listing/)
+  await writeFile(join(f.root, 'index.html'), '<h1>Explicit default</h1>')
+  const redirect = await fetch(url, { redirect: 'manual' })
+  assert.equal(redirect.status, 302); assert.equal(redirect.headers.get('location'), '/index.html')
+  f.peer()!.write(JSON.stringify({ action: 'stop' }) + '\n'); assert.equal(await run.exit, 0)
+})

@@ -42,8 +42,8 @@ const zoom = useContentZoom(() => props.data.zoomKey)
 const header = ref<HTMLElement>()
 const headerCompact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined), undefined, () => preview.value === 'text' ? 10 : 5)
 const compact = computed(() => !!props.data.mobile && props.data.focus && headerCompact.value)
-const markdown = computed(() => preview.value === 'text' && isMarkdownFile(props.data.asset.filename))
-const { rendered, wrap, formatted, highlighted, reading, remember } = useFileView(props.data.instanceId, props.data.canvasId, props.id, markdown.value, props.data.canPersistView)
+const markup = computed(() => preview.value === 'text' && (isMarkdownFile(props.data.asset.filename) || /\.html?$/iu.test(props.data.asset.filename)))
+const { rendered, wrap, formatted, highlighted, reading, remember } = useFileView(props.data.instanceId, props.data.canvasId, props.id, markup.value, props.data.canPersistView)
 const capabilities = computed(() => textCapabilities(props.data.asset.filename))
 const sitePreview = useSourcePreview()
 const previewBusy = sitePreview.busy
@@ -54,13 +54,13 @@ const menu = computed<DropdownMenuItem[]>(() => [
     { label: t('fileTransfer.copy'), icon: 'i-lucide-copy', onSelect: copyFile },
     { label: t('app.addToOtherCanvas'), icon: 'i-lucide-layers', onSelect: () => props.data.onAction?.('add', props.id) },
   ] : []),
-  ...(markdown.value ? [{ label: t('panels.preview.source'), icon: 'i-lucide-code', type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
-  ...(preview.value === 'text' && (!markdown.value || !rendered.value) ? [
+  ...(markup.value ? [{ label: t('panels.preview.source'), icon: 'i-lucide-code', type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
+  ...(preview.value === 'text' && (!markup.value || !rendered.value) ? [
     ...(capabilities.value.format ? [{ label: t('panels.preview.format'), icon: 'i-lucide-list-tree', type: 'checkbox' as const, checked: formatted.value, onUpdateChecked: (checked: boolean) => { formatted.value = checked } }] : []),
     ...(capabilities.value.highlight ? [{ label: t('panels.preview.highlight'), icon: 'i-lucide-palette', type: 'checkbox' as const, checked: highlighted.value, onUpdateChecked: (checked: boolean) => { highlighted.value = checked } }] : []),
     { label: t('panels.preview.wrap'), icon: 'i-lucide-wrap-text', type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } },
   ] : []),
-  ...(preview.value === 'text' && capabilities.value.html ? [{ label: t('panels.preview.site'), icon: 'i-lucide-square-arrow-out-up-right', description: !props.data.asset.sourcePreview ? t('panels.preview.noSource') : undefined, disabled: !props.data.asset.sourcePreview || previewBusy.value, onSelect: previewSite }] : []),
+  ...(preview.value === 'text' && (capabilities.value.html || markup.value) ? [{ label: t('panels.preview.site'), icon: 'i-lucide-square-arrow-out-up-right', description: !props.data.asset.sourcePreview ? t('panels.preview.noSource') : undefined, disabled: !props.data.asset.sourcePreview || previewBusy.value, onSelect: previewSite }] : []),
   { label: t('panels.file.download'), icon: 'i-lucide-download', onSelect: download },
   { label: t('common.settings'), icon: 'i-lucide-settings', onSelect: () => props.data.onAction?.('settings', props.id) },
 ])

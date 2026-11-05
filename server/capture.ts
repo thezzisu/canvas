@@ -24,6 +24,7 @@ export interface CapturePresentation {
   windowId?: string
   paneId?: string
   title: string
+  preview?: 'static'
 }
 export interface CapturePreparation {
   /** Exact browser API base bound to the authenticated terminal connection. */
@@ -33,6 +34,7 @@ export interface CapturePreparation {
   session: string
   port: number
   title?: string
+  preview?: 'static'
   /** Browser-opened previews expire without traffic; CLI captures keep their owner lifetime. */
   idleTtlMs?: number
   onStop?(): void
@@ -117,7 +119,7 @@ export class CaptureService {
       if (!this.valid(capture)) throw new CaptureError('capture-expired', 'Capture expired')
       capture.ready = true
       capture.lastActivity = Date.now()
-      return { type: 'capture', id, url, windowId: capture.windowId, paneId: capture.paneId, title }
+      return { type: 'capture', id, url, windowId: capture.windowId, paneId: capture.paneId, title, ...(capture.preview ? { preview: capture.preview } : {}) }
     }, close: () => { void this.remove(capture) } }
   }
   private bootstrap(capture: Capture, value?: string): string {
@@ -151,6 +153,10 @@ export class CaptureService {
     return capture.closing
   }
   closeSource(sourceId: string): void { for (const capture of this.captures.values()) if (capture.source.id === sourceId) void this.remove(capture) }
+  hasStaticPreview(id: string): boolean {
+    const capture = this.captures.get(id)
+    return !!capture && capture.preview === 'static' && capture.ready && this.valid(capture)
+  }
   stop(id: string, session: string): boolean {
     const capture = this.captures.get(id)
     if (!capture || capture.session !== session || !this.valid(capture)) return false
@@ -259,6 +265,17 @@ export class CaptureService {
       response.writeHead(404).end(unavailable); return true
     }
     const { capture, path } = target
+    const url = new URL(request.url, capture.publicUrl)
+    const requestedMode = url.searchParams.get('canvas')
+    const mode = capture.preview === 'static' && ['raw', 'download'].includes(requestedMode || '') ? requestedMode : null
+    const pathname = url.pathname.slice(PREFIX.length + capture.id.length)
+    const document = /\.(?:md|markdown|mdown|mkdn?|mdx)$/iu.test(pathname)
+    if (capture.preview === 'static' && document && !mode && request.headers['sec-fetch-mode'] === 'navigate') {
+      const viewer = new URL(capture.publicUrl.href.replace(/\/api\/capture\/([^/]+)\/$/u, '/api/document/$1/'))
+      viewer.searchParams.set('path', pathname)
+      response.writeHead(302, { Location: viewer.href, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }).end()
+      return true
+    }
     const cancel = () => response.destroy(); capture.connections.add(cancel)
     response.once('close', () => capture.connections.delete(cancel))
     void capture.endpoint!.then(transport => {
@@ -267,7 +284,13 @@ export class CaptureService {
         headers: this.requestHeaders(request, capture, path), timeout: 30_000 }, incoming => {
         // The startup timeout must not terminate a healthy idle SSE stream.
         upstream.setTimeout(0)
-        response.writeHead(incoming.statusCode || 502, this.responseHeaders(incoming.headers, capture, path))
+        const headers = this.responseHeaders(incoming.headers, capture, path)
+        if (capture.preview === 'static' && (mode === 'raw' || mode === 'download')) {
+          if (mode === 'raw') headers['content-type'] = 'text/plain; charset=utf-8'
+          else headers['content-disposition'] = 'attachment'
+          headers['content-security-policy'] = "default-src 'none'; sandbox"
+        }
+        response.writeHead(incoming.statusCode || 502, headers)
         incoming.once('error', cancel); incoming.pipe(response)
       })
       response.once('close', () => upstream.destroy())

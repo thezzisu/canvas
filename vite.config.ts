@@ -11,6 +11,7 @@ import { contentFontsPlugin } from './fonts.config.ts'
 const buildInfo = readBuildInfo()
 
 export default defineConfig({
+  base: './',
   root: 'web',
   worker: { format: 'es', rolldownOptions: { output: {
     entryFileNames: 'assets/code-preview/[name]-[hash].js', chunkFileNames: 'assets/code-preview/[name]-[hash].js',

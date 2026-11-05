@@ -19,6 +19,7 @@ Daemon callers must supply the originating pane's values per invocation.
 Preview examples:
   canvas preview ./site
   canvas open --preview ./site/page.html
+  canvas open --preview --preview-root ./project ./project/docs/readme.md
 
 Capture examples:
   canvas capture npm start

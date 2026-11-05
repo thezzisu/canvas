@@ -8,12 +8,13 @@ import { getMimeType } from 'hono/utils/mime'
 const hashedAsset = /^\/assets\/[^/]+-[\w-]{8,}\.(?:js|css|woff2)$/
 
 /** Public build output only. API routes keep their own authentication and cache policy. */
-export function serveCanvasStatic(directory: string): MiddlewareHandler {
+export function serveCanvasStatic(directory: string, mount = ''): MiddlewareHandler {
   const root = resolve(directory)
   return async (c, next) => {
-    if (!['GET', 'HEAD'].includes(c.req.method) || /^\/api(?:\/|$)/.test(c.req.path)) return next()
+    const path = mount ? c.req.path.slice(mount.length) : c.req.path
+    if (!['GET', 'HEAD'].includes(c.req.method) || !c.req.path.startsWith(mount) || /^\/api(?:\/|$)/.test(path)) return next()
     let pathname: string
-    try { pathname = decodeURIComponent(c.req.path) } catch { return c.notFound() }
+    try { pathname = decodeURIComponent(path) } catch { return c.notFound() }
     if (pathname.includes('\\') || pathname.includes('\0') || pathname.split('/').some(part => part === '.' || part === '..')) return c.notFound()
     const file = join(root, pathname === '/' ? 'index.html' : pathname)
     const info = await stat(file).catch(() => undefined)

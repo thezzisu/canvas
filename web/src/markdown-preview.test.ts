@@ -47,3 +47,12 @@ test('script, credentialed and file-relative URLs cannot become active preview l
   assert.doesNotMatch(html, /src="\.\//u)
   assert.match(html, /relative/u)
 })
+
+test('source documents resolve adjacent resources within their root and preserve exact encoded names', async () => {
+  const root = `https://canvas.test/prefix/api/capture/${'x'.repeat(43)}/`
+  const tree = await parseFileMarkdown('![figure](../images/a%20%23%20%E4%B8%AD.png)\n\n[Next](next.md)\n\n[HTML](page.html)\n\n![outside](../../outside.png)\n\n[API](../../state)', { root, document: root + 'docs/readme.md' })
+  const html = await renderToString(createSSRApp({ render: () => h(MarkdownDocument, { value: tree }) }))
+  assert.match(html, new RegExp('src="' + root + 'images/a%20%23%20%E4%B8%AD.png"'))
+  assert(html.includes(`href="${root}docs/next.md"`)); assert(html.includes(`href="${root}docs/page.html"`))
+  assert(!html.includes('outside.png')); assert(!html.includes('href="https://canvas.test/prefix/api/state'))
+})
