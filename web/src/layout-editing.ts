@@ -11,10 +11,13 @@ export const layoutEditingKey: InjectionKey<LayoutEditing> = Symbol('layout-edit
 export function useLayoutCard(root: Ref<HTMLElement | undefined>) {
   const layout = inject(layoutEditingKey, undefined)
   const editing = computed(() => !!layout?.active.value)
-  const frozen = new Map<HTMLElement, { style: string | null; inert: boolean }>()
+  const properties = ['position', 'width', 'height', 'left', 'top', 'right', 'bottom', 'flex', 'visibility'] as const
+  const frozen = new Map<HTMLElement, { styles: Array<{ name: string; value: string; priority: string }>; inert: boolean }>()
   function restore() {
     for (const [element, value] of frozen) {
-      if (value.style === null) element.removeAttribute('style'); else element.setAttribute('style', value.style)
+      for (const { name, value: original, priority } of value.styles) {
+        if (original) element.style.setProperty(name, original, priority); else element.style.removeProperty(name)
+      }
       element.inert = value.inert
     }
     frozen.clear()
@@ -27,7 +30,7 @@ export function useLayoutCard(root: Ref<HTMLElement | undefined>) {
     const contents = [...element.querySelectorAll<HTMLElement>(':scope > .card-content, :scope > .capture-toolbar')].filter(node => !frozen.has(node))
     const measurements = contents.map(node => ({ node, width: node.offsetWidth, height: node.offsetHeight, left: node.offsetLeft, top: node.offsetTop }))
     for (const { node, width, height, left, top } of measurements) {
-      frozen.set(node, { style: node.getAttribute('style'), inert: node.inert })
+      frozen.set(node, { styles: properties.map(name => ({ name, value: node.style.getPropertyValue(name), priority: node.style.getPropertyPriority(name) })), inert: node.inert })
       Object.assign(node.style, { position: 'absolute', width: `${width}px`, height: `${height}px`, left: `${left}px`, top: `${top}px`, right: 'auto', bottom: 'auto', flex: 'none', visibility: 'hidden' })
       node.inert = true
     }
