@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, useId, watch } from 'vue'
+import { computed, ref, useId, watch } from 'vue'
 import { useTimeoutFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import UPopover from '@nuxt/ui/components/Popover.vue'
@@ -29,13 +29,14 @@ function enter(event?: PointerEvent) {
   stopLeave(); open.value = true
 }
 function close() { stopLeave(); open.value = false }
-async function toggle(event: MouseEvent) {
+function focusFirst() {
+  const target = panel.value?.querySelector<HTMLButtonElement>('button:not(:disabled)') || panel.value
+  target?.focus({ preventScroll: true })
+}
+function toggle(event: MouseEvent) {
   stopLeave(); pinned.value = !pinned.value; open.value = pinned.value
-  if (open.value && event.detail === 0) {
-    await nextTick()
-    if (!open.value) return
-    ;(panel.value?.querySelector<HTMLButtonElement>('button:not(:disabled)') || panel.value)?.focus({ preventScroll: true })
-  }
+  // A hover-open panel is already mounted. Newly opened panels use native autofocus.
+  if (open.value && event.detail === 0) focusFirst()
 }
 function go(agent: CanvasAgent) {
   if (!agent.available || props.actionsAvailable === false) return
@@ -44,9 +45,9 @@ function go(agent: CanvasAgent) {
 watch(open, value => { if (!value) pinned.value = false })
 watch(() => props.indicator?.status, value => { if (!value) close() })
 const content = computed(() => ({ 'aria-label': t('canvasUi.agentsInCanvas', { name: props.name }),
-  side: 'right' as const, align: 'start' as const, sideOffset: 8, collisionPadding: 8,
+  side: 'right' as const, align: 'start' as const, sideOffset: 8, collisionPadding: 8, prioritizePosition: true,
   onPointerenter: enter, onPointerleave: () => leave(),
-  onOpenAutoFocus: (event: Event) => event.preventDefault(),
+  onOpenAutoFocus: (event: Event) => { event.preventDefault(); if (pinned.value) focusFirst() },
   ...dismiss,
   onInteractOutside: (event: Event) => { dismiss.onInteractOutside(); if (event.target instanceof Node && trigger.value?.contains(event.target)) event.preventDefault() },
   onEscapeKeyDown: (event: Event) => { event.preventDefault(); close(); trigger.value?.focus({ preventScroll: true }) },

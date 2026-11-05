@@ -279,19 +279,19 @@ onBeforeUnmount(() => { textRequest?.abort(); cancelPress(); window.removeEventL
     <input ref="fileInput" class="mobile-file-input" type="file" multiple tabindex="-1" :aria-label="t('terminal.upload.file')" @change="filesChanged" />
     <UModal :open="!!sheet" :portal="portal" :transition="false" :title="sheet === 'select' ? t('terminal.keyboard.selectText') : t('terminal.keyboard.pasteText')"
       :close="{ 'aria-label': t('common.close') }" :content="{ onCloseAutoFocus: event => { event.preventDefault(); moreTrigger?.focus({ preventScroll: true }) } }"
-      :ui="{ content: 'mobile-text-sheet', overlay: 'mobile-text-backdrop', header: 'shrink-0 px-4 py-3', title: 'text-sm font-medium', body: 'flex flex-1 min-h-0 p-0 sm:p-0', footer: 'shrink-0 justify-end gap-2 p-2', close: 'min-w-11 min-h-11' }"
+      :ui="{ content: 'mobile-text-sheet', overlay: 'mobile-text-backdrop', header: 'shrink-0 px-4 py-3', title: 'text-sm font-medium', body: 'flex flex-1 min-h-0 p-0 sm:p-0', footer: 'shrink-0 justify-end gap-2 p-2', close: 'min-w-[44px] min-h-[44px]' }"
       @update:open="value => { if (!value) closeSheet() }">
       <template #body>
         <div v-if="sheet === 'select' && (loadingText || textFailed)" class="mobile-text-status" :role="textFailed ? 'alert' : 'status'">
           <template v-if="loadingText"><span class="spinner" />{{ t('common.loading') }}</template>
-          <template v-else><span>{{ t('panels.scan.incomplete') }}</span><UButton type="button" color="neutral" variant="ghost" class="min-h-11" @click="loadText">{{ t('common.retry') }}</UButton></template>
+          <template v-else><span>{{ t('panels.scan.incomplete') }}</span><UButton type="button" color="neutral" variant="ghost" class="min-h-[44px]" @click="loadText">{{ t('common.retry') }}</UButton></template>
         </div>
         <textarea v-else-if="sheet === 'select'" ref="textArea" :value="snapshot" readonly inputmode="none" :aria-label="t('terminal.keyboard.terminalText')" spellcheck="false" @select="updateSelection" @pointerup="updateSelection" @keyup="updateSelection" />
         <textarea v-else ref="textArea" v-model="draft" :aria-label="t('terminal.keyboard.textToPaste')" :placeholder="t('terminal.keyboard.longPressPaste')" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" @paste="pasteFiles" />
       </template>
       <template #footer>
-        <template v-if="sheet === 'select'"><UButton type="button" color="neutral" variant="outline" class="min-h-11" :disabled="!selected" @pointerdown.prevent @click="copy(false)">{{ t('terminal.keyboard.copySelection') }}</UButton><UButton type="button" color="neutral" variant="outline" class="min-h-11" :disabled="!snapshot" @pointerdown.prevent @click="copy(true)">{{ t('terminal.keyboard.copyAll') }}</UButton></template>
-        <UButton v-else type="button" color="neutral" variant="outline" class="min-h-11" :disabled="!draft || disabled" @pointerdown.prevent @click="pasteText">{{ t('terminal.keyboard.pasteIntoTerminal') }}</UButton>
+        <template v-if="sheet === 'select'"><UButton type="button" color="neutral" variant="outline" class="min-h-[44px]" :disabled="!selected" @pointerdown.prevent @click="copy(false)">{{ t('terminal.keyboard.copySelection') }}</UButton><UButton type="button" color="neutral" variant="outline" class="min-h-[44px]" :disabled="!snapshot" @pointerdown.prevent @click="copy(true)">{{ t('terminal.keyboard.copyAll') }}</UButton></template>
+        <UButton v-else type="button" color="neutral" variant="outline" class="min-h-[44px]" :disabled="!draft || disabled" @pointerdown.prevent @click="pasteText">{{ t('terminal.keyboard.pasteIntoTerminal') }}</UButton>
       </template>
     </UModal>
   </section>

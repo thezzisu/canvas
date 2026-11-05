@@ -228,8 +228,8 @@ const canvasMenuItems = computed<DropdownMenuItem[][]>(() => [
     { label: t('app.background'), icon: 'i-lucide-image', onSelect: openBackground },
   ],
   [
-    { type: 'checkbox', label: t('app.minimap'), icon: 'i-lucide-map', checked: showMinimap.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { showMinimap.value = value } },
-    { type: 'checkbox', label: t('app.navigation'), icon: 'i-lucide-panel-bottom', checked: showNavigation.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { showNavigation.value = value } },
+    { ui: { item: 'aria-checked:before:bg-[var(--toggle-bg)] aria-checked:text-[var(--toggle-fg)]' }, type: 'checkbox', label: t('app.minimap'), icon: 'i-lucide-map', checked: showMinimap.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { showMinimap.value = value } },
+    { ui: { item: 'aria-checked:before:bg-[var(--toggle-bg)] aria-checked:text-[var(--toggle-fg)]' }, type: 'checkbox', label: t('app.navigation'), icon: 'i-lucide-panel-bottom', checked: showNavigation.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { showNavigation.value = value } },
   ],
   ...(!isOverview.value ? [[
     { label: t('app.renameCanvas'), icon: 'i-lucide-pencil', onSelect: () => openCanvasDialog(currentCanvas.value) },
@@ -2216,7 +2216,7 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
         </UDropdownMenu>
         <span v-if="!isOverview && saveState" class="save-state" :title="t(`app.${saveState}`)" :aria-label="t(`app.${saveState}`)"><span v-if="saveState === 'saving'" class="spinner" /><Icon v-else :name="saveState === 'saved' ? 'check' : 'info'" :size="13" /></span>
         <UDropdownMenu v-model:open="canvasMenu" :modal="false" :items="canvasMenuItems" :portal="appElement || false"
-          :content="{ align: 'end', ...canvasMenuDismiss }" :ui="{ content: 'canvas-menu z-[60] min-w-[200px] w-max max-w-[calc(var(--ui-viewport-width)-16px)]', group: 'space-y-0.5', item: 'aria-checked:bg-[var(--toggle-bg)] aria-checked:text-[var(--toggle-fg)]', itemLabel: 'whitespace-nowrap' }">
+          :content="{ align: 'end', ...canvasMenuDismiss }" :ui="{ content: 'canvas-menu z-[60] min-w-[200px] w-max max-w-[calc(var(--ui-viewport-width)-16px)]', group: 'space-y-0.5', itemLabel: 'whitespace-nowrap' }">
           <button ref="canvasMenuTrigger" class="icon-button canvas-menu-trigger" :title="t('app.canvasSettings')" :aria-label="t('app.canvasSettings')"><Icon name="more" :size="17" /></button>
         </UDropdownMenu>
         <button class="button subtle" :title="t('app.connections')" :aria-label="t('app.connections')" @click="sourcePanel = true"><Icon name="server" :size="15" />{{ t('app.connections') }}</button>
