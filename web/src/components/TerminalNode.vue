@@ -300,7 +300,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <div v-if="!closed && keepTerminal && !maximizedElsewhere && (status.status === 'connecting' || status.status === 'connected' && !status.screenReady)" class="terminal-loading nodrag" :class="{ 'terminal-loading-initial': !status.screenReady }" role="status"><span class="spinner" />{{ status.retryAttempt ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt }) : t('common.loading') }}</div>
     <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :read-text="readText" :copy-text="copyText" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @files="mobileFiles" @paste="mobilePaste" @paste-file="pasteFile" @reading="reading" />
   </article>
-  <CardLayoutControls :id="id" :label="label" :kind="app ? 'app' : 'terminal'" :width="data.width" :height="data.height" :waiting="!!status.layoutRestoring && !showApp && !closed && status.status === 'connected'" />
+  <CardLayoutControls :id="id" :label="label" :kind="app ? 'app' : 'terminal'" :width="data.width" :height="data.height" :waiting="!!status.layoutRestoring && !showApp && !closed && !maximizedElsewhere && status.status === 'connected'" />
 </template>
 
 <style scoped>

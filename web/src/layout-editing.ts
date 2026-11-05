@@ -1,4 +1,4 @@
-import { computed, inject, onBeforeUnmount, watch, type InjectionKey, type Ref } from 'vue'
+import { computed, inject, onBeforeUnmount, onUpdated, watch, type InjectionKey, type Ref } from 'vue'
 
 export interface LayoutEditing {
   active: Readonly<Ref<boolean>>
@@ -21,17 +21,21 @@ export function useLayoutCard(root: Ref<HTMLElement | undefined>) {
   }
   // Keep each content host and iframe parent in place, at its last layout size.
   // visibility hides painting; it deliberately does not claim to suspend arbitrary iframe scripts.
-  watch([editing, root], ([active, element]) => {
-    restore()
-    if (!active || !element) return
-    const contents = [...element.querySelectorAll<HTMLElement>(':scope > .card-content, :scope > .capture-toolbar')]
+  function freezeNewContent() {
+    const element = root.value
+    if (!editing.value || !element) return
+    const contents = [...element.querySelectorAll<HTMLElement>(':scope > .card-content, :scope > .capture-toolbar')].filter(node => !frozen.has(node))
     const measurements = contents.map(node => ({ node, width: node.offsetWidth, height: node.offsetHeight, left: node.offsetLeft, top: node.offsetTop }))
     for (const { node, width, height, left, top } of measurements) {
       frozen.set(node, { style: node.getAttribute('style'), inert: node.inert })
       Object.assign(node.style, { position: 'absolute', width: `${width}px`, height: `${height}px`, left: `${left}px`, top: `${top}px`, right: 'auto', bottom: 'auto', flex: 'none', visibility: 'hidden' })
       node.inert = true
     }
-  }, { flush: 'sync' })
+  }
+  watch([editing, root], () => { restore(); freezeNewContent() }, { flush: 'sync' })
+  // A late capture/connection can add a host while editing; freeze only that new
+  // direct child, without moving or remeasuring already retained content.
+  onUpdated(freezeNewContent)
   onBeforeUnmount(restore)
   return { editing, layout }
 }
