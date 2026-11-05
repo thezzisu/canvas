@@ -43,6 +43,7 @@ async function removed(path: string) {
 test('remove is immediate and undo restores only its reference, geometry and current shared state', async t => {
   const f = await fixture(t), original = f.current().nodes[0]!
   const first = await f.remove(original.id)
+  assert.equal(first.lastReference, true)
   assert(first.undo && first.undo.remainingMs > 0 && first.undo.remainingMs <= CARD_REMOVAL_UNDO_MS)
   assert.equal(first.canvas.nodes.length, 1); assert.equal(f.current().nodes.length, 1)
   assert.equal((await f.undo(first.undo.token, f.canvas.id, 'other')).status, 404)
@@ -58,7 +59,9 @@ test('remove is immediate and undo restores only its reference, geometry and cur
   await f.undo(first.undo.token)
   assert(!f.current().nodes.some(node => node.id === original.id), 'old successful undo cannot cancel a later removal')
   assert.equal((await f.undo(second.undo!.token)).status, 200)
-  assert.equal((await f.remove('missing')).undo, null)
+  const missing = await f.remove('missing')
+  assert.equal(missing.undo, null); assert.equal(missing.lastReference, false)
+  assert.equal((await f.remove('terminal')).lastReference, false, 'removing a terminal reference does not delete its native window')
   assert.equal((await f.request('/api/canvases/overview/nodes/note', 'DELETE')).status, 403)
   assert.equal((await f.request(`/api/canvases/${f.canvas.id}/nodes/note`, 'DELETE', {}, 'missing')).status, 401)
 })
@@ -66,8 +69,10 @@ test('remove is immediate and undo restores only its reference, geometry and cur
 test('multiple note removals keep the newest shared content even after the final reference is gone', async t => {
   const f = await fixture(t), peer = f.store.put<Canvas>('canvas', { id: randomUUID(), name: 'Peer', nodes: [note()] })
   const first = await f.remove('note')
+  assert.equal(first.lastReference, false)
   f.store.updateNote(peer.id, 'note', { title: 'Latest', content: 'Peer edit', color: 'green' })
   const last = await f.remove('note', peer.id)
+  assert.equal(last.lastReference, true, 'a pending Undo is not an active reference')
   assert.equal((await f.undo(first.undo!.token)).status, 200)
   const restored = f.current().nodes.find((node): node is NoteNode => node.type === 'note')!
   assert.equal(restored.content, 'Peer edit'); assert.equal(restored.title, 'Latest'); assert.equal(restored.color, 'green')
@@ -85,8 +90,10 @@ test('final file bytes stay pinned during undo and are collected after the indep
   f.store.addNodeReference(f.canvas.id, file.id, peer.id, { x: 500, y: 600 })
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
   const a = await f.remove(file.id)
+  assert.equal(a.lastReference, false)
   t.mock.timers.tick(1000)
   const b = await f.remove(file.id, peer.id)
+  assert.equal(b.lastReference, true)
   await settle(); assert.deepEqual(await readFile(path), Buffer.from([0, 1, 2, 255]))
   t.mock.timers.tick(4000); await settle()
   assert.equal((await f.undo(a.undo!.token)).status, 404)
@@ -95,6 +102,7 @@ test('final file bytes stay pinned during undo and are collected after the indep
   const restored = f.store.get<Canvas>('canvas', peer.id)!.nodes.find(node => node.id === file.id)!
   assert.equal(restored.x, 500); assert.equal(restored.y, 600)
   const c = await f.remove(file.id, peer.id)
+  assert.equal(c.lastReference, true)
   t.mock.timers.tick(CARD_REMOVAL_UNDO_MS)
   assert.equal((await f.undo(c.undo!.token, peer.id)).status, 404)
   t.mock.timers.reset()

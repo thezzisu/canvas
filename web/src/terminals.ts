@@ -837,6 +837,14 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     current.keyHandler = event => {
       if (!interactive(current)) return false
       if (document.activeElement !== (current.mobile ? current.mobileInput?.element : current.term.textarea)) return true
+      if (event.isComposing || current.composing) {
+        // The IME owns every key of an active composition, including copy and
+        // paste chords reported with real key codes by some Linux IME bridges.
+        current.nativeKey = undefined; setModifiers(current); return false
+      }
+      if (event.keyCode === 229 || ['Process', 'Dead', 'AltGraph'].includes(event.key) || event.getModifierState('AltGraph')) {
+        current.nativeKey = undefined; setModifiers(current); return true
+      }
       const shiftPaste = event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey && (event.code === 'KeyV' || event.key.toLowerCase() === 'v')
       if (shiftPaste && current.settings.shiftPaste === 'paste' && event.type === 'keydown' && !event.repeat) {
         clearTimeout(current.shiftPaste)
@@ -847,15 +855,6 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
         }, 150)
       }
       if (!(shiftPaste && current.settings.shiftPaste === 'terminal') && current.clipboard?.key(event) === false) { current.nativeKey = undefined; return false }
-      if (event.isComposing || current.composing) {
-        // The IME owns every key of an active composition. Some Linux IME
-        // bridges report real key codes here; xterm would treat those as a
-        // commit and send the unfinished preedit before the final text.
-        current.nativeKey = undefined; setModifiers(current); return false
-      }
-      if (event.keyCode === 229 || ['Process', 'Dead', 'AltGraph'].includes(event.key) || event.getModifierState('AltGraph')) {
-        current.nativeKey = undefined; setModifiers(current); return true
-      }
       const id = event.code || event.key
       if (event.type === 'keyup' && current.nativeKey?.id === id) {
         current.nativeKey = undefined; event.preventDefault(); event.stopPropagation(); return false

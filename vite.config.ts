@@ -24,6 +24,10 @@ export default defineConfig({
     icon: { clientBundle: { scan: { globInclude: ['src/**/*.{vue,ts}'] } } },
     ui: {
       colors: { primary: 'amber', neutral: 'zinc' },
+      modal: { slots: {
+        overlay: 'canvas-modal-overlay',
+        content: 'canvas-modal-content top-[calc(var(--dialog-top)+var(--dialog-height)/2)] max-h-[calc(var(--dialog-height)-2rem)]',
+      } },
       toast: { slots: {
         root: '[--ui-error:#f38ba8] [--ui-success:#94e2d5]',
         title: '[overflow-wrap:anywhere]',

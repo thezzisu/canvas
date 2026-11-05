@@ -128,6 +128,7 @@ export class TerminalClipboard {
   }
 
   key(event: KeyboardEvent): boolean {
+    if (event.isComposing || event.keyCode === 229 || ['Process', 'Dead', 'AltGraph'].includes(event.key) || event.getModifierState('AltGraph')) return true
     // Returning false skips xterm's Ctrl+V -> SYN mapping without cancelling
     // the browser's native paste event. Windows clipboard history can supply
     // the logical key without a physical code; images still arrive via paste.
@@ -141,7 +142,6 @@ export class TerminalClipboard {
       this.allowProgramCopy()
       if (this.ready() && this.term.hasSelection()) { this.copySelection(); event.preventDefault(); return false }
     }
-    if (copy && event.metaKey && !event.ctrlKey) return false
     return true
   }
 

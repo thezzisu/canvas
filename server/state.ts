@@ -10,7 +10,7 @@ import { defaultWindowSize } from "../shared/window-size.ts";
 import { settingsPatchSchema } from "./settings.ts";
 import { layoutFields, type LayoutUpdate, type LayoutGeometry } from "../shared/layout.ts";
 import { getMimeType } from "hono/utils/mime";
-import { CARD_REMOVAL_UNDO_MS, type CardRemovalUndo } from '../shared/card-removal.ts';
+import { CARD_REMOVAL_UNDO_MS, type CardRemovalResponse } from '../shared/card-removal.ts';
 
 export const sourceSchema = z
   .object({
@@ -224,12 +224,12 @@ export class Store extends EventEmitter {
     }
     return releasedFile;
   }
-  removeCard(canvasId: string, nodeId: string, sessionId: string): { canvas: Canvas; undo: CardRemovalUndo | null } | undefined {
+  removeCard(canvasId: string, nodeId: string, sessionId: string): CardRemovalResponse<Canvas> | undefined {
     if (canvasId === 'overview' || !this.hasSession(sessionId)) return;
     const canvas = this.get<Canvas>('canvas', canvasId);
     if (!canvas) return;
     const index = canvas.nodes.findIndex(node => node.id === nodeId);
-    if (index < 0) return { canvas, undo: null };
+    if (index < 0) return { canvas, undo: null, lastReference: false };
     const node = canvas.nodes[index]!, token = randomUUID(), expiresAt = Date.now() + CARD_REMOVAL_UNDO_MS;
     const source = node.type === 'terminal' ? this.get<Source>('source', node.sourceId) : undefined;
     const timer = setTimeout(() => {
@@ -244,7 +244,11 @@ export class Store extends EventEmitter {
     canvas.nodes.splice(index, 1);
     try { this.put('canvas', canvas); }
     catch (error) { clearTimeout(timer); this.removals.delete(token); throw error; }
-    return { canvas, undo: { token, remainingMs: Math.max(0, expiresAt - Date.now()) } };
+    // Undo keeps a recoverable copy, but only live canvas references count here.
+    // A terminal remains owned by its runtime even after its last canvas removal.
+    const lastReference = node.type !== 'terminal' && !this.list<Canvas>('canvas').some(canvas => canvas.nodes.some(current =>
+      node.type === 'note' ? current.type === 'note' && current.id === node.id : current.type === 'file' && current.assetId === node.assetId));
+    return { canvas, undo: { token, remainingMs: Math.max(0, expiresAt - Date.now()) }, lastReference };
   }
   restoreCard(canvasId: string, token: string, sessionId: string): Canvas | undefined {
     const item = this.removals.get(token);

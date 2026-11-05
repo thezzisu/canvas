@@ -75,7 +75,7 @@ export function useCardRemovalUndo(options: { sync(): Promise<void>; released(co
       entries.set(entry.id, entry); count.value = entries.size
       return entry
     },
-    offer(entry: Removal, undo: CardRemovalUndo | null, started: number, name: string) {
+    offer(entry: Removal, undo: CardRemovalUndo | null, started: number, name: string, lastReference: boolean) {
       if (!current(entry) || !undo) { release(entry); return }
       const remaining = Math.max(0, undo.remainingMs - (performance.now() - started))
       entry.deadline = performance.now() + remaining
@@ -84,7 +84,7 @@ export function useCardRemovalUndo(options: { sync(): Promise<void>; released(co
         toast.remove(entry.id)
         if (!entry.restoring) release(entry)
       }, remaining)
-      toast.add({ id: entry.id, title: t('app.cardRemoved', { name }), duration: remaining,
+      toast.add({ id: entry.id, title: t(lastReference ? 'app.cardDeleted' : 'app.cardRemoved', { name }), duration: remaining,
         color: 'neutral', type: 'background', class: 'card-removal-toast',
         actions: [{ ...toastAction, label: t('app.undoRemoval'), closeOnClick: false, onClick: () => { void restore(entry, undo) } }],
       })

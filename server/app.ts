@@ -620,7 +620,7 @@ export function createApp(
     if (id === "overview")
       return c.json({ error: "Overview is read-only" }, 403);
     const result = store.removeCard(id, c.req.param('node'), bearerToken(c.req.header('authorization')));
-    return result ? c.json({ canvas: store.canvasView(result.canvas), undo: result.undo }) : c.json({ error: 'Canvas not found' }, 404);
+    return result ? c.json({ ...result, canvas: store.canvasView(result.canvas) }) : c.json({ error: 'Canvas not found' }, 404);
   });
   app.post('/api/canvases/:id/removals/:token/undo', async c => {
     z.object({}).strict().parse(await c.req.json());

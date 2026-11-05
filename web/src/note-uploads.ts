@@ -3,15 +3,13 @@ import { api, apiContext, apiRevision, requireCurrentApi, segment } from './api'
 import { reportDownloadError } from './downloads'
 import { loadCanvasFile } from './file-transfer'
 import { attachmentToken } from './note-document'
+import type { NoteRange } from './note-editing'
 import { loadNoteClipboard, reusedNoteClipboard, type NoteClipboard } from './note-clipboard'
 import type { PastePart } from '../../shared/paste'
 import type { FileAsset } from './types'
 
-export interface NoteInsertion { content: string; assets: FileAsset[]; offset: number; end: number; replaced: string }
-export interface NoteUpload {
-  offset: number
-  end: number
-  replaced: string
+export interface NoteInsertion extends NoteRange { content: string; assets: FileAsset[] }
+export interface NoteUpload extends NoteRange {
   controller: AbortController
   uploading: boolean
   insert?: (value: NoteInsertion) => boolean
@@ -47,8 +45,8 @@ async function upload(canvasId: string, noteId: string, offset: number, end: num
   } catch (error) { if (!task.controller.signal.aborted && !context.signal.aborted) reportDownloadError(error) }
   finally { if (pending.get(noteId) === task) pending.delete(noteId) }
 }
-export function uploadNoteAttachment(canvasId: string, noteId: string, file: File, offset: number, insert: (value: NoteInsertion) => void) {
-  return upload(canvasId, noteId, offset, offset, '', async () => ({ files: [file], parts: [{ file: 0, format: 'path' }] }), insert)
+export function uploadNoteAttachment(canvasId: string, noteId: string, file: File, range: NoteRange, insert: (value: NoteInsertion) => void) {
+  return upload(canvasId, noteId, range.offset, range.end, range.replaced, async () => ({ files: [file], parts: [{ file: 0, format: 'path' }] }), insert)
 }
 export function pasteNoteAttachments(canvasId: string, noteId: string, note: NoteClipboard, offset: number, end: number, replaced: string,
   insert: (value: NoteInsertion) => void, ownedAssets: readonly FileAsset[] = []) {

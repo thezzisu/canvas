@@ -14,7 +14,7 @@ export default {
 
   connectionNotVisible: '此连接在总览中没有可显示的内容。',
   reorderHint: '拖动排序；触屏请长按后拖动。也可按 Alt + 上 / 下方向键。', itemReordered: '{name}：第 {position} 项，共 {count} 项',
-  cardRemoved: '已移除 {name}', undoRemoval: '撤销', undoUnavailable: '已无法撤销此次移除。',
+  cardRemoved: '已移除 {name}', cardDeleted: '已删除 {name}', undoRemoval: '撤销', undoUnavailable: '已无法撤销此次移除。',
   addContent: '添加内容', uploadFile: '上传文件',
   "previousWindow": "上一个窗口",
   "previousSpace": "上一个 Space",

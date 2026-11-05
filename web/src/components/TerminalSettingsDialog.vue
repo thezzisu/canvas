@@ -34,7 +34,7 @@ function update(key: keyof TerminalSettings, value: string | number) { settings.
 </template>
 
 <style>
-.terminal-settings-dialog{z-index:50;width:min(440px,calc(var(--ui-viewport-width) - 28px));max-height:calc(var(--mobile-height,var(--ui-viewport-height)) - 32px)}
+.terminal-settings-dialog{z-index:50;width:min(440px,calc(var(--ui-viewport-width) - 28px));max-height:calc(var(--dialog-height) - 32px)}
 .terminal-settings-rows{display:grid;gap:12px}
 .terminal-setting-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:16px}
 .terminal-setting-label{min-width:0;color:#b8c0cc;font-size:13px;overflow-wrap:anywhere}

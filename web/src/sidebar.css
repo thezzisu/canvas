@@ -72,10 +72,10 @@
   .app-shell:not(.sidebar-drawer) .sidebar-account { grid-template-columns: var(--sidebar-rail); gap: 0; }
   .app-shell:not(.sidebar-drawer) .sidebar-footer>.icon-button { width: 27px; height: 24px; }
 }
-.sidebar-drawer .sidebar-backdrop { position: absolute; inset: 0; z-index: 41; background: #080a0fb3; backdrop-filter: blur(3px); }
+.sidebar-drawer .sidebar-backdrop { position: absolute; inset: var(--window-controls-height) 0 0; z-index: 41; background: #080a0fb3; backdrop-filter: blur(3px); }
 .sidebar-drawer .sidebar {
   --sidebar-rail: 40px;
-  position: absolute; inset: 0 auto 0 0; width: min(292px,calc(100% - 44px)); min-width: 0;
+  position: absolute; inset: var(--window-controls-height) auto 0 0; width: min(292px,calc(100% - 44px)); min-width: 0;
   padding: var(--ui-safe-top) max(6px,var(--ui-safe-right)) var(--ui-safe-bottom) max(6px,var(--ui-safe-left));
   z-index: 42; box-shadow: 12px 0 40px #0005; overflow: hidden;
 }

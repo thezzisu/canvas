@@ -12,6 +12,7 @@ import { apiContext, segment } from '../api'
 import { hasFileTransfer, readFileTransfer } from '../browser-file-input'
 import { presentDownload, reportDownloadError } from '../downloads'
 import { attachmentToken, noteDocument, noteOffset, notePosition, serializeNote } from '../note-document'
+import { NoteSelectionEnter, noteRange, replaceNoteRange, type NoteRange } from '../note-editing'
 import { noteUpload, uploadNoteAttachment, pasteNoteAttachments, type NoteInsertion } from '../note-uploads'
 import { clipboardText, noteClipboard, readNoteClipboard, NOTE_CLIPBOARD_TYPE } from '../note-clipboard'
 import { clearCopiedFile } from '../file-clipboard'
@@ -94,20 +95,19 @@ function compositionEnded() {
 function fail(key: string) { window.dispatchEvent(new CustomEvent('canvas:error', { detail: new Error(t(key)) })) }
 function editor() { return input.value?.editor }
 const transaction: EditorOptions['onTransaction'] = ({ transaction }) => {
-  if (!task.value || !transaction.docChanged) return
-  const before = notePosition(transaction.before, task.value.offset), end = notePosition(transaction.before, task.value.end)
-  task.value.offset = noteOffset(transaction.doc, transaction.mapping.map(before))
-  task.value.end = Math.max(task.value.offset, noteOffset(transaction.doc, transaction.mapping.map(end, -1)))
+  if (!transaction.docChanged) return
+  for (const range of [task.value, selection?.range]) {
+    if (!range) continue
+    const before = notePosition(transaction.before, range.offset), end = notePosition(transaction.before, range.end)
+    range.offset = noteOffset(transaction.doc, transaction.mapping.map(before))
+    range.end = Math.max(range.offset, noteOffset(transaction.doc, transaction.mapping.map(end, -1)))
+  }
 }
 function insert(value: NoteInsertion) {
   const current = editor()
   if (!current || current.isDestroyed) return false
   uploaded.value = [...uploaded.value, ...value.assets]
-  const unchanged = serializeNote(current.state.doc.toJSON()).slice(value.offset, value.end) === value.replaced
-  const from = notePosition(current.state.doc, value.offset), to = unchanged ? notePosition(current.state.doc, value.end) : from
-  const content = current.schema.nodeFromJSON(noteDocument(value.content)).content
-  const slice = new Slice(content, 1, 1)
-  const tr = current.state.tr.replaceRange(from, to, slice)
+  const tr = replaceNoteRange(current.state, value)
   closeHistory(tr); current.view.dispatch(tr)
   current.view.dispatch(closeHistory(current.state.tr))
   return true
@@ -116,15 +116,14 @@ watch(task, (current, previous) => {
   if (previous?.insert === insert) previous.insert = undefined
   if (current) current.insert = insert
 }, { immediate: true, flush: 'sync' })
-function upload(files: File[], position?: number) {
+function upload(files: File[], range?: NoteRange) {
   if (props.readOnly) return
   if (pending.value) { fail('panels.file.uploadBusy'); return }
   if (!files.length || files.length !== 1) { fail('panels.file.singleOnly'); return }
   const file = files[0]!, current = editor()
   if (file.webkitRelativePath) { fail('terminal.upload.foldersUnsupported'); return }
   if (!current) return
-  void uploadNoteAttachment(props.canvasId, props.noteId, file,
-    noteOffset(current.state.doc, position ?? current.state.selection.from), props.insertAttachment)
+  void uploadNoteAttachment(props.canvasId, props.noteId, file, range ?? noteRange(current.state), props.insertAttachment)
 }
 function copy(event: ClipboardEvent, cut = false) {
   const current = editor(), data = event.clipboardData
@@ -150,11 +149,9 @@ function paste(event: ClipboardEvent) {
     if (!note || !current) { fail('fileTransfer.failed'); return true }
     if (props.readOnly) return true
     if (pending.value) { fail('panels.file.uploadBusy'); return true }
-    const { from, to } = current.state.selection
-    const offset = noteOffset(current.state.doc, from), end = noteOffset(current.state.doc, to)
+    const { offset, end, replaced } = noteRange(current.state)
     const length = note.parts.reduce((size, part) => size + (typeof part === 'string' ? part.length : 38), 0)
     if (serializeNote(current.state.doc.toJSON()).length - (end - offset) + length > 200_000) { fail('panels.note.tooLong'); return true }
-    const replaced = serializeNote(current.state.doc.toJSON()).slice(offset, end)
     void pasteNoteAttachments(props.canvasId, props.noteId, note, offset, end, replaced,
       value => { if (!insert(value)) props.insertAttachment(value) }, assets.value)
     return true
@@ -179,18 +176,20 @@ function paste(event: ClipboardEvent) {
   return true
 }
 const fileDialog = useFileDialog({ multiple: false, reset: true })
-let selection: { context: ReturnType<typeof apiContext>; canvasId: string; noteId: string } | undefined
+let selection: { context: ReturnType<typeof apiContext>; canvasId: string; noteId: string; range: NoteRange } | undefined
 function chooseFiles() {
-  if (props.readOnly) return
-  selection = { context: apiContext(), canvasId: props.canvasId, noteId: props.noteId }
+  const current = editor()
+  if (props.readOnly || !current) return
+  selection = { context: apiContext(), canvasId: props.canvasId, noteId: props.noteId, range: noteRange(current.state) }
   fileDialog.open()
 }
 fileDialog.onChange(files => {
   if (!files?.length) return
   const target = selection; selection = undefined
   if (target && !target.context.signal.aborted && target.canvasId === props.canvasId && target.noteId === props.noteId)
-    void upload([...files])
+    void upload([...files], target.range)
 })
+fileDialog.onCancel(() => { selection = undefined })
 function dragOver(event: DragEvent) {
   if (!hasFileTransfer(event.dataTransfer)) return
   event.preventDefault(); event.stopPropagation()
@@ -201,7 +200,14 @@ function drop(event: DragEvent) {
   event.preventDefault(); event.stopPropagation()
   const incoming = readFileTransfer(event.dataTransfer)
   if (incoming.error) fail(incoming.error === 'folders' ? 'terminal.upload.foldersUnsupported' : 'panels.file.unreadableTransfer')
-  else void upload(incoming.files, editor()?.view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos)
+  else {
+    const current = editor()
+    if (current) {
+      const position = current.view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos ?? current.state.doc.content.size - 1
+      const offset = noteOffset(current.state.doc, position)
+      void upload(incoming.files, { offset, end: offset, replaced: '' })
+    }
+  }
   return true
 }
 watch(() => [props.canvasId, props.noteId], () => { selection = undefined; uploaded.value = [] })
@@ -211,7 +217,7 @@ defineExpose({ chooseFiles, pending })
 
 <template>
   <div ref="shell" class="note-editor-shell" @dragenter="dragOver" @dragover="dragOver">
-  <UEditor ref="input" :model-value="initial" content-type="json" :starter-kit="false" :image="false" :mention="false" :extensions="[extension, sizeLimit]" :editable="!readOnly" :enable-input-rules="false" :enable-paste-rules="false" :placeholder="t('panels.note.placeholder')" class="note-editor"
+  <UEditor ref="input" :model-value="initial" content-type="json" :starter-kit="false" :image="false" :mention="false" :extensions="[extension, sizeLimit, NoteSelectionEnter]" :editable="!readOnly" :enable-input-rules="false" :enable-paste-rules="false" :placeholder="t('panels.note.placeholder')" class="note-editor"
     :ui="{ root: 'h-full min-h-0', content: 'h-full min-h-0', base: 'note-editor-content h-full min-h-0 outline-none' }"
     :editor-props="{ attributes: { 'aria-label': t('panels.note.content'), role: 'textbox', 'aria-multiline': 'true' },
       handleDOMEvents: { copy: (_view, event) => copy(event), cut: (_view, event) => copy(event, true), compositionend: compositionEnded },

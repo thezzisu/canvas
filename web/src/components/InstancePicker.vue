@@ -125,7 +125,7 @@ const items = computed<DropdownMenuItem[][]>(() => [
 .instance-menu-label{display:flex;align-items:center;gap:10px;min-width:0}.instance-menu-label>span{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .instance-version{flex:0 1 auto;min-width:0;max-width:60%;overflow:hidden;text-overflow:ellipsis;color:#7d899a;font-size:10px;font-weight:400;white-space:nowrap}.instance-version.stale{color:#707b8a}
 .instance-build-detail{display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 12px;margin:0;font-size:11px;color:#8995a6}.instance-build-detail dt{font-weight:400}.instance-build-detail dd{margin:0;color:#bbc5d2;overflow-wrap:anywhere}.instance-build-detail small{margin-left:7px;color:#7d899a}.instance-revision{font-family:monospace;overflow-wrap:anywhere;font-size:10px}
-.instance-dialog{width:min(420px,calc(var(--mobile-width,var(--ui-viewport-width)) - 28px));max-height:calc(var(--mobile-height,var(--ui-viewport-height)) - 32px);z-index:92}
+.instance-dialog{width:min(420px,calc(var(--mobile-width,var(--ui-viewport-width)) - 28px));max-height:calc(var(--dialog-height) - 32px);z-index:92}
 .instance-dialog-overlay{z-index:91}.instance-add-scan{align-self:stretch;min-width:32px;justify-content:center}
 .instance-dialog-body{padding:16px 20px}.instance-dialog form{display:flex;flex-direction:column;gap:16px}
 .instance-dialog label{margin-top:0}.instance-dialog input{margin-top:0;font-size:13px}

@@ -14,7 +14,7 @@ export default {
 
   connectionNotVisible: 'This connection has no visible content in Overview.',
   reorderHint: 'Drag to reorder; on touch, press and hold. Or press Alt + Up / Down.', itemReordered: '{name}: position {position} of {count}',
-  cardRemoved: 'Removed {name}', undoRemoval: 'Undo', undoUnavailable: 'This removal can no longer be undone.',
+  cardRemoved: 'Removed {name}', cardDeleted: 'Deleted {name}', undoRemoval: 'Undo', undoUnavailable: 'This removal can no longer be undone.',
   addContent: 'Add content', uploadFile: 'Upload file',
   "previousWindow": "Previous window",
   "previousSpace": "Previous space",

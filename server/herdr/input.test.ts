@@ -321,6 +321,16 @@ test('copy shortcut reuses retained selection; application copy keys pass throug
   f.router.write('x\x1b[99;6u'); await f.router.drain(); assert.equal(f.inputs().flatMap(input => input.events).length, 2); f.router.dispose();
 });
 
+test('after copy-on-select, Ctrl+C still reaches the program like the native client default', async () => {
+  const f = fixture();
+  f.router.write(mouse(0, 2, 2) + mouse(32, 7, 2) + mouse(0, 7, 2, true)); await f.router.drain();
+  assert.deepEqual(f.copied, ['selected']);
+  f.router.write('\x03'); await f.router.drain();
+  assert.deepEqual(f.inputs().flatMap(input => input.events).map(keyShape), [{ code: { Char: 'c' }, modifiers: 2 }]);
+  assert.equal(f.selections.at(-1), undefined);
+  assert.deepEqual(f.copied, ['selected']); f.router.dispose();
+});
+
 test('popup input is isolated from underlying panes and captured mouse stays popup-local', async () => {
   const f = fixture(); f.surface = { ...f.surface, popup: { terminal_id: 'pop', title: '', frame: frame(10, 4), width: null, height: null, mouse_reporting: true, sgr_pixel_mouse: false, pixel_width: 100, pixel_height: 80 } };
   const rect = popupInnerRect(f.surface)!;

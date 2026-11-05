@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
-import { copyText } from './clipboard'
+import { copyText, TerminalClipboard } from './clipboard'
+import type { Terminal } from '@xterm/xterm'
 import { beginCopyFeedback, copyFeedback } from './copy-feedback'
 
 function clipboardEnvironment(t: TestContext, writeText?: (text: string) => Promise<void>, legacy = false) {
@@ -74,4 +75,88 @@ test('empty and oversized content never attempt a clipboard write', async t => {
   assert.equal(await copyText('a'.repeat(1024 * 1024 + 1)), false)
   assert.equal(writes, 0)
   assert.equal(copyFeedback.value?.kind, 'failed')
+})
+
+function terminalClipboard(t: TestContext, controlsInput = true) {
+  const writes: string[] = []
+  let clipboard: TerminalClipboard
+  t.after(() => clipboard?.dispose())
+  clipboardEnvironment(t, async text => { writes.push(text) })
+  const surface = { addEventListener() {}, removeEventListener() {} }
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: surface })
+  t.after(() => { if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow); else Reflect.deleteProperty(globalThis, 'window') })
+  Object.assign(document, { hasFocus: () => true, visibilityState: 'visible' })
+  let selected = '', osc!: (data: string) => boolean
+  const term = {
+    element: { contains: () => true }, getSelection: () => selected, hasSelection: () => !!selected,
+    parser: { registerOscHandler(_code: number, handler: typeof osc) { osc = handler; return { dispose() {} } } },
+  } as unknown as Terminal
+  clipboard = new TerminalClipboard(term, surface as unknown as HTMLElement, { visible: () => true, controlsInput: () => controlsInput })
+  return { clipboard, writes, select: (text: string) => { selected = text }, osc: (text: string) => osc('c;' + btoa(text)) }
+}
+
+function copyKey(fields: Partial<KeyboardEvent> = {}) {
+  let prevented = false
+  const event = { type: 'keydown', code: 'KeyC', key: 'c', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false,
+    isTrusted: true, getModifierState: () => false, preventDefault: () => { prevented = true }, ...fields } as KeyboardEvent
+  return { event, prevented: () => prevented }
+}
+
+test('copy chords consume only a local selection; empty-selection Cmd+C reaches the client', async t => {
+  const f = terminalClipboard(t)
+  for (const chord of [{ metaKey: true }, { ctrlKey: true, shiftKey: true }, { key: 'Insert', code: 'Insert', ctrlKey: true }]) {
+    f.select('local selection')
+    const local = copyKey(chord)
+    assert.equal(f.clipboard.key(local.event), false)
+    assert.equal(local.prevented(), true)
+    f.select('')
+    const native = copyKey(chord)
+    assert.equal(f.clipboard.key(native.event), true)
+    assert.equal(native.prevented(), false)
+  }
+  await Promise.resolve()
+  assert.deepEqual(f.writes, Array(3).fill('local selection'))
+})
+
+test('Ctrl+C retains terminal input semantics even with browser selection', t => {
+  const f = terminalClipboard(t)
+  f.select('local selection')
+  const key = copyKey({ ctrlKey: true })
+  assert.equal(f.clipboard.key(key.event), true)
+  assert.equal(key.prevented(), false)
+  assert.deepEqual(f.writes, [])
+})
+
+test('composition and AltGraph never copy local selection or authorize program clipboard output', async t => {
+  const f = terminalClipboard(t)
+  for (const composing of [{ isComposing: true }, { keyCode: 229 }, { key: 'Process' }, { key: 'Dead' }, { getModifierState: () => true }]) {
+    f.select('local selection')
+    const key = copyKey({ ctrlKey: true, shiftKey: true, ...composing })
+    assert.equal(f.clipboard.key(key.event), true)
+    assert.equal(key.prevented(), false)
+    f.osc('unsolicited')
+  }
+  await Promise.resolve()
+  assert.deepEqual(f.writes, [])
+})
+
+test('program clipboard output needs an initiating trusted copy gesture and is consumed once', async t => {
+  const f = terminalClipboard(t)
+  f.osc('unsolicited')
+  f.clipboard.key(copyKey({ metaKey: true, isTrusted: false }).event)
+  f.osc('synthetic')
+  f.clipboard.key(copyKey({ metaKey: true }).event)
+  f.osc('initiated')
+  f.osc('replayed')
+  await Promise.resolve()
+  assert.deepEqual(f.writes, ['initiated'])
+})
+
+test('passive viewers cannot write a shared client clipboard response', async t => {
+  const f = terminalClipboard(t, false)
+  f.clipboard.key(copyKey({ metaKey: true }).event)
+  f.osc('from another viewer')
+  await Promise.resolve()
+  assert.deepEqual(f.writes, [])
 })

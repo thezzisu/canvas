@@ -287,7 +287,6 @@ function creationNavigation(event: Event) {
   const target = notificationReveal.value?.target
   if (!target || card?.dataset.sourceId !== target.sourceId || card?.dataset.windowId !== target.windowId) cancelNotificationReveal()
 }
-const focusedSize = reactive({ width: mobile.value ? visibleViewport.value.width : window.innerWidth / uiZoom.value - 32, height: mobile.value ? visibleViewport.value.height : window.innerHeight / uiZoom.value - 32 })
 const saveState = ref<'' | 'saving' | 'saved' | 'saveFailed'>('')
 let refreshTimer: ReturnType<typeof setInterval>
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -1688,7 +1687,7 @@ async function removeNode(id: string) {
     if (!isCurrentApi(context)) return
     pendingLayouts.get(canvas.id)?.delete(id)
     clearNoteEdits(canvas.id, id)
-    feedback.offer(removal, result.undo, started, name); offered = true
+    feedback.offer(removal, result.undo, started, name, result.lastReference); offered = true
     await syncState()
   } catch (reason) { if (isCurrentApi(context)) showError(reason) }
   finally { if (!offered) feedback.release(removal) }
@@ -2072,9 +2071,6 @@ function beforeUnload(event: BeforeUnloadEvent) {
 }
 function windowResize() {
   queueCameraResize()
-  if (!mobile.value) {
-    focusedSize.width = window.innerWidth / uiZoom.value - 32; focusedSize.height = window.innerHeight / uiZoom.value - 32
-  }
 }
 function queueCameraResize() {
   cancelAnimationFrame(cameraResize)
@@ -2227,7 +2223,7 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
     </main>
     <Transition name="slide"><aside v-if="sourcePanel" ref="sourcePanelElement" class="source-panel"><header><div><h2>{{ t('app.connectionsWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeConnections')" @click="sourcePanel = false"><Icon name="close" /></button></header><button class="button primary full-width" @click="openSource()"><Icon name="plus" :size="16" />{{ t('app.addConnection') }}</button><div class="source-panel-content"><p v-if="!latestState" class="panel-empty" role="status">{{ loadFailure ? t('app.loadFailed') : t('common.loading') }}</p><div v-for="source in orderedSources" :key="source.id" class="source-detail"><div class="source-detail-header"><button class="source-expand" @click="expandedSource = expandedSource === source.id ? '' : source.id"><Icon name="chevron" :size="15" :class="{ rotated: expandedSource === source.id }" /><span>{{ source.name }}<small><span class="source-address">{{ source.transport === 'local' ? t('app.local') : source.target }}</span><span v-if="resources.find(item => item.id === source.id)?.serverVersion" class="source-version" :title="`${source.runtime === 'core' ? 'herdr-core' : 'herdr'} ${resources.find(item => item.id === source.id)!.serverVersion}`">{{ source.runtime === 'core' ? 'herdr-core' : 'herdr' }} {{ resources.find(item => item.id === source.id)!.serverVersion }}</span></small></span></button><button class="icon-button" :title="t('app.editConnection')" :aria-label="t('app.editConnection')" @click="openSource(source)"><Icon name="edit" :size="14" /></button><button class="icon-button" :title="t('app.removeConnection')" :aria-label="t('app.removeConnection')" @click="deleteSource(source)"><Icon name="trash" :size="14" /></button></div><template v-if="expandedSource === source.id"><p v-if="undiscoveredSources.some(item => item.id === source.id)" class="panel-empty" role="status">{{ loadFailure ? t('app.loadFailed') : t('common.loading') }}</p><div v-else-if="resources.find(item => item.id === source.id)?.error" class="source-error">{{ resources.find(item => item.id === source.id)?.error }}</div><div v-for="space in resources.find(item => item.id === source.id)?.spaces || []" :key="space.id" class="space-detail"><div class="space-detail-header"><Icon name="layers" :size="14" /><strong>{{ space.name }}</strong><button class="icon-button" :title="t('app.newWindow')" :aria-label="t('app.newWindow')" @click="windowAction({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: '', x: 0, y: 0, width: 0, height: 0 }, 'create')"><Icon name="tab-plus" :size="14" /></button><button class="icon-button" :title="t('app.renameSpace')" :aria-label="t('app.renameSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'rename')"><Icon name="edit" :size="13" /></button><button class="icon-button danger-hover" :title="t('app.closeSpace')" :aria-label="t('app.closeSpace')" @click="spaceAction(resources.find(item => item.id === source.id)!, space.id, 'close')"><Icon name="close" :size="14" /></button></div><div v-for="window in space.windows" :key="window.id" class="window-detail"><span class="program-dot" :style="{ '--program-color': statusColor(window.status) }" :title="statusLabel(window.status)" /><WindowTitle :window="window" /><button class="icon-button" :title="t('app.addToCanvas')" :aria-label="t('app.addToCanvas')" @click="openAdd({ type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, ...windowSize({ sourceId: source.id, windowId: window.id }) })"><Icon name="layers" :size="14" /></button><button class="icon-button" :title="t('app.windowActions')" :aria-label="t('app.windowActions')" @click="windowMenu = { name: window.name, node: { type: 'terminal', id: '', sourceId: source.id, spaceId: space.id, windowId: window.id, x: 0, y: 0, ...windowSize({ sourceId: source.id, windowId: window.id }) } }"><Icon name="more" :size="15" /></button></div></div><button class="source-new-space" :disabled="!resources.some(item => item.id === source.id && !item.error)" @click="spaceAction(resources.find(item => item.id === source.id)!, undefined, 'create')"><Icon name="plus" :size="14" />{{ t('app.newSpace') }}</button></template></div><p v-if="latestState && !sources.length" class="panel-empty">{{ t('app.noConnections') }}</p></div></aside></Transition>
     <div v-if="focused || focusedCard" ref="focusViewportElement" class="focus-overlay" :class="{ 'card-focus-overlay': focusedCard }">
-      <TerminalNode v-if="focused" :key="focused.id" :id="focused.id" :data="{ ...terminalData(focused, isOverview), ...focusedSize, overview: isOverview, focus: true }" />
+      <TerminalNode v-if="focused" :key="focused.id" :id="focused.id" :data="{ ...terminalData(focused, isOverview), overview: isOverview, focus: true }" />
       <NoteNode v-else-if="focusedCard?.type === 'note'" :key="focusedCard.id" :id="focusedCard.id" :selected="false" :data="noteData(focusedCard, true)" />
       <FileNode v-else-if="focusedCard?.type === 'file'" :key="focusedCard.id" :id="focusedCard.id" :selected="false" :data="fileData(focusedCard, true)" />
     </div>
