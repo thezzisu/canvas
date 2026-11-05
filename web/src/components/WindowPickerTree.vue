@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useMobileLayout } from '../mobile-layout'
 import UCheckbox from '@nuxt/ui/components/Checkbox.vue'
 import type { Source, SourceResource } from '../types'
 import { pickerChecked, pickerGroups, updatePickerSelection } from '../window-picker'
@@ -12,6 +13,7 @@ import { windowLabel } from '../window-title'
 const props = defineProps<{ resources: SourceResource[]; sources: Source[]; query: string; selected: string[]; existing: Set<string> }>()
 const emit = defineEmits<{ 'update:selected': [value: string[]] }>()
 const { t, n } = useI18n()
+const touch = useMobileLayout()
 const pending = computed(() => props.sources.some(source => !props.resources.some(resource => resource.id === source.id)))
 const groups = computed(() => pickerGroups(props.sources, props.resources, props.query, props.existing))
 const selected = computed(() => new Set(props.selected))
@@ -28,7 +30,7 @@ const checkboxUi = { root: 'picker-checkbox', base: 'picker-checkbox-base' }
 </script>
 
 <template>
-  <div class="window-picker-tree">
+  <div class="window-picker-tree" :class="{ 'picker-touch': touch }">
     <details v-for="source in groups" :key="source.id" class="picker-source" :open="expanded(source.id)">
       <summary class="picker-group-row picker-source-row" @click.prevent="toggleGroup(source.id)">
         <Icon class="picker-disclosure" name="chevron" :size="12" />
@@ -69,5 +71,5 @@ const checkboxUi = { root: 'picker-checkbox', base: 'picker-checkbox-base' }
 .picker-window-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
 .picker-added{flex:none;color:#728296;font-size:10px}.picker-checkbox{display:flex;align-items:center;flex:none}
 .picker-checkbox-base{width:15px;height:15px;border-radius:3px;padding:0;gap:0}.picker-checkbox-base:disabled{cursor:default}.picker-empty{padding:28px 16px;text-align:center;color:#7d8a9d;font-size:12px}
-:global(.mobile-layout) .picker-group-row,:global(.mobile-layout) .picker-window-row{min-height:44px}:global(.mobile-layout) .picker-window-name,:global(.mobile-layout) .picker-group-row strong{font-size:12px}:global(.mobile-layout) .picker-checkbox-base{width:18px;height:18px}
+.picker-touch .picker-group-row,.picker-touch .picker-window-row{min-height:44px}.picker-touch .picker-window-name,.picker-touch .picker-group-row strong{font-size:12px}.picker-touch .picker-checkbox-base{width:18px;height:18px}
 </style>

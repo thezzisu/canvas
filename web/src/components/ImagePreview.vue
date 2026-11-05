@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
+import { useMobileLayout } from '../mobile-layout'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import Icon from './Icon.vue'
 
 const { t, n } = useI18n()
+const touch = useMobileLayout()
 
 const props = defineProps<{ id: string; src: string; alt: string; readOnly?: boolean }>()
 const emit = defineEmits<{ loaded: [id: string, width: number, height: number]; failed: [id: string] }>()
@@ -171,7 +173,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="image-preview-viewer">
+  <div class="image-preview-viewer" :class="{ 'image-preview-touch': touch }">
     <div ref="viewport" class="image-preview-viewport" :class="{ 'can-pan': canPan, dragging }" :data-scale="scale" :data-fit="fitted" :data-pan-x="pan.x" :data-pan-y="pan.y"
       @wheel="wheel" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerEnd" @pointercancel="pointerEnd($event, true)" @lostpointercapture="pointerEnd($event, true)" @dblclick="doubleClick" @dragstart.prevent @contextmenu.stop>
       <img class="download-preview-image" :data-preview-id="id" :src="src" :alt="alt" :style="imageStyle" draggable="false" @load="loaded" @error="failed" />
@@ -195,5 +197,5 @@ onBeforeUnmount(() => {
 .image-preview-tools button:hover:not(:disabled){background:#ffffff0d;color:#e5c9b3}.image-preview-tools button:disabled{opacity:.35;cursor:default}
 .image-preview-tools button:focus-visible{outline:1px solid #d4ac8e;outline-offset:0}
 .image-preview-scale{min-width:39px;padding:0 3px;font-size:10px;font-variant-numeric:tabular-nums;text-align:center;color:#a1afc0}
-:global(.mobile-layout) .image-preview-tools button{width:44px;min-width:44px;height:44px}
+.image-preview-touch .image-preview-tools button{width:44px;min-width:44px;height:44px}
 </style>
