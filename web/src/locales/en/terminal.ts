@@ -3,7 +3,7 @@ export default {
   richPaste: { title: 'Paste preview', body: 'Text', attachments: 'Attachments', markdown: 'Markdown', plain: 'Plain text', links: 'Markdown links', paths: 'Paths', skip: 'Skip', paste: 'Paste', missing: 'Some attachments cannot be read. Choose Skip to paste the text.', tooLarge: 'Clipboard content is too large. Paste a smaller selection.' },
   closed: 'Closed',
   zoom: { title: 'Terminal zoom' },
-  settings: { title: 'Terminal settings', rightClick: 'Right click', paneMenu: 'Pane menu', sendToTerminal: 'Send to terminal' },
+  settings: { title: 'Terminal settings', rightClick: 'Right click', paneMenu: 'Pane menu', sendToTerminal: 'Send to terminal', shiftPaste: 'Ctrl+Shift+V', paste: 'Paste' },
   paneMenu: { rename: 'Rename pane', splitRight: 'Split right', splitDown: 'Split down', zoom: 'Zoom pane', close: 'Close pane', name: 'Pane name', closeConfirm: 'Close this pane and its running process?', failed: 'Pane action failed', unavailable: 'Pane unavailable' },
   status: {
     error: 'Error', attention: 'Needs attention', working: 'Running', done: 'Completed', idle: 'Idle', unknown: 'No status reported',

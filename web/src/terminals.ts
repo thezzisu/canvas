@@ -20,7 +20,7 @@ import { terminalInputChunks } from './terminal-input-chunks'
 import { bindTerminalKeyboardLock } from './terminal-keyboard-lock'
 import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch'
 import { bindTerminalMouseDefaults, rightMouseInput } from './terminal-mouse-defaults'
-import type { RightClickMode } from './terminal-settings'
+import { defaultTerminalSettings, type TerminalSettings } from './terminal-settings'
 import { defaultContentFont, type ContentFontSettings } from '../../shared/settings'
 import { applyTerminalFontFeatures, type FontPresentation } from './fonts'
 import { bindMobileKeyboard } from './mobile-keyboard'
@@ -112,7 +112,9 @@ interface Session {
   pastePreview?: () => void
   fileRead?: AbortController
   clipboard?: TerminalClipboard
-  rightClickMode: RightClickMode
+  settings: TerminalSettings
+  // Browsers without a paste event for Ctrl+Shift+V fall back to the async clipboard.
+  shiftPaste?: ReturnType<typeof setTimeout>
   mouseDefaults?: ReturnType<typeof bindTerminalMouseDefaults>
 }
 const sessions = new Map<string, Session>()
@@ -730,7 +732,7 @@ function sendTerminalData(session: Session, data: string) {
   session.term.input(data, true)
   return true
 }
-export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, options: { magnified?: boolean; mobile?: boolean; zoom?: number; closed?: boolean; rightClickMode?: RightClickMode } = {}) {
+export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, options: { magnified?: boolean; mobile?: boolean; zoom?: number; closed?: boolean; settings?: TerminalSettings } = {}) {
   installTerminalEvents()
   const id = key(resource.sourceId, resource.spaceId, resource.windowId)
   let session = sessions.get(id)
@@ -759,7 +761,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       changed: upload => setState(session!, { ...session!.state, upload }),
     })
     session = { term, surface, uploads, opened: false, magnified: false, mobile: !!options.mobile, connectionRevision: 0,
-      modifiers: emptyModifiers(), touchMode: 'scroll', keyboardRequested: false, rightClickMode: options.rightClickMode || 'menu',
+      modifiers: emptyModifiers(), touchMode: 'scroll', keyboardRequested: false, settings: options.settings || defaultTerminalSettings,
       state: { status: 'connecting' }, listeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
     const current = session
     current.reconnect = new TerminalReconnect({
@@ -823,7 +825,16 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     current.keyHandler = event => {
       if (!interactive(current)) return false
       if (document.activeElement !== (current.mobile ? current.mobileInput?.element : current.term.textarea)) return true
-      if (current.clipboard?.key(event) === false) { current.nativeKey = undefined; return false }
+      const shiftPaste = event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey && (event.code === 'KeyV' || event.key.toLowerCase() === 'v')
+      if (shiftPaste && current.settings.shiftPaste === 'paste' && event.type === 'keydown' && !event.repeat) {
+        clearTimeout(current.shiftPaste)
+        current.shiftPaste = setTimeout(() => {
+          current.shiftPaste = undefined
+          if (document.activeElement !== current.term.textarea) return
+          void navigator.clipboard?.readText?.().then(text => { if (text && document.activeElement === current.term.textarea) { claimFocus(current); current.term.paste(text) } }, () => {})
+        }, 150)
+      }
+      if (!(shiftPaste && current.settings.shiftPaste === 'terminal') && current.clipboard?.key(event) === false) { current.nativeKey = undefined; return false }
       if (event.isComposing || current.composing) {
         // The IME owns every key of an active composition. Some Linux IME
         // bridges report real key codes here; xterm would treat those as a
@@ -871,7 +882,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   session.mobile = options.mobile === true
   session.magnified = options.magnified === true
   session.resizing = false
-  session.rightClickMode = options.rightClickMode || 'menu'
+  session.settings = options.settings || defaultTerminalSettings
   setTerminalZoom(session, options.zoom ?? 100)
   session.nativeKey = undefined
   session.term.options.disableStdin = !interactive(session) || options.closed === true
@@ -886,6 +897,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     session.term.textarea?.addEventListener('focus', () => { if (!clipboardRestoringFocus()) claimFocus(current) })
     session.term.textarea?.addEventListener('paste', event => {
       if (!interactive(current)) { event.preventDefault(); event.stopImmediatePropagation(); return }
+      clearTimeout(current.shiftPaste); current.shiftPaste = undefined
       current.nativeKey = undefined; setModifiers(current); claimFocus(current)
     }, { capture: true })
     session.term.textarea?.addEventListener('compositionstart', () => { current.composing = true; current.nativeKey = undefined; setModifiers(current) })
@@ -966,7 +978,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   const mountingContext = apiContext()
   const canPasteText = () => isCurrentApi(mountingContext) && current.host === host && host.isConnected && interactive(current) && current.state.status === 'connected' && current.socket?.readyState === WebSocket.OPEN &&
     !(current.state.presentation?.maximized && (!current.state.presentation.owned || !current.magnified))
-  const mouseDefaults = bindTerminalMouseDefaults(current.surface, canPasteText, () => current.rightClickMode, (event, action) => {
+  const mouseDefaults = bindTerminalMouseDefaults(current.surface, canPasteText, () => current.settings.rightClick, (event, action) => {
     if (!canPasteText()) return false
     const rect = current.term.element?.querySelector('.xterm-screen')?.getBoundingClientRect()
     const data = rect && rightMouseInput(event, action, rect, current.term.cols, current.term.rows)
@@ -1017,7 +1029,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   present(current)
   schedulePresentation(current)
   return {
-    setRightClickMode(mode: RightClickMode) { if (current.host === host && isCurrentApi(mountingContext)) current.rightClickMode = mode },
+    setSettings(settings: TerminalSettings) { if (current.host === host && isCurrentApi(mountingContext)) current.settings = settings },
     allowsContextMenu() { return current.mouseDefaults?.allowsContextMenu() ?? true },
     async paneContext(x: number, y: number, signal: AbortSignal): Promise<PaneContext | null> {
       const layout = current.paintedLayout
