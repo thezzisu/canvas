@@ -82,7 +82,7 @@ const content = computed(() => ({ 'aria-label': t('canvasUi.agentsInCanvas', { n
 
 <style scoped>
 .canvas-nav-row{position:relative}
-.canvas-agent-trigger{position:absolute;right:0;top:2px;bottom:0;width:var(--sidebar-rail);padding:0;border-radius:5px}
+.canvas-agent-trigger{position:absolute;right:0;top:2px;bottom:0;width:var(--sidebar-rail);padding:0;border-radius:5px;-webkit-tap-highlight-color:transparent}
 .canvas-agent-trigger:hover,.canvas-agent-trigger[aria-expanded=true]{background:#ffffff0b}
 .canvas-agent-trigger:focus-visible{outline-offset:-2px}
 .canvas-agents-panel{outline:none;padding:5px}
