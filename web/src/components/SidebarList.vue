@@ -22,7 +22,7 @@ const sortableOptions: UseSortableOptions & { supportPointer: boolean } = {
   // Native touchmove keeps scrolling available until the long press starts a drag.
   supportPointer: false,
   draggable: '.sidebar-sortable-item', ghostClass: 'sidebar-sortable-ghost', chosenClass: 'sidebar-sortable-chosen',
-  fallbackTolerance: 5, touchStartThreshold: 5,
+  fallbackTolerance: 5, touchStartThreshold: 5, filter: '[data-no-reorder]', preventOnFilter: false,
   onUpdate(event) {
     const ids = [...event.from.children].map(item => (item as HTMLElement).dataset.orderId!).filter(Boolean)
     // Restore Sortable's temporary DOM move; Vue applies the keyed order.
@@ -36,6 +36,7 @@ const sortableOptions: UseSortableOptions & { supportPointer: boolean } = {
 const sortable = useSortable(root, computed(() => props.items), sortableOptions)
 watch(reducedMotion, value => sortable.option('animation', value ? 0 : 150))
 function keydown(event: KeyboardEvent) {
+  if ((event.target as HTMLElement).closest('[data-no-reorder]')) return
   if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return
   const element = (event.target as HTMLElement).closest<HTMLElement>('[data-order-id]')
   const ids = props.items.map(item => item.id), from = ids.indexOf(element?.dataset.orderId || '')

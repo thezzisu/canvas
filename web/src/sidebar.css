@@ -3,16 +3,17 @@
   --sidebar-icon: 16px;
   --sidebar-gap: 2px;
   width: var(--sidebar-width,168px); min-width: var(--sidebar-width,168px); min-height: 0; display: flex; flex-direction: column;
-  padding: 12px 4px 0; background: #1a1c21; border-right: 1px solid #292d34; z-index: 3;
+  padding: 0 4px; background: #1a1c21; border-right: 1px solid #292d34; z-index: 3;
 }
 .app-shell:not(.sidebar-drawer)>.sidebar { grid-area: sidebar; }
-.sidebar>.brand { height: 52px; min-height: 52px; padding: 0; margin-bottom: 8px; font-size: 20px; letter-spacing: -1px; }
+.sidebar>.brand { height: 52px; min-height: 52px; padding: 0; margin-bottom: 0; font-size: 20px; letter-spacing: -1px; }
 .sidebar>.brand svg { width: 21px; height: 21px; }
 /* Fixed rows reserve the same native gutter as the navigation scrollport. */
 .sidebar>.brand,.sidebar-navigation,.sidebar-footer { overflow: hidden; scrollbar-gutter: stable both-edges; }
 @supports not selector(::-webkit-scrollbar) {
   .sidebar>.brand,.sidebar-navigation,.sidebar-footer { scrollbar-width: thin; }
 }
+.sidebar-instance { padding-block: 12px; }
 .sidebar-navigation { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 8px; }
 .sidebar :is(.brand,.instance-trigger,.nav-item,.source-nav-item,.source-empty,.nav-section-label) {
   display: grid; grid-template-columns: var(--sidebar-rail) minmax(0,1fr) var(--sidebar-rail);
@@ -59,19 +60,6 @@
 .avatar { height: 27px; width: 27px; min-width: 27px; border-radius: 7px; display: flex; align-items: center; justify-content: center; background: #37312e; color: #d3ac8e; border: 1px solid #4d4037; font-size: 11px; }
 .sidebar-account>.avatar { justify-self: center; }
 
-@media(max-width:620px) {
-  .app-shell:not(.sidebar-drawer) { --sidebar-width:52px; }
-  .app-shell:not(.sidebar-drawer) .sidebar { width: 52px; min-width: 52px; padding: 6px 5px 0; }
-  .app-shell:not(.sidebar-drawer) .sidebar :is(.instance-trigger,.nav-item,.source-nav-item,.source-empty,.nav-section-label) { grid-template-columns: minmax(0,1fr); justify-items: center; padding-inline: 0; gap: 0; }
-  .app-shell:not(.sidebar-drawer) :is(.instance-trigger>span,.sidebar .instance-trigger>svg:last-child,.nav-section-label>span,.nav-item>span,.source-nav-icon,.source-nav-name,.source-empty-label,.sidebar-account>span:nth-child(2)) { display: none; }
-  .app-shell:not(.sidebar-drawer) .nav-section-label { height: 25px; }
-  .app-shell:not(.sidebar-drawer) .nav-section-label .icon-button { width: 25px; height: 23px; }
-  .app-shell:not(.sidebar-drawer) .sidebar-divider { margin: 11px 5px 7px; }
-  .app-shell:not(.sidebar-drawer) .source-empty { height: 32px; padding-block: 0; }
-  .app-shell:not(.sidebar-drawer) .sidebar-footer { display: flex; flex-direction: column; justify-content: center; padding: 8px 0; gap: 5px; }
-  .app-shell:not(.sidebar-drawer) .sidebar-account { grid-template-columns: var(--sidebar-rail); gap: 0; }
-  .app-shell:not(.sidebar-drawer) .sidebar-footer>.icon-button { width: 27px; height: 24px; }
-}
 .sidebar-drawer .sidebar-backdrop { position: absolute; inset: var(--window-controls-height) 0 0; z-index: 41; background: #080a0fb3; backdrop-filter: blur(3px); }
 .sidebar-drawer .sidebar {
   --sidebar-rail: 40px;
@@ -93,3 +81,6 @@
 .sidebar-drawer .sidebar-footer>.icon-button { height: 40px; }
 .sidebar-drawer .sidebar-account { font-size: 12px; }
 .sidebar-drawer .sidebar-account small { font-size: 10px; }
+
+/* The instance section owns symmetric spacing; its separator adds none above. */
+.sidebar-instance + .sidebar-divider { margin-top: 0; }

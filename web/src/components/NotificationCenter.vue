@@ -8,7 +8,7 @@ import type { SourceResource } from '../types'
 import { sameCompletion } from '../../../shared/completion'
 import { samePane, type PaneFocus } from '../completion-focus'
 import { apiContext, isCurrentApi, uuid } from '../api'
-import { attentionSummary, faviconStatus, isCanvasNotification, notificationKey, notificationTarget, notificationCurrent } from '../notification-model'
+import { attentionSummary, faviconStatus, isCanvasNotification, notificationKey, notificationTarget, notificationCurrent, notificationPresent } from '../notification-model'
 import { deliverNotificationEffects, holdNotificationOwner, isBadgeOwnerChange, syncNotificationFocus, updateNotificationBadge } from '../notification-effects'
 import { notificationSoundEnabled, refreshNotificationPermission, unlockNotificationSound } from '../notification-settings'
 import { statusColor } from '../status'
@@ -51,9 +51,20 @@ function noticeValid(notice: Notice) {
   return current() && !notice.dismissed && notificationCurrent(notice.event, props.resources) &&
     (notice.focus ? samePane(notice.focus, props.focus) : !interacting(notice.event))
 }
+function toastValid(notice: Notice) {
+  return notice.event.kind === 'done'
+    ? current() && !notice.dismissed && notificationPresent(notice.event, props.resources)
+    : noticeValid(notice)
+}
 function acceptsToast(id: string | number) {
   const notice = [...active.values()].find(notice => `${toastPrefix}${notice.event.id}` === id)
-  return !!notice && noticeValid(notice)
+  return !!notice && toastValid(notice)
+}
+function actionAvailable(event: CanvasNotification) { return current() && props.actionsAvailable && !!notificationTarget(event, props.resources) }
+function act(action: 'open' | 'go', event: CanvasNotification) {
+  if (!actionAvailable(event)) return
+  if (action === 'open') emit('open', event)
+  else emit('go', event)
 }
 function title(event: CanvasNotification) {
   const target = notificationTarget(event, props.resources)
@@ -69,16 +80,15 @@ function show(event: CanvasNotification, focus?: PaneFocus) {
   const previous = active.get(key)
   if (important && previous?.event.kind === event.kind &&
       (event.kind !== 'done' || sameCompletion(previous.event.completion, event.completion))) return
+  if (event.kind === 'attention' && interacting(event)) {
+    // A deliberately silent reminder must not dismiss a still-readable Done.
+    if (previous?.event.kind !== 'done') active.set(key, { event, focus, dismissed: true })
+    void deliverNotificationEffects(props.backendId, event, { title: '', body: '', url: '', quiet: true, valid: current })
+    return
+  }
   if (previous) toast.remove(`${toastPrefix}${previous.event.id}`)
   const notice: Notice = { event, focus }
-  if (important) {
-    active.set(key, notice)
-    if (event.kind !== 'done' && interacting(event)) {
-      notice.dismissed = true
-      void deliverNotificationEffects(props.backendId, event, { title: '', body: '', url: '', quiet: true, valid: current })
-      return
-    }
-  }
+  if (important) active.set(key, notice)
   const target = notificationTarget(event, props.resources)
   if (document.hasFocus() && !document.hidden) toast.add({
     id: `${toastPrefix}${event.id}`, title: title(event), description: focus ? undefined : description(event),
@@ -86,8 +96,8 @@ function show(event: CanvasNotification, focus?: PaneFocus) {
     class: `notice-${event.kind}${focus ? ' notice-focused' : ''}`, duration: focus ? 3000 : event.kind === 'attention' ? Infinity : important ? 15000 : 3500,
     type: important ? 'foreground' : 'background',
     actions: !focus && target ? [
-      { ...toastAction, label: t('notifications.open'), get disabled() { return !props.actionsAvailable }, onClick: () => emit('open', event) },
-      { ...toastAction, label: t('notifications.go'), get disabled() { return !props.actionsAvailable }, onClick: () => emit('go', event) },
+      { ...toastAction, label: t('notifications.open'), get disabled() { return !actionAvailable(event) }, onClick: () => act('open', event) },
+      { ...toastAction, label: t('notifications.go'), get disabled() { return !actionAvailable(event) }, onClick: () => act('go', event) },
     ] : [],
   })
   if (!important) return
@@ -101,9 +111,9 @@ function show(event: CanvasNotification, focus?: PaneFocus) {
 function reconcile() {
   clearTimeout(timer)
   for (const [key, notice] of active) {
-    if (!notificationCurrent(notice.event, props.resources)) {
+    if (!notificationPresent(notice.event, props.resources) || notice.event.kind !== 'done' && !notificationCurrent(notice.event, props.resources)) {
       toast.remove(`${toastPrefix}${notice.event.id}`); active.delete(key)
-    } else if (!noticeValid(notice)) {
+    } else if (!toastValid(notice)) {
       notice.dismissed = true
       toast.remove(`${toastPrefix}${notice.event.id}`)
     }

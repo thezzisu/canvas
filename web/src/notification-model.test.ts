@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { attentionSummary, faviconStatus, isCanvasNotification, notificationKey, notificationTarget } from './notification-model.ts'
+import { attentionSummary, faviconStatus, isCanvasNotification, notificationCurrent, notificationKey, notificationPresent, notificationTarget } from './notification-model.ts'
 import { mergeLiveResources } from './live-resources.ts'
 import type { CanvasNotification } from '../../shared/notification.ts'
 import type { SourceResource } from './types.ts'
@@ -24,6 +24,28 @@ test('notifications target their pane after a move rather than the window aggreg
   assert.equal(notificationTarget({ ...event, paneId: 'missing' }, resources), undefined)
   assert.equal(notificationTarget({ ...event, sourceId: 'other' }, resources), undefined)
   assert.notEqual(notificationKey(event), notificationKey({ ...event, paneId: 'pane1' }))
+})
+test('displayed completion presence is independent of current status and temporary connection availability', () => {
+  const completion = { bootId: 'fixture', sequence: 1 }, done = { ...event, completion }
+  for (const status of ['done', 'idle', 'working', 'attention'] as const) {
+    const current = structuredClone(resources)
+    const pane = current[0]!.spaces[0]!.windows[0]!.panes![1]!
+    Object.assign(pane, { status, completion })
+    assert(notificationPresent(done, current), 'The target still exists for the displayed event')
+    assert(notificationTarget(done, current), 'Navigation remains possible while the live target is online')
+    assert.equal(notificationCurrent(done, current), status === 'done' || status === 'idle', 'New stale events still fail entry/effect validation')
+    current[0]!.status = 'offline'
+    assert(notificationPresent(done, current), 'A temporary offline snapshot does not destroy the event target')
+    assert.equal(notificationTarget(done, current), undefined, 'Offline targets cannot be invoked')
+    assert.equal(notificationCurrent(done, current), false)
+    current[0]!.spaces = []
+    assert(notificationPresent(done, current), 'Unavailable discovery is not confirmed target removal')
+    current[0]!.status = 'online'
+    assert.equal(notificationPresent(done, current), false, 'An online authoritative absence removes the target')
+  }
+  assert.equal(notificationPresent(done, []), false)
+  assert.equal(notificationPresent({ ...done, paneId: 'removed' }, resources), false)
+  assert.equal(notificationPresent({ ...done, paneId: undefined, windowId: 'removed' }, resources), false)
 })
 test('notification frames require known kinds and string identity and content', () => {
   assert(isCanvasNotification(event))

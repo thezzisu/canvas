@@ -3,6 +3,8 @@ import { useI18n } from 'vue-i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { TerminalModifiers } from '../terminal-input'
 import Icon from './Icon.vue'
+import UModal from './CanvasModal.vue'
+import UButton from '@nuxt/ui/components/Button.vue'
 import { copiedFile } from '../file-clipboard'
 
 const { t } = useI18n()
@@ -27,6 +29,8 @@ const emit = defineEmits<{
   reading: [active: boolean]
 }>()
 const more = ref(false)
+const keyboard = ref<HTMLElement>(), moreTrigger = ref<HTMLButtonElement>()
+const portal = computed(() => keyboard.value?.closest<HTMLElement>('.app-shell') || document.body)
 const caps = ref(false)
 const sheet = ref<'select' | 'paste'>()
 const snapshot = ref('')
@@ -249,9 +253,9 @@ onBeforeUnmount(() => { textRequest?.abort(); cancelPress(); window.removeEventL
 </script>
 
 <template>
-  <section class="mobile-keyboard" @pointerdown.stop @mousedown.stop @keydown.esc.stop.prevent="escape">
+  <section ref="keyboard" class="mobile-keyboard" @pointerdown.stop @mousedown.stop @keydown.esc.stop.prevent="escape">
     <div v-if="more" class="mobile-keys-dismiss" @pointerdown.stop.prevent="more = false" />
-    <div v-if="more" class="mobile-keys-more" role="menu" :aria-label="t('terminal.keyboard.more')" @wheel.stop>
+    <div v-if="more" class="mobile-keys-more" role="region" :aria-label="t('terminal.keyboard.more')" @wheel.stop>
       <div class="mobile-key-deck" role="group" :aria-label="t('terminal.keyboard.full')" @scroll.capture="stopRepeat" @contextmenu.prevent>
         <div v-for="row in deckRows" :key="row.keys[0]?.key" class="mobile-key-deck-row" :class="row.class" role="group" :aria-label="row.name">
           <button v-for="key in row.keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :title="key.label" :aria-pressed="keyPressed(key.key)" :style="key.span ? { gridColumn: `span ${key.span}` } : undefined"
@@ -270,22 +274,26 @@ onBeforeUnmount(() => { textRequest?.abort(); cancelPress(); window.removeEventL
     </div>
     <div class="mobile-key-row" role="toolbar" :aria-label="t('terminal.keyboard.helperKeys')" @contextmenu.prevent>
       <button v-for="key in keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :aria-pressed="keyPressed(key.key)" :class="{ 'arrow-key': key.symbol }" @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ key.symbol || key.label }}</button>
-      <button type="button" :aria-label="t('terminal.keyboard.more')" :aria-expanded="more" :class="{ active: more || modifiers.shift || modifiers.alt || modifiers.meta }" @pointerdown.prevent @click="toggleMore"><Icon name="more" :size="19" /></button>
+      <button ref="moreTrigger" type="button" :aria-label="t('terminal.keyboard.more')" :aria-expanded="more" :class="{ active: more || modifiers.shift || modifiers.alt || modifiers.meta }" @pointerdown.prevent @click="toggleMore"><Icon name="more" :size="19" /></button>
     </div>
     <input ref="fileInput" class="mobile-file-input" type="file" multiple tabindex="-1" :aria-label="t('terminal.upload.file')" @change="filesChanged" />
-    <div v-if="sheet" class="mobile-text-backdrop" @pointerdown.self="closeSheet">
-      <section class="mobile-text-sheet" role="dialog" aria-modal="true" :aria-label="sheet === 'select' ? t('terminal.keyboard.selectText') : t('terminal.keyboard.pasteText')">
-        <header><strong>{{ sheet === 'select' ? t('terminal.keyboard.selectText') : t('terminal.keyboard.pasteText') }}</strong><button type="button" :aria-label="t('common.close')" @pointerdown.prevent @click="closeSheet"><Icon name="close" :size="18" /></button></header>
+    <UModal :open="!!sheet" :portal="portal" :transition="false" :title="sheet === 'select' ? t('terminal.keyboard.selectText') : t('terminal.keyboard.pasteText')"
+      :close="{ 'aria-label': t('common.close') }" :content="{ onCloseAutoFocus: event => { event.preventDefault(); moreTrigger?.focus({ preventScroll: true }) } }"
+      :ui="{ content: 'mobile-text-sheet', overlay: 'mobile-text-backdrop', header: 'shrink-0 px-4 py-3', title: 'text-sm font-medium', body: 'flex flex-1 min-h-0 p-0 sm:p-0', footer: 'shrink-0 justify-end gap-2 p-2', close: 'min-w-11 min-h-11' }"
+      @update:open="value => { if (!value) closeSheet() }">
+      <template #body>
         <div v-if="sheet === 'select' && (loadingText || textFailed)" class="mobile-text-status" :role="textFailed ? 'alert' : 'status'">
           <template v-if="loadingText"><span class="spinner" />{{ t('common.loading') }}</template>
-          <template v-else><span>{{ t('panels.scan.incomplete') }}</span><button type="button" @click="loadText">{{ t('common.retry') }}</button></template>
+          <template v-else><span>{{ t('panels.scan.incomplete') }}</span><UButton type="button" color="neutral" variant="ghost" class="min-h-11" @click="loadText">{{ t('common.retry') }}</UButton></template>
         </div>
         <textarea v-else-if="sheet === 'select'" ref="textArea" :value="snapshot" readonly inputmode="none" :aria-label="t('terminal.keyboard.terminalText')" spellcheck="false" @select="updateSelection" @pointerup="updateSelection" @keyup="updateSelection" />
         <textarea v-else ref="textArea" v-model="draft" :aria-label="t('terminal.keyboard.textToPaste')" :placeholder="t('terminal.keyboard.longPressPaste')" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" @paste="pasteFiles" />
-        <footer v-if="sheet === 'select'"><button type="button" :disabled="!selected" @pointerdown.prevent @click="copy(false)">{{ t('terminal.keyboard.copySelection') }}</button><button type="button" :disabled="!snapshot" @pointerdown.prevent @click="copy(true)">{{ t('terminal.keyboard.copyAll') }}</button></footer>
-        <footer v-else><button type="button" :disabled="!draft || disabled" @pointerdown.prevent @click="pasteText">{{ t('terminal.keyboard.pasteIntoTerminal') }}</button></footer>
-      </section>
-    </div>
+      </template>
+      <template #footer>
+        <template v-if="sheet === 'select'"><UButton type="button" color="neutral" variant="outline" class="min-h-11" :disabled="!selected" @pointerdown.prevent @click="copy(false)">{{ t('terminal.keyboard.copySelection') }}</UButton><UButton type="button" color="neutral" variant="outline" class="min-h-11" :disabled="!snapshot" @pointerdown.prevent @click="copy(true)">{{ t('terminal.keyboard.copyAll') }}</UButton></template>
+        <UButton v-else type="button" color="neutral" variant="outline" class="min-h-11" :disabled="!draft || disabled" @pointerdown.prevent @click="pasteText">{{ t('terminal.keyboard.pasteIntoTerminal') }}</UButton>
+      </template>
+    </UModal>
   </section>
 </template>
 
@@ -318,14 +326,13 @@ onBeforeUnmount(() => { textRequest?.abort(); cancelPress(); window.removeEventL
 .mobile-key-actions button:active{background:#3b4654}
 .mobile-keyboard button:is([aria-pressed=true],.active):active:not(:disabled){background:var(--toggle-pressed)}
 .mobile-file-input{display:none}
-.mobile-text-backdrop{--text-safe-top:var(--mobile-safe-top,var(--ui-safe-top));--text-safe-bottom:var(--mobile-safe-bottom,var(--ui-safe-bottom));box-sizing:border-box;position:fixed;inset:0;z-index:90;display:flex;align-items:center;justify-content:center;padding:calc(12px + var(--text-safe-top)) calc(12px + var(--ui-safe-right)) calc(12px + var(--text-safe-bottom)) calc(12px + var(--ui-safe-left));background:#070a10b0}
-.mobile-text-sheet{width:min(600px,100%);max-height:100%;min-height:0;height:min(520px,80%);display:flex;flex-direction:column;overflow:auto;overscroll-behavior:contain;border:1px solid #48515f;border-radius:9px;background:#20252d;box-shadow:0 16px 50px #0008}
-.mobile-text-sheet header{display:flex;align-items:center;justify-content:space-between;flex:0 0 48px;padding:0 6px 0 15px;border-bottom:1px solid #353e4b}
-.mobile-text-sheet strong{font-size:14px;font-weight:500}
+@media(hover:hover){.mobile-keyboard button:hover:not(:disabled):not([aria-pressed=true]):not(.active){background:#37414e;border-color:#526071}.mobile-keyboard button:is([aria-pressed=true],.active):hover:not(:active):not(:disabled){background:var(--toggle-hover)}}
+
+</style>
+
+<style>
+.mobile-text-backdrop{z-index:90;background:#070a10b0}
+.mobile-text-sheet{--text-safe-top:var(--mobile-safe-top,var(--ui-safe-top));--text-safe-bottom:var(--mobile-safe-bottom,var(--ui-safe-bottom));left:calc(var(--mobile-left,0px) + (var(--mobile-width,var(--ui-viewport-width)) + var(--ui-safe-left) - var(--ui-safe-right))/2);top:calc(var(--dialog-top) + (var(--dialog-height) + var(--text-safe-top) - var(--text-safe-bottom))/2);width:min(600px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px - var(--ui-safe-left) - var(--ui-safe-right)));height:min(520px,calc(var(--dialog-height) - 24px - var(--text-safe-top) - var(--text-safe-bottom)));max-width:none;max-height:none;min-height:0;overflow:hidden;overscroll-behavior:contain;z-index:91}
 .mobile-text-status{display:flex;flex:1;align-items:center;justify-content:center;gap:8px;padding:12px;color:#a0adbf;font-size:13px}
 .mobile-text-sheet textarea{display:block;flex:1;min-height:0;resize:none;width:100%;padding:12px;margin:0;color:#d7dce5;border:0;border-radius:0;outline:none;box-shadow:none;background:#15191f;font-family:var(--content-font-family,monospace);font-feature-settings:var(--content-font-features,normal);font-size:16px;line-height:1.5;white-space:pre-wrap;overflow:auto;user-select:text;-webkit-user-select:text;touch-action:pan-y;-webkit-touch-callout:default}
-.mobile-text-sheet footer{display:flex;align-items:center;justify-content:flex-end;gap:5px;flex:0 0 52px;padding:2px 8px;border-top:1px solid #353e4b}
-.mobile-text-sheet footer button{background:#333c49;color:#d4dfed;font-size:12px}
-@media(hover:hover){.mobile-keyboard button:hover:not(:disabled):not([aria-pressed=true]):not(.active){background:#37414e;border-color:#526071}.mobile-keyboard button:is([aria-pressed=true],.active):hover:not(:active):not(:disabled){background:var(--toggle-hover)}}
-@media(max-height:400px){.mobile-text-backdrop{padding:calc(5px + var(--text-safe-top)) calc(5px + var(--ui-safe-right)) calc(5px + var(--text-safe-bottom)) calc(5px + var(--ui-safe-left))}.mobile-text-sheet{height:100%;}.mobile-text-sheet header{flex-basis:44px}.mobile-text-sheet footer{flex-basis:44px}}
 </style>

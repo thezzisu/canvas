@@ -11,6 +11,7 @@ import { settingsPatchSchema } from "./settings.ts";
 import { layoutFields, type LayoutUpdate, type LayoutGeometry } from "../shared/layout.ts";
 import { getMimeType } from "hono/utils/mime";
 import { CARD_REMOVAL_UNDO_MS, type CardRemovalResponse } from '../shared/card-removal.ts';
+import { orderedIds, type NavigationOrder, type NavigationOrderKind } from '../shared/navigation-order.ts';
 
 export const sourceSchema = z
   .object({
@@ -121,6 +122,7 @@ interface RemovedCard {
   sourceKey?: string; restored: boolean; timer: ReturnType<typeof setTimeout>;
 }
 export type SharedState = {
+  navigationOrder: NavigationOrder;
   settings: GlobalSettings;
   instanceId: string;
   revision: number;
@@ -282,6 +284,7 @@ export class Store extends EventEmitter {
   }
   snapshot(): SharedState {
     return {
+      navigationOrder: this.navigationOrder(),
       settings: this.settings(),
       instanceId: this.instanceId,
       revision: this.revision,
@@ -299,6 +302,23 @@ export class Store extends EventEmitter {
   settings(): GlobalSettings {
     const stored = this.get<unknown>("settings", "global");
     return stored === undefined ? defaultSettings() : settingsPatchSchema.parse(stored);
+  }
+  navigationOrder(): NavigationOrder {
+    const saved = this.get<NavigationOrder>('navigation', 'order');
+    const ids = (kind: string) => this.db.prepare("SELECT id FROM documents WHERE kind=? AND NOT(kind='canvas' AND id='overview') ORDER BY rowid").all(kind).map(row => String(row.id));
+    return {
+      canvases: orderedIds(ids('canvas'), saved?.canvases || []),
+      sources: orderedIds(ids('source'), saved?.sources || []),
+    };
+  }
+  updateNavigationOrder(kind: NavigationOrderKind, ids: string[]): NavigationOrder {
+    const current = this.navigationOrder();
+    const next = { ...current, [kind]: orderedIds(current[kind], ids) };
+    if (isDeepStrictEqual(current, next)) return current;
+    this.db.prepare("INSERT INTO documents(kind,id,body) VALUES('navigation','order',?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body")
+      .run(JSON.stringify(next));
+    this.changed();
+    return next;
   }
   updateSettings(value: GlobalSettings): GlobalSettings {
     const settings = settingsPatchSchema.parse(value);

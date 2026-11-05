@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, shallowRef, watch } from 'vue'
 import { VueFlow, useVueFlow, type Node, type NodeChange, type NodePositionChange, type NodeMouseEvent } from '@vue-flow/core'
-import { useStorage, useTitle, watchDebounced } from '@vueuse/core'
+import { useMediaQuery, useStorage, useTitle, watchDebounced } from '@vueuse/core'
 import CanvasMiniMap from './components/CanvasMiniMap.vue'
 import UApp from '@nuxt/ui/components/App.vue'
 import UTheme from '@nuxt/ui/components/Theme.vue'
@@ -21,6 +21,7 @@ import { defaultWindowSize } from '../../shared/window-size'
 import CanvasNavItem from './components/CanvasNavItem.vue'
 import SidebarList from './components/SidebarList.vue'
 import { orderedItems, useSidebarOrder } from './sidebar-order'
+import { useOrderTransition } from './order-transition'
 import NotificationCenter from './components/NotificationCenter.vue'
 import NotificationHost from './components/NotificationHost.vue'
 import AppFeedback from './components/AppFeedback.vue'
@@ -30,6 +31,7 @@ import type { CanvasNotification } from '../../shared/notification'
 import { notificationTarget } from './notification-model'
 import { focusedCompletionStatus, projectFocusedResources, type WindowFocus, type FocusedStatus } from './completion-focus'
 import { canvasIndicators, needsAttention, windowVisualState } from './canvas-status'
+import { canvasAgents } from './canvas-agents'
 import { LayoutDraft } from './layout-draft'
 import { layoutEditingKey } from './layout-editing'
 import { useReducedMotion } from './reduced-motion'
@@ -103,6 +105,7 @@ const { fitView, zoomIn, zoomOut, setViewport, getViewport, getNodesInitialized,
 const { hasSafeTop } = useDisplayCutout()
 const ViewportDiagnostics = defineAsyncComponent(() => import('./components/ViewportDiagnostics.vue'))
 const mobile = useMobileLayout()
+const narrowNavigation = useMediaQuery('(max-width: 620px)')
 const reducedMotion = useReducedMotion()
 const { viewport: visibleViewport, style: mobileViewportStyle } = useMobileViewport(mobile)
 const sidebarOpen = ref(false)
@@ -134,13 +137,18 @@ const loginError = computed(() => {
 })
 const error = ref('')
 const success = ref('')
-const { order: sidebarOrder, remember: rememberSidebarOrder } = useSidebarOrder(activeInstanceId)
+const { order: sidebarOrder, remember: rememberSidebarOrder } = useSidebarOrder(() => latestState.value?.navigationOrder, apiRevision, async (kind, ids) => {
+  const context = apiContext()
+  await api(`/api/navigation-order/${kind}`, { method: 'PATCH', body: JSON.stringify({ ids }) }, context)
+  if (isCurrentApi(context)) await syncState()
+}, showError)
 const sources = ref<Source[]>([])
-const orderedSources = computed(() => orderedItems(sources.value, sidebarOrder.value?.sources))
+const orderedSources = computed(() => orderedItems(sources.value, sidebarOrder.value.sources))
+const overviewSourceOrder = shallowRef<string[]>([])
 const polledResources = ref<SourceResource[]>([])
 const rawResources = computed(() => mergeLiveResources(polledResources.value, liveTerminalMetadata.value))
 const focusedStatus = computed<FocusedStatus | undefined>(previous => focusedCompletionStatus(rawResources.value, terminalReadFocus.value, previous))
-const resources = computed(() => orderedItems(projectFocusedResources(rawResources.value, focusedStatus.value), sidebarOrder.value?.sources))
+const resources = computed(() => orderedItems(projectFocusedResources(rawResources.value, focusedStatus.value), overviewSourceOrder.value))
 const resourcesFresh = ref(false)
 const resourcesLoaded = ref(false)
 const loadFailure = shallowRef<unknown>()
@@ -193,6 +201,8 @@ const settingsDialog = ref(false)
 const settingsDialogComponent = ref<InstanceType<typeof SettingsDialog>>()
 const accountDialog = ref(false)
 const accountMenuOpen = ref(false), accountTrigger = ref<HTMLButtonElement>()
+const openCanvasAgents = ref('')
+watch([activeId, apiRevision], () => { openCanvasAgents.value = '' })
 const accountMenuDismiss = usePointerDismiss(accountMenuOpen, accountTrigger)
 const accountMenu = computed<DropdownMenuItem[][]>(() => [
   [{ label: t('account.title'), icon: 'i-lucide-user-round', onSelect: () => { accountDialog.value = true } }],
@@ -205,7 +215,27 @@ const contentFontReady = ref(false)
 let fontSignature = ''
 let fontRevision = 0
 const canvasMenu = ref(false)
-const canvasMenuElement = ref<HTMLElement>()
+const canvasMenuTrigger = ref<HTMLButtonElement>()
+const canvasMenuDismiss = usePointerDismiss(canvasMenu, canvasMenuTrigger)
+const canvasMenuItems = computed<DropdownMenuItem[][]>(() => [
+  [
+    ...(mobile.value ? [
+      { label: t('app.refresh'), icon: 'i-lucide-refresh-cw', onSelect: () => { void refreshResources() } },
+      { label: t('app.connections'), icon: 'i-lucide-server', onSelect: () => { sourcePanel.value = true } },
+      ...(!isOverview.value ? [{ label: t('app.addWindows'), icon: 'i-lucide-plus', onSelect: () => openAdd() }] : []),
+    ] : []),
+    ...(mobile.value && !isOverview.value && !layoutEditing.value ? [{ label: t('app.layoutEdit'), icon: 'i-lucide-pencil', onSelect: () => { void startLayout() } }] : []),
+    { label: t('app.background'), icon: 'i-lucide-image', onSelect: openBackground },
+  ],
+  [
+    { type: 'checkbox', label: t('app.minimap'), icon: 'i-lucide-map', checked: showMinimap.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { showMinimap.value = value } },
+    { type: 'checkbox', label: t('app.navigation'), icon: 'i-lucide-panel-bottom', checked: showNavigation.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { showNavigation.value = value } },
+  ],
+  ...(!isOverview.value ? [[
+    { label: t('app.renameCanvas'), icon: 'i-lucide-pencil', onSelect: () => openCanvasDialog(currentCanvas.value) },
+    { label: t('app.deleteCanvas'), icon: 'i-lucide-trash', color: 'error' as const, onSelect: () => { void deleteCanvas() } },
+  ]] : []),
+])
 const createMenuOpen = ref(false)
 const canvasFileDrop = ref<InstanceType<typeof CanvasFileDrop>>()
 const createMenu = computed<DropdownMenuItem[]>(() => [
@@ -213,7 +243,6 @@ const createMenu = computed<DropdownMenuItem[]>(() => [
   { label: t('app.uploadFile'), disabled: canvasFileDrop.value?.uploading, onSelect: () => canvasFileDrop.value?.chooseFiles() },
 ])
 watch([activeId, apiRevision], () => { createMenuOpen.value = false })
-usePointerDismiss(canvasMenu, canvasMenuElement)
 const canvasDraft = reactive({ id: '', name: '' })
 const dialogError = ref('')
 const actionDialog = ref<{ title: string; description: string; label?: string; optional?: boolean; value: string; danger?: boolean; button: string; submit: (value: string) => Promise<void> } | null>(null)
@@ -597,8 +626,13 @@ const { surface: graphSurface, app: appElement, fullscreen: canvasFullscreen, re
   paging: { enabled: () => paging.value, canMove: direction => !!pageNeighbor(direction), move: movePage, recenter: fitPage },
   beforeFullscreen: () => { clearFitContext(); sourcePanel.value = false; sidebarOpen.value = false; canvasMenu.value = false },
 })
-const sidebarDrawer = computed(() => mobile.value || canvasFullscreen.value)
+const sidebarDrawer = computed(() => mobile.value || narrowNavigation.value || canvasFullscreen.value)
 provide(cutoutActiveKey, computed(() => canvasFullscreen.value && hasSafeTop.value))
+useOrderTransition(overviewSourceOrder, {
+  order: () => orderedSources.value.map(source => source.id),
+  active: () => isOverview.value && pageVisible.value && !hasFocus.value && !navigation.requested.value,
+  instance: () => apiRevision.value, reduced: () => reducedMotion.value, host: () => graphSurface.value,
+})
 const currentBackground = computed(() => isOverview.value ? overviewBackground.value : currentCanvas.value?.background)
 const { url: backgroundUrl, material: backgroundMaterial } = useBackgroundUrl(() => currentBackground.value?.url, { material: true })
 const terminalMaterialStyle = computed(() => {
@@ -701,7 +735,7 @@ function overviewCreateNode(source: SourceResource, spaceId: string | undefined,
 function overviewNodes(): Node[] {
   const result: Node[] = []
   let y = 0
-  for (const config of orderedSources.value) {
+  for (const config of orderedItems(sources.value, overviewSourceOrder.value)) {
     const source = resources.value.find(item => item.id === config.id)
     if (!source) continue
     const visible = visibleOverview.value.find(item => item.id === config.id)
@@ -1276,11 +1310,7 @@ function settingsSaved(_settings: GlobalSettings) { void syncState().catch(showE
 function openBackground() { canvasMenu.value = false; backgroundCanvas.value = isOverview.value ? { id: 'overview', name: t('app.overview'), nodes: [], background: overviewBackground.value } : currentCanvas.value || null }
 function closeBackgroundDialog() {
   backgroundCanvas.value = null
-  void nextTick(() => canvasMenuElement.value?.querySelector<HTMLButtonElement>('.canvas-menu-trigger')?.focus())
-}
-async function toggleCanvasMenu() {
-  canvasMenu.value = !canvasMenu.value
-  if (canvasMenu.value) { await nextTick(); canvasMenuElement.value?.querySelector<HTMLButtonElement>('.canvas-menu button')?.focus() }
+  void nextTick(() => canvasMenuTrigger.value?.focus())
 }
 function openCanvasDialog(canvas?: Canvas) { canvasDialogRevision++; canvasDraft.id = canvas?.id || ''; canvasDraft.name = canvas?.name || ''; dialogError.value = ''; canvasDialog.value = true; sidebarOpen.value = false }
 async function submitCanvas() {
@@ -1472,18 +1502,24 @@ watch([notificationFocus, terminalReadFocus], ([target, ready]) => {
   if (focusWindow(target.sourceId, target.spaceId, target.windowId, false)) notificationFocus.value = undefined
 }, { flush: 'post' })
 async function goToNotification(event: CanvasNotification) {
-  if (!await leaveLayout()) return
-  if (!prepareNotificationAction()) return
-  cancelNotificationReveal()
   const target = notificationTarget(event, resources.value), source = sources.value.find(item => item.id === event.sourceId)
   if (!target || !source || !latestState.value) return
-  const context = apiContext(), intent = notificationIntent
+  const canvasId = lastWindowCanvas(terminalIdentityKey(latestState.value.instanceId, source, target.window.id), event.sourceId, target.window.id, canvases.value)
+  await goToCanvasWindow(canvasId, { sourceId: source.id, windowId: target.window.id })
+}
+async function goToCanvasWindow(canvasId: string, target: WindowFocus) {
+  const context = apiContext()
+  if (!await leaveLayout() || !isCurrentApi(context) || !prepareNotificationAction()) return
+  cancelNotificationReveal()
+  const intent = notificationIntent
   if (focusedCardId.value) await closeCardFocus()
   if (focused.value) await closeFocus()
   if (!isCurrentApi(context) || intent !== notificationIntent) return
-  const windowId = target.window.id
-  const canvasId = lastWindowCanvas(terminalIdentityKey(latestState.value.instanceId, source, windowId), event.sourceId, windowId, canvases.value)
-  notificationReveal.value = { canvasId, target: { sourceId: event.sourceId, windowId }, pending: true }
+  const source = resources.value.find(source => source.id === target.sourceId && source.status === 'online' && !source.error)
+  if (!source?.spaces.some(space => space.windows.some(window => window.id === target.windowId))) return
+  if (canvasId !== 'overview' && !canvases.value.find(canvas => canvas.id === canvasId)?.nodes.some(node =>
+    isTerminalNode(node) && node.sourceId === target.sourceId && node.windowId === target.windowId)) return
+  notificationReveal.value = { canvasId, target, pending: true }
   sourcePanel.value = false; sidebarOpen.value = false
   switchCanvas(canvasId)
   if (notificationReveal.value) notificationReveal.value.request = navigation.requested.value
@@ -2056,7 +2092,6 @@ function keydown(event: KeyboardEvent) {
   }
   if (event.key === 'Escape') {
     if (sidebarOpen.value) sidebarOpen.value = false
-    else if (canvasMenu.value) { canvasMenu.value = false; canvasMenuElement.value?.querySelector<HTMLButtonElement>('.canvas-menu-trigger')?.focus() }
     else if (overviewMenuOpen.value) overviewMenuOpen.value = false
     else if (windowMenu.value) windowMenu.value = null
     else if (actionDialog.value) { if (!busy.value) actionDialog.value = null }
@@ -2109,8 +2144,9 @@ watch(graphSurface, element => {
 watch(visibleViewport, () => { if (mobile.value) void nextTick(windowResize) })
 watch(uiZoom, () => { void nextTick(windowResize) })
 watch(mobile, () => { if (layoutEditing.value) return; sidebarOpen.value = false; canvasTouchCancel(); rebuildNodes() })
+watch(sidebarDrawer, drawer => { if (!drawer) sidebarOpen.value = false })
 watch(sourcePanel, value => { if (value && sidebarDrawer.value) sidebarOpen.value = false })
-watch(sidebarOpen, value => { if (value) { canvasMenu.value = false; overviewMenuOpen.value = false; createMenuOpen.value = false } })
+watch(sidebarOpen, value => { if (!value) openCanvasAgents.value = ''; if (value) { canvasMenu.value = false; overviewMenuOpen.value = false; createMenuOpen.value = false } })
 watch([canvasMenu, overviewMenuOpen, createMenuOpen], values => { if (values.some(Boolean)) sidebarOpen.value = false })
 watch(canvasFullscreen, async () => { sidebarOpen.value = false; await nextTick(); cameraFrame = canvasFrame(graphSurface.value) })
 setDownloadContext(resource => {
@@ -2168,8 +2204,8 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
   </div>
   <div v-else ref="appElement" class="app-shell" :class="{ 'canvas-fullscreen': canvasFullscreen, 'mobile-layout': mobile, 'sidebar-drawer': sidebarDrawer, 'has-display-cutout': hasSafeTop, 'cutout-preview-active': settingsDialog && mobile && hasSafeTop }" :style="[mobileViewportStyle, contentFontStyle, terminalMaterialStyle]" :data-content-font="appliedContentFont">
     <header class="workspace-header" :inert="contentFontReady && !!focusedCard || undefined" :aria-hidden="contentFontReady && !!focusedCard || undefined">
-      <div v-if="!mobile" class="brand header-brand"><span class="brand-symbol"><Icon name="canvas" :size="21" /></span><span class="brand-name">canvas</span></div>
-      <div class="header-context"><button v-if="mobile" class="icon-button mobile-menu-trigger" :aria-label="t('app.openCanvasList')" aria-controls="canvas-sidebar" :aria-expanded="sidebarOpen" @click="sidebarOpen = !sidebarOpen"><Icon name="menu" :size="21" /></button><div class="breadcrumb"><h1 v-if="latestState" :title="currentName">{{ currentName }}</h1></div><span v-if="!workspacePending && !undiscoveredSources.length" class="header-counts">{{ canvasCounts }}</span><button class="icon-button refresh-button" :title="refreshedAt ? t('app.refreshUpdated', { time: refreshedTime }) : t('app.refresh')" :aria-label="t('app.refresh')" :disabled="loading || workspacePending" @click="refreshResources()"><Icon name="refresh" :size="14" :class="{ spinning: loading }" /></button></div>
+      <div v-if="!sidebarDrawer" class="brand header-brand"><span class="brand-symbol"><Icon name="canvas" :size="21" /></span><span class="brand-name">canvas</span></div>
+      <div class="header-context"><button v-if="sidebarDrawer" class="icon-button mobile-menu-trigger" :aria-label="t('app.openCanvasList')" aria-controls="canvas-sidebar" :aria-expanded="sidebarOpen" @click="sidebarOpen = !sidebarOpen"><Icon name="menu" :size="21" /></button><div class="header-text"><div class="breadcrumb"><h1 v-if="latestState" :title="currentName">{{ currentName }}</h1></div><span v-if="!workspacePending && !undiscoveredSources.length" class="header-counts">{{ canvasCounts }}</span></div><button class="icon-button refresh-button" :title="refreshedAt ? t('app.refreshUpdated', { time: refreshedTime }) : t('app.refresh')" :aria-label="t('app.refresh')" :disabled="loading || workspacePending" @click="refreshResources()"><Icon name="refresh" :size="14" :class="{ spinning: loading }" /></button></div>
       <div class="header-actions" :inert="workspacePending || layoutEditing || undefined">
         <UDropdownMenu v-if="isOverview" v-model:open="overviewMenuOpen" :modal="false" :items="overviewMenu" :portal="appElement || false" :content="{ align: 'end', ...overviewDismiss }" :ui="{ content: 'overview-display-menu w-[180px] z-[60]' }">
           <button ref="overviewTrigger" class="icon-button overview-display-trigger" :class="{ active: overviewChanged }" :title="t('app.filterSort')" :aria-label="t('app.overviewFilterSort')"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg><i v-if="overviewChanged" /></button>
@@ -2179,7 +2215,10 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
           <button class="icon-button canvas-create-trigger" :title="t('app.addContent')" :aria-label="t('app.addContent')" :disabled="busy"><Icon name="plus" :size="17" /></button>
         </UDropdownMenu>
         <span v-if="!isOverview && saveState" class="save-state" :title="t(`app.${saveState}`)" :aria-label="t(`app.${saveState}`)"><span v-if="saveState === 'saving'" class="spinner" /><Icon v-else :name="saveState === 'saved' ? 'check' : 'info'" :size="13" /></span>
-        <div ref="canvasMenuElement" class="canvas-menu-wrap"><button class="icon-button canvas-menu-trigger" :title="t('app.canvasSettings')" :aria-label="t('app.canvasSettings')" :aria-expanded="canvasMenu" aria-controls="canvas-menu" @click="toggleCanvasMenu"><Icon name="more" :size="17" /></button><div v-if="canvasMenu" id="canvas-menu" class="canvas-menu"><template v-if="mobile"><button @click="canvasMenu = false; refreshResources()"><Icon name="refresh" :size="15" />{{ t('app.refresh') }}</button><button @click="canvasMenu = false; sourcePanel = true"><Icon name="server" :size="15" />{{ t('app.connections') }}</button><button v-if="!isOverview" @click="canvasMenu = false; openAdd()"><Icon name="plus" :size="15" />{{ t('app.addWindows') }}</button></template><button v-if="mobile && !isOverview && !layoutEditing" @click="startLayout"><Icon name="edit" :size="15" />{{ t('app.layoutEdit') }}</button><button @click="openBackground"><Icon name="image" :size="15" />{{ t('app.background') }}</button><button :aria-pressed="showMinimap" @click="showMinimap = !showMinimap"><Icon name="map" :size="15" />{{ t('app.minimap') }}<Icon class="canvas-menu-check" :class="{ unchecked: !showMinimap }" name="check" :size="15" /></button><button :aria-pressed="showNavigation" @click="showNavigation = !showNavigation"><Icon name="navigation" :size="15" />{{ t('app.navigation') }}<Icon class="canvas-menu-check" :class="{ unchecked: !showNavigation }" name="check" :size="15" /></button><button v-if="!isOverview" @click="canvasMenu = false; openCanvasDialog(currentCanvas)"><Icon name="edit" :size="15" />{{ t('app.renameCanvas') }}</button><button v-if="!isOverview" class="danger-text" @click="canvasMenu = false; deleteCanvas()"><Icon name="trash" :size="15" />{{ t('app.deleteCanvas') }}</button></div></div>
+        <UDropdownMenu v-model:open="canvasMenu" :modal="false" :items="canvasMenuItems" :portal="appElement || false"
+          :content="{ align: 'end', ...canvasMenuDismiss }" :ui="{ content: 'canvas-menu z-[60] min-w-[200px] w-max max-w-[calc(var(--ui-viewport-width)-16px)]', group: 'space-y-0.5', item: 'aria-checked:bg-[var(--toggle-bg)] aria-checked:text-[var(--toggle-fg)]', itemLabel: 'whitespace-nowrap' }">
+          <button ref="canvasMenuTrigger" class="icon-button canvas-menu-trigger" :title="t('app.canvasSettings')" :aria-label="t('app.canvasSettings')"><Icon name="more" :size="17" /></button>
+        </UDropdownMenu>
         <button class="button subtle" :title="t('app.connections')" :aria-label="t('app.connections')" @click="sourcePanel = true"><Icon name="server" :size="15" />{{ t('app.connections') }}</button>
         <button v-if="isOverview" class="button primary" :title="t('app.addConnection')" :aria-label="t('app.addConnection')" @click="openSource()"><Icon name="plus" :size="15" />{{ t('app.addConnection') }}</button><button v-else class="button primary" :title="t('app.addWindows')" :aria-label="t('app.addWindows')" @click="openAdd()"><Icon name="layers" :size="15" />{{ t('app.addWindows') }}</button>
       </div>
@@ -2192,9 +2231,9 @@ onBeforeUnmount(() => { setTerminalReadFocus(); window.removeEventListener('poin
         <div class="sidebar-divider" role="separator" />
         <div class="nav-section-label canvas-label"><span>{{ t('app.canvases') }}</span><button class="icon-button" :title="t('app.newCanvas')" :aria-label="t('app.newCanvas')" @click="openCanvasDialog()"><Icon name="plus" :size="16" /></button></div>
         <nav class="canvas-nav" :aria-label="t('app.canvases')">
-          <CanvasNavItem :name="t('app.overview')" overview :active="isOverview" :indicator="indicators.overview" @select="navigateCanvas('overview')" />
+          <CanvasNavItem :name="t('app.overview')" overview :active="isOverview" :indicator="indicators.overview" :open="openCanvasAgents === 'overview'" @update:open="value => { if (value) openCanvasAgents = 'overview'; else if (openCanvasAgents === 'overview') openCanvasAgents = '' }" :agents="() => canvasAgents(undefined, resources)" :actions-available="notificationActionsAvailable" @go="target => goToCanvasWindow('overview', target)" @select="navigateCanvas('overview')" />
           <SidebarList :key="activeInstanceId" :items="orderedCanvases" @reorder="ids => rememberSidebarOrder('canvases', ids)">
-            <template #default="{ item: canvas, hint }"><CanvasNavItem :name="canvas.name" :active="activeId === canvas.id" :indicator="indicators[canvas.id]" :aria-description="hint" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" @select="navigateCanvas(canvas.id)" /></template>
+            <template #default="{ item: canvas, hint }"><CanvasNavItem :name="canvas.name" :active="activeId === canvas.id" :indicator="indicators[canvas.id]" :open="openCanvasAgents === canvas.id" @update:open="value => { if (value) openCanvasAgents = canvas.id; else if (openCanvasAgents === canvas.id) openCanvasAgents = '' }" :agents="() => canvasAgents(canvas, resources)" :actions-available="notificationActionsAvailable" @go="target => goToCanvasWindow(canvas.id, target)" :aria-description="hint" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" @select="navigateCanvas(canvas.id)" /></template>
           </SidebarList>
         </nav>
         <div class="sidebar-divider" role="separator" />

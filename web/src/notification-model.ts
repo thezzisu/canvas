@@ -15,13 +15,24 @@ export function isCanvasNotification(value: unknown): value is CanvasNotificatio
     })
 }
 
-export function notificationTarget(event: CanvasNotification, resources: readonly SourceResource[]) {
-  const source = resources.find(source => source.id === event.sourceId && source.status === 'online' && !source.error)
+function notificationLocation(event: CanvasNotification, resources: readonly SourceResource[]) {
+  const source = resources.find(source => source.id === event.sourceId)
   if (!source) return
   for (const space of source.spaces) for (const window of space.windows) {
     const pane = event.paneId ? window.panes?.find(pane => pane.id === event.paneId) : undefined
     if (event.paneId ? !!pane : event.windowId === window.id) return { source, space, window, pane }
   }
+}
+
+export function notificationTarget(event: CanvasNotification, resources: readonly SourceResource[]) {
+  const target = notificationLocation(event, resources)
+  return target?.source.status === 'online' && !target.source.error ? target : undefined
+}
+
+/** A displayed completion is an event, even after focus or live status changes. */
+export function notificationPresent(event: CanvasNotification, resources: readonly SourceResource[]): boolean {
+  const source = resources.find(source => source.id === event.sourceId)
+  return !!source && (source.status !== 'online' || !!source.error || !!notificationLocation(event, resources))
 }
 
 export function attentionSummary(resources: readonly SourceResource[]) {

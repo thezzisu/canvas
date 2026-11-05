@@ -1,4 +1,5 @@
 import type { GlobalSettings } from '../../shared/settings'
+import type { NavigationOrder } from '../../shared/navigation-order'
 import type { ProgramStatus } from '../../shared/status'
 import type { CompletionToken } from '../../shared/completion'
 import type { CanvasDirection, CanvasEntry } from './canvas-jump'
@@ -79,7 +80,7 @@ export const isTerminalNode = (node: CanvasNode): node is TerminalCanvasNode => 
 export type NotePatch = Partial<Pick<NoteCanvasNode, 'title' | 'content' | 'color'>>
 export interface Canvas { id: string; name: string; nodes: CanvasNode[]; snapToGrid?: boolean; background?: { url: string; opacity: number } | null }
 export interface WindowSize { width: number; height: number }
-export interface SharedState { instanceId: string; revision: number; sources: Source[]; canvases: Canvas[]; overviewBackground: Canvas['background']; windowSizes: Record<string, WindowSize>; settings: GlobalSettings }
+export interface SharedState { instanceId: string; revision: number; navigationOrder: NavigationOrder; sources: Source[]; canvases: Canvas[]; overviewBackground: Canvas['background']; windowSizes: Record<string, WindowSize>; settings: GlobalSettings }
 export interface TerminalData {
   preferenceKey: string
   sourceId: string
