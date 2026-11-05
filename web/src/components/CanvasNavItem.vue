@@ -19,7 +19,7 @@ const label = computed(() => props.indicator?.status ? t('canvasUi.canvasStatus'
 const trigger = ref<HTMLButtonElement>(), panel = ref<HTMLElement>(), pinned = ref(false)
 const open = computed({ get: () => !!props.open, set: value => emit('update:open', value) })
 const panelId = useId(), portal = computed(() => trigger.value?.closest<HTMLElement>('.app-shell') || document.body)
-const agents = computed(() => open.value ? props.agents() : [])
+const agents = computed(() => props.agents())
 const dismiss = usePointerDismiss(open, trigger)
 const { start: leave, stop: stopLeave } = useTimeoutFn(() => {
   if (!pinned.value && !panel.value?.contains(document.activeElement) && document.activeElement !== trigger.value) open.value = false
@@ -36,7 +36,7 @@ function focusFirst() {
 function toggle(event: MouseEvent) {
   stopLeave(); pinned.value = !pinned.value; open.value = pinned.value
   // A hover-open panel is already mounted. Newly opened panels use native autofocus.
-  if (open.value && event.detail === 0) focusFirst()
+  if (pinned.value && event.detail === 0) focusFirst()
 }
 function go(agent: CanvasAgent) {
   if (!agent.available || props.actionsAvailable === false) return
