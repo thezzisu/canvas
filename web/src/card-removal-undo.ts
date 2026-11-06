@@ -3,14 +3,15 @@ import { useI18n } from 'vue-i18n'
 import { useToast } from '@nuxt/ui/composables/useToast'
 import type { CardRemovalUndo } from '../../shared/card-removal'
 import { api, apiRevision, ApiError, isCurrentApi, segment, uuid, type ApiContext } from './api'
-import { fileViewKey } from './file-view'
+import { filePreferenceKeys } from './file-view'
+import { noteScrollKey } from './note-scroll'
 import { cardZoomKey } from './card-zoom'
 import type { CanvasNode } from './types'
 import { toastAction } from './toast'
 
 interface Removal {
   id: string; canvasId: string; nodeId: string; context: ApiContext
-  fileView?: string; zoom?: string; deadline?: number; timer?: ReturnType<typeof setTimeout>; restoring?: boolean
+  keys: string[]; deadline?: number; timer?: ReturnType<typeof setTimeout>; restoring?: boolean
   preferences?: Array<[string, string]>
 }
 
@@ -61,13 +62,13 @@ export function useCardRemovalUndo(options: { sync(): Promise<void>; released(co
 
   return {
     count, clear, release,
-    begin(canvasId: string, node: CanvasNode, backend: string, context: ApiContext) {
+    begin(canvasId: string, node: CanvasNode, context: ApiContext) {
       if ([...entries.values()].some(entry => entry.canvasId === canvasId && entry.nodeId === node.id)) return
       const entry: Removal = { id: `card-removal:${uuid()}`, canvasId, nodeId: node.id, context,
-        ...(node.type === 'file' ? { fileView: fileViewKey(context.id, canvasId, node.id) } : {}),
-        ...(node.type !== 'terminal' ? { zoom: cardZoomKey(backend, node.id) } : {}) }
+        keys: node.type === 'terminal' ? [] : [cardZoomKey(context.id, node.id),
+          ...(node.type === 'file' ? filePreferenceKeys(context.id, canvasId, node.id) : [noteScrollKey(context.id, canvasId, node.id)])] }
       try {
-        entry.preferences = [entry.fileView, entry.zoom].flatMap(key => {
+        entry.preferences = entry.keys.flatMap(key => {
           const value = key ? localStorage.getItem(key) : null
           return key && value !== null ? [[key, value] as [string, string]] : []
         })
@@ -89,7 +90,6 @@ export function useCardRemovalUndo(options: { sync(): Promise<void>; released(co
         actions: [{ ...toastAction, label: t('app.undoRemoval'), closeOnClick: false, onClick: () => { void restore(entry, undo) } }],
       })
     },
-    fileViews: () => new Set([...entries.values()].flatMap(entry => entry.fileView ? [entry.fileView] : [])),
-    zooms: () => new Set([...entries.values()].flatMap(entry => entry.zoom ? [entry.zoom] : [])),
+    preferences: () => new Set([...entries.values()].flatMap(entry => entry.keys)),
   }
 }

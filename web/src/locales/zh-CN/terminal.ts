@@ -24,7 +24,7 @@ export default {
     showKeyboard: '打开键盘', windowActions: '窗口操作', restore: '退出放大', openWindow: '打开窗口 {name}',
     previousCanvas: '上一个画布', nextCanvas: '下一个画布', canvasNamed: '{action}：{name}',
   },
-  clipboard: { failed: '复制失败', copied: '已复制', macPaste: '使用 ⌘V 粘贴' },
+  clipboard: { failed: '复制失败', copied: '已复制', cut: '已剪切', macPaste: '使用 ⌘V 粘贴' },
   keyboard: {
     input: '终端输入', arrowLeft: '向左', arrowDown: '向下', arrowUp: '向上', arrowRight: '向右',
     more: '更多按键', full: '完整键盘', functions: '功能键', numbers: '数字和符号', modifiers: '修改键和导航',

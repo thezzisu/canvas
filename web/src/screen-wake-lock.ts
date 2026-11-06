@@ -1,4 +1,4 @@
-import { useStorage } from '@vueuse/core'
+import { useLocalStorage } from '@vueuse/core'
 import { computed, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { t } from './i18n'
 
@@ -68,7 +68,7 @@ export class ScreenWakeLockController {
   }
 }
 
-export const keepScreenAwake = useStorage('canvas:display:keep-awake', false)
+export const keepScreenAwake = useLocalStorage('canvas:display:keep-awake', false)
 export const screenWakeLockState = ref<WakeLockState>('off')
 export const screenWakeLockUnavailable = computed(() => typeof window === 'undefined' || !window.isSecureContext
   ? t('common.httpsRequired') : typeof navigator.wakeLock?.request !== 'function' ? t('common.unsupportedBrowser') : '')

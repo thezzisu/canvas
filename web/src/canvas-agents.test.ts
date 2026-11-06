@@ -45,3 +45,24 @@ test('window and pane IDs are scoped to their connection and existing data is ne
   assert.equal(new Set(result.map(item => item.key)).size, 6)
   assert.equal(JSON.stringify(resources), before)
 })
+
+test('status sorting uses each agent pane and preserves native order for equal priorities', () => {
+  const before = JSON.stringify(resources)
+  const peer = { ...resources[0]!, id: 'b', name: 'B' }
+  const result = canvasAgents(undefined, [peer, ...resources], 'status')
+  assert.deepEqual(result.map(agent => `${agent.sourceId}/${agent.pane.id}`), [
+    'b/attention', 'a/attention', 'b/two', 'a/two', 'b/one', 'a/one',
+  ])
+  assert.deepEqual(canvasAgents(selected, resources, 'status').map(agent => agent.pane.id), ['two', 'one'])
+  assert.deepEqual(canvasAgents(undefined, resources, 'native').map(agent => agent.pane.id), ['one', 'two', 'attention'])
+  assert.equal(JSON.stringify(resources), before)
+})
+
+test('offline agents sort by their displayed unknown state without disappearing', () => {
+  const offline = { ...resources[0]!, id: 'offline', status: 'offline' as const }
+  const result = canvasAgents(undefined, [offline, ...resources], 'status')
+  assert.deepEqual(result.map(agent => `${agent.sourceId}/${agent.pane.id}`), [
+    'a/attention', 'a/two', 'a/one', 'offline/one', 'offline/two', 'offline/attention',
+  ])
+  assert(result.slice(3).every(agent => !agent.available && agent.status === 'unknown'))
+})

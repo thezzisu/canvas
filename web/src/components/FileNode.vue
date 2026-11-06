@@ -44,7 +44,7 @@ watch(() => props.data.assetId, () => { binary.value = false })
 const mobilePreview = computed(() => !!props.data.mobile && !props.data.focus)
 const zoom = useContentZoom(() => props.data.zoomKey)
 const markup = computed(() => preview.value === 'text' && (isMarkdownFile(props.data.asset.filename) || /\.html?$/iu.test(props.data.asset.filename)))
-const { rendered, wrap, formatted, highlighted, reading, remember } = useFileView(props.data.instanceId, props.data.canvasId, props.id, markup.value, props.data.canPersistView)
+const { rendered, wrap, formatted, highlighted, reading, remember } = useFileView(() => props.data.instanceId, () => props.data.canvasId, () => props.id, markup, () => props.data.canPersistView())
 const sitePreview = useSourcePreview()
 const previewBusy = sitePreview.busy
 function previewSite() { if (props.data.asset.sourcePreview) void sitePreview.open(path.value, props.data.asset.filename) }

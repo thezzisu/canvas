@@ -25,7 +25,7 @@ export default {
     showKeyboard: 'Show keyboard', windowActions: 'Window actions', restore: 'Restore window', openWindow: 'Open window {name}',
     previousCanvas: 'Previous canvas', nextCanvas: 'Next canvas', canvasNamed: '{action}: {name}',
   },
-  clipboard: { failed: 'Copy failed', copied: 'Copied', macPaste: 'Use ⌘V to paste' },
+  clipboard: { failed: 'Copy failed', copied: 'Copied', cut: 'Cut', macPaste: 'Use ⌘V to paste' },
   keyboard: {
     input: 'Terminal input', arrowLeft: 'Left arrow', arrowDown: 'Down arrow', arrowUp: 'Up arrow', arrowRight: 'Right arrow',
     more: 'More keys', full: 'Full keyboard', functions: 'Function keys', numbers: 'Numbers and symbols', modifiers: 'Modifiers and navigation',

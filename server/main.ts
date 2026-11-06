@@ -25,7 +25,6 @@ import {
 import { OpenDownloadService } from "./open-download.ts";
 import { AssetStore } from "./assets.ts";
 import { UploadService } from "./uploads.ts";
-import { vscodeDirectoryUri } from "./editor-links.ts";
 import { WindowContentService } from "./window-content.ts";
 import { UrlForwardService } from "./url-forward.ts";
 import { CaptureError, CaptureService, type CaptureLease } from './capture.ts';
@@ -89,7 +88,7 @@ const downloads = new OpenDownloadService({
     socket.resume();
   },
   openUrl: (source, url, session) => urlForwards.open(source, url, session),
-  directoryUri: async (source, path) => vscodeDirectoryUri(await editorAuthority(source), path),
+  directoryAuthority: editorAuthority,
   createUpload: metadata => assets.begin(metadata),
   readTemporary: (id, range) => assets.readTemporary(id, range),
   prepare: prepareOpenBridge,

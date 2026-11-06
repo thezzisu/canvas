@@ -23,15 +23,15 @@ import type { FileAsset } from '../types'
 import NoteAttachment from './NoteAttachment.vue'
 import { useNoteScroll } from '../note-scroll'
 
-const props = defineProps<{ content: string; attachments: FileAsset[]; canvasId: string; noteId: string; scrollKey: string; readOnly: boolean; insertAttachment: (value: NoteInsertion) => void }>()
+const props = defineProps<{ content: string; attachments: FileAsset[]; canvasId: string; noteId: string; scrollKey: string; canPersist?: () => boolean; readOnly: boolean; insertAttachment: (value: NoteInsertion) => void }>()
 const emit = defineEmits<{ change: [content: string]; flush: [] }>()
 const { t } = useI18n()
 const input = ref<{ editor?: Editor }>()
 // The editor owns its document. Its initial value is fixed: echoing editor output
 // back through v-model can replace the DOM under an active IME composition.
 const initial = noteDocument(props.content)
-const shell = ref<HTMLElement>()
-useNoteScroll(shell, '.note-editor-content', () => props.scrollKey)
+const scrollTarget = computed(() => input.value?.editor?.view.dom)
+useNoteScroll(scrollTarget, () => props.scrollKey, () => props.canPersist?.() !== false)
 const uploaded = shallowRef<FileAsset[]>([])
 const assets = computed(() => [...props.attachments, ...uploaded.value.filter(asset => !props.attachments.some(item => item.id === asset.id))])
 const task = computed(() => noteUpload(props.noteId))
@@ -144,8 +144,8 @@ function copy(event: ClipboardEvent, cut = false) {
     data.setData('text/plain', clipboardText(note))
     if (note.parts.some(part => typeof part !== 'string')) data.setData(NOTE_CLIPBOARD_TYPE, JSON.stringify(note))
     event.preventDefault()
-    if (cut) current.commands.deleteSelection()
-    beginCopyFeedback()('copied')
+    const removed = cut && current.commands.deleteSelection()
+    beginCopyFeedback()(removed ? 'cut' : 'copied')
   } catch (error) { event.preventDefault(); reportDownloadError(error) }
   return true
 }
@@ -224,7 +224,7 @@ defineExpose({ chooseFiles, pending })
 </script>
 
 <template>
-  <div ref="shell" class="note-editor-shell" @dragenter="dragOver" @dragover="dragOver">
+  <div class="note-editor-shell" @dragenter="dragOver" @dragover="dragOver">
   <UEditor ref="input" :model-value="initial" content-type="json" :starter-kit="false" :image="false" :mention="false" :extensions="[extension, sizeLimit, NoteSelectionEnter, fileDropCursor]" :editable="!readOnly" :enable-input-rules="false" :enable-paste-rules="false" :placeholder="t('panels.note.placeholder')" class="note-editor"
     :ui="{ root: 'h-full min-h-0', content: 'h-full min-h-0', base: 'note-editor-content h-full min-h-0 outline-none' }"
     :editor-props="{ attributes: { 'aria-label': t('panels.note.content'), role: 'textbox', 'aria-multiline': 'true' },

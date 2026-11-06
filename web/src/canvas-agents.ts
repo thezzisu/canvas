@@ -1,4 +1,5 @@
-import type { ProgramStatus } from '../../shared/status'
+import { statusPriority, type ProgramStatus } from '../../shared/status'
+import type { OverviewOrder } from './overview'
 import type { Canvas, PaneResource, SourceResource, WindowResource } from './types'
 
 export interface CanvasAgent {
@@ -13,7 +14,7 @@ export interface CanvasAgent {
 }
 
 /** Use the same displayed resources as the canvas dot; filtering never hides agents here. */
-export function canvasAgents(canvas: Canvas | undefined, resources: readonly SourceResource[]): CanvasAgent[] {
+export function canvasAgents(canvas: Canvas | undefined, resources: readonly SourceResource[], order: OverviewOrder = 'native'): CanvasAgent[] {
   const windows = canvas && new Set(canvas.nodes.flatMap(node => node.type === 'terminal' ? [`${node.sourceId}/${node.windowId}`] : []))
   const agents = new Map<string, CanvasAgent>()
   for (const source of resources) for (const space of source.spaces) for (const window of space.windows) {
@@ -28,5 +29,6 @@ export function canvasAgents(canvas: Canvas | undefined, resources: readonly Sou
       })
     }
   }
-  return [...agents.values()]
+  const result = [...agents.values()]
+  return order === 'status' ? result.sort((a, b) => statusPriority[b.status] - statusPriority[a.status]) : result
 }

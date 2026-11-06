@@ -17,7 +17,7 @@ import { AssetStore } from "./assets.ts";
 import { createApp } from "./app.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { OpenDownloadService, type OpenDownloadOptions } from "./open-download.ts";
-import { vscodeDirectoryUri } from "./editor-links.ts";
+import type { EditorAuthority } from "../shared/editor-target.ts";
 
 const helper = fileURLToPath(new URL("../cli/canvas", import.meta.url));
 const routingError = (nativeSocket: string, message: string, pane = "pane") =>
@@ -48,7 +48,7 @@ type FixtureOptions = Partial<Pick<OpenDownloadOptions, "contextTimeoutMs" | "pr
   customCanvas?: boolean;
   uploadFailure?: "create" | "write" | "complete";
   directoryAck?: boolean;
-  directoryUri?: OpenDownloadOptions["directoryUri"];
+  directoryAuthority?: OpenDownloadOptions["directoryAuthority"];
   urlAck?: boolean;
   capture?: OpenDownloadOptions["capture"];
 };
@@ -75,8 +75,7 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
     idleTimeoutMs: 15,
     contextTimeoutMs: options.contextTimeoutMs,
     progressTimeoutMs: options.progressTimeoutMs,
-    directoryUri: options.directoryUri ?? (async (_source, path) =>
-      vscodeDirectoryUri({ hostName: "192.0.2.10", user: "fixture", port: 22 }, path)),
+    directoryAuthority: options.directoryAuthority ?? (async () => ({ hostName: "192.0.2.10", user: "fixture", port: 22 })),
     createUpload: async metadata => {
       if (options.uploadFailure === "create") throw new Error("fixture staging unavailable");
       const upload = await assets.begin(metadata);
@@ -339,7 +338,8 @@ test("directories reach only their controlling browser and do not stage file byt
   const message = f.receiver.messages[0]!;
   assert.equal(message.type, "open-directory");
   assert.equal(message.path, path);
-  assert.equal(message.uri, vscodeDirectoryUri({ hostName: "192.0.2.10", user: "fixture", port: 22 }, path));
+  assert.deepEqual(message.authority, { hostName: "192.0.2.10", user: "fixture", port: 22 });
+  assert.equal(message.uri, undefined, "The browser, not the service, chooses its editor URI");
   assert.equal(f.observations.uploadedBytes, 0);
   assert.equal(f.observations.aborted, 0);
   assert.equal(f.observations.finalized, 0);
@@ -361,6 +361,18 @@ test("directory completion requires acknowledgement from the original socket and
   assert.equal(f.service.directoryReceived(id, f.receiver as never, "authenticated-session"), false);
 });
 
+test("directory deliveries whitelist the resolved authority and reject invalid targets before publication", async t => {
+  const safe = await fixture(t, { directoryAuthority: async () => ({ hostName: 'host.example', user: 'dev', port: 22,
+    identityFile: '/fixture/private-key', secret: 'fixture-secret' }) });
+  assert.equal((await safe.run(safe.root)).code, 0);
+  assert.deepEqual(safe.receiver.messages[0]!.authority, { hostName: 'host.example', user: 'dev', port: 22 });
+  assert(!JSON.stringify(safe.receiver.messages).includes('private-key'));
+  assert(!JSON.stringify(safe.receiver.messages).includes('fixture-secret'));
+  const invalid = await fixture(t, { directoryAuthority: async () => ({ hostName: 'host/invalid' }) });
+  assert.equal((await invalid.run(invalid.root)).code, 1);
+  assert.deepEqual(invalid.receiver.messages, []);
+});
+
 test("unacknowledged directories time out and a missing browser fails immediately", async t => {
   const timed = await fixture(t, { directoryAck: false, contextTimeoutMs: 60 });
   const result = await timed.run(timed.root);
@@ -374,14 +386,14 @@ test("unacknowledged directories time out and a missing browser fails immediatel
 });
 
 test("directory resolution cannot deliver after timeout or a browser disconnect", async t => {
-  let resolveUri!: (value: string) => void;
-  const f = await fixture(t, { contextTimeoutMs: 60, directoryUri: () => new Promise(resolve => { resolveUri = resolve; }) });
+  let resolveAuthority!: (value: EditorAuthority) => void;
+  const f = await fixture(t, { contextTimeoutMs: 60, directoryAuthority: () => new Promise(resolve => { resolveAuthority = resolve; }) });
   const running = f.run(f.root);
-  await waitFor(() => !!resolveUri, "resolver never started");
+  await waitFor(() => !!resolveAuthority, "resolver never started");
   f.receiver.readyState = 3;
   f.receiver.emit("close");
   assert.equal((await running).code, 1);
-  resolveUri(vscodeDirectoryUri({ hostName: "192.0.2.10" }, f.root));
+  resolveAuthority({ hostName: "192.0.2.10" });
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(f.receiver.messages, []);
 });

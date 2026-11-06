@@ -1,10 +1,10 @@
-import { useStorage } from '@vueuse/core'
+import { useLocalStorage } from '@vueuse/core'
 import { computed, shallowRef } from 'vue'
 
-export const developerMode = useStorage('canvas:developer-mode', false)
-export const viewportFit = useStorage<'cover' | 'contain'>('canvas:developer:viewport-fit', 'cover')
+export const developerMode = useLocalStorage('canvas:developer-mode', false)
+export const viewportFit = useLocalStorage<'cover' | 'contain'>('canvas:developer:viewport-fit', 'cover')
 export type InteractiveWidget = 'resizes-content' | 'resizes-visual' | 'overlays-content'
-export const interactiveWidget = useStorage<InteractiveWidget>('canvas:developer:interactive-widget', 'resizes-content')
+export const interactiveWidget = useLocalStorage<InteractiveWidget>('canvas:developer:interactive-widget', 'resizes-content')
 
 export const pendingViewportPolicy = computed(() => ({
   viewportFit: developerMode.value && viewportFit.value === 'contain' ? 'contain' : 'cover',

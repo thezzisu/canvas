@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, shallowRef, watch } from 'vue'
 import { VueFlow, useVueFlow, type Node, type NodeChange, type NodePositionChange, type NodeMouseEvent } from '@vue-flow/core'
-import { useMediaQuery, useStorage, useTitle, watchDebounced } from '@vueuse/core'
+import { useMediaQuery, useLocalStorage, useTitle, watchDebounced } from '@vueuse/core'
 import CanvasMiniMap from './components/CanvasMiniMap.vue'
 import UApp from '@nuxt/ui/components/App.vue'
 import UTheme from '@nuxt/ui/components/Theme.vue'
@@ -48,6 +48,7 @@ import { retainBackgrounds, useBackgroundUrl } from './backgrounds'
 import { pruneFileViews } from './file-view'
 import { cardZoomKey, pruneCardZooms } from './card-zoom'
 import { noteScrollKey, pruneNoteScrolls } from './note-scroll'
+import { pruneCanvasLocations } from './local-preferences'
 import CardRemovalFeedback from './components/CardRemovalFeedback.vue'
 import type { CardRemovalResponse } from '../../shared/card-removal'
 import { pruneTerminalPreferences, terminalIdentityKey } from './terminal-identity'
@@ -68,7 +69,7 @@ import DownloadPreviewDialog from './components/DownloadPreviewDialog.vue'
 import TrustedPreviewDialog from './components/TrustedPreviewDialog.vue'
 import { closeTrustedPreview, trustedPreviewRequest } from './trusted-preview'
 import { clearCaptureTrust } from './capture-trust'
-import { capturedApp } from './capture'
+import { capturedApp, pruneCaptureViews } from './capture'
 import WindowContentDialog from './components/WindowContentDialog.vue'
 import CanvasFileDrop from './components/CanvasFileDrop.vue'
 import WindowPickerTree from './components/WindowPickerTree.vue'
@@ -333,15 +334,28 @@ let draftBase = ''
 function checkpointEdits() { pendingEdits.save(draftBase, pendingLayouts, [...savingNotes.values(), ...pendingNotes.values()]) }
 let layoutGesture = ''
 const latestState = shallowRef<SharedState>()
+let stateInstance = ''
 const removalUndo = ref<InstanceType<typeof CardRemovalFeedback>>()
 function removalReleased(context: ReturnType<typeof apiContext>) { if (isCurrentApi(context)) pruneReadingPreferences() }
 function pruneReadingPreferences() {
   const state = latestState.value
-  if (!state) return
-  pruneFileViews(activeInstance.value.id, state.canvases, undefined, removalUndo.value?.fileViews())
-  pruneCardZooms(state.instanceId, state.canvases, undefined, removalUndo.value?.zooms())
-  pruneNoteScrolls(state.instanceId, state.canvases)
+  if (!state || stateInstance !== activeInstance.value.id) return
+  pruneFileViews(activeInstance.value.id, state.canvases, undefined, removalUndo.value?.preferences())
+  pruneCardZooms(activeInstance.value.id, state.canvases, undefined, removalUndo.value?.preferences())
+  pruneNoteScrolls(activeInstance.value.id, state.canvases, undefined, removalUndo.value?.preferences())
+  pruneCanvasLocations(activeInstance.value.id, state.canvases)
 }
+// Cleanup follows authoritative object membership, never note edits, view filters
+// or a transient source outage. Undo keeps its affected keys until its deadline.
+watch(() => latestState.value && JSON.stringify([activeInstance.value.id, latestState.value.canvases.map(canvas =>
+  [canvas.id, canvas.nodes.map(node => [node.id, node.type])])]), () => pruneReadingPreferences(), { flush: 'sync' })
+watch(() => latestState.value && JSON.stringify([activeInstance.value.id,
+  latestState.value.sources.map(source => terminalIdentityKey(activeInstance.value.id, source, '')),
+  polledResources.value.map(source => [source.id, source.status, !!source.error, source.spaces.flatMap(space => space.windows.map(window => window.id))])]), () => {
+  if (!latestState.value || stateInstance !== activeInstance.value.id) return
+  pruneTerminalPreferences(activeInstance.value.id, latestState.value.sources, polledResources.value)
+  pruneCaptureViews(activeInstance.value.id, latestState.value.sources, polledResources.value)
+})
 const { toasts: notificationToasts, add: addToast } = useToast()
 // Nuxt UI can enqueue after nextTick; reject stale account notices when published.
 watch([notificationToasts, apiRevision, authenticated, () => latestState.value?.instanceId], ([items, revision, signedIn, backend]) => {
@@ -487,11 +501,11 @@ watch(() => {
   { duration: reducedMotion.value ? 0 : 200, interpolate: 'linear', ease: value => 1 - (1 - value) ** 3 })
 }, { flush: 'post' })
 
-const overviewSelected = useStorage<ProgramStatus[]>('canvas:overview:statuses', [...overviewStatuses])
-const overviewOrder = useStorage<OverviewOrder>('canvas:overview:order', 'native')
+const overviewSelected = useLocalStorage<ProgramStatus[]>(() => `canvas:overview:${activeInstance.value.id}:statuses`, [...overviewStatuses], { listenToStorageChanges: false, writeDefaults: false })
+const overviewOrder = useLocalStorage<OverviewOrder>(() => `canvas:overview:${activeInstance.value.id}:order`, 'native', { listenToStorageChanges: false, writeDefaults: false })
 const overviewCreation = computed(() => overviewSelected.value.includes('unknown'))
-const showMinimap = useStorage('canvas:view:minimap', true)
-const showNavigation = useStorage('canvas:view:navigation', true)
+const showMinimap = useLocalStorage('canvas:view:minimap', true, { listenToStorageChanges: false, writeDefaults: false })
+const showNavigation = useLocalStorage('canvas:view:navigation', true, { listenToStorageChanges: false, writeDefaults: false })
 const overviewMenuOpen = ref(false)
 const overviewTrigger = ref<HTMLElement>()
 const overviewDismiss = usePointerDismiss(overviewMenuOpen, overviewTrigger)
@@ -545,7 +559,7 @@ useWindowCanvasHistory(() => {
   if (!source || !windowId || !latestState.value) return
   // A notification may open an overlay on a canvas that has no reference to it.
   if (!isOverview.value && !currentCanvas.value?.nodes.some(node => node.type === 'terminal' && node.sourceId === sourceId && node.windowId === windowId)) return
-  return terminalIdentityKey(latestState.value.instanceId, source, windowId)
+  return terminalIdentityKey(activeInstance.value.id, source, windowId)
 }, () => activeId.value, activeElement)
 const visibleOverview = computed(() => overviewResources(resources.value, overviewSelected.value, overviewOrder.value, overviewInteraction.value))
 const visibleOverviewCount = computed(() => visibleOverview.value.reduce((total, source) => total + source.spaces.reduce((sum, space) => sum + space.windows.length, 0), 0))
@@ -682,7 +696,7 @@ function terminalData(node: TerminalCanvasNode, overview = false): TerminalData 
   }
   const visual = windowVisualState(found.source, found.window, freshStatuses.value)
   const closed = windowIsClosed(found.source, node.windowId, liveTerminalMetadata.value.get(`${node.sourceId}/${node.windowId}`))
-  return { ...node, preferenceKey: sourceConfig ? terminalIdentityKey(latestState.value?.instanceId || activeInstance.value.base, sourceConfig, node.windowId) : '', newTab, canvasJump, status: visual.status, statusFresh: visual.fresh, name: found.window?.name || cachedTerminalView(node.sourceId, node.windowId)?.name || t(closed ? 'app.closedWindow' : 'app.window'), subtitle: `${found.source?.name || sourceConfig?.name || t('app.unknownConnection')} / ${found.space?.name || t('app.space')}`, available: !!found.window && !found.source?.error, closed, sourceOffline: !!found.source?.error, panes: found.window?.panes || [], overview, focus: false, mobile: mobile.value, onAction: terminalAction, onResize: resizeNode, onResizeStart: resizeStarted }
+  return { ...node, preferenceKey: sourceConfig ? terminalIdentityKey(activeInstance.value.id, sourceConfig, node.windowId) : '', newTab, canvasJump, status: visual.status, statusFresh: visual.fresh, name: found.window?.name || cachedTerminalView(node.sourceId, node.windowId)?.name || t(closed ? 'app.closedWindow' : 'app.window'), subtitle: `${found.source?.name || sourceConfig?.name || t('app.unknownConnection')} / ${found.space?.name || t('app.space')}`, available: !!found.window && !found.source?.error, closed, sourceOffline: !!found.source?.error, panes: found.window?.panes || [], overview, focus: false, mobile: mobile.value, onAction: terminalAction, onResize: resizeNode, onResizeStart: resizeStarted }
 }
 function terminalFlowNode(node: TerminalCanvasNode, overview = false): Node {
   node = { ...node, ...windowSize(node), ...layoutDraft.value?.geometry(node.id) }
@@ -690,8 +704,10 @@ function terminalFlowNode(node: TerminalCanvasNode, overview = false): Node {
 }
 function noteData(node: NoteCanvasNode, focus = false): NoteData {
   const canvasId = activeId.value
-  const instance = latestState.value?.instanceId || activeInstance.value.base
+  const instance = activeInstance.value.id, base = activeInstance.value.base
   return { ...node, canvasId, zoomKey: cardZoomKey(instance, node.id), scrollKey: noteScrollKey(instance, canvasId, node.id), mobile: mobile.value, focus, onResize: resizeNode, onResizeStart: resizeStarted,
+    canPersistView: () => activeInstance.value.id === instance && activeInstance.value.base === base &&
+      !!latestState.value?.canvases.find(canvas => canvas.id === canvasId)?.nodes.some(candidate => candidate.id === node.id && candidate.type === 'note'),
     onAttachment: value => {
       const canvas = canvases.value.find(canvas => canvas.nodes.some(item => item.type === 'note' && item.id === node.id))
       const latest = canvas?.nodes.find((item): item is NoteCanvasNode => item.type === 'note' && item.id === node.id)
@@ -705,9 +721,9 @@ function noteData(node: NoteCanvasNode, focus = false): NoteData {
 }
 function fileData(node: FileCanvasNode, focus = false): FileData {
   const { id: instanceId, base } = activeInstance.value, canvasId = activeId.value
-  return { ...node, zoomKey: cardZoomKey(latestState.value?.instanceId || base, node.id), instanceId, canvasId, mobile: mobile.value, focus, onResize: resizeNode, onResizeStart: resizeStarted, onRemove: id => { void removeNode(id) }, onAction: cardAction,
+  return { ...node, zoomKey: cardZoomKey(instanceId, node.id), instanceId, canvasId, mobile: mobile.value, focus, onResize: resizeNode, onResizeStart: resizeStarted, onRemove: id => { void removeNode(id) }, onAction: cardAction,
     canPersistView: () => activeInstance.value.id === instanceId && activeInstance.value.base === base &&
-      !!canvases.value.find(canvas => canvas.id === canvasId)?.nodes.some(candidate => candidate.id === node.id && candidate.type === 'file') }
+      !!latestState.value?.canvases.find(canvas => canvas.id === canvasId)?.nodes.some(candidate => candidate.id === node.id && candidate.type === 'file') }
 }
 function flowNode(node: CanvasNode): Node {
   node = { ...node, ...layoutDraft.value?.geometry(node.id) }
@@ -838,9 +854,8 @@ function applySharedState(state: SharedState) {
     for (const edit of drafts.notes) pendingNotes.set(noteKey(edit.canvasId, edit.id), edit)
   }
   reconcileNoteEdits(state.canvases)
+  stateInstance = activeInstance.value.id
   latestState.value = state
-  pruneReadingPreferences()
-  pruneTerminalPreferences(state.instanceId, state.sources, [])
   retainBackgrounds([state.overviewBackground, ...state.canvases.map(canvas => canvas.background)].flatMap(background => background ? [background.url] : []))
   applySettings(state.settings)
   const changedConnections = sources.value.filter(previous => {
@@ -1125,7 +1140,6 @@ async function refreshResources(silent = false): Promise<void> {
           return windows.length ? [{ ...space, windows }] : []
         }),
       } : source)
-      pruneTerminalPreferences(latestState.value!.instanceId, sources.value, body.sources)
       resourcesFresh.value = true; resourcesLoaded.value = true; loadFailure.value = undefined
       polledResources.value = body.sources
       acknowledgeTerminalMetadata(metadataAtStart, body.sources)
@@ -1213,7 +1227,7 @@ function clearInstanceRuntime() {
   sourceDialogRevision++; canvasDialogRevision++; addDialogRevision++; pendingKeyboard = undefined
   addDialog.value = false; shareCard.value = undefined; windowMenu.value = null; backgroundCanvas.value = null; settingsDialog.value = false; accountDialog.value = false
   sidebarOpen.value = false; overviewMenuOpen.value = false; canvasMenu.value = false; accountMenuOpen.value = false
-  settings.value = null; fontRevision++; fontSignature = ''; contentFontReady.value = false; latestState.value = undefined
+  settings.value = null; fontRevision++; fontSignature = ''; contentFontReady.value = false; stateInstance = ''; latestState.value = undefined
   sources.value = []; polledResources.value = []; canvases.value = []; setNodes([]); windowSizes.value = {}
   resourcesFresh.value = false; resourcesLoaded.value = false; loadFailure.value = undefined
   overviewBackground.value = null; resourceSignature = ''; resourceLayoutSignature = ''; resourceRequest = undefined
@@ -1526,7 +1540,7 @@ watch([notificationFocus, terminalReadFocus], ([target, ready]) => {
 async function goToNotification(event: CanvasNotification) {
   const target = notificationTarget(event, resources.value), source = sources.value.find(item => item.id === event.sourceId)
   if (!target || !source || !latestState.value) return
-  const canvasId = lastWindowCanvas(terminalIdentityKey(latestState.value.instanceId, source, target.window.id), event.sourceId, target.window.id, canvases.value)
+  const canvasId = lastWindowCanvas(terminalIdentityKey(activeInstance.value.id, source, target.window.id), event.sourceId, target.window.id, canvases.value)
   await goToCanvasWindow(canvasId, { sourceId: source.id, windowId: target.window.id })
 }
 async function goToCanvasWindow(canvasId: string, target: WindowFocus) {
@@ -1735,7 +1749,7 @@ async function removeNode(id: string) {
   const context = apiContext()
   const feedback = removalUndo.value
   if (!feedback) return
-  const removal = feedback.begin(canvas.id, node, latestState.value?.instanceId || context.base, context)
+  const removal = feedback.begin(canvas.id, node, context)
   if (!removal) return
   let offered = false
   try {
@@ -2250,9 +2264,9 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
         <div class="sidebar-divider" role="separator" />
         <div class="nav-section-label canvas-label"><span>{{ t('app.canvases') }}</span><button class="icon-button" :title="t('app.newCanvas')" :aria-label="t('app.newCanvas')" @click="openCanvasDialog()"><Icon name="plus" :size="16" /></button></div>
         <nav class="canvas-nav" :aria-label="t('app.canvases')">
-          <CanvasNavItem :name="t('app.overview')" overview :active="isOverview" :indicator="indicators.overview" :open="openCanvasAgents === 'overview'" @update:open="value => { if (value) openCanvasAgents = 'overview'; else if (openCanvasAgents === 'overview') openCanvasAgents = '' }" :agents="() => canvasAgents(undefined, resources)" :actions-available="notificationActionsAvailable" @go="target => goToCanvasWindow('overview', target)" @select="navigateCanvas('overview')" />
+          <CanvasNavItem :name="t('app.overview')" overview :active="isOverview" :indicator="indicators.overview" :open="openCanvasAgents === 'overview'" @update:open="value => { if (value) openCanvasAgents = 'overview'; else if (openCanvasAgents === 'overview') openCanvasAgents = '' }" :agents="() => canvasAgents(undefined, resources, overviewOrder)" :actions-available="notificationActionsAvailable" @go="target => goToCanvasWindow('overview', target)" @select="navigateCanvas('overview')" />
           <SidebarList :key="activeInstanceId" :items="orderedCanvases" @reorder="ids => rememberSidebarOrder('canvases', ids)">
-            <template #default="{ item: canvas, hint }"><CanvasNavItem :name="canvas.name" :active="activeId === canvas.id" :indicator="indicators[canvas.id]" :open="openCanvasAgents === canvas.id" @update:open="value => { if (value) openCanvasAgents = canvas.id; else if (openCanvasAgents === canvas.id) openCanvasAgents = '' }" :agents="() => canvasAgents(canvas, resources)" :actions-available="notificationActionsAvailable" @go="target => goToCanvasWindow(canvas.id, target)" :aria-description="hint" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" @select="navigateCanvas(canvas.id)" /></template>
+            <template #default="{ item: canvas, hint }"><CanvasNavItem :name="canvas.name" :active="activeId === canvas.id" :indicator="indicators[canvas.id]" :open="openCanvasAgents === canvas.id" @update:open="value => { if (value) openCanvasAgents = canvas.id; else if (openCanvasAgents === canvas.id) openCanvasAgents = '' }" :agents="() => canvasAgents(canvas, resources, overviewOrder)" :actions-available="notificationActionsAvailable" @go="target => goToCanvasWindow(canvas.id, target)" :aria-description="hint" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" @select="navigateCanvas(canvas.id)" /></template>
           </SidebarList>
         </nav>
         <div class="sidebar-divider" role="separator" />

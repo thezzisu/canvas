@@ -36,7 +36,6 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { hostname, userInfo } from 'node:os';
 import { editorAuthority } from './server/runtimes.ts';
-import { vscodeDirectoryUri } from './server/editor-links.ts';
 const root = process.env.CANVAS_AUTHORITY_TEST_ROOT;
 const source = { id: 'fixture', name: 'Fixture', transport: 'ssh' };
 ${body}
@@ -64,18 +63,16 @@ assert.deepEqual(actual, { hostName: 'host.example', user: 'alice', port: 2201 }
 const args = JSON.parse(await readFile(join(root, 'ssh-arguments.json'), 'utf8'));
 assert(args.includes('/fixture/private key'));
 assert(args.includes('UserKnownHostsFile="/fixture/known hosts"'));
-const uri = vscodeDirectoryUri(actual, '/workspace');
-const encoded = new URL(uri).pathname.split('/')[1].slice('ssh-remote+'.length);
-assert.deepEqual(JSON.parse(Buffer.from(encoded, 'hex').toString()), actual);
+assert.deepEqual(Object.keys(actual).sort(), ['hostName', 'port', 'user']);
 assert(!JSON.stringify(actual).includes('fixture-token'));
-assert(!Buffer.from(encoded, 'hex').toString().includes('identityfile'));
+assert(!JSON.stringify(actual).includes('identityfile'));
 `, {
     destination: "alice@host.example", portOption: "2201",
     output: "hostname host.example\nuser alice\nport 2201\nidentityfile /fixture/secret-key\nproxycommand fixture-token\nidentityagent /fixture/private-agent",
   });
 });
 
-test("literal IPv6 targets use their SSH port and return an unbracketed URI hostname", async t => {
+test("literal IPv6 targets use their SSH port and return an unbracketed hostname", async t => {
   await isolated(t, `
 const actual = await editorAuthority({ ...source, target: 'ssh://dev@[2001:db8::20]:2222' });
 assert.deepEqual(actual, { hostName: '2001:db8::20', user: 'dev', port: 2222 });
@@ -90,7 +87,7 @@ assert.deepEqual(Object.keys(actual).sort(), ['hostName', 'port', 'user']);
 `, { destination: "workstation-alias", output: "host workstation-alias\nhostname workstation.example\nuser remote-user\nport 2022\nidentityfile /fixture/do-not-expose\nproxyjump fixture-bastion" });
 });
 
-test("missing or invalid effective SSH address fields reject rather than constructing an ambiguous URI", async t => {
+test("missing or invalid effective SSH address fields reject rather than exposing an ambiguous address", async t => {
   for (const output of ["hostname host\nuser dev", "hostname host\nuser dev\nport 70000", "hostname host\nport 22"]) {
     await isolated(t, `
 await assert.rejects(editorAuthority({ ...source, target: 'bad-alias' }), /could not be resolved/);

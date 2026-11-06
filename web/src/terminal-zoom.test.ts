@@ -15,18 +15,23 @@ function storage(): Storage {
     getItem: key => values.get(key) ?? null, setItem: (key, value) => { values.set(key, value) }, removeItem: key => { values.delete(key) }, clear: () => values.clear() }
 }
 
+function browser(localStorage: Storage) {
+  globalThis.Storage ??= class {} as typeof Storage
+  return { window: Object.assign(new EventTarget(), { localStorage }) as Window }
+}
+
 test('concurrent views of different native tabs update isolated scalar keys and survive reopening', () => {
   const store = storage(), scope = effectScope(), firstKey = terminalIdentityKey('backend', source, 'tab1'), secondKey = terminalIdentityKey('backend', source, 'tab2')
-  const { first, second } = scope.run(() => ({ first: useTerminalZoom(() => firstKey, store), second: useTerminalZoom(() => secondKey, store) }))!
+  const { first, second } = scope.run(() => ({ first: useTerminalZoom(() => firstKey, browser(store)), second: useTerminalZoom(() => secondKey, browser(store)) }))!
   first.value = 140; second.value = 80; first.value = 150
   assert.equal(store.getItem(terminalZoomStorageKey(firstKey)), '150')
   assert.equal(store.getItem(terminalZoomStorageKey(secondKey)), '80')
-  const reopened = scope.run(() => useTerminalZoom(() => secondKey, store))!
+  const reopened = scope.run(() => useTerminalZoom(() => secondKey, browser(store)))!
   assert.equal(reopened.value, 80)
   assert.equal(terminalIdentityKey('backend', { ...source, name: 'Renamed' }, 'tab1'), firstKey)
   for (const key of [terminalIdentityKey('other-backend', source, 'tab1'), terminalIdentityKey('backend', { ...source, id: 'other' }, 'tab1'),
     terminalIdentityKey('backend', source, 'new-tab'), terminalIdentityKey('backend', { ...source, target: 'other-host' }, 'tab1')])
-    assert.equal(scope.run(() => useTerminalZoom(() => key, store))!.value, 100)
+    assert.equal(scope.run(() => useTerminalZoom(() => key, browser(store)))!.value, 100)
   first.value = 100
   assert.equal(store.getItem(terminalZoomStorageKey(firstKey)), null)
   assert.equal(store.getItem(terminalZoomStorageKey(secondKey)), '80')
@@ -36,7 +41,7 @@ test('concurrent views of different native tabs update isolated scalar keys and 
 test('changing connection identity retires the previous binding without writing its value into the new key', () => {
   for (const next of [{ ...source, target: 'other' }, { ...source, runtime: 'core' as const }]) {
     const store = storage(), scope = effectScope(), first = terminalIdentityKey('backend', source, 'tab1'), second = terminalIdentityKey('backend', next, 'tab1')
-    const key = ref(first), zoom = scope.run(() => useTerminalZoom(() => key.value, store))!
+    const key = ref(first), zoom = scope.run(() => useTerminalZoom(() => key.value, browser(store)))!
     zoom.value = 140; key.value = second
     assert.equal(zoom.value, 100); assert.equal(store.getItem(terminalZoomStorageKey(second)), null)
     zoom.value = 80; key.value = first

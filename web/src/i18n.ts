@@ -1,5 +1,5 @@
 import { computed, watch } from 'vue'
-import { usePreferredLanguages, useStorage } from '@vueuse/core'
+import { usePreferredLanguages, useLocalStorage } from '@vueuse/core'
 import { createI18n } from 'vue-i18n'
 import { en as enUi, zh_cn as zhUi } from '@nuxt/ui/locale'
 import zhCommon from './locales/zh-CN/common'
@@ -28,7 +28,7 @@ import zhNotifications from './locales/zh-CN/notifications'
 import enNotifications from './locales/en/notifications'
 
 export type AppLocale = 'zh-CN' | 'en'
-export const languagePreference = useStorage<'system' | AppLocale>('canvas:language', 'system')
+export const languagePreference = useLocalStorage<'system' | AppLocale>('canvas:language', 'system')
 const preferredLanguages = usePreferredLanguages()
 const preferredLocale = computed<AppLocale>(() => {
   if (languagePreference.value === 'zh-CN' || languagePreference.value === 'en') return languagePreference.value

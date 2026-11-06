@@ -7,7 +7,8 @@ import { Writable, type Readable } from "node:stream";
 import type { WebSocket } from "ws";
 import { sourceConnectionKey, type FileAsset, type FileAssetContext, type FileOrigin, type Source } from "./state.ts";
 import type { SourceResource } from "./runtimes.ts";
-import { directoryPath } from "./editor-links.ts";
+import { directoryPath } from "./directory-path.ts";
+import { sanitizeEditorAuthority, type EditorAuthority } from "../shared/editor-target.ts";
 import { webUrl, type OpenedUrl } from "./url-forward.ts";
 
 const MAX_HEADER = 16 * 1024;
@@ -45,7 +46,7 @@ export interface OpenDownloadOptions {
   progressTimeoutMs?: number;
   createUpload(metadata: { filename: string; size: number }): Promise<Upload>;
   readTemporary(id: string, range?: { start: number; end: number }): Promise<{ body: Readable; asset: FileAsset } | undefined>;
-  directoryUri?(source: Source, path: string): Promise<string>;
+  directoryAuthority?(source: Source): Promise<EditorAuthority>;
   openUrl?(source: Source, url: string, sessionId: string): Promise<OpenedUrl> | OpenedUrl;
   capture?(source: Source, windowId: string, paneId: string, header: Record<string, unknown>, socket: Socket, recipient: DownloadRecipient): Promise<void>;
   prepare(source: Source, localSocket: string): Promise<PreparedOpenBridge>;
@@ -372,7 +373,7 @@ export class OpenDownloadService {
   }
 
   private async sendReference(source: Source, path: string, socket: Socket, recipient: DownloadRecipient, kind: "directory" | "url"): Promise<void> {
-    if (kind === "directory" ? !this.options.directoryUri : !this.options.openUrl) { socket.end(jsonLine({ ok: false, reason: kind === "url" ? "url-unavailable" : "editor-unavailable" })); return; }
+    if (kind === "directory" ? !this.options.directoryAuthority : !this.options.openUrl) { socket.end(jsonLine({ ok: false, reason: kind === "url" ? "url-unavailable" : "editor-unavailable" })); return; }
     const id = randomBytes(32).toString("base64url");
     const release = this.retainSource(source.id);
     const onClose = () => this.finishDirectory(id, "not-attached");
@@ -396,7 +397,7 @@ export class OpenDownloadService {
     socket.setTimeout(0);
     socket.resume();
     try {
-      const data = kind === "directory" ? { type: "open-directory", path, uri: await this.options.directoryUri!(source, path) }
+      const data = kind === "directory" ? { type: "open-directory", path, authority: sanitizeEditorAuthority(await this.options.directoryAuthority!(source)) }
         : { type: "open-url", ...await this.options.openUrl!(source, path, recipient.sessionId) };
       if (this.directories.get(id) !== ticket) return;
       if (!recipient.isCurrent() || recipient.socket.readyState !== 1) {

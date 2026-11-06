@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { effectScope, ref } from 'vue'
+import { effectScope, nextTick, ref } from 'vue'
 import { normalizeTerminalSettings, terminalSettingsKey, useTerminalSettings } from './terminal-settings.ts'
 import { pruneTerminalPreferences, terminalIdentityKey } from './terminal-identity.ts'
 import { terminalZoomStorageKey } from './terminal-zoom.ts'
@@ -13,15 +13,21 @@ function storage(): Storage {
     getItem: key => values.get(key) ?? null, setItem: (key, value) => { values.set(key, value) }, removeItem: key => { values.delete(key) }, clear: () => values.clear() }
 }
 
-test('terminal preferences persist by native identity and reset without leaking between targets', () => {
+function browser(localStorage: Storage) {
+  globalThis.Storage ??= class {} as typeof Storage
+  return { window: Object.assign(new EventTarget(), { localStorage }) as Window }
+}
+
+test('terminal preferences persist by native identity and reset without leaking between targets', async () => {
   const store = storage(), scope = effectScope(), first = terminalIdentityKey('backend', source, 'first')
-  const key = ref(first), settings = scope.run(() => useTerminalSettings(() => key.value, store))!
+  const key = ref(first), settings = scope.run(() => useTerminalSettings(() => key.value, browser(store)))!
   assert.deepEqual(settings.value, { rightClick: 'menu', shiftPaste: 'paste' }); assert.equal(store.length, 0)
   settings.value = { ...settings.value, rightClick: 'terminal' }
   assert.deepEqual(JSON.parse(store.getItem(terminalSettingsKey(first))!), { rightClick: 'terminal', shiftPaste: 'paste' })
-  assert.equal(scope.run(() => useTerminalSettings(() => first, store))!.value.rightClick, 'terminal', 'another canvas reference restores the same native preference')
+  assert.equal(scope.run(() => useTerminalSettings(() => first, browser(store)))!.value.rightClick, 'terminal', 'another canvas reference restores the same native preference')
+  await nextTick() // Separate real user events; VueUse resumes its storage-event write guard.
   settings.value = { ...settings.value, shiftPaste: 'terminal' }
-  assert.equal(scope.run(() => useTerminalSettings(() => first, store))!.value.shiftPaste, 'terminal')
+  assert.equal(scope.run(() => useTerminalSettings(() => first, browser(store)))!.value.shiftPaste, 'terminal')
   assert.equal(terminalIdentityKey('backend', { ...source, name: 'Renamed' }, 'first'), first)
   for (const next of [terminalIdentityKey('other-backend', source, 'first'), terminalIdentityKey('backend', source, 'second'), terminalIdentityKey('backend', { ...source, target: 'other-host' }, 'first'),
     terminalIdentityKey('backend', { ...source, runtime: 'core' }, 'first')]) {
@@ -49,4 +55,16 @@ test('settings prune only confirmed closed native identities and leave offline p
   assert.equal(store.getItem(coreZoom), '80'); assert.equal(store.getItem(terminalSettingsKey(coreIdentity)), JSON.stringify({ rightClick: 'terminal' }), 'offline discovery preserves preferences for the configured runtime')
   assert.equal(store.getItem(key('other', 'closed')), saved); assert.equal(store.getItem('unrelated'), 'value')
   for (const value of [undefined, null, {}, 'unknown', true, 1, { rightClick: 'other', shiftPaste: 1 }]) assert.deepEqual(normalizeTerminalSettings(value), { rightClick: 'menu', shiftPaste: 'paste' })
+})
+
+test('last-used canvas history follows confirmed native tab lifetime, not transient unavailability', () => {
+  const store = storage(), identity = terminalIdentityKey('frontend-instance', source, 'native-tab')
+  const key = 'canvas:window-canvas:' + identity
+  store.setItem(key, 'workspace')
+  for (const discovered of [[], [{ id: source.id, name: source.name, status: 'offline', spaces: [] }]]) {
+    pruneTerminalPreferences('frontend-instance', [source], discovered, store)
+    assert.equal(store.getItem(key), 'workspace')
+  }
+  pruneTerminalPreferences('frontend-instance', [source], [{ id: source.id, name: source.name, status: 'online', spaces: [{ id: 'space', name: 'Space', windows: [] }] }], store)
+  assert.equal(store.getItem(key), null)
 })

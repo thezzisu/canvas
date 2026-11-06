@@ -1,5 +1,5 @@
-import { computed, effectScope, shallowRef, watch, type Ref } from 'vue'
-import { useStorage } from '@vueuse/core'
+import { computed, toValue, type MaybeRefOrGetter } from 'vue'
+import { useLocalStorage, type UseStorageOptions } from '@vueuse/core'
 
 export type RightClickMode = 'menu' | 'terminal'
 /** Ctrl+Shift+V either pastes the browser clipboard or reaches the terminal application. */
@@ -14,27 +14,20 @@ export function normalizeTerminalSettings(value: unknown): TerminalSettings {
 export const terminalSettingsKey = (identity: string) => 'canvas:terminal-settings:' + identity
 
 /** Browser-local preferences for one native window, shared by all its canvas references. */
-export function useTerminalSettings(key: () => string, storage?: Storage) {
-  const saved = shallowRef<Ref<TerminalSettings | null>>()
-  // VueUse fixes the storage key at creation; changing native identity retires it.
-  watch(key, (identity, _, cleanup) => {
-    const scope = effectScope()
-    saved.value = scope.run(() => useStorage<TerminalSettings | null>(terminalSettingsKey(identity), null, storage, {
-      writeDefaults: false, flush: 'sync',
-      serializer: {
-        read: raw => { try { return normalizeTerminalSettings(JSON.parse(raw)) } catch { return null } },
-        write: value => JSON.stringify(normalizeTerminalSettings(value)),
-      },
-      onError() { /* Browser storage must not block terminal input. */ },
-    }))
-    cleanup(() => scope.stop())
-  }, { immediate: true, flush: 'sync' })
+export function useTerminalSettings(key: MaybeRefOrGetter<string>, options: Pick<UseStorageOptions<TerminalSettings | null>, 'window'> = {}) {
+  const saved = useLocalStorage<TerminalSettings | null>(() => terminalSettingsKey(toValue(key)), null, {
+    ...options, writeDefaults: false, flush: 'sync',
+    serializer: {
+      read: raw => { try { return normalizeTerminalSettings(JSON.parse(raw)) } catch { return null } },
+      write: value => JSON.stringify(normalizeTerminalSettings(value)),
+    },
+    onError() { /* Browser storage must not block terminal input. */ },
+  })
   return computed({
-    get: () => normalizeTerminalSettings(saved.value?.value),
+    get: () => normalizeTerminalSettings(saved.value),
     set: (value: TerminalSettings) => {
-      if (!saved.value) return
       const next = normalizeTerminalSettings(value)
-      saved.value.value = next.rightClick === defaultTerminalSettings.rightClick && next.shiftPaste === defaultTerminalSettings.shiftPaste ? null : next
+      saved.value = next.rightClick === defaultTerminalSettings.rightClick && next.shiftPaste === defaultTerminalSettings.shiftPaste ? null : next
     },
   })
 }

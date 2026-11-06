@@ -102,7 +102,7 @@ function dragNote(event: DragEvent) {
       </CardHeaderActions>
     </header>
     <div ref="noteBody" class="note-content card-content nodrag nowheel" :data-content-active="contentActive" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.stop="contentPointerDown" @wheel.stop @dblclick.stop>
-      <NoteEditor ref="noteEditor" :content="content" :attachments="data.attachments || []" :canvas-id="data.canvasId" :note-id="id" :scroll-key="data.scrollKey" :read-only="mobilePreview" :insert-attachment="data.onAttachment" @change="value => { content = value; emitChange({ content: value }) }" @flush="flush" />
+      <NoteEditor ref="noteEditor" :content="content" :attachments="data.attachments || []" :canvas-id="data.canvasId" :note-id="id" :scroll-key="data.scrollKey" :can-persist="data.canPersistView" :read-only="mobilePreview" :insert-attachment="data.onAttachment" @change="value => { content = value; emitChange({ content: value }) }" @flush="flush" />
     </div>
     <CardPreview v-if="mobilePreview && !editing" :label="t('common.openCard', { name: title || t('panels.note.name') })" @open="data.onAction('focus', id)" />
   </article>

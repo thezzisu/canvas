@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, useId, watch } from 'vue'
+import { computed, ref, shallowRef, useId, watch } from 'vue'
 import { useTimeoutFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import UPopover from '@nuxt/ui/components/Popover.vue'
@@ -19,7 +19,19 @@ const label = computed(() => props.indicator?.status ? t('canvasUi.canvasStatus'
 const trigger = ref<HTMLButtonElement>(), panel = ref<HTMLElement>(), pinned = ref(false)
 const open = computed({ get: () => !!props.open, set: value => emit('update:open', value) })
 const panelId = useId(), portal = computed(() => trigger.value?.closest<HTMLElement>('.app-shell') || document.body)
-const agents = computed(() => props.agents())
+const currentAgents = computed(() => props.agents()), openedKeys = shallowRef<string[]>([])
+// Live labels/status remain reactive, but a row cannot move under an active
+// pointer or keyboard focus. Reopening adopts the latest requested sort order.
+watch(() => open.value ? currentAgents.value : undefined, current => {
+  if (!current) { openedKeys.value = []; pinned.value = false; return }
+  const present = new Set(current.map(agent => agent.key)), known = new Set(openedKeys.value)
+  openedKeys.value = [...openedKeys.value.filter(key => present.has(key)), ...current.filter(agent => !known.has(agent.key)).map(agent => agent.key)]
+}, { immediate: true })
+const agents = computed(() => {
+  if (!open.value) return currentAgents.value
+  const current = new Map(currentAgents.value.map(agent => [agent.key, agent]))
+  return openedKeys.value.flatMap(key => current.get(key) || [])
+})
 const dismiss = usePointerDismiss(open, trigger)
 const { start: leave, stop: stopLeave } = useTimeoutFn(() => {
   if (!pinned.value && !panel.value?.contains(document.activeElement) && document.activeElement !== trigger.value) open.value = false
@@ -42,7 +54,6 @@ function go(agent: CanvasAgent) {
   if (!agent.available || props.actionsAvailable === false) return
   close(); emit('go', { sourceId: agent.sourceId, windowId: agent.windowId })
 }
-watch(open, value => { if (!value) pinned.value = false })
 watch(() => props.indicator?.status, value => { if (!value) close() })
 const content = computed(() => ({ 'aria-label': t('canvasUi.agentsInCanvas', { name: props.name }),
   side: 'right' as const, align: 'start' as const, sideOffset: 8, collisionPadding: 8, prioritizePosition: true,

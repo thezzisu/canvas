@@ -1,8 +1,8 @@
-import { useStorage } from '@vueuse/core'
+import { useLocalStorage } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
 
-export const notificationSoundEnabled = useStorage('canvas:notifications:sound', false)
-export const notificationSystemEnabled = useStorage('canvas:notifications:system', false)
+export const notificationSoundEnabled = useLocalStorage('canvas:notifications:sound', false)
+export const notificationSystemEnabled = useLocalStorage('canvas:notifications:system', false)
 export const notificationSoundSupported = computed(() => typeof AudioContext !== 'undefined')
 export const systemNotificationSupported = computed(() => typeof window !== 'undefined' && window.isSecureContext &&
   typeof Notification !== 'undefined' && 'serviceWorker' in navigator &&

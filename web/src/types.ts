@@ -109,6 +109,7 @@ export interface NoteData extends NoteCanvasNode {
   canvasId: string
   zoomKey: string
   scrollKey: string
+  canPersistView: () => boolean
   mobile?: boolean
   focus?: boolean
   onResize: (id: string, width: number, height: number, x?: number, y?: number) => void

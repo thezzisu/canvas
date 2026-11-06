@@ -1,4 +1,5 @@
 .sidebar {
+  user-select: none; -webkit-user-select: none;
   --sidebar-rail: 27px;
   --sidebar-icon: 16px;
   --sidebar-gap: 2px;

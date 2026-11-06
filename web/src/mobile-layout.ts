@@ -1,8 +1,8 @@
 import { computed } from 'vue'
-import { createSharedComposable, useMediaQuery, useStorage } from '@vueuse/core'
+import { createSharedComposable, useMediaQuery, useLocalStorage } from '@vueuse/core'
 
 export type InputMode = 'auto' | 'touch' | 'keyboard'
-export const inputMode = useStorage<InputMode>('canvas:input-mode', 'auto', undefined, {
+export const inputMode = useLocalStorage<InputMode>('canvas:input-mode', 'auto', {
   serializer: {
     read: value => value === 'touch' || value === 'keyboard' ? value : 'auto',
     write: value => value,

@@ -1,10 +1,10 @@
 import { computed, watch } from 'vue'
-import { useStorage } from '@vueuse/core'
+import { useLocalStorage } from '@vueuse/core'
 import { normalizeApiBase, parseInstanceLink } from './instance-url'
 import { formatCanvasLocation, parseCanvasLocation } from './canvas-location'
 import { removeSessionToken } from './instance-session'
 import { instanceConfiguration, type CanvasInstance } from './instance-config'
-import { clearInstanceFileViews } from './file-view'
+import { clearInstancePreferences, pruneInstancePreferences } from './local-preferences'
 import { forgetInstanceBuild } from './instance-builds'
 
 export type { CanvasInstance } from './instance-config'
@@ -17,10 +17,11 @@ function identity() {
 export const sameOriginBase = normalizeApiBase(new URL(import.meta.env.BASE_URL, location.href).href)
 const builtinServer = import.meta.env.VITE_CANVAS_BUILTIN_SERVER !== 'false'
 const sameOriginInstance: CanvasInstance | undefined = builtinServer ? { id: identity(), name: new URL(sameOriginBase).host, base: sameOriginBase, builtin: true } : undefined
-const savedInstances = useStorage<CanvasInstance[]>('canvas:instances', [])
-export const activeInstanceId = useStorage('canvas:active-instance', instanceConfiguration(savedInstances.value, '', sameOriginInstance).active.id, localStorage, { listenToStorageChanges: false })
+const savedInstances = useLocalStorage<CanvasInstance[]>('canvas:instances', [])
+export const activeInstanceId = useLocalStorage('canvas:active-instance', instanceConfiguration(savedInstances.value, '', sameOriginInstance).active.id, { listenToStorageChanges: false })
 const configuration = computed(() => instanceConfiguration(savedInstances.value, activeInstanceId.value, sameOriginInstance))
 export const instances = computed({ get: () => configuration.value.instances, set: (value: CanvasInstance[]) => { savedInstances.value = value } })
+watch(() => instances.value.map(instance => instance.id).sort().join(','), () => pruneInstancePreferences(instances.value), { immediate: true })
 export const activeInstance = computed(() => configuration.value.active)
 export const hasActiveInstance = computed(() => !!activeInstance.value.base)
 watch(activeInstance, instance => { activeInstanceId.value = instance.id }, { immediate: true, flush: 'sync' })
@@ -54,7 +55,7 @@ export function saveInstance(value: { id?: string; name: string; base: string; u
   if (previous?.builtin && previous.base !== base) throw new Error('instances.readOnly')
   const result: CanvasInstance = { ...previous, id: previous?.id || identity(), name, base }
   if (!previous && value.username) result.username = value.username
-  if (previous && previous.base !== base) { delete result.username; removeSessionToken(previous.id); clearInstanceFileViews(previous.id); forgetInstanceBuild(previous.id) }
+  if (previous && previous.base !== base) { delete result.username; removeSessionToken(previous.id); clearInstancePreferences(previous.id); forgetInstanceBuild(previous.id) }
   instances.value = previous ? instances.value.map(instance => instance.id === result.id ? result : instance) : [...instances.value, result]
   selectInstance(result.id)
   return result
@@ -62,7 +63,7 @@ export function saveInstance(value: { id?: string; name: string; base: string; u
 export function removeInstance(id: string) {
   if (instances.value.find(instance => instance.id === id)?.builtin) return
   removeSessionToken(id)
-  clearInstanceFileViews(id)
+  clearInstancePreferences(id)
   forgetInstanceBuild(id)
   instances.value = instances.value.filter(instance => instance.id !== id)
   if (activeInstanceId.value === id) activeInstanceId.value = instances.value[0]?.id || sameOriginInstance?.id || ''
