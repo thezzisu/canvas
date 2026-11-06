@@ -59,8 +59,8 @@ export async function checkPwaUpdates() {
   updateCheck.value = 'checking'
   try {
     const waiting = await checkPwaRegistration(current)
-    if (waiting && !updateAvailable.value) updateReady()
-    updateCheck.value = updateAvailable.value ? 'idle' : 'current'
+    // The plugin installs its activation listener before onNeedRefresh exposes Reload.
+    updateCheck.value = waiting || updateAvailable.value ? 'idle' : 'current'
   } catch { updateCheck.value = 'failed' }
 }
 export async function installPwa() {
