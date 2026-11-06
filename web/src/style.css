@@ -250,8 +250,9 @@ html{zoom:var(--ui-zoom)}#app{position:fixed;inset:0;width:auto;height:auto}.app
 
 /* Yield only over a genuinely focused terminal; geometry never changes input ownership. */
 .graph-wrap :is(.canvas-toolbar,.vue-flow__minimap){transition:opacity 180ms ease}
+.graph-wrap .canvas-toolbar{--terminal-overlay-opacity:.3;--terminal-overlay-pointer-opacity:.2}
 /* VueFlow Panel owns an inline pointer-events value; override only while yielding. */
-.graph-wrap:has(.terminal-host[data-content-active="true"]) :is(.canvas-toolbar,.vue-flow__minimap)[data-terminal-overlap]{opacity:.2;pointer-events:none!important}
-.graph-wrap:has(.terminal-host[data-content-active="true"]) :is(.canvas-toolbar,.vue-flow__minimap)[data-terminal-overlap="pointer"]{opacity:.1}
+.graph-wrap:has(.terminal-host[data-content-active="true"]) :is(.canvas-toolbar,.vue-flow__minimap)[data-terminal-overlap]{opacity:var(--terminal-overlay-opacity,.2);pointer-events:none!important}
+.graph-wrap:has(.terminal-host[data-content-active="true"]) :is(.canvas-toolbar,.vue-flow__minimap)[data-terminal-overlap="pointer"]{opacity:var(--terminal-overlay-pointer-opacity,.1)}
 .graph-wrap:has(.terminal-host[data-content-active="true"]) :is(.canvas-toolbar,.vue-flow__minimap)[data-terminal-overlap] *{pointer-events:none}
 @media(prefers-reduced-motion:reduce){.graph-wrap :is(.canvas-toolbar,.vue-flow__minimap){transition:none}}
