@@ -40,7 +40,9 @@ const urlForwards = new UrlForwardService(store);
 const captures = new CaptureService(store);
 const assets = new AssetStore(dataDir, store);
 const completionReads = new CompletionReads(store);
-const terminals = new TerminalManager(completionReads, (source, windowId) => store.removeWindowReferences(source, [windowId]));
+const terminals = new TerminalManager(completionReads, (source, windowId) => store.removeWindowReferences(source, [windowId]),
+  (sourceId, windowId) => store.normalTerminalSize(sourceId, windowId));
+store.on('change', () => terminals.refreshNormalSizes());
 const uploads = new UploadService(terminals);
 const helperBytes = readFileSync(new URL("../cli/canvas", import.meta.url));
 const sourcePreviews = new SourcePreviewService(store, captures, helperBytes.toString('utf8'));

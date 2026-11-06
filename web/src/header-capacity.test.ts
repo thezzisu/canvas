@@ -1,26 +1,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { compactHeader } from './header-capacity.ts'
+import { headerShortcuts } from './header-capacity.ts'
 
-test('centered cutouts fold the primary action at the actual inner-width boundary', () => {
-  assert.equal(compactHeader(320, 56, 'center'), false)
-  assert.equal(compactHeader(318.4, 56, 'center'), true)
-  assert.equal(compactHeader(318.4, 40, 'center'), false)
-  assert.equal(compactHeader(390, 130, 'center'), true)
-  assert.equal(compactHeader(390, 126, 'center'), false)
+test('a five-slot phone header retains keyboard and zoom before adding to a canvas', () => {
+  assert.deepEqual([...headerShortcuts(238.66, ['keyboard', 'zoom'], true)], ['remove', 'keyboard', 'zoom'])
+  assert.deepEqual([...headerShortcuts(264, ['keyboard', 'zoom'], true)], ['remove', 'keyboard', 'zoom', 'add'])
 })
-test('side cutouts retain a title and fixed-size controls, folding rather than shrinking', () => {
-  for (const position of ['left', 'right'] as const) {
-    assert.equal(compactHeader(320, 100, position), false)
-    assert.equal(compactHeader(318.4, 100, position), true)
-    assert.equal(compactHeader(320, 240, position), true)
-  }
-  assert.equal(compactHeader(320, 0, 'center'), false)
-  assert.equal(compactHeader(0, 0, 'center'), true)
+test('very narrow regions keep the menu and restore without overflowing a remove button', () => {
+  for (const width of [0, 87, 88, 119, NaN]) assert.equal(headerShortcuts(width, ['copy', 'zoom'], true).size, 0)
+  assert.deepEqual([...headerShortcuts(132, ['copy', 'zoom'], true)], ['remove'])
 })
-test('full card action rows fold on phones and remain expanded when each side has room', () => {
-  assert.equal(compactHeader(320, 0, 'center', 6), true)
-  assert.equal(compactHeader(390, 0, 'center', 6), false)
-  assert.equal(compactHeader(600, 72, 'center', 6), false)
-  assert.equal(compactHeader(598.4, 72, 'center', 6), true)
+test('only currently available shortcuts consume space and retention priority does not reorder display', () => {
+  assert.deepEqual([...headerShortcuts(176, ['zoom', 'copy'], true, ['copy', 'zoom'])], ['remove', 'copy'])
+  assert.deepEqual([...headerShortcuts(176, ['copy'], false, ['copy', 'zoom'])], ['copy', 'add'])
 })

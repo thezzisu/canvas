@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { useElementSize } from '@vueuse/core'
+import { headerShortcuts } from '../header-capacity'
 import UModal from './CanvasModal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
@@ -16,10 +18,9 @@ import { downloadMedia, useMediaUrl } from '../media'
 import { reportDownloadError } from '../downloads'
 import { apiFetch } from '../api'
 import { useMobileViewport } from '../viewport'
-import { cutoutActiveKey, cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
-import { textCapabilities } from '../code-preview'
+import { cutoutPosition, cutoutWidth } from '../display-cutout'
+import { useTextPreviewActions } from '../text-preview-actions'
 import { useSourcePreview } from '../source-preview'
-import { isMarkdownFile } from '../markdown'
 import { useMobileLayout } from '../mobile-layout'
 import { usePointerDismiss } from '../pointer-dismiss'
 
@@ -37,28 +38,25 @@ const rendered = ref(true), wrap = ref(false), formatted = ref(false), highlight
 const sitePreview = useSourcePreview()
 const previewBusy = sitePreview.busy
 function previewSite() { const item = downloadPreview.value; if (item?.sourcePreview) void sitePreview.open(item.url, item.filename) }
-const capabilities = computed(() => textCapabilities(downloadPreview.value?.filename || ''))
 const menuOpen = ref(false), menuTrigger = ref<InstanceType<typeof UButton>>()
 const menuDismiss = usePointerDismiss(menuOpen, menuTrigger)
-const header = ref<HTMLElement>()
-const cutoutActive = inject(cutoutActiveKey, ref(false))
 const mobile = useMobileLayout()
-const markup = computed(() => downloadPreview.value?.preview === 'text' && (isMarkdownFile(downloadPreview.value.filename) || /\.html?$/iu.test(downloadPreview.value.filename)))
 const imageSize = ref<{ width: number; height: number }>()
 const preparing = computed(() => ['image', 'video'].includes(downloadPreview.value?.preview || '') &&
   !imageSize.value && !error.value && !ticketError.value)
 const { viewport } = useMobileViewport(ref(true))
 const mobileHeader = computed(() => mobile.value || viewport.value.width <= 600)
-const compact = useCompactHeader(header, () => cutoutActive.value && mobileHeader.value && expanded.value)
 function download() { const preview = downloadPreview.value; if (preview) void downloadMedia(preview.url, preview.filename).catch(reportDownloadError) }
+const textActions = useTextPreviewActions(() => downloadPreview.value?.filename || '', { rendered, wrap, formatted, highlighted }, {
+  sourcePreview: () => downloadPreview.value?.sourcePreview, busy: previewBusy, preview: previewSite,
+})
+const textShortcuts = computed(() => downloadPreview.value?.preview === 'text' && !loading.value && !error.value ? textActions.value.map(item => item.slot!) : [])
+const actions = ref<HTMLElement>()
+const { width: actionsWidth } = useElementSize(actions)
+const available = computed(() => headerShortcuts(actionsWidth.value, ['download', ...textShortcuts.value], false))
+const showShortcut = (key: string) => !mobileHeader.value || available.value.has(key)
 const menu = computed<DropdownMenuItem[]>(() => [
-  ...(markup.value ? [{ label: t('panels.preview.source'), icon: 'i-lucide-code', type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
-  ...(downloadPreview.value?.preview === 'text' && (!markup.value || !rendered.value) ? [
-    ...(capabilities.value.format ? [{ label: t('panels.preview.format'), icon: 'i-lucide-list-tree', type: 'checkbox' as const, checked: formatted.value, onUpdateChecked: (checked: boolean) => { formatted.value = checked } }] : []),
-    ...(capabilities.value.highlight ? [{ label: t('panels.preview.highlight'), icon: 'i-lucide-palette', type: 'checkbox' as const, checked: highlighted.value, onUpdateChecked: (checked: boolean) => { highlighted.value = checked } }] : []),
-    { label: t('panels.preview.wrap'), icon: 'i-lucide-wrap-text', type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } },
-  ] : []),
-  ...((capabilities.value.html || markup.value) ? [{ label: t('panels.preview.site'), icon: 'i-lucide-square-arrow-out-up-right', description: !downloadPreview.value?.sourcePreview ? t('panels.preview.noSource') : undefined, disabled: !downloadPreview.value?.sourcePreview || previewBusy.value, onSelect: previewSite }] : []),
+  ...(downloadPreview.value?.preview === 'text' ? textActions.value : []),
   { label: t('panels.file.download'), icon: 'i-lucide-download', onSelect: download },
   { label: t(expanded.value ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen'), icon: expanded.value ? 'i-lucide-minimize' : 'i-lucide-maximize', onSelect: () => { expanded.value = !expanded.value } },
   ...(expanded.value ? [{ label: t('panels.preview.close'), icon: 'i-lucide-x', onSelect: dismissDownloadPreview }] : []),
@@ -140,12 +138,12 @@ onBeforeUnmount(() => request?.abort())
     :ui="{ content: `download-preview-modal${preparing ? ' download-preview-preparing' : ''}${expanded ? ' download-preview-fullscreen' : ''}${mobileHeader ? ' download-preview-mobile' : ''}`, overlay: 'download-preview-overlay', header: 'download-preview-header-slot', body: 'download-preview-body' }"
     @update:open="openChanged">
     <template #header>
-      <header ref="header" class="download-preview-header" :class="{ 'cutout-header': mobileHeader && expanded }" :data-cutout-position="mobileHeader && expanded && cutoutWidth > 0 ? cutoutPosition : undefined" :style="{ '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` }">
+      <header class="download-preview-header" :class="{ 'cutout-header': mobileHeader && expanded }" :data-cutout-position="mobileHeader && expanded && cutoutWidth > 0 ? cutoutPosition : undefined" :style="{ '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` }">
         <span v-if="preparing" class="download-preview-pending" role="status"><span class="spinner" />{{ t('common.loading') }}</span>
         <DialogTitle class="download-preview-title" :class="{ 'cutout-title': mobileHeader && expanded, 'sr-only': preparing }">{{ downloadPreview.filename }}<span v-if="downloadPreviewCount > 1" class="download-preview-count" :aria-label="t('panels.preview.remaining', downloadPreviewCount - 1)"> +{{ n(downloadPreviewCount - 1) }}</span></DialogTitle>
-        <div class="download-preview-actions" :class="{ 'cutout-actions': mobileHeader && expanded }">
-          <TextPreviewActions v-if="downloadPreview.preview === 'text' && !loading && !error && !mobileHeader" :filename="downloadPreview.filename" v-model:rendered="rendered" v-model:wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :source-preview="downloadPreview.sourcePreview" :preview-busy="previewBusy" @preview="previewSite" />
-          <UButton v-if="!preparing && (!mobileHeader || !markup && !compact)" type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-download" :aria-label="t('panels.file.download')" :title="t('panels.file.download')" @click="download"><Icon name="download" :size="16" /></UButton>
+        <div ref="actions" class="download-preview-actions" :class="{ 'cutout-actions': mobileHeader && expanded }" :style="{ '--header-actions-width': `${(textShortcuts.length + 3) * 44}px` }">
+          <template v-for="key in textShortcuts" :key="key"><TextPreviewActions v-if="showShortcut(key)" :only="key" :filename="downloadPreview.filename" v-model:rendered="rendered" v-model:wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :source-preview="downloadPreview.sourcePreview" :preview-busy="previewBusy" @preview="previewSite" /></template>
+          <UButton v-if="!preparing && showShortcut('download')" type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-download" :aria-label="t('panels.file.download')" :title="t('panels.file.download')" @click="download"><Icon name="download" :size="16" /></UButton>
           <UDropdownMenu v-if="mobileHeader && !preparing" v-model:open="menuOpen" :modal="false" :items="menu" :portal="portal || false" :content="{ align: 'end', ...menuDismiss }" :ui="{ content: 'card-action-menu download-preview-menu z-[90] min-w-[160px]' }">
             <UButton ref="menuTrigger" type="button" color="neutral" variant="ghost" class="download-preview-button" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></UButton>
           </UDropdownMenu>
@@ -184,14 +182,15 @@ onBeforeUnmount(() => request?.abort())
 .download-preview-pending{display:flex;align-items:center;gap:8px;flex:1;font-size:13px;color:#d6dce5}
 .download-preview-modal.download-preview-fullscreen{box-sizing:border-box;left:var(--mobile-left,var(--preview-left));top:var(--dialog-top);right:auto;bottom:auto;translate:none;width:var(--preview-frame-width);height:var(--preview-frame-height);max-width:none;max-height:none;border:0;border-radius:0;padding:var(--preview-safe-top) var(--ui-safe-right) var(--preview-safe-bottom) var(--ui-safe-left)}
 .download-preview-header-slot{display:contents}
-.download-preview-header{--header-action-size:28px;display:flex;align-items:center;height:44px;min-height:44px;padding:0 8px 0 12px;gap:0;border-bottom:1px solid #343a43}
+.download-preview-header{container-type:inline-size;--header-action-size:28px;display:flex;align-items:center;height:44px;min-height:44px;padding:0 8px 0 12px;gap:0;border-bottom:1px solid #343a43}
 .download-preview-title{display:block;flex:1;min-width:0;font-size:13px;font-weight:500;letter-spacing:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#d6dce5}
 .download-preview-count{font-size:10px;color:#8290a1;font-variant-numeric:tabular-nums}
 .download-preview-actions{display:flex;flex:none;gap:0;align-items:center}
 .download-preview-button{position:static;flex:none;display:flex;align-items:center;justify-content:center;width:var(--header-action-size);min-width:var(--header-action-size);height:var(--header-action-size);padding:0;color:#93a1b4;border-radius:5px}
 .download-preview-button:hover{background:#ffffff08;color:#d4dfec}
-.download-preview-mobile .download-preview-header{--header-action-size:44px;padding:0}
+.download-preview-mobile .download-preview-header{container-type:inline-size;--header-action-size:44px;padding:0}
 .download-preview-mobile .download-preview-title{padding-left:12px}
+.download-preview-mobile .download-preview-actions{min-width:0;justify-content:flex-end;width:min(var(--header-actions-width),max(88px,calc(100cqw - 88px)))}
 .download-preview-modal{container-type:inline-size}
 .canvas-fullscreen.has-display-cutout .download-preview-fullscreen.download-preview-mobile{padding-top:0}
 .canvas-fullscreen.has-display-cutout .download-preview-mobile .cutout-header[data-cutout-position=center]>.cutout-title{margin-left:0}

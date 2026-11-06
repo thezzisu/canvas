@@ -14,6 +14,8 @@ import { randomUUID } from "node:crypto";
 import type { CanvasNotification } from "../shared/notification.ts";
 import type { PasteSegment } from "../shared/paste.ts";
 import type { CapturePresentation } from "./capture.ts";
+import { defaultTerminalCell } from '../shared/settings.ts';
+import { defaultWindowSize, normalTerminalGrid } from '../shared/window-size.ts';
 type CaptureMessage = CapturePresentation;
 type CaptureEnded = { type: 'capture-ended'; id: string };
 const { Terminal } = headless;
@@ -71,11 +73,13 @@ class LiveTerminal {
   closed = false;
   cols: number;
   rows: number;
+  private normalSize: Size;
   constructor(
     readonly key: string,
     readonly sourceId: string,
     readonly connectionKey: string,
     readonly spaceId: string,
+    readonly windowId: string,
     readonly handle: Awaited<ReturnType<typeof openTerminal>>,
     cols: number,
     rows: number,
@@ -87,6 +91,7 @@ class LiveTerminal {
   ) {
     this.cols = cols;
     this.rows = rows;
+    this.normalSize = { cols, rows };
     this.emulator = new Terminal({
       cols,
       rows,
@@ -414,7 +419,6 @@ class LiveTerminal {
           if (this.pasting) this.holdInput(this.pasting.then(() => { if (!this.closed) this.proc.write(data); }));
           else this.proc.write(data);
         }
-        if (msg.type === "resize") this.geometry.persistent(size);
       } catch {
         /* Malformed messages cannot become terminal commands. */
       }
@@ -449,6 +453,13 @@ class LiveTerminal {
       for (const ws of this.clients)
         if (this.canRender(ws)) json(ws, { type: "resize", cols: size.cols, rows: size.rows });
     });
+  }
+  setNormalSize(size: Size) {
+    if (this.closed || this.normalSize.cols === size.cols && this.normalSize.rows === size.rows) return;
+    this.normalSize = size;
+    // A shared card/font edit changes the restore size while maximized; it never
+    // takes input ownership or replaces an active temporary viewport.
+    this.geometry.persistent(size);
   }
   status() {
     for (const ws of this.clients)
@@ -504,7 +515,12 @@ export class TerminalManager {
   private pendingCompletions = new Map<string, { source: Source; notification: CanvasNotification; timer: ReturnType<typeof setTimeout> }>();
   private deliveredCompletions = new Map<string, CompletionToken>();
   private completionBoots = new Map<string, string>();
-  constructor(private readonly reads?: CompletionReads, private readonly onFocusedWindowRemoved?: (source: Source, windowId: string) => void) {}
+  constructor(private readonly reads?: CompletionReads, private readonly onFocusedWindowRemoved?: (source: Source, windowId: string) => void,
+    private readonly normalSize: (sourceId: string, windowId: string) => Size = () => normalTerminalGrid(defaultWindowSize, defaultTerminalCell())) {}
+  refreshNormalSizes() {
+    if (this.stopped) return;
+    for (const terminal of this.live) terminal.setNormalSize(this.normalSize(terminal.sourceId, terminal.windowId));
+  }
   onNotification(listener: (notification: CanvasNotification) => void) {
     this.notificationListeners.add(listener);
     return { dispose: () => { this.notificationListeners.delete(listener); } };
@@ -551,13 +567,14 @@ export class TerminalManager {
         const handle = await openTerminal(source, target.spaceId, target.windowId);
         let transport: HerdrClientTransport | undefined;
         try {
-          const cols = 100, rows = 30;
+          const { cols, rows } = this.normalSize(source.id, target.windowId);
           transport = await handle.connect(cols, rows);
           const terminal = new LiveTerminal(
             key,
             source.id,
             sourceConnectionKey(source),
             target.spaceId,
+            target.windowId,
             handle,
             cols,
             rows,
@@ -566,6 +583,8 @@ export class TerminalManager {
             source, this.reads, () => this.onFocusedWindowRemoved?.(source, target.windowId),
           );
           this.live.add(terminal);
+          // A card/font edit may have committed while the native socket opened.
+          terminal.setNormalSize(this.normalSize(source.id, target.windowId));
           transport.onSnapshot(() => {
             const owner = [...this.live].find(candidate => !candidate.closed && candidate.sourceId === source.id && candidate.connectionKey === terminal.connectionKey);
             if (owner === terminal) this.observeCompletionSource(source);

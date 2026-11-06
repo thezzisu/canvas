@@ -1,36 +1,24 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useI18n } from 'vue-i18n'
+import { useVModels } from '@vueuse/core'
 import UButton from '@nuxt/ui/components/Button.vue'
-import Icon from './Icon.vue'
-import { isMarkdownFile } from '../markdown'
-import { textCapabilities } from '../code-preview'
+import { useTextPreviewActions } from '../text-preview-actions'
 
 const props = defineProps<{ filename: string; rendered: boolean; wrap: boolean; formatted: boolean; highlighted: boolean;
-  sourcePreview?: boolean; previewBusy?: boolean; hideSite?: boolean }>()
+  sourcePreview?: boolean; previewBusy?: boolean; hideSite?: boolean; only?: string }>()
 const emit = defineEmits<{ 'update:rendered': [value: boolean]; 'update:wrap': [value: boolean];
   'update:formatted': [value: boolean]; 'update:highlighted': [value: boolean]; preview: [] }>()
-const { t } = useI18n()
-const markup = computed(() => isMarkdownFile(props.filename) || /\.html?$/iu.test(props.filename))
-const capabilities = computed(() => textCapabilities(props.filename))
-const source = computed(() => !markup.value || !props.rendered)
+const models = useVModels(props, emit)
+const actions = useTextPreviewActions(() => props.filename, models, { sourcePreview: () => props.sourcePreview,
+  busy: () => props.previewBusy || false, hideSite: () => props.hideSite || false, preview: () => emit('preview') })
+const shown = computed(() => actions.value.filter(item => !props.only || item.slot === props.only))
 </script>
 
 <template>
   <div class="text-preview-actions nodrag nopan" @pointerdown.stop @click.stop @dblclick.stop>
-    <UButton v-if="markup" type="button" :color="!rendered ? 'primary' : 'neutral'" :variant="rendered ? 'ghost' : 'soft'" size="xs" class="text-preview-action"
-      :aria-label="t('panels.preview.source')" :title="t(rendered ? 'panels.preview.source' : 'panels.preview.rendered')" :aria-pressed="!rendered"
-      @click="emit('update:rendered', !rendered)"><Icon name="code" :size="15" /></UButton>
-    <template v-if="source">
-      <UButton v-if="capabilities.format" icon="i-lucide-list-tree" type="button" :color="formatted ? 'primary' : 'neutral'" :variant="formatted ? 'soft' : 'ghost'" size="xs" class="text-preview-action"
-        :aria-label="t('panels.preview.format')" :title="t('panels.preview.format')" :aria-pressed="formatted" @click="emit('update:formatted', !formatted)" />
-      <UButton v-if="capabilities.highlight" icon="i-lucide-palette" type="button" :color="highlighted ? 'primary' : 'neutral'" :variant="highlighted ? 'soft' : 'ghost'" size="xs" class="text-preview-action"
-        :aria-label="t('panels.preview.highlight')" :title="t('panels.preview.highlight')" :aria-pressed="highlighted" @click="emit('update:highlighted', !highlighted)" />
-      <UButton type="button" :color="wrap ? 'primary' : 'neutral'" :variant="wrap ? 'soft' : 'ghost'" size="xs" class="text-preview-action"
-        :aria-label="t('panels.preview.wrap')" :title="t('panels.preview.wrap')" :aria-pressed="wrap" @click="emit('update:wrap', !wrap)"><Icon name="wrap" :size="15" /></UButton>
-    </template>
-    <UButton v-if="!hideSite && (capabilities.html || isMarkdownFile(filename))" icon="i-lucide-square-arrow-out-up-right" type="button" color="neutral" variant="ghost" size="xs" class="text-preview-action"
-      :aria-label="t('panels.preview.site')" :title="t(sourcePreview ? 'panels.preview.site' : 'panels.preview.noSource')" :disabled="!sourcePreview" :loading="previewBusy" @click="emit('preview')" />
+    <UButton v-for="item in shown" :key="item.slot" type="button" :icon="item.icon" :color="item.checked ? 'primary' : 'neutral'" :variant="item.checked ? 'soft' : 'ghost'" size="xs" class="text-preview-action"
+      :aria-label="item.label" :title="item.title || item.label" :aria-pressed="item.type === 'checkbox' ? item.checked : undefined" :disabled="item.disabled" :loading="item.loading"
+      @click="event => item.type === 'checkbox' ? item.onUpdateChecked?.(!item.checked) : item.onSelect?.(event)" />
   </div>
 </template>
 

@@ -8,8 +8,8 @@ import USelect from '@nuxt/ui/components/Select.vue'
 import USlider from '@nuxt/ui/components/Slider.vue'
 import USwitch from '@nuxt/ui/components/Switch.vue'
 import type { ContentFontSettings, GlobalSettings } from '../../../shared/settings'
-import { FONT_CATALOG, buildFontPresentation, ensureContentFont } from '../fonts'
-import { write } from '../api'
+import { FONT_CATALOG, buildFontPresentation, ensureContentFont, measureTerminalCell } from '../fonts'
+import { api, apiContext, requireCurrentApi } from '../api'
 import { inputMode, useMobileLayout } from '../mobile-layout'
 import { uiScale, uiZoom } from '../ui-scale'
 import { cutoutPosition, cutoutWidth, type CutoutPosition } from '../display-cutout'
@@ -115,9 +115,13 @@ function failed(reason: unknown, current: number, changed: boolean) {
 }
 async function saveFont(value: ContentFontSettings, current: number) {
   if (disposed || current !== revision || signature(value) === signature(persisted.value)) return
+  const context = apiContext()
   saving.value = true
   try {
-    const settings = await write<GlobalSettings>('/api/settings', 'PATCH', { contentFont: value })
+    const terminalCell = await measureTerminalCell(value)
+    if (disposed || current !== revision) return
+    requireCurrentApi(context)
+    const settings = await api<GlobalSettings>('/api/settings', { method: 'PATCH', body: JSON.stringify({ contentFont: value, terminalCell }) }, context)
     if (disposed) return
     persisted.value = clone(settings.contentFont)
     if (current === revision) setDraft(settings.contentFont)

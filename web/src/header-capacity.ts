@@ -1,6 +1,6 @@
-/** Fold optional actions before the 44 px controls crowd the title or cutout. */
-export function compactHeader(width: number, gap: number, position: 'left' | 'center' | 'right', controls = 3): boolean {
-  if (!Number.isFinite(width) || width <= 0) return true
-  const reserved = Math.max(0, Math.min(gap, width - 176))
-  return position === 'center' && reserved > 0 ? (width - reserved) / 2 < controls * 44 : width - reserved < (controls + 2) * 44
+/** The CSS action region owns available space; the menu and restore stay reachable. */
+export function headerShortcuts(width: number, shortcuts: readonly string[], removable: boolean, priority: readonly string[] = shortcuts) {
+  const count = Math.max(0, Math.floor((Number.isFinite(width) ? width : 0) / 44) - 2)
+  const ordered = [...(removable ? ['remove'] : []), ...priority.filter(key => shortcuts.includes(key)), ...shortcuts.filter(key => !priority.includes(key)), 'add']
+  return new Set(ordered.slice(0, count))
 }

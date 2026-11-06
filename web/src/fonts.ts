@@ -1,7 +1,8 @@
 import type { Terminal } from '@xterm/xterm'
-import type { ContentFontSettings } from '../../shared/settings.ts'
+import type { ContentFontSettings, TerminalCell } from '../../shared/settings.ts'
 import { fontChain, quoteFamily } from './font-catalog'
 import { createFontLoader } from './font-loading'
+import { terminalBox } from './terminal-geometry'
 import { t } from './i18n'
 
 export { FONT_CATALOG } from './font-catalog'
@@ -29,6 +30,33 @@ export async function ensureContentFont(settings: ContentFontSettings, fallbackR
   })
   try { await loader.prepare(fontChain(settings), fallbackReady) }
   catch (error) { throw error instanceof Error ? error : new Error(t('common.fontLoadFailed')) }
+}
+
+/** Only an explicit shared-font edit records metrics; viewers never recalibrate
+ * the shared terminal from their own platform's fallback or device scale. */
+export async function measureTerminalCell(settings: ContentFontSettings): Promise<TerminalCell> {
+  await ensureContentFont(settings)
+  // A missing local family can fall through to a bundled one. Do not record a
+  // temporary fallback while any configured bundled family is still loading.
+  await Promise.all(fontChain(settings).filter(font => font.bundled).map(font => loader!.load(font)))
+  const { Terminal } = await import('@xterm/xterm')
+  const host = document.createElement('div')
+  host.inert = true; host.setAttribute('aria-hidden', 'true')
+  Object.assign(host.style, { position: 'fixed', left: '-10000px', top: '0', opacity: '0', pointerEvents: 'none' })
+  document.body.append(host)
+  const term = new Terminal({ cols: 200, rows: 10, fontSize: 12, lineHeight: 1, fontFamily: buildFontPresentation(settings).family })
+  try {
+    // open() synchronously measures with the renderer's own font metrics. Read
+    // its CSS grid, not private xterm services or a separate canvas algorithm.
+    term.open(host)
+    const screen = term.element?.querySelector<HTMLElement>('.xterm-screen')
+    if (!screen) throw new Error(t('common.fontLoadFailed'))
+    const box = terminalBox(screen)
+    const cell = { width: box.contentWidth / term.cols, height: box.contentHeight / term.rows }
+    if (!Number.isFinite(cell.width) || !Number.isFinite(cell.height) || cell.width <= 0 || cell.height <= 0)
+      throw new Error(t('common.fontLoadFailed'))
+    return cell
+  } finally { term.dispose(); host.remove() }
 }
 
 // Documented programming sequences from Maple Mono and Cascadia Code. Grouping

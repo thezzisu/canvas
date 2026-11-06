@@ -101,7 +101,6 @@ interface Session {
   opened: boolean
   rendered?: RenderedTerminalGrid
   metrics?: RenderedTerminalGrid
-  cardFit?: { width: number; height: number; metrics: RenderedTerminalGrid }
   resizing?: boolean
   parsedGrid?: TerminalGrid
   paintedGrid?: TerminalGrid
@@ -323,8 +322,8 @@ export function setContentFont(settings: ContentFontSettings, presentation: Font
     present(session)
     session.term.options.fontFamily = presentation.family
     if (session.opened) session.removeFontFeatures = applyTerminalFontFeatures(session.term, contentFont)
-    // Fonts alter cell metrics, not the shared native grid. Only an existing
-    // magnified owner may update its temporary geometry through the usual lease.
+    // Normal geometry comes from shared settings/state. Only a maximized view
+    // measures its own temporary viewport and updates the existing lease.
     schedulePresentation(session)
   }
 }
@@ -411,7 +410,6 @@ function schedulePresentation(session: Session) {
   session.presentationFrame = requestAnimationFrame(() => {
     session.presentationFrame = undefined
     updateFocusSize(session)
-    if (!session.magnified) resize(session, false)
     present(session)
   })
 }
@@ -426,7 +424,6 @@ function disconnect(session: Session) {
   session.connectionRevision++
   session.parsedGrid = undefined; session.paintedGrid = undefined; session.resetPending = false
   session.paintRevision = (session.paintRevision || 0) + 1
-  session.cardFit = undefined
   session.connectionProbe?.abort(); session.connectionProbe = undefined
   endFocusSize(session)
   const socket = session.socket
@@ -595,7 +592,6 @@ async function connect(session: Session, probe: boolean) {
             session.parsedCompletion = undefined; session.paintedCompletion = undefined
             session.paintRevision = (session.paintRevision || 0) + 1
             if (session.resumeReset) session.resumePaint = session.paintRevision
-            session.cardFit = undefined
           }
           session.term.resize(message.cols, message.rows)
           if (session.opened) session.term.refresh(0, session.term.rows - 1)
@@ -705,23 +701,6 @@ function endFocusSize(session: Session) {
   session.focusResize = undefined
   if (session.socket?.readyState === WebSocket.OPEN) session.socket.send(JSON.stringify({ type: 'focus-resize-end', token: request.token }))
   setState(session, { ...session.state, focusResize: undefined })
-}
-function resize(session: Session, explicit = true) {
-  if (session.editing || session.magnified || session.resizing || session.state.status !== 'connected' || session.state.presentation?.maximized) return
-  const proposed = proposedSize(session)
-  if (!proposed || !session.host || !session.metrics || session.socket?.readyState !== WebSocket.OPEN) return
-  const available = availableSize(session.host), previous = session.cardFit
-  // Only the existing controller fits changed card geometry. A native grid
-  // change rechecks the frame; matching replies never send another resize.
-  if (!explicit && (session.state.readOnly || previous?.width === available.width && previous.height === available.height && previous.metrics === session.metrics)) return
-  session.cardFit = { ...available, metrics: session.metrics }
-  if (explicit) claimFocus(session)
-  const { cols, rows } = proposed
-  if (cols !== session.term.cols || rows !== session.term.rows) {
-    session.socket.send(JSON.stringify({ type: 'resize', cols, rows }))
-  }
-  if (explicit) present(session)
-  return terminalGeometry(session)
 }
 function claimFocus(session: Session) {
   if (!interactive(session)) return
@@ -1100,7 +1079,6 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       return true
     },
     setTouchMode(mode: TerminalTouchMode) { current.touchMode = mode; setModifiers(current); setState(current, { ...current.state, touchMode: mode }) },
-    resize() { return resize(current) },
     setResizing(value: boolean) { current.resizing = value; present(current) },
     close() { if (current.host === host && isCurrentApi(mountingContext)) windowRemoved(current) },
     cancelUpload() { current.uploads.cancel() },

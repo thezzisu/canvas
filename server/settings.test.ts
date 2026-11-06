@@ -20,7 +20,7 @@ test('global font defaults do not write data; generic chains persist and publish
   store.updateSettings(defaultSettings())
   assert.equal(changes, 0)
   assert.equal(store.get('settings', 'global'), undefined)
-  const settings = { contentFont: { stack: [{ family: 'Future Bundled Font Compact' }, { family: '本机字体' }, { family: 'monospace' }], ligatures: true } }
+  const settings = { contentFont: { stack: [{ family: 'Future Bundled Font Compact' }, { family: '本机字体' }, { family: 'monospace' }], ligatures: true }, terminalCell: { width: 8, height: 18 } }
   store.updateSettings(settings)
   assert.equal(changes, 1)
   assert.deepEqual(store.snapshot().settings, settings)
@@ -43,7 +43,7 @@ test('settings routes enforce account/origin boundaries and validate family name
   })
   assert.equal((await call(undefined, 'missing')).status, 401)
   assert.equal((await call(defaultSettings(), 'fixture', 'https://elsewhere.test')).status, 403)
-  const good = { contentFont: { stack: [{ family: '  New Font  ' }, { family: 'new font' }, { family: 'Maple Mono NF CN' }, { family: 'Maple Mono Normal NF CN' }, { family: 'monospace' }], ligatures: true } }
+  const good = { contentFont: { stack: [{ family: '  New Font  ' }, { family: 'new font' }, { family: 'Maple Mono NF CN' }, { family: 'Maple Mono Normal NF CN' }, { family: 'monospace' }], ligatures: true }, terminalCell: { width: 8, height: 18 } }
   assert.equal((await call(good)).status, 200)
   assert.deepEqual((await (await call()).json()).contentFont.stack, [{ family: 'New Font' }, { family: 'Maple Mono NF CN' }, { family: 'Maple Mono Normal NF CN' }, { family: 'monospace' }])
   for (const contentFont of [
@@ -54,7 +54,12 @@ test('settings routes enforce account/origin boundaries and validate family name
     { stack: [{ family: 'monospace', unknown: true }], ligatures: false },
     { stack: [{ family: 'monospace' }], ligatures: 'false' },
     { ...defaultSettings().contentFont, unknown: true },
-  ]) assert.equal((await call({ contentFont })).status, 400)
+  ]) assert.equal((await call({ contentFont, terminalCell: good.terminalCell })).status, 400)
+  for (const terminalCell of [undefined, {}, { width: 0, height: 16 }, { width: -1, height: 16 },
+    { width: 7.25, height: 129 }, { width: '7.25', height: 16 }, { width: 7.25, height: 16, browser: 'local' }]) {
+    assert.equal((await call({ contentFont: good.contentFont, terminalCell })).status, 400)
+    assert.deepEqual(store.settings().terminalCell, good.terminalCell)
+  }
 })
 
 test('invalid stored settings fail explicitly without overwriting their document or substituting defaults', t => {

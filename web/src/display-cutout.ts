@@ -1,17 +1,10 @@
-import { useElementSize, useStorage } from '@vueuse/core'
-import { computed, inject, onBeforeUnmount, onMounted, ref, toValue, type InjectionKey, type MaybeRefOrGetter, type Ref } from 'vue'
-import { compactHeader } from './header-capacity'
-import { uiZoom } from './ui-scale'
+import { useStorage } from '@vueuse/core'
+import { onBeforeUnmount, onMounted, ref, type InjectionKey, type Ref } from 'vue'
 
 export type CutoutPosition = 'left' | 'center' | 'right'
 export const cutoutPosition = useStorage<CutoutPosition>('canvas:display:cutout-position', 'center')
 export const cutoutWidth = useStorage('canvas:display:cutout-width', 0)
 export const cutoutActiveKey: InjectionKey<Readonly<Ref<boolean>>> = Symbol('canvas-cutout-active')
-
-export function useCompactHeader(header: Readonly<Ref<HTMLElement | undefined>>, active: MaybeRefOrGetter<boolean> = inject(cutoutActiveKey, ref(false)), controls: MaybeRefOrGetter<number> = 3) {
-  const { width } = useElementSize(header, { width: 0, height: 44 }, { box: 'border-box' })
-  return computed(() => compactHeader(width.value, toValue(active) ? cutoutWidth.value / uiZoom.value : 0, cutoutPosition.value, toValue(controls)))
-}
 
 /** Observe the safe area reported by CSS without guessing the device model. */
 export function useDisplayCutout() {

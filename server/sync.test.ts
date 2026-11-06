@@ -176,7 +176,7 @@ test("global font settings broadcast to both browsers without altering canvas do
   const f = fixture(t), first = await f.subscribe(), second = await f.subscribe('second')
   const baseline = (await first.next()).state!
   await second.next()
-  const settings = { contentFont: { stack: [{ family: 'Example Local Mono' }, { family: 'monospace' }], ligatures: true } }
+  const settings = { contentFont: { stack: [{ family: 'Example Local Mono' }, { family: 'monospace' }], ligatures: true }, terminalCell: { width: 8, height: 18 } }
   assert.equal((await f.request('/api/settings', 'PATCH', settings)).status, 200)
   const a = (await first.next()).state!, b = (await second.next()).state!
   assert.deepEqual(a, b)

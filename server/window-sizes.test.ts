@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { createApp } from "./app.ts";
 import { Store, type Canvas, type SharedState } from "./state.ts";
 import type { TerminalManager } from "./terminals.ts";
+import { defaultSettings } from '../shared/settings.ts';
 
 test("terminal presentation dimensions are shared across canvases while positions and notes stay local", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "canvas-shared-sizes-")), store = new Store(join(dir, "state.db"));
@@ -76,4 +77,27 @@ test("canonical window sizes persist across restarts and missing sizes stay at t
     assert.equal(store.snapshot().windowSizes[key], undefined, "orphan canvas refs recreated a removed source's size");
     assert.deepEqual(store.windowSize(sourceId, windowId), { width: 1090, height: 672 });
   } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('normal native geometry derives from the latest shared dimensions and atomically saved font metrics', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'canvas-normal-grid-')), path = join(dir, 'state.db');
+  let store = new Store(path);
+  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+  assert.deepEqual(store.normalTerminalSize('source', 'window'), { cols: 150, rows: 40 });
+  store.setWindowSize('source', 'window', { width: 802, height: 572 });
+  const snapshots: unknown[] = [];
+  store.on('change', () => snapshots.push({ settings: store.settings(), grid: store.normalTerminalSize('source', 'window') }));
+  const settings = { contentFont: { stack: [{ family: 'Fixture Mono' }], ligatures: false }, terminalCell: { width: 8, height: 18 } };
+  store.updateSettings(settings);
+  assert.deepEqual(snapshots, [{ settings, grid: { cols: 100, rows: 30 } }]);
+  // A font change uses current dimensions rather than a browser's stale map.
+  store.setWindowSize('source', 'window', { width: 962 });
+  store.updateSettings({ ...settings, terminalCell: { width: 9.6, height: 18 } });
+  assert.deepEqual(store.normalTerminalSize('source', 'window'), { cols: 100, rows: 30 });
+  store.close(); store = new Store(path);
+  assert.deepEqual(store.normalTerminalSize('source', 'window'), { cols: 100, rows: 30 });
+  assert.deepEqual(store.windowSize('source', 'window'), { width: 962, height: 572 });
+  store.updateSettings(defaultSettings());
+  assert.deepEqual(store.normalTerminalSize('source', 'window'), { cols: 132, rows: 33 });
+  assert.deepEqual(store.snapshot().windowSizes['source/window'], { width: 962, height: 572 }, 'no duplicate stored grid is created');
 });

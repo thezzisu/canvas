@@ -63,7 +63,9 @@ async function fixture(t: TestContext, probe = false, quietProbe = false, comple
   const store = completionReads ? new Store(join(root, "canvas.db")) : undefined;
   store?.put("source", source);
   const reads = store ? new CompletionReads(store) : undefined;
-  const manager = new TerminalManager(reads, (source, windowId) => store?.removeWindowReferences(source, [windowId]));
+  let normalSize = { cols: 100, rows: 30 };
+  const manager = new TerminalManager(reads, (source, windowId) => store?.removeWindowReferences(source, [windowId]), () => normalSize);
+  const setNormalSize = (cols: number, rows: number) => { normalSize = { cols, rows }; manager.refreshNormalSizes(); };
   t.after(async () => {
     await manager.closeAll();
     try { execFileSync(binary, ["--session", session, "server", "stop"], { env, stdio: "ignore", timeout: 5000 }); } catch {}
@@ -105,7 +107,7 @@ async function fixture(t: TestContext, probe = false, quietProbe = false, comple
     }, 'native notification API remained rate-limited');
     return result!;
   };
-  return { root, bytes, manager, store, reads, source, target, shellResult, assertSize, ready, text, reportAgent, notify };
+  return { root, bytes, manager, store, reads, source, target, shellResult, assertSize, ready, text, reportAgent, notify, setNormalSize };
 }
 
 test('geometry controls cannot overtake queued terminal output', async t => {
@@ -118,7 +120,7 @@ test('geometry controls cannot overtake queued terminal output', async t => {
   const mark = client.received.length;
   terminal.queue = terminal.queue.then(() => gate);
   try {
-    client.command({ type: 'resize', cols: 83, rows: 27 });
+    f.setNormalSize(83, 27);
     await terminal.geometry.drain();
     assert(!client.received.slice(mark).some(value => typeof value === 'string' && JSON.parse(value).type === 'resize'));
     assert.notEqual(terminal.emulator.cols, 83, 'queued old output retains its original grid');
@@ -126,6 +128,40 @@ test('geometry controls cannot overtake queued terminal output', async t => {
   await waitFor(() => messages(client).some(message => message.type === 'resize' && message.cols === 83 && message.rows === 27), 'ordered resize');
   assert.equal(terminal.emulator.cols, 83);
   client.close();
+});
+
+test('normal geometry starts from shared state and changes without browser focus or resize authority', async t => {
+  const f = await fixture(t, true, true); if (!f) return;
+  f.setNormalSize(150, 40);
+  const first = new Client(), peer = new Client();
+  await f.manager.connect(f.source, f.target, first.socket); await f.ready();
+  await f.manager.connect(f.source, f.target, peer.socket);
+  const terminal = (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!;
+  assert.deepEqual(size(first), { type: 'resize', cols: 150, rows: 40 });
+  assert.deepEqual(size(peer), { type: 'resize', cols: 150, rows: 40 });
+  assert.equal(messages(peer).filter(message => message.type === 'status').at(-1)?.readOnly, true);
+  assert.equal(await f.manager.downloadRecipient(f.source.id, f.target.windowId), undefined);
+  const writes: unknown[] = [], nativeResize = terminal.proc.resize.bind(terminal.proc);
+  terminal.proc.resize = (cols, rows) => { writes.push({ cols, rows }); nativeResize(cols, rows); };
+  for (const viewer of [first, peer]) viewer.command({ type: 'resize', cols: 80, rows: 24 });
+  f.manager.refreshNormalSizes(); await terminal.geometry.drain();
+  assert.deepEqual(writes, [], 'browser viewport requests and unrelated shared changes cannot replace the normal size');
+  f.setNormalSize(120, 32); await terminal.geometry.drain();
+  await waitFor(() => size(peer)?.cols === 120, 'shared edit reaches the passive browser');
+  assert.deepEqual(writes, [{ cols: 120, rows: 32 }]);
+  assert.equal(terminal.controller, first.socket);
+  assert.equal(await f.manager.downloadRecipient(f.source.id, f.target.windowId), undefined);
+  const token = randomUUID();
+  peer.command({ type: 'focus-resize-begin', token, cols: 90, rows: 25 });
+  await waitFor(() => size(peer)?.cols === 90, 'temporary view owns its maximized size');
+  first.command({ type: 'view-visible', visible: false });
+  f.setNormalSize(160, 44); await terminal.geometry.drain();
+  assert.equal(size(peer)?.cols, 90, 'normal shared edit updates only the restore baseline during maximization');
+  peer.command({ type: 'focus-resize-end', token });
+  await waitFor(() => size(peer)?.cols === 160, 'restoration uses the latest shared normal size');
+  const late = new Client(); await f.manager.connect(f.source, f.target, late.socket);
+  assert.deepEqual(size(late), { type: 'resize', cols: 160, rows: 44 });
+  assert.equal(existsSync(f.bytes) ? readFileSync(f.bytes).length : 0, 0, 'size changes never inject terminal input');
 });
 
 test('one existing native endpoint per source delivers live notifications across viewers, owner closure and reconnect', async t => {
@@ -460,7 +496,7 @@ test("a paused peer cancels the observed maximization without input, focus takeo
   await waitFor(() => size(owner)?.cols === 130, "owner did not maximize");
   const observed = presentation(peer);
   assert(observed.maximized && !observed.owned && Number.isSafeInteger(observed.lease));
-  owner.command({ type: "resize", cols: 112, rows: 34 });
+  f.setNormalSize(112, 34);
   const terminal = await manager.entries.get(`${source.id}/${target.windowId}`)!;
   await terminal.geometry.drain();
   assert.equal(size(owner).cols, 130, "persistent card geometry replaced the active maximized size");
@@ -623,7 +659,7 @@ test("shared native terminals serialize to late viewers, retain last resize and 
   second.command({ type: "input", data: "printf 'ALLOWED_%s\\n' INPUT\r" });
   await waitFor(async () => (await f.text()).includes("ALLOWED_INPUT"), "controller input did not arrive");
   assert.ok(!(await f.text()).includes("BLOCKED_INPUT"));
-  for (let cols = 110; cols <= 132; cols++) second.command({ type: "resize", cols, rows: 42 });
+  for (let cols = 110; cols <= 132; cols++) f.setNormalSize(cols, 42);
   await f.assertSize(second, 132, 42);
   second.command({ type: "input", data: "seq 1 40000\r" });
   await manager.closeAll();
@@ -637,7 +673,7 @@ test("binary mouse coordinates and UTF-8 input pass through the native herdr cli
   const { manager, source, target } = f, client = new Client();
   await manager.connect(source, target, client.socket);
   await f.ready();
-  client.command({ type: "resize", cols: 220, rows: 60 });
+  f.setNormalSize(220, 60);
   await waitFor(() => size(client)?.cols === 220, "wide viewport was not applied");
   client.command({ type: "input", encoding: "binary", data: "\x1b[M" + String.fromCharCode(67, 200, 70) });
   await waitFor(() => existsSync(f.bytes) && readFileSync(f.bytes).length >= 6, "legacy mouse bytes did not arrive");
@@ -760,7 +796,7 @@ test("hidden viewers stop binary traffic and resume an exact current screen with
   const mark = second.received.length;
   first.command({ type: 'input', data: "printf '\\033[2J\\033[H'; printf 'HIDDEN_%s\\n' OUTPUT; seq 1 70\r" });
   await waitFor(async () => (await f.text()).includes('70'), 'background output was not incorporated');
-  first.command({ type: 'resize', cols: 123, rows: 37 });
+  f.setNormalSize(123, 37);
   await f.assertSize(first, 123, 37);
   await terminal.queue;
   assert.equal(second.received.slice(mark).filter(Buffer.isBuffer).length, 0);

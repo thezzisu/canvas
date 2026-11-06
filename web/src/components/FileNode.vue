@@ -13,7 +13,7 @@ import { BinaryFileError, readTextPreview } from '../text-preview'
 import { filePreview } from '../file-preview'
 import TextPreview from './TextPreview.vue'
 import TextPreviewActions from './TextPreviewActions.vue'
-import { textCapabilities } from '../code-preview'
+import { useTextPreviewActions } from '../text-preview-actions'
 import { useSourcePreview } from '../source-preview'
 import MediaPreview from './MediaPreview.vue'
 import ImagePreview from './ImagePreview.vue'
@@ -28,7 +28,7 @@ import { reportDownloadError } from '../downloads'
 import { apiFetch } from '../api'
 import { copyCanvasFile, fileReference } from '../file-transfer'
 import { writeFileReference } from '../file-reference'
-import { cutoutPosition, cutoutWidth, useCompactHeader } from '../display-cutout'
+import { cutoutPosition, cutoutWidth } from '../display-cutout'
 import { useFileView } from '../file-view'
 import { useCardContentFocus } from '../card-content-focus'
 import { useRetainedFrame } from '../retained-frame'
@@ -43,28 +43,19 @@ const preview = computed(() => binary.value ? 'file' : filePreview(props.data.as
 watch(() => props.data.assetId, () => { binary.value = false })
 const mobilePreview = computed(() => !!props.data.mobile && !props.data.focus)
 const zoom = useContentZoom(() => props.data.zoomKey)
-const header = ref<HTMLElement>()
-const headerCompact = useCompactHeader(computed(() => props.data.mobile && props.data.focus ? header.value : undefined), undefined, () => preview.value === 'text' ? 10 : 5)
-const compact = computed(() => !!props.data.mobile && props.data.focus && headerCompact.value)
 const markup = computed(() => preview.value === 'text' && (isMarkdownFile(props.data.asset.filename) || /\.html?$/iu.test(props.data.asset.filename)))
 const { rendered, wrap, formatted, highlighted, reading, remember } = useFileView(props.data.instanceId, props.data.canvasId, props.id, markup.value, props.data.canPersistView)
-const capabilities = computed(() => textCapabilities(props.data.asset.filename))
 const sitePreview = useSourcePreview()
 const previewBusy = sitePreview.busy
 function previewSite() { if (props.data.asset.sourcePreview) void sitePreview.open(path.value, props.data.asset.filename) }
+const textActions = useTextPreviewActions(() => props.data.asset.filename, { rendered, wrap, formatted, highlighted }, {
+  sourcePreview: () => props.data.asset.sourcePreview, busy: previewBusy, preview: previewSite,
+})
+const textShortcuts = computed(() => preview.value === 'text' && props.data.focus ? textActions.value.map(item => item.slot!) : [])
+const shortcuts = computed(() => [...textShortcuts.value, ...(preview.value === 'text' && props.data.focus ? ['zoom'] : []), 'copy'])
 const menu = computed<DropdownMenuItem[]>(() => [
-  ...(compact.value ? [
-    ...(preview.value === 'text' ? contentZoomMenu(zoom) : []),
-    { label: t('fileTransfer.copy'), icon: 'i-lucide-copy', onSelect: copyFile },
-    { label: t('app.addToOtherCanvas'), icon: 'i-lucide-layers', onSelect: () => props.data.onAction?.('add', props.id) },
-  ] : []),
-  ...(markup.value ? [{ label: t('panels.preview.source'), icon: 'i-lucide-code', type: 'checkbox' as const, checked: !rendered.value, onUpdateChecked: (checked: boolean) => { rendered.value = !checked } }] : []),
-  ...(preview.value === 'text' && (!markup.value || !rendered.value) ? [
-    ...(capabilities.value.format ? [{ label: t('panels.preview.format'), icon: 'i-lucide-list-tree', type: 'checkbox' as const, checked: formatted.value, onUpdateChecked: (checked: boolean) => { formatted.value = checked } }] : []),
-    ...(capabilities.value.highlight ? [{ label: t('panels.preview.highlight'), icon: 'i-lucide-palette', type: 'checkbox' as const, checked: highlighted.value, onUpdateChecked: (checked: boolean) => { highlighted.value = checked } }] : []),
-    { label: t('panels.preview.wrap'), icon: 'i-lucide-wrap-text', type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } },
-  ] : []),
-  ...(preview.value === 'text' && (capabilities.value.html || markup.value) ? [{ label: t('panels.preview.site'), icon: 'i-lucide-square-arrow-out-up-right', description: !props.data.asset.sourcePreview ? t('panels.preview.noSource') : undefined, disabled: !props.data.asset.sourcePreview || previewBusy.value, onSelect: previewSite }] : []),
+  ...(preview.value === 'text' ? [...contentZoomMenu(zoom), ...textActions.value] : []),
+  { label: t('fileTransfer.copy'), icon: 'i-lucide-copy', onSelect: copyFile },
   { label: t('panels.file.download'), icon: 'i-lucide-download', onSelect: download },
   { label: t('common.settings'), icon: 'i-lucide-settings', onSelect: () => props.data.onAction?.('settings', props.id) },
 ])
@@ -131,14 +122,14 @@ const size = computed(() => {
 <template>
   <NodeResizer v-if="!data.mobile && !data.focus" :node-id="id" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="event => data.onResizeStart(id, event.params)" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
   <article ref="layoutRoot" class="file-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus, 'input-focused': contentActive }" :data-asset-id="data.assetId" :data-preview-kind="preview">
-    <header ref="header" class="file-header drag-handle" :class="{ 'cutout-header': data.focus && data.mobile }" :data-cutout-position="data.focus && data.mobile && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus && data.mobile ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))`, '--cutout-controls': '264px' } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
+    <header class="file-header drag-handle" :class="{ 'cutout-header': data.focus && data.mobile }" :data-cutout-position="data.focus && data.mobile && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus && data.mobile ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
       <span class="file-icon" :class="{ 'cutout-status': data.focus }"><Icon name="file" :size="13" /></span>
       <span class="file-title" :class="{ 'cutout-title': data.focus }" :title="`${data.asset.filename} · ${size}`">{{ data.asset.filename }}</span>
-      <CardHeaderActions class="file-actions" :class="{ 'cutout-actions': data.mobile && data.focus }" :items="menu" :expanded="!!data.focus" removable :compact="compact" :add-label="t('app.addToOtherCanvas')" :remove-label="t('panels.file.remove')"
+      <CardHeaderActions class="file-actions" :class="{ 'cutout-actions': data.mobile && data.focus }" :items="menu" :expanded="!!data.focus" removable :mobile="!!data.mobile && !!data.focus" :shortcuts="shortcuts" :priority="['copy', 'zoom']" :add-label="t('app.addToOtherCanvas')" :remove-label="t('panels.file.remove')"
         @add="data.onAction?.('add', id)" @toggle="data.onAction?.(data.focus ? 'unfocus' : 'focus', id)" @remove="data.onRemove(id)">
-        <TextPreviewActions v-if="data.focus && preview === 'text'" :filename="data.asset.filename" v-model:rendered="rendered" v-model:wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :source-preview="data.asset.sourcePreview" :preview-busy="previewBusy" @preview="previewSite" />
-        <ContentZoom v-if="data.focus && preview === 'text'" v-model="zoom" :mobile="data.mobile" :label="t('common.contentZoom')" />
-        <button type="button" class="card-header-action file-copy" draggable="true" :title="t('fileTransfer.copyOrDrag')" :aria-label="t('fileTransfer.copy')" @pointerdown.stop @click="copyFile" @dragstart="dragFile"><Icon name="copy" :size="15" /></button>
+        <template v-for="key in textShortcuts" :key="key" #[key]><TextPreviewActions :only="key" :filename="data.asset.filename" v-model:rendered="rendered" v-model:wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :source-preview="data.asset.sourcePreview" :preview-busy="previewBusy" @preview="previewSite" /></template>
+        <template #zoom><ContentZoom v-model="zoom" :mobile="data.mobile" :label="t('common.contentZoom')" /></template>
+        <template #copy><button type="button" class="card-header-action file-copy" draggable="true" :title="t('fileTransfer.copyOrDrag')" :aria-label="t('fileTransfer.copy')" @pointerdown.stop @click="copyFile" @dragstart="dragFile"><Icon name="copy" :size="15" /></button></template>
       </CardHeaderActions>
     </header>
     <div ref="fileBody" class="file-body card-content nodrag nopan" :style="{ '--content-zoom': data.focus ? zoom / 100 : 1 }" :data-content-active="contentActive" :tabindex="mobilePreview ? -1 : 0" :aria-label="data.asset.filename" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.capture="contentPointerDown" @pointerdown.stop @dblclick.stop>
@@ -187,7 +178,6 @@ const size = computed(() => {
 .mobile-layout .card-focused .file-header{height:calc(44px + var(--mobile-safe-top,0px));flex-basis:calc(44px + var(--mobile-safe-top,0px));padding:var(--mobile-safe-top,0px) 0 0;gap:0}
 .mobile-layout .card-focused .file-title{font-size:13px;margin-inline:6px}
 .mobile-layout .card-focused .file-icon{width:44px;height:44px;justify-content:center}
-.mobile-layout .card-focused{--header-action-size:44px;--text-preview-action-gap:0px}
 .mobile-layout.canvas-fullscreen .card-focused .file-header{height:44px;flex-basis:44px;padding-top:0}
 
 </style>

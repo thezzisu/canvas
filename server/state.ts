@@ -6,7 +6,7 @@ import { EventEmitter } from "node:events";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { defaultSettings, type GlobalSettings } from "../shared/settings.ts";
-import { defaultWindowSize } from "../shared/window-size.ts";
+import { defaultWindowSize, normalTerminalGrid } from "../shared/window-size.ts";
 import { settingsPatchSchema } from "./settings.ts";
 import { layoutFields, type LayoutUpdate, type LayoutGeometry } from "../shared/layout.ts";
 import { getMimeType } from "hono/utils/mime";
@@ -394,6 +394,9 @@ export class Store extends EventEmitter {
   windowSize(sourceId: string, windowId: string): WindowSize {
     const stored = this.get<WindowSize>("window-size", `${sourceId}/${windowId}`);
     return stored ? { width: stored.width, height: stored.height } : { ...defaultWindowSize };
+  }
+  normalTerminalSize(sourceId: string, windowId: string) {
+    return normalTerminalGrid(this.windowSize(sourceId, windowId), this.settings().terminalCell);
   }
   setWindowSize(sourceId: string, windowId: string, patch: Partial<WindowSize>) {
     const id = `${sourceId}/${windowId}`;

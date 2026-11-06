@@ -15,4 +15,6 @@ export const contentFontSchema = z.object({
     })
   }),
 }).strict() satisfies z.ZodType<ContentFontSettings>
-export const settingsPatchSchema = z.object({ contentFont: contentFontSchema }).strict()
+export const settingsPatchSchema = z.object({ contentFont: contentFontSchema,
+  terminalCell: z.object({ width: z.number().finite().positive().max(128), height: z.number().finite().positive().max(128) }).strict(),
+}).strict()

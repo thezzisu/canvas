@@ -4,7 +4,7 @@ import { useMediaQuery } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import UApp from '@nuxt/ui/components/App.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
-import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
+import UDropdownMenu from '@nuxt/ui/components/DropdownMenu.vue'
 import TextPreview from './TextPreview.vue'
 import TextPreviewActions from './TextPreviewActions.vue'
 import TrustedPreviewDialog from './TrustedPreviewDialog.vue'
@@ -14,7 +14,7 @@ import { uiLocale } from '../i18n'
 import { documentLocation } from '../document-location'
 import { useMobileLayout } from '../mobile-layout'
 import { useDocumentInputMode } from '../document-input'
-import { textCapabilities } from '../code-preview'
+import { useTextPreviewActions } from '../text-preview-actions'
 const { t } = useI18n()
 const document = documentLocation(location.href), filename = document?.filename || ''
 const resources = document?.resources
@@ -23,15 +23,9 @@ const compact = computed(() => mobile.value || narrow.value)
 const rendered = ref(true), wrap = ref(false), formatted = ref(false), highlighted = ref(true)
 const text = ref(''), loading = ref(true), error = ref(false), truncated = ref(false)
 const controller = new AbortController()
-const capabilities = textCapabilities(filename)
-const menu = computed<DropdownMenuItem[]>(() => [
-  { label: t('panels.preview.source'), icon: 'i-lucide-code', type: 'checkbox', checked: !rendered.value, onUpdateChecked: checked => { rendered.value = !checked } },
-  ...(!rendered.value ? [
-    ...(capabilities.format ? [{ label: t('panels.preview.format'), icon: 'i-lucide-list-tree', type: 'checkbox' as const, checked: formatted.value, onUpdateChecked: (checked: boolean) => { formatted.value = checked } }] : []),
-    ...(capabilities.highlight ? [{ label: t('panels.preview.highlight'), icon: 'i-lucide-palette', type: 'checkbox' as const, checked: highlighted.value, onUpdateChecked: (checked: boolean) => { highlighted.value = checked } }] : []),
-    { label: t('panels.preview.wrap'), icon: 'i-lucide-wrap-text', type: 'checkbox' as const, checked: wrap.value, onUpdateChecked: (checked: boolean) => { wrap.value = checked } },
-  ] : []),
-])
+const menu = useTextPreviewActions(filename, { rendered, wrap, formatted, highlighted }, {
+  sourcePreview: () => /\.html?$/i.test(filename), hideSite: () => !/\.html?$/i.test(filename), preview: openOriginal,
+})
 async function load() {
   try {
     if (!document) throw new Error('Invalid source path')
