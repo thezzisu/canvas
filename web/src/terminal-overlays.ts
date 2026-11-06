@@ -17,8 +17,9 @@ export function useTerminalOverlays(options: {
   })
   // Pointer coordinates remain in viewport CSS pixels; xterm normalizes mouse events.
   const mouse = usePointer()
-  const bounds = useElementBounding(body)
-  const controls = options.controls.map(target => ({ target, bounds: useElementBounding(target) }))
+  // VueFlow patches node transforms after its store update; measure the next frame.
+  const bounds = useElementBounding(body, { updateTiming: 'next-frame' })
+  const controls = options.controls.map(target => ({ target, bounds: useElementBounding(target, { updateTiming: 'next-frame' }) }))
   const contains = (rect: typeof bounds) => rect.width.value > 0 && rect.height.value > 0
     && mouse.x.value >= rect.left.value && mouse.x.value < rect.right.value
     && mouse.y.value >= rect.top.value && mouse.y.value < rect.bottom.value
