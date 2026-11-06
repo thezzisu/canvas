@@ -12,7 +12,7 @@ const props = defineProps<{ items: DropdownMenuItem[]; expanded: boolean; remova
 const emit = defineEmits<{ add: []; toggle: []; remove: [] }>()
 const { t } = useI18n()
 const root = ref<HTMLElement>()
-const { width } = useElementSize(root, undefined, { box: 'content-box' })
+const { width } = useElementSize(computed(() => props.mobile ? root.value : undefined), undefined, { box: 'content-box' })
 const available = computed(() => props.mobile ? headerShortcuts(width.value, props.shortcuts || [], !!props.removable, props.priority) : undefined)
 const visible = (key: string) => !available.value || available.value.has(key)
 const menu = computed<DropdownMenuItem[][]>(() => [[

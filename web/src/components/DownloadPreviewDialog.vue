@@ -52,7 +52,7 @@ const textActions = useTextPreviewActions(() => downloadPreview.value?.filename 
 })
 const textShortcuts = computed(() => downloadPreview.value?.preview === 'text' && !loading.value && !error.value ? textActions.value.map(item => item.slot!) : [])
 const actions = ref<HTMLElement>()
-const { width: actionsWidth } = useElementSize(actions)
+const { width: actionsWidth } = useElementSize(computed(() => mobileHeader.value ? actions.value : undefined))
 const available = computed(() => headerShortcuts(actionsWidth.value, ['download', ...textShortcuts.value], false))
 const showShortcut = (key: string) => !mobileHeader.value || available.value.has(key)
 const menu = computed<DropdownMenuItem[]>(() => [

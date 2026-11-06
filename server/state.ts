@@ -278,9 +278,9 @@ export class Store extends EventEmitter {
     if (!existing) this.changed();
     return canvas;
   }
-  private changed() {
+  private changed(normalGeometryChanged = false) {
     this.revision++;
-    this.emit("change");
+    this.emit("change", normalGeometryChanged);
   }
   snapshot(): SharedState {
     return {
@@ -322,10 +322,11 @@ export class Store extends EventEmitter {
   }
   updateSettings(value: GlobalSettings): GlobalSettings {
     const settings = settingsPatchSchema.parse(value);
-    if (isDeepStrictEqual(settings, this.settings())) return settings;
+    const previous = this.settings();
+    if (isDeepStrictEqual(settings, previous)) return settings;
     this.db.prepare("INSERT INTO documents(kind,id,body) VALUES('settings','global',?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body")
       .run(JSON.stringify(settings));
-    this.changed();
+    this.changed(!isDeepStrictEqual(settings.terminalCell, previous.terminalCell));
     return settings;
   }
   canvasView(canvas: Canvas): CanvasView {
@@ -350,6 +351,7 @@ export class Store extends EventEmitter {
   /** Compare only edited geometry, then publish one committed layout snapshot. */
   applyLayout(id: string, changes: LayoutUpdate[]): Canvas | undefined {
     let result: Canvas | undefined;
+    let normalGeometryChanged = false;
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const canvas = this.get<Canvas>('canvas', id);
@@ -383,12 +385,15 @@ export class Store extends EventEmitter {
       result = { ...canvasSchema.parse({ ...canvas, nodes }), id };
       for (const [key, patch] of sizes) if (Object.keys(patch).length) {
         const node = canvas.nodes.find(node => isTerminalNode(node) && `${node.sourceId}/${node.windowId}` === key)! as TerminalNode;
+        const previous = this.windowSize(node.sourceId, node.windowId);
+        if (patch.width !== undefined && patch.width !== previous.width || patch.height !== undefined && patch.height !== previous.height)
+          normalGeometryChanged = true;
         this.setWindowSize(node.sourceId, node.windowId, patch);
       }
       this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?").run(JSON.stringify(result), id);
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-    this.changed();
+    this.changed(normalGeometryChanged);
     return result;
   }
   windowSize(sourceId: string, windowId: string): WindowSize {
