@@ -90,7 +90,7 @@ import { useCanvasNavigation } from './canvas-navigation'
 import { inputMode, useMobileLayout } from './mobile-layout'
 import { uiZoom } from './ui-scale'
 import { hideMobileKeyboard } from './mobile-keyboard'
-import { cutoutActiveKey, useDisplayCutout } from './display-cutout'
+import { useDisplayCutout } from './display-cutout'
 import { developerMode } from './developer-mode'
 import { useScreenWakeLock } from './screen-wake-lock'
 import { canvasFrame, preserveCanvasCenter, useMobileViewport, type CanvasFrame } from './viewport'
@@ -629,7 +629,6 @@ const { surface: graphSurface, app: appElement, fullscreen: canvasFullscreen, re
   beforeFullscreen: () => { clearFitContext(); sourcePanel.value = false; sidebarOpen.value = false; canvasMenu.value = false },
 })
 const sidebarDrawer = computed(() => mobile.value || narrowNavigation.value || canvasFullscreen.value)
-provide(cutoutActiveKey, computed(() => canvasFullscreen.value && hasSafeTop.value))
 useOrderTransition(overviewSourceOrder, {
   order: () => orderedSources.value.map(source => source.id),
   active: () => isOverview.value && pageVisible.value && !hasFocus.value && !navigation.requested.value,

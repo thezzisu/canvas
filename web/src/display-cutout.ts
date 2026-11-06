@@ -1,10 +1,9 @@
 import { useStorage } from '@vueuse/core'
-import { onBeforeUnmount, onMounted, ref, type InjectionKey, type Ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 
 export type CutoutPosition = 'left' | 'center' | 'right'
 export const cutoutPosition = useStorage<CutoutPosition>('canvas:display:cutout-position', 'center')
 export const cutoutWidth = useStorage('canvas:display:cutout-width', 0)
-export const cutoutActiveKey: InjectionKey<Readonly<Ref<boolean>>> = Symbol('canvas-cutout-active')
 
 /** Observe the safe area reported by CSS without guessing the device model. */
 export function useDisplayCutout() {
