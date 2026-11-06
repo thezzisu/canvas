@@ -12,7 +12,7 @@ import type { HerdrClientExit, HerdrClientTransport } from '../herdr/client.ts'
 import type { CellData, ClientMessage, ClientShellSnapshot, FrameData, PaneSurfaceFrame, PaneSurfacePane, PaneSurfaceSplit } from '../herdr/wire.ts'
 import { coreInput, type CoreInputModes } from './input.ts'
 import { CoreLayout, coreWindowMetadata, panes, projectCoreSnapshot, projectTab, type CoreSnapshot, type CoreTab, type CoreTerminal } from './layout.ts'
-import { CoreRpc, type CoreNotification, type CoreStream } from './rpc.ts'
+import { CoreRpc, CoreRpcError, type CoreNotification, type CoreStream } from './rpc.ts'
 
 const { Terminal } = headless
 type Emulator = InstanceType<typeof Terminal>
@@ -182,6 +182,32 @@ class CoreWindowClient implements HerdrClientTransport {
     let tab: CoreTab
     try { tab = this.options.layout.findWindow(state, this.options.spaceId, this.options.tabId) }
     catch { this.finish({ exitCode: 0, reason: 'removed' }); return }
+    if (!tab.synthetic) {
+      const ended: Array<{ id: string; terminal: string }> = []
+      for (const pane of panes(tab)) {
+        if (!pane.terminal) continue
+        const terminal = state.terminals.find(item => item.address === pane.terminal)
+        if (terminal?.state === 'finished') ended.push({ id: pane.id, terminal: pane.terminal })
+        else if (!terminal) {
+          // The layout and subscription snapshots have separate waterlines. A
+          // missing record alone cannot prove that a newly placed pane exited.
+          try {
+            const result = await this.options.rpc.call('terminal.get', { terminal: pane.terminal })
+            const record = result.terminal && typeof result.terminal === 'object' ? result.terminal as Record<string, unknown> : result
+            if (record.state === 'finished') ended.push({ id: pane.id, terminal: pane.terminal })
+          } catch (error) {
+            if (error instanceof CoreRpcError && error.kind === 'not_found') ended.push({ id: pane.id, terminal: pane.terminal })
+          }
+        }
+      }
+      if (ended.length) {
+        await this.options.layout.reconcileClosedPanes(this.options.spaceId, this.options.tabId, ended, () => !this.closed)
+        state = await this.options.layout.snapshot(state.terminals)
+        try { tab = this.options.layout.findWindow(state, this.options.spaceId, this.options.tabId) }
+        catch { this.finish({ exitCode: 0, reason: 'removed' }); return }
+      }
+    }
+    if (this.closed) return
     this.state = state; this.tab = tab
     const projected = projectTab(tab, this.cols, this.rows, this.zoomed)
     const ids = new Set(projected.panes.filter(pane => pane.terminal).map(pane => pane.id))
@@ -213,9 +239,15 @@ class CoreWindowClient implements HerdrClientTransport {
         pane.subscriptions.push(attached.stream.onResize(size => this.enqueue(() => {
           if (!pane.disposed) { pane.emulator.resize(size.cols, size.rows); pane.revision++; this.render() }
         })))
-        pane.subscriptions.push(attached.stream.onClose(() => {
+        pane.subscriptions.push(attached.stream.onClose(reason => {
           pane.stream = undefined; pane.ready = true; pane.painted()
-          if (!this.closed && !pane.disposed) void this.refresh()
+          if (!this.closed && !pane.disposed) void this.refresh(async () => {
+            if (!pane.disposed && ['exited', 'killed', 'finished'].includes(String(reason?.reason))) {
+              await this.options.layout.reconcileClosedPanes(this.options.spaceId, this.options.tabId,
+                [{ id: pane.id, terminal: pane.address }], () => !this.closed)
+            }
+            return this.options.layout.snapshot(this.state?.terminals)
+          })
         }))
         pane.subscriptions.push(attached.stream.onData(data => this.enqueue(async () => {
           if (pane.disposed) return

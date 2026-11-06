@@ -299,13 +299,46 @@ export class CoreLayout {
     return tab
   }
 
-  private async write(on: string | undefined, update: (doc: CoreDocument) => void, authorized = () => true): Promise<void> {
+  private async write(on: string | undefined, update: (doc: CoreDocument) => void | boolean, authorized = () => true): Promise<void> {
     for (let attempt = 0; attempt < 3; attempt++) {
       const current = await this.document(on)
-      update(current.value)
+      const changed = update(current.value)
       if (!authorized()) throw new Error('Core operation was cancelled')
+      if (changed === false) return
       try { await this.rpc.call('doc.set', { name: 'herdr-app', value: current.value, version: current.version, ...(on ? { on } : {}) }); return }
       catch (error) { if (!conflict(error) || attempt === 2) throw error }
+    }
+  }
+
+  /** A final native exit removes its pane from the shared app document, not its
+   * retained terminal record. Identity checks make delayed/duplicate events safe. */
+  async reconcileClosedPanes(spaceId: string, tabId: string, expected: readonly { id: string; terminal: string }[], authorized = () => true): Promise<void> {
+    if (!expected.length) return
+    try {
+      await this.write(undefined, doc => {
+        const space = doc.spaces.find(space => space.id === spaceId), tab = space?.tabs.find(tab => tab.id === tabId)
+        if (!space || !tab) return false
+        let removed = false
+        for (const target of expected) {
+          const node = nodeAt(tab.root, target.id)
+          if (!node || localTerminal(node.content?.terminal) !== target.terminal) continue
+          if (tab.root.id === node.id) tab.root = { id: tab.id, type: 'row', children: [] }
+          else if (!removeNode(tab.root, node.id)) continue
+          removed = true
+        }
+        if (!removed) return false
+        if (!panes(tab).length) space.tabs = space.tabs.filter(item => item !== tab)
+        if (!space.tabs.length) doc.spaces = doc.spaces.filter(item => item !== space)
+      }, authorized)
+    } catch (error) {
+      // A lost acknowledgement is not a failed write. Confirm only the target
+      // identities, without retrying the mutation or touching native records.
+      try {
+        const current = await this.document()
+        const tab = current.value.spaces.find(space => space.id === spaceId)?.tabs.find(tab => tab.id === tabId)
+        if (!tab || expected.every(target => localTerminal(nodeAt(tab.root, target.id)?.content?.terminal) !== target.terminal)) return
+      } catch { /* Preserve the original error if the outcome is still unknown. */ }
+      throw error
     }
   }
 

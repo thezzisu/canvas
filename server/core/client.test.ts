@@ -3,7 +3,7 @@ import test from 'node:test'
 import headless from '@xterm/headless'
 import { createCoreClient, coreHyperlink } from './client.ts'
 import { CoreLayout, type CoreDocument } from './layout.ts'
-import { CoreRpc, CoreStream, type CoreNotification } from './rpc.ts'
+import { CoreRpc, CoreRpcError, CoreStream, type CoreNotification } from './rpc.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
 
 const tick = () => new Promise<void>(resolve => setImmediate(resolve))
@@ -16,7 +16,7 @@ function fixture(split = false, subscriptionSeq = 0) {
   if (split) document.spaces[0]!.tabs[0]!.root.children!.push({ id: 'second', type: 'block', content: { terminal: 't2' } })
   let onEvent: ((event: CoreNotification) => void | Promise<void>) | undefined
   const failures: Error[] = [], sent: Array<{ channel: number; kind: number; data: Buffer }> = [], attached: string[] = [], streams: CoreStream[] = []
-  const controls: { attachGate?: Promise<void>; failAttach?: boolean; labelGate?: Promise<void>; labelStarted?(): void; documentVersion: number; listCalls: number } = { documentVersion: 1, listCalls: 0 }
+  const controls: { attachGate?: Promise<void>; failAttach?: boolean; labelGate?: Promise<void>; labelStarted?(): void; documentVersion: number; listCalls: number; documentWrites: number; missingReadFails?: boolean } = { documentVersion: 1, listCalls: 0, documentWrites: 0 }
   const rpc = {
     connected: true,
     hello: { core: { id: 'core', name: 'Fixture' }, version: '0.1.17' },
@@ -24,7 +24,17 @@ function fixture(split = false, subscriptionSeq = 0) {
       if (method === 'server.status') return { core: { id: 'core' }, version: '0.1.17' }
       if (method === 'terminal.list') { controls.listCalls++; return { terminals: structuredClone(terminals) } }
       if (method === 'doc.get') return { value: structuredClone(document), version: controls.documentVersion }
-      if (method === 'terminal.get') return structuredClone(terminal)
+      if (method === 'doc.set') {
+        assert.equal(params.version, controls.documentVersion)
+        Object.assign(document, structuredClone(params.value)); controls.documentWrites++
+        return { version: ++controls.documentVersion }
+      }
+      if (method === 'terminal.get') {
+        if (controls.missingReadFails) throw new Error('Read unavailable')
+        const found = terminals.find(item => item.address === params.terminal)
+        if (!found) throw new CoreRpcError({ message: 'No terminal', data: { kind: 'not_found' } })
+        return structuredClone(found)
+      }
       if (method === 'terminal.label') { controls.labelStarted?.(); await controls.labelGate; Object.assign(terminal.labels, params.labels); return structuredClone(terminal) }
       throw new Error('Unexpected fixture method: ' + method)
     },
@@ -192,6 +202,100 @@ test('native lifecycle events preserve unrelated terminals, replace restarted st
     await f.event('removed', {}, 26)
     assert.deepEqual(exits, [{ exitCode: 0, reason: 'removed' }], 'removing the last synthetic native tab closes its view')
   } finally { client.kill() }
+})
+
+test('confirmed Core EOF closes an explicit tab once and preserves the retained terminal record', async () => {
+  const f = fixture()
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
+  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('FINAL\x1b[?9001l') })
+  const client = await opening
+  const exits: unknown[] = []; client.onExit(exit => exits.push(exit))
+  try {
+    await f.event('finished', { reason: 'exited', exit_code: 0, finished_ms: 100 })
+    f.stream.receive({ kind: 'close', reason: { reason: 'exited', exit_code: 0 } })
+    await tick(); await tick()
+    assert.deepEqual(f.document.spaces, [])
+    assert.deepEqual(exits, [{ exitCode: 0, reason: 'removed' }])
+    assert.equal(f.controls.documentWrites, 1)
+    assert.equal(f.controls.listCalls, 0, 'closure never replaces the ordered terminal mirror with a newer list')
+    assert.equal(f.terminals.length, 1, 'layout cleanup does not destroy the retained Core record')
+    assert.deepEqual(f.failures, [])
+  } finally { client.kill() }
+})
+
+test('a split pane finishing leaves its live sibling connected and the last exit closes the tab', async () => {
+  const f = fixture(true)
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 40, rows: 6 })
+  await tick()
+  for (const [index, stream] of f.streams.entries()) stream.receive({ kind: 'data', data: Buffer.from(`PANE${index}\x1b[?9001l`) })
+  const client = await opening
+  const exits: unknown[] = []; client.onExit(exit => exits.push(exit))
+  try {
+    client.onData(() => {})
+    // The terminal channel can finish before the subscription channel catches up.
+    f.streams[0]!.receive({ kind: 'close', reason: { reason: 'exited', exit_code: 0 } })
+    await tick(); await tick(); await tick()
+    assert.deepEqual(client.completionSnapshot()?.windows.find(window => window.id === 'tab')?.panes.map(pane => pane.id), ['second'])
+    assert.deepEqual(exits, [])
+    await f.event('finished', { reason: 'exited', exit_code: 0, finished_ms: 100 })
+    assert.equal(f.controls.documentWrites, 1, 'later global event does not repeat the document edit')
+    f.streams[1]!.receive({ kind: 'data', data: Buffer.from('\r\nSTILL LIVE') })
+    await tick(); assert((await client.content())?.[0]?.lines.some(line => line.includes('STILL LIVE')))
+    await f.notification('event', { terminal: 't2', type: 'finished', data: { reason: 'exited', exit_code: 0, finished_ms: 200 } })
+    assert.deepEqual(f.document.spaces, [])
+    assert.deepEqual(exits, [{ exitCode: 0, reason: 'removed' }])
+  } finally { client.kill() }
+})
+
+test('recoverable lost terminals and transport-only stream endings do not remove their document panes', async () => {
+  const f = fixture(), before = structuredClone(f.document)
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
+  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('READY\x1b[?9001l') })
+  const client = await opening
+  const exits: unknown[] = []; client.onExit(exit => exits.push(exit))
+  try {
+    f.stream.receive({ kind: 'close', reason: { reason: 'signaled', signal: 9 } })
+    await f.event('lost', { reason: 'signaled', pid: null, signal: 9 })
+    assert.deepEqual(f.document, before); assert.deepEqual(exits, [])
+    await f.event('restarted', { ...f.terminal, pid: 999, reason: null })
+    await tick(); f.streams[1]!.receive({ kind: 'data', data: Buffer.from('RECOVERED\x1b[?9001l') })
+    await tick(); await tick()
+    assert((await client.content())?.[0]?.lines.some(line => line.includes('RECOVERED')))
+    f.streams[1]!.receive({ kind: 'close', reason: { reason: 'disconnected' } })
+    await tick(); await tick()
+    assert.deepEqual(f.document, before); assert.equal(f.controls.documentWrites, 0); assert.deepEqual(exits, [])
+  } finally { client.kill() }
+})
+
+test('initial and missed snapshots reconcile already finished panes without attaching or emitting completion', async () => {
+  const initial = fixture()
+  initial.terminal.state = 'finished'
+  await assert.rejects(createCoreClient({ rpc: initial.rpc, layout: initial.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 }), /closed|paint/u)
+  assert.deepEqual(initial.document.spaces, []); assert.deepEqual(initial.attached, [])
+  const f = fixture()
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
+  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('READY\x1b[?9001l') })
+  const client = await opening, notices: unknown[] = [], exits: unknown[] = []
+  client.onNotification(event => notices.push(event)); client.onExit(exit => exits.push(exit))
+  try {
+    await f.notification('missed', { terminals: [{ ...f.terminal, state: 'finished', reason: 'exited' }] }, 40)
+    assert.deepEqual(f.document.spaces, []); assert.deepEqual(notices, [])
+    assert.deepEqual(exits, [{ exitCode: 0, reason: 'removed' }])
+  } finally { client.kill() }
+})
+
+test('missing snapshot records need confirmed absence, not failed discovery, before removing a pane', async () => {
+  for (const unavailable of [false, true]) {
+    const f = fixture(), before = structuredClone(f.document)
+    f.terminals.length = 0; f.controls.missingReadFails = unavailable
+    if (unavailable) {
+      const client = await createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
+      assert.deepEqual(f.document, before); assert.equal(f.controls.documentWrites, 0); client.kill()
+    } else {
+      await assert.rejects(createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 }), /closed|paint/u)
+      assert.deepEqual(f.document.spaces, [])
+    }
+  }
 })
 
 test('a delayed seen-label write cannot replace newer event state with its response-time snapshot', async () => {
