@@ -15,14 +15,18 @@ import { useInstanceProbe } from '../instance-probe'
 import { normalizeApiBase, parseInstanceLink, type InstanceLink } from '../instance-url'
 import { usePointerDismiss } from '../pointer-dismiss'
 
-const props = defineProps<{ portal?: HTMLElement; beforeChange?: () => Promise<boolean>; disabled?: boolean }>()
-const emit = defineEmits<{ connect: [] }>()
+const props = defineProps<{ portal?: HTMLElement; beforeChange?: () => Promise<boolean>; disabled?: boolean; username?: string }>()
+const emit = defineEmits<{ connect: []; account: []; signOut: [] }>()
 const { t } = useI18n()
 const currentBuild = computed(() => instanceBuild(activeInstance.value))
 const open = ref(false), working = ref(false), error = ref('')
 const scanning = ref(false), scanned = ref<InstanceLink>()
-const menuOpen = ref(false), menuTrigger = ref<HTMLButtonElement>()
-const menuDismiss = usePointerDismiss(menuOpen, menuTrigger)
+const menuOpen = defineModel<boolean>('menuOpen', { default: false }), menuTrigger = ref<HTMLButtonElement>()
+const menuDismiss = usePointerDismiss(menuOpen, menuTrigger, {
+  // Reka owns the whole menu tree, including portalled submenus. Only canvas
+  // gestures need capture dismissal because they can stop native bubbling.
+  outside: event => event.target instanceof Element && !!event.target.closest('.graph-wrap, .focus-overlay'),
+})
 const draft = reactive({ id: '', name: '', base: '' })
 const draftBuild = computed(() => draft.id ? instanceBuild(draft) : undefined)
 const original = computed(() => instances.value.find(instance => instance.id === draft.id))
@@ -76,7 +80,7 @@ async function submit() {
   }) }
   catch (reason) { error.value = reason instanceof Error && reason.message.startsWith('instances.') ? reason.message : 'instances.invalidUrl' }
 }
-const items = computed<DropdownMenuItem[][]>(() => [
+const instanceItems = computed<DropdownMenuItem[][]>(() => [
   instances.value.map(instance => ({ label: instance.name, type: 'checkbox' as const, server: instanceBuild(instance),
     checked: instance.id === activeInstance.value.id, onSelect: (): void => { void change(() => selectInstance(instance.id)) } })),
   [{ label: t('instances.add'), onSelect: () => edit(true) },
@@ -84,15 +88,25 @@ const items = computed<DropdownMenuItem[][]>(() => [
     { label: t('instances.remove'), disabled: !!activeInstance.value.builtin,
       onSelect: (): void => { void change(() => removeInstance(activeInstance.value.id)) } }],
 ])
+const items = computed<DropdownMenuItem[][]>(() => props.username === undefined ? instanceItems.value : [
+  [{ label: t('account.settings'), icon: 'i-lucide-user-round', onSelect: () => emit('account') },
+    { label: activeInstance.value.name, icon: 'i-lucide-server', children: instanceItems.value,
+      content: { collisionPadding: 12 }, ui: { content: 'instance-menu' } }],
+  [{ label: t('account.signOutInstance'), icon: 'i-lucide-log-out', color: 'error', onSelect: () => emit('signOut') }],
+])
 </script>
 
 <template>
   <UDropdownMenu v-model:open="menuOpen" :modal="false" :items="items" :portal="portal || false" :content="{ side: 'top', align: 'start', sideOffset: 6, ...menuDismiss }"
-    :ui="{ content: 'instance-menu' }">
+    :ui="{ content: username === undefined ? 'instance-menu' : 'instance-menu account-menu' }">
     <template #item-label="{ item }">
       <span class="instance-menu-label"><span>{{ item.label }}</span><small v-if="item.server" class="instance-version" :class="{ stale: !item.server.fresh }" :title="`${t('instances.serverVersion')}: ${item.server.build.version}${item.server.build.revision ? ` · ${item.server.build.revision}` : ''}${!item.server.fresh ? ` · ${t('instances.lastSeen')}` : ''}`">{{ buildLabel(item.server.build) }}<span v-if="!item.server.fresh"> · {{ t('instances.lastSeen') }}</span></small></span>
     </template>
-    <button ref="menuTrigger" type="button" class="instance-trigger" :disabled="disabled || working" :aria-busy="working" :title="activeInstance.base" :aria-label="`${t('instances.instance')}: ${activeInstance.name}`">
+    <button v-if="username !== undefined" ref="menuTrigger" type="button" class="sidebar-account" :disabled="disabled || working" :aria-busy="working" :title="`${username} · ${activeInstance.name}`" :aria-label="`${t('account.title')}: ${username}`">
+      <span class="avatar" aria-hidden="true">{{ username.slice(0, 1).toUpperCase() || 'C' }}</span>
+      <span>{{ username }}<small>{{ activeInstance.name }}</small></span>
+    </button>
+    <button v-else ref="menuTrigger" type="button" class="instance-trigger" :disabled="disabled || working" :aria-busy="working" :title="activeInstance.base" :aria-label="`${t('instances.instance')}: ${activeInstance.name}`">
       <Icon name="server" :size="16" />
       <span class="instance-trigger-label"><span class="instance-trigger-name">{{ activeInstance.name }}</span><small v-if="currentBuild" class="instance-trigger-version" :title="`${t('instances.serverVersion')}: ${currentBuild.build.version}${currentBuild.fresh ? '' : ` · ${t('instances.lastSeen')}`}`">{{ currentBuild.build.version }}</small></span>
       <Icon name="down" :size="12" />
@@ -131,5 +145,4 @@ const items = computed<DropdownMenuItem[][]>(() => [
 .instance-dialog label{margin-top:0}.instance-dialog input{margin-top:0;font-size:13px}
 .instance-error{color:#dfaaa5;font-size:12px}.login-content>.instance-trigger{margin:6px 0 2px}
 .instance-probe-footer{display:flex;align-items:center;gap:12px;min-width:0;width:100%}.instance-probe-footer>button{flex:none}.instance-probe-status{display:block;flex:1;min-width:0;margin-left:auto;text-align:right;color:#8391a4;font-size:11px}.instance-probe-status>span,.instance-probe-status>button{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.instance-probe-status>button{margin-left:auto;padding:0;font-size:inherit;color:inherit}
-.sidebar-footer>.instance-trigger{flex:1}.sidebar-footer>.instance-trigger>span{max-width:100px}
 </style>

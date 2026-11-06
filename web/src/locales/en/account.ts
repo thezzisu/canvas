@@ -1,4 +1,5 @@
 export default {
+  settings: 'Account settings', signOutInstance: 'Sign out of this instance',
   title: 'Account', currentPassword: 'Current password', newPassword: 'New password', confirmPassword: 'Confirm password',
   passwordMismatch: 'Passwords do not match.', incorrectPassword: 'Current password is incorrect.', saveFailed: 'Could not update account.',
   otherSessions: 'Changing the password signs out other devices.',

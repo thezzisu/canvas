@@ -2,6 +2,8 @@
 import { useI18n } from 'vue-i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { TerminalModifiers } from '../terminal-input'
+import type { TerminalTouchMode } from '../terminal-touch'
+import type { TouchpadControl } from '../touchpad-gesture'
 import Icon from './Icon.vue'
 import UModal from './CanvasModal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
@@ -9,7 +11,7 @@ import { copiedFile } from '../file-clipboard'
 
 const { t } = useI18n()
 
-type TouchMode = 'scroll' | 'mouse' | 'select'
+type TouchMode = TerminalTouchMode
 interface Keycap { key: string; label: string; symbol?: string; span?: number }
 const props = defineProps<{
   sessionKey: string
@@ -27,6 +29,7 @@ const emit = defineEmits<{
   paste: [text: string]
   pasteFile: []
   reading: [active: boolean]
+  pointer: [action: TouchpadControl]
 }>()
 const more = ref(false)
 const keyboard = ref<HTMLElement>(), moreTrigger = ref<HTMLButtonElement>()
@@ -70,6 +73,33 @@ const deckRows = computed(() => [
   ] },
 ])
 const modifierPresses = ref(new Map<number, { key: keyof TerminalModifiers; previous: boolean; value: boolean; used: boolean; target: HTMLElement }>())
+const pointerPress = ref<{ id: number; target: HTMLElement; button: 'left' | 'middle'; x: number; y: number; startX: number; startY: number; moved: boolean }>()
+function releasePointer(cancelled = false) {
+  const press = pointerPress.value
+  if (!press) return
+  pointerPress.value = undefined
+  if (press.button === 'left') emit('pointer', { type: 'left', pressed: false, cancelled })
+  else if (!cancelled && !press.moved) emit('pointer', { type: 'click', button: 'middle' })
+  if (press.target.hasPointerCapture(press.id)) press.target.releasePointerCapture(press.id)
+}
+function pointerDown(event: PointerEvent, button: 'left' | 'middle') {
+  if (event.button !== 0) return
+  event.preventDefault()
+  if (props.disabled || pointerPress.value) return
+  const target = event.currentTarget as HTMLElement
+  pointerPress.value = { id: event.pointerId, target, button, x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, moved: false }
+  target.setPointerCapture(event.pointerId)
+  if (button === 'left') emit('pointer', { type: 'left', pressed: true })
+}
+function pointerMove(event: PointerEvent) {
+  const press = pointerPress.value
+  if (!press || press.id !== event.pointerId || press.button !== 'middle') return
+  if (!press.moved && Math.hypot(event.clientX - press.startX, event.clientY - press.startY) <= 6) return
+  press.moved = true
+  emit('pointer', { type: 'scroll', x: press.x - event.clientX, y: press.y - event.clientY })
+  press.x = event.clientX; press.y = event.clientY
+}
+function pointerUp(event: PointerEvent, cancelled = false) { if (pointerPress.value?.id === event.pointerId) releasePointer(cancelled) }
 const activeModifiers = computed(() => {
   const value = { ...props.modifiers }
   for (const press of modifierPresses.value.values()) value[press.key] = press.value
@@ -84,6 +114,7 @@ function releaseModifier(id: number, cancelled = false) {
   return true
 }
 function cancelPress(event?: Event) {
+  if (!(event instanceof PointerEvent) || event.pointerId === pointerPress.value?.id) releasePointer(true)
   if (event instanceof PointerEvent) {
     releaseModifier(event.pointerId, true)
     if (held?.pointer === event.pointerId) stopRepeat()
@@ -172,7 +203,7 @@ function keyboardClick(event: MouseEvent, key: string) {
   if (event.detail === 0) send(caps.value && /^[a-z]$/.test(key) ? key.toUpperCase() : key, { ...activeModifiers.value })
 }
 function toggleMore() { stopRepeat(); more.value = !more.value }
-function chooseMode(mode: TouchMode) { emit('mode', mode); more.value = false }
+function chooseMode(mode: TouchMode) { releasePointer(true); emit('mode', mode); more.value = false }
 function closeSheet() {
   if (!sheet.value) return
   textRequest?.abort(); textRequest = undefined
@@ -248,6 +279,7 @@ function reset() { cancelPress(); more.value = false; caps.value = false; closeS
 function visibilityChanged() { if (document.hidden) cancelPress() }
 watch(() => props.sessionKey, reset)
 watch(() => props.disabled, disabled => { if (disabled) reset() })
+watch(() => props.touchMode, () => releasePointer(true))
 onMounted(() => { window.addEventListener('blur', cancelPress); document.addEventListener('visibilitychange', visibilityChanged) })
 onBeforeUnmount(() => { textRequest?.abort(); cancelPress(); window.removeEventListener('blur', cancelPress); document.removeEventListener('visibilitychange', visibilityChanged) })
 </script>
@@ -263,14 +295,20 @@ onBeforeUnmount(() => { textRequest?.abort(); cancelPress(); window.removeEventL
             @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ keyLabel(key) }}</button>
         </div>
       </div>
-      <div class="mobile-key-actions" :style="copiedFile ? { gridTemplateColumns: 'repeat(6,minmax(0,1fr))' } : undefined" role="toolbar" :aria-label="t('terminal.keyboard.actions')">
+      <div class="mobile-key-actions" :style="copiedFile ? { gridTemplateColumns: 'repeat(7,minmax(0,1fr))' } : undefined" role="toolbar" :aria-label="t('terminal.keyboard.actions')">
         <button type="button" :disabled="disabled" :aria-label="t('terminal.upload.file')" :title="t('terminal.upload.file')" @pointerdown.prevent @click="pickFiles"><Icon name="file" :size="18" /></button>
         <button type="button" :disabled="disabled" :aria-label="t('terminal.keyboard.pasteText')" :title="t('terminal.keyboard.pasteText')" @pointerdown.prevent @click="openSheet('paste')"><Icon name="copy" :size="18" /></button>
         <button v-if="copiedFile" type="button" :disabled="disabled" :aria-label="t('fileTransfer.paste')" :title="t('fileTransfer.pasteNamed', { name: copiedFile.filename })" @pointerdown.prevent @click="emit('pasteFile')"><Icon name="clipboard" :size="18" /></button>
         <button type="button" :aria-label="t('terminal.keyboard.selectText')" :title="t('terminal.keyboard.selectText')" @pointerdown.prevent @click="openSheet('select')"><Icon name="note" :size="18" /></button>
         <button type="button" :aria-pressed="touchMode === 'scroll'" :aria-label="t('terminal.keyboard.touchScroll')" :title="t('terminal.keyboard.touchScroll')" @pointerdown.prevent @click="chooseMode('scroll')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18 M8 7l4-4 4 4 M8 17l4 4 4-4" /></svg></button>
         <button type="button" :disabled="disabled" :aria-pressed="touchMode === 'mouse'" :aria-label="t('terminal.keyboard.touchMouse')" :title="t('terminal.keyboard.touchMouse')" @pointerdown.prevent @click="chooseMode('mouse')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="6" /><path d="M12 3v6" /></svg></button>
+        <UButton type="button" :disabled="disabled" :aria-pressed="touchMode === 'touchpad'" :aria-label="t('terminal.keyboard.touchpad')" :title="t('terminal.keyboard.touchpad')" icon="i-lucide-touchpad" @pointerdown.prevent @click="chooseMode('touchpad')" />
       </div>
+    </div>
+    <div v-if="touchMode === 'touchpad'" class="mobile-touchpad-controls" role="toolbar" :aria-label="t('terminal.keyboard.touchpad')" @contextmenu.prevent>
+      <UButton type="button" :disabled="disabled" :aria-label="t('terminal.keyboard.mouseLeft')" :aria-pressed="pointerPress?.button === 'left'" icon="i-lucide-mouse-pointer-2" @pointerdown="pointerDown($event, 'left')" @pointerup="pointerUp($event)" @pointercancel="pointerUp($event, true)" @lostpointercapture="pointerUp($event, true)" @click="event => { if (event.detail === 0) emit('pointer', { type: 'click', button: 'left' }) }">{{ t('terminal.keyboard.mouseLeftShort') }}</UButton>
+      <UButton type="button" :disabled="disabled" :aria-label="t('terminal.keyboard.mouseMiddle')" :aria-pressed="pointerPress?.button === 'middle'" icon="i-lucide-move" @pointerdown="pointerDown($event, 'middle')" @pointermove="pointerMove" @pointerup="pointerUp($event)" @pointercancel="pointerUp($event, true)" @lostpointercapture="pointerUp($event, true)" @click="event => { if (event.detail === 0) emit('pointer', { type: 'click', button: 'middle' }) }">{{ t('terminal.keyboard.mouseMiddleShort') }}</UButton>
+      <UButton type="button" :disabled="disabled" :aria-label="t('terminal.keyboard.mouseRight')" icon="i-lucide-mouse-pointer-2" @pointerdown.prevent @click="emit('pointer', { type: 'click', button: 'right' })">{{ t('terminal.keyboard.mouseRightShort') }}</UButton>
     </div>
     <div class="mobile-key-row" role="toolbar" :aria-label="t('terminal.keyboard.helperKeys')" @contextmenu.prevent>
       <button v-for="key in keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :aria-pressed="keyPressed(key.key)" :class="{ 'arrow-key': key.symbol }" @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ key.symbol || key.label }}</button>
@@ -320,7 +358,9 @@ onBeforeUnmount(() => { textRequest?.abort(); cancelPress(); window.removeEventL
 .mobile-key-bottom .symbol-key{font-size:clamp(12px,3.6cqw,18px);font-family:system-ui,sans-serif;letter-spacing:0}
 .mobile-key-deck .shift-key,.mobile-key-deck .backspace-key,.mobile-key-deck .enter-key{font-size:clamp(14px,4cqw,20px);background:#252c36}
 .mobile-key-deck .shift-key[aria-pressed=true]{background:var(--toggle-bg)}
-.mobile-key-actions{flex:0 0 auto;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;padding:6px;border-top:1px solid #3c4552;background:#191e25}
+.mobile-key-actions{flex:0 0 auto;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px;padding:6px;border-top:1px solid #3c4552;background:#191e25}
+.mobile-touchpad-controls{display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:4px;margin-bottom:4px}
+.mobile-touchpad-controls button{touch-action:none}
 .mobile-key-actions button{min-width:0;min-height:44px;padding:0;background:#252d37;border-color:#35414f;color:#b7c3d2}
 .mobile-key-actions button[aria-pressed=true]{background:var(--toggle-bg);border-color:#886b54;color:var(--toggle-fg)}
 .mobile-key-actions button:active{background:#3b4654}

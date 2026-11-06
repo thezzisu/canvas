@@ -19,6 +19,8 @@ import { emptyModifiers, hasModifiers, modifiedText, terminalKey, terminalShortc
 import { terminalInputChunks } from './terminal-input-chunks'
 import { bindTerminalKeyboardLock } from './terminal-keyboard-lock'
 import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch'
+import { bindTerminalTouchpad } from './terminal-touchpad'
+import type { TouchpadControl } from './touchpad-gesture'
 import { bindTerminalMouseDefaults, rightMouseInput } from './terminal-mouse-defaults'
 import { defaultTerminalSettings, type TerminalSettings } from './terminal-settings'
 import { defaultContentFont, type ContentFontSettings } from '../../shared/settings'
@@ -90,6 +92,7 @@ interface Session {
   keyboardLock?: ReturnType<typeof bindTerminalKeyboardLock>
   removeFontFeatures?: () => void
   removeTouch?: () => void
+  touchpad?: ReturnType<typeof bindTerminalTouchpad>
   focusResize?: FocusResize
   presentationFrame?: number
   presentationRevision?: number
@@ -381,9 +384,11 @@ function installTerminalEvents() {
 }
 const key = (sourceId: string, spaceId: string, windowId: string) => `${sourceId}\u0000${spaceId}\u0000${windowId}`
 function setState(session: Session, state: TerminalStatus) {
+  if (state.status !== 'connected' || state.readOnly || state.presentation?.maximized && !state.presentation.owned) session.touchpad?.cancel()
   const next = session.state = { ...state, modifiers: session.modifiers, touchMode: session.touchMode,
     keyboardRequested: session.keyboardRequested }
   session.keyboardLock?.refresh()
+  session.touchpad?.refresh()
   session.listeners.forEach(listener => listener(next))
   refreshReadFocus()
 }
@@ -414,6 +419,7 @@ function schedulePresentation(session: Session) {
   })
 }
 function disconnect(session: Session) {
+  session.touchpad?.cancel()
   session.pastePreview?.(); session.pastePreview = undefined
   updateMetadata(session)
   session.reportedVisible = undefined
@@ -866,6 +872,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   }
   // Vue may mount a replacement host before disposing the old component. Only
   // the current host owns its presentation and temporary size request.
+  if (session.host !== host || session.mobile !== (options.mobile === true) || session.magnified !== (options.magnified === true)) session.touchpad?.cancel()
   if (session.host !== host) endFocusSize(session)
   session.mouseDefaults?.dispose()
   session.host = host
@@ -914,6 +921,12 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       session!.surface.removeEventListener('touchend', finishTerminalReadGesture)
       session!.surface.removeEventListener('touchcancel', finishTerminalReadGesture)
     }
+    session.touchpad = bindTerminalTouchpad(session.surface, session.term, {
+      active: () => current.mobile && current.magnified && interactive(current) && current.state.status === 'connected' && !current.state.readOnly
+        && !(current.state.presentation?.maximized && !current.state.presentation.owned),
+      enabled: () => current.touchMode === 'touchpad', focus: () => focusTerminal(current),
+      modifiers: () => current.modifiers, copyGesture: () => current.clipboard?.touchSelectionCompleted(),
+    })
   }
   if (!session.mobile && session.keyboard) {
     session.keyboard.dispose(); session.keyboard = undefined
@@ -1006,7 +1019,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     current.pastePreview = dismiss
     return true
   })
-  const observer = new ResizeObserver(() => { if (current.host === host) { present(current); schedulePresentation(current) } })
+  const observer = new ResizeObserver(() => { if (current.host === host) { present(current); schedulePresentation(current); current.touchpad?.refresh() } })
   observer.observe(host)
   const intersection = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
     if (current.host !== host) return
@@ -1037,6 +1050,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     },
     setEditing(value: boolean) {
       if (current.editing === value) return
+      if (value) current.touchpad?.cancel()
       current.editing = value
       if (value) {
         current.term.blur(); current.keyboard?.blur()
@@ -1049,9 +1063,9 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       syncViewVisibility(current)
       if (!value) schedulePresentation(current)
     },
-    setAppShowing(value: boolean) { current.appShowing = value; if (value) { current.term.blur(); current.keyboard?.blur() }; current.term.options.disableStdin = !interactive(current); present(current); refreshReadFocus() },
+    setAppShowing(value: boolean) { if (value) current.touchpad?.cancel(); current.appShowing = value; if (value) { current.term.blur(); current.keyboard?.blur() }; current.term.options.disableStdin = !interactive(current); current.touchpad?.refresh(); present(current); refreshReadFocus() },
     focus(options: { keyboard?: boolean } = {}) { focusTerminal(current, options.keyboard) },
-    blur() { if (current.mobile) current.keyboard?.blur(); else current.term.blur(); setModifiers(current) },
+    blur() { current.touchpad?.cancel(); if (current.mobile) current.keyboard?.blur(); else current.term.blur(); setModifiers(current) },
     setModifiers(modifiers: Partial<TerminalModifiers>) { setModifiers(current, modifiers) },
     setZoom(percent: number) { if (current.host === host && isCurrentApi(mountingContext)) setTerminalZoom(current, percent) },
     sendKey(key: string, modifiers: Partial<TerminalModifiers> = current.modifiers) {
@@ -1078,7 +1092,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       current.nativeKey = undefined; setModifiers(current); claimFocus(current); current.term.paste(text)
       return true
     },
-    setTouchMode(mode: TerminalTouchMode) { current.touchMode = mode; setModifiers(current); setState(current, { ...current.state, touchMode: mode }) },
+    setTouchMode(mode: TerminalTouchMode) { current.touchpad?.cancel(); current.touchMode = mode; setModifiers(current); setState(current, { ...current.state, touchMode: mode }) },
+    touchpadControl(action: TouchpadControl) { if (current.host === host && isCurrentApi(mountingContext)) current.touchpad?.control(action) },
     setResizing(value: boolean) { current.resizing = value; present(current) },
     close() { if (current.host === host && isCurrentApi(mountingContext)) windowRemoved(current) },
     cancelUpload() { current.uploads.cancel() },
@@ -1094,6 +1109,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       intersection?.disconnect()
       current.listeners.delete(listener)
       if (current.host === host) {
+        current.touchpad?.cancel()
         current.pastePreview?.(); current.pastePreview = undefined
         endFocusSize(current)
         if (current.mobile) current.keyboard?.blur()
@@ -1124,6 +1140,7 @@ export function clearTerminals() {
     session.keyboardLock?.dispose()
     session.mouseDefaults?.dispose()
     session.removeTouch?.()
+    session.touchpad?.dispose()
     session.removeFontFeatures?.()
     session.keyboard?.dispose()
     session.mobileInput?.dispose()

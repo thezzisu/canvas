@@ -26,6 +26,8 @@ import { useRetainedFrame } from '../retained-frame'
 import { api } from '../api'
 import { cachedTerminalView, mountTerminal, type TerminalStatus } from '../terminals'
 import { emptyModifiers, type TerminalModifiers } from '../terminal-input'
+import type { TerminalTouchMode } from '../terminal-touch'
+import type { TouchpadControl } from '../touchpad-gesture'
 import { cutoutPosition, cutoutWidth } from '../display-cutout'
 import { useDocumentFocus } from '../document-focus'
 import { useTerminalZoom } from '../terminal-zoom'
@@ -176,7 +178,8 @@ function copyText(text?: string) { return terminal?.copySelection(text) ?? Promi
 function reading(active: boolean) { if (active) terminal?.blur() }
 function mobileKey(key: string, modifiers?: Partial<TerminalModifiers>) { terminal?.sendKey(key, modifiers) }
 function mobileModifiers(value: TerminalModifiers) { terminal?.setModifiers(value) }
-function mobileMode(mode: 'scroll' | 'mouse' | 'select') { terminal?.setTouchMode(mode) }
+function mobileMode(mode: TerminalTouchMode) { terminal?.setTouchMode(mode) }
+function mobilePointer(action: TouchpadControl) { terminal?.touchpadControl(action) }
 function mobileFiles(files: File[]) { terminal?.uploadFiles(files) }
 function mobilePaste(text: string) { terminal?.pasteText(text) }
 function noteDragOver(event: DragEvent) {
@@ -215,7 +218,10 @@ function mount() {
   }, { magnified: props.data.focus, mobile: props.data.mobile, zoom: zoom.value, closed: !!props.data.closed, settings: settings.value })
   terminal?.setAppShowing(showApp.value)
   terminal?.setEditing(editing.value)
-  if (mobileFocus.value && !showApp.value) { terminal?.setTouchMode('scroll'); terminal?.focus({ keyboard: false }) }
+  if (mobileFocus.value && !showApp.value) {
+    if (status.value.touchMode === 'select') terminal?.setTouchMode('scroll')
+    terminal?.focus({ keyboard: false })
+  }
 }
 onMounted(() => { mount(); document.addEventListener('dragend', clearNoteDrag); window.addEventListener('blur', clearNoteDrag) })
 watch(() => props.data.closed, value => { if (value) terminal?.close() })
@@ -293,7 +299,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <div v-else-if="!keepTerminal" class="terminal-unavailable"><Icon name="terminal" :size="28" /><strong>{{ t('terminal.unavailable') }}</strong></div>
     <div v-if="!closed && data.available && status.status === 'disconnected'" class="terminal-disconnected nodrag" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined"><span>{{ status.error || t('terminal.connection.disconnected') }}</span><button @click.stop="action('reconnect')"><Icon name="refresh" :size="13" />{{ t('terminal.connection.reconnect') }}</button></div>
     <div v-if="!closed && keepTerminal && !maximizedElsewhere && (status.status === 'connecting' || status.status === 'connected' && !status.screenReady)" class="terminal-loading nodrag" :class="{ 'terminal-loading-initial': !status.screenReady }" role="status"><span class="spinner" />{{ status.retryAttempt ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt }) : t('common.loading') }}</div>
-    <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :read-text="readText" :copy-text="copyText" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @files="mobileFiles" @paste="mobilePaste" @paste-file="pasteFile" @reading="reading" />
+    <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :read-text="readText" :copy-text="copyText" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @pointer="mobilePointer" @files="mobileFiles" @paste="mobilePaste" @paste-file="pasteFile" @reading="reading" />
   </article>
   <CardLayoutControls :id="id" :label="label" :kind="app ? 'app' : 'terminal'" :width="data.width" :height="data.height" :waiting="!!status.layoutRestoring && !showApp && !closed && !maximizedElsewhere && status.status === 'connected'" />
 </template>

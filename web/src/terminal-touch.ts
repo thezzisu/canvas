@@ -1,6 +1,6 @@
 import type { Terminal } from '@xterm/xterm'
 
-export type TerminalTouchMode = 'scroll' | 'mouse' | 'select'
+export type TerminalTouchMode = 'scroll' | 'mouse' | 'select' | 'touchpad'
 interface TouchOptions {
   active(): boolean
   mode(): TerminalTouchMode
@@ -39,7 +39,7 @@ export function bindTerminalTouch(surface: HTMLElement, term: Terminal, options:
     bindingsChanged = false
   }
   const start = (event: TouchEvent) => {
-    if (!options.active() || options.mode() === 'select') return
+    if (!options.active() || options.mode() === 'select' || options.mode() === 'touchpad') return
     if (event.touches.length !== 1) { finish(); event.preventDefault(); return }
     const touch = event.touches[0]!
     event.preventDefault(); event.stopPropagation(); options.focus()

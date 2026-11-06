@@ -202,14 +202,9 @@ const backgroundCanvas = ref<Canvas | null>(null)
 const settingsDialog = ref(false)
 const settingsDialogComponent = ref<InstanceType<typeof SettingsDialog>>()
 const accountDialog = ref(false)
-const accountMenuOpen = ref(false), accountTrigger = ref<HTMLButtonElement>()
+const accountMenuOpen = ref(false)
 const openCanvasAgents = ref('')
 watch([activeId, apiRevision], () => { openCanvasAgents.value = '' })
-const accountMenuDismiss = usePointerDismiss(accountMenuOpen, accountTrigger)
-const accountMenu = computed<DropdownMenuItem[][]>(() => [
-  [{ label: t('account.title'), icon: 'i-lucide-user-round', onSelect: () => { accountDialog.value = true } }],
-  [{ label: t('app.signOut'), icon: 'i-lucide-log-out', color: 'error', onSelect: () => { void logout().catch(showError) } }],
-])
 const settings = ref<GlobalSettings | null>(null)
 const contentFontStyle = ref<Record<string, string>>({})
 const appliedContentFont = ref('')
@@ -575,7 +570,6 @@ const overviewMenu = computed<DropdownMenuItem[][]>(() => [
   ],
   [{ label: t('app.reset'), disabled: !overviewChanged.value, onSelect: resetOverview }],
 ])
-const onlineCount = computed(() => resources.value.filter(source => !source.error && !['offline', 'error', 'disconnected'].includes(source.status)).length)
 const currentName = computed(() => isOverview.value ? t('app.overview') : currentCanvas.value?.name || t('app.canvas'))
 useTitle(computed(() => authenticated.value && latestState.value && !unknownInstance.value ? `${currentName.value} - Canvas` : 'Canvas'))
 const allWindows = computed(() => resources.value.flatMap(source => source.spaces.flatMap(space => space.windows.map(window => ({ source, space, window, key: `${source.id}/${space.id}/${window.id}` })))))
@@ -2286,8 +2280,6 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
     <aside v-show="!sidebarDrawer || sidebarOpen" :inert="contentFontReady && !!focusedCard || undefined" :aria-hidden="contentFontReady && !!focusedCard || undefined" id="canvas-sidebar" class="sidebar" :class="{ 'sidebar-open': sidebarOpen }">
       <div v-if="sidebarDrawer" class="brand"><span class="brand-symbol"><Icon name="canvas" :size="24" /></span><span class="brand-name">canvas</span><button class="icon-button sidebar-close" :aria-label="t('app.closeCanvasList')" @click="sidebarOpen = false"><Icon name="close" :size="19" /></button></div>
       <div class="sidebar-navigation">
-        <div class="sidebar-instance"><InstancePicker :portal="appElement" :before-change="beforeInstanceChange" :disabled="busy" /></div>
-        <div class="sidebar-divider" role="separator" />
         <div class="nav-section-label canvas-label"><span>{{ t('app.canvases') }}</span><button class="icon-button" :title="t('app.newCanvas')" :aria-label="t('app.newCanvas')" @click="openCanvasDialog()"><Icon name="plus" :size="16" /></button></div>
         <nav class="canvas-nav" :aria-label="t('app.canvases')">
           <CanvasNavItem :name="t('app.overview')" overview :active="isOverview" :indicator="indicators.overview" :open="openCanvasAgents === 'overview'" @update:open="value => { if (value) openCanvasAgents = 'overview'; else if (openCanvasAgents === 'overview') openCanvasAgents = '' }" :agents="() => canvasAgents(undefined, resources, overviewOrder)" :actions-available="notificationActionsAvailable" @go="target => goToCanvasWindow('overview', target)" @select="navigateCanvas('overview')" />
@@ -2300,13 +2292,8 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
         <div class="source-nav"><SidebarList :key="activeInstanceId" :items="orderedSources" @reorder="ids => rememberSidebarOrder('sources', ids)"><template #default="{ item: source, hint }"><button :aria-description="hint" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" class="source-nav-item" :title="`${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}${resources.find(item => item.id === source.id)?.serverVersion ? ` · herdr ${resources.find(item => item.id === source.id)!.serverVersion}` : ''}`" @click="sourcePanel = false; navigateCanvas('overview', { fitNodeId: `source:${source.id}` })"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}</span><span class="source-nav-status"><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : resources.find(item => item.id === source.id)?.status === 'online' ? 'connected' : ''" /></span></button></template></SidebarList><button v-if="latestState && !sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="16" /><span class="source-empty-label">{{ t('app.addConnection') }}</span></button></div>
       </div>
       <div class="sidebar-footer">
-        <UDropdownMenu v-model:open="accountMenuOpen" :modal="false" :items="accountMenu" :portal="appElement || false"
-          :content="{ side: 'top', align: 'start', ...accountMenuDismiss }" :ui="{ content: 'z-[90] min-w-[160px]' }">
-          <button ref="accountTrigger" class="sidebar-account" :title="username" :aria-label="`${t('account.title')}: ${username}`">
-            <span class="avatar" aria-hidden="true">{{ username.slice(0, 1).toUpperCase() || 'C' }}</span>
-            <span>{{ username }}<small>{{ t('app.onlineCount', onlineCount) }}</small></span>
-          </button>
-        </UDropdownMenu>
+        <InstancePicker v-model:menu-open="accountMenuOpen" :username="username" :portal="appElement" :before-change="beforeInstanceChange" :disabled="busy"
+          @account="accountDialog = true" @sign-out="void logout().catch(showError)" />
         <button class="icon-button sidebar-settings" :title="t('common.settings')" :aria-label="t('common.settings')" :disabled="!settings" @click="openSettings"><Icon name="settings" :size="17" /></button>
       </div>
     </aside>
