@@ -247,3 +247,10 @@ html{zoom:var(--ui-zoom)}#app{position:fixed;inset:0;width:auto;height:auto}.app
   .login-screen::before{content:'';position:fixed;inset:0 0 auto;height:var(--window-controls-height);background:var(--window-controls-color);-webkit-app-region:drag;app-region:drag}
   .workspace-header :is(button,a,input,select,[role=menu]),.login-content{-webkit-app-region:no-drag;app-region:no-drag}
 }
+
+/* Yield only over a genuinely focused terminal; geometry never changes input ownership. */
+.graph-wrap :is(.canvas-toolbar,.vue-flow__minimap){transition:opacity 180ms ease}
+.graph-wrap:has(.terminal-host[data-content-active="true"]) :is(.canvas-toolbar,.vue-flow__minimap)[data-terminal-overlap]{opacity:.2;pointer-events:none}
+.graph-wrap:has(.terminal-host[data-content-active="true"]) :is(.canvas-toolbar,.vue-flow__minimap)[data-terminal-overlap="pointer"]{opacity:.1}
+.graph-wrap:has(.terminal-host[data-content-active="true"]) :is(.canvas-toolbar,.vue-flow__minimap)[data-terminal-overlap] *{pointer-events:none}
+@media(prefers-reduced-motion:reduce){.graph-wrap :is(.canvas-toolbar,.vue-flow__minimap){transition:none}}
