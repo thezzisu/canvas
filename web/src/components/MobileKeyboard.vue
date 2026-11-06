@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRafFn } from '@vueuse/core'
 import type { TerminalModifiers } from '../terminal-input'
 import type { TerminalTouchMode } from '../terminal-touch'
 import type { TouchpadControl } from '../touchpad-gesture'
@@ -74,7 +75,17 @@ const deckRows = computed(() => [
 ])
 const modifierPresses = ref(new Map<number, { key: keyof TerminalModifiers; previous: boolean; value: boolean; used: boolean; target: HTMLElement }>())
 const pointerPress = ref<{ id: number; target: HTMLElement; button: 'left' | 'middle'; x: number; y: number; startX: number; startY: number; moved: boolean }>()
+const pointerScroll = useRafFn(({ delta }) => {
+  const press = pointerPress.value
+  if (!press || press.button !== 'middle' || props.disabled) { pointerScroll.pause(); return }
+  const x = press.x - press.startX, y = press.y - press.startY, distance = Math.hypot(x, y)
+  if (distance <= 6) { pointerScroll.pause(); return }
+  // Deflection controls velocity, not distance travelled. Avoid catch-up after a stalled frame.
+  const scale = Math.min(distance - 6, 74) * 4 / distance * Math.min(delta, 100) / 1000
+  if (scale) emit('pointer', { type: 'scroll', x: x * scale, y: y * scale })
+}, { immediate: false })
 function releasePointer(cancelled = false) {
+  pointerScroll.pause()
   const press = pointerPress.value
   if (!press) return
   pointerPress.value = undefined
@@ -94,10 +105,10 @@ function pointerDown(event: PointerEvent, button: 'left' | 'middle') {
 function pointerMove(event: PointerEvent) {
   const press = pointerPress.value
   if (!press || press.id !== event.pointerId || press.button !== 'middle') return
-  if (!press.moved && Math.hypot(event.clientX - press.startX, event.clientY - press.startY) <= 6) return
-  press.moved = true
-  emit('pointer', { type: 'scroll', x: press.x - event.clientX, y: press.y - event.clientY })
   press.x = event.clientX; press.y = event.clientY
+  if (Math.hypot(press.x - press.startX, press.y - press.startY) <= 6) { pointerScroll.pause(); return }
+  press.moved = true
+  pointerScroll.resume()
 }
 function pointerUp(event: PointerEvent, cancelled = false) { if (pointerPress.value?.id === event.pointerId) releasePointer(cancelled) }
 const activeModifiers = computed(() => {

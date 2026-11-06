@@ -2,6 +2,7 @@ export default {
   test: 'Test', testSound: 'Test sound', testSystemNotification: 'Test system notification',
   notificationTestTitle: 'Canvas · Test notification', notificationTestBody: 'System notifications are working.', notificationTestFailed: 'Could not show the test notification',
   installApp: 'Install Canvas', updateApp: 'Reload to update', updateReady: 'Update available', pwaFailed: 'Could not complete this action',
+  checkUpdate: 'Check for updates', checkingUpdate: 'Checking for updates…', noUpdate: 'Check complete. No updates found.', checkUpdateFailed: 'Could not check for updates. Try again.',
   close: 'Close settings', thisBrowser: 'This browser', cutout: 'Display cutout', position: 'Position', width: 'Width',
   inputMode: 'Input mode', inputAuto: 'Automatic', inputTouch: 'Touch', inputKeyboard: 'Keyboard & mouse',
   uiScale: 'UI scale',

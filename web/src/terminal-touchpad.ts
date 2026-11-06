@@ -49,6 +49,15 @@ export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, optio
     if (left) send(0, true)
     left = false; dragged = false
   }
+  function pressLeft() {
+    if (!active() || left) return false
+    left = true; send(0); return true
+  }
+  function finishDrag(cancelled: boolean) {
+    const copied = dragged && !cancelled
+    release()
+    if (copied) options.copyGesture()
+  }
   function click(button: TouchpadButton) {
     if (!active() || left) return
     options.focus()
@@ -81,7 +90,7 @@ export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, optio
     }
     remainderX %= step; remainderY %= step
   }
-  const gesture = new TouchpadGesture({ move, scroll, tap: click })
+  const gesture = new TouchpadGesture({ move, scroll, tap: click, startDrag: pressLeft, endDrag: finishDrag })
   const stopEvent = (event: TouchEvent) => { event.preventDefault(); event.stopPropagation() }
   const fingers = (event: TouchEvent) => [...event.touches].filter(touch => touch.target instanceof Node && surface.contains(touch.target))
   const touch = (event: TouchEvent) => {
@@ -110,10 +119,11 @@ export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, optio
     refresh() { if (!active()) cancel(); render() },
     cancel,
     control(action: TouchpadControl) {
-      if (action.type === 'left' && !action.pressed) { const copied = dragged && !action.cancelled; release(); if (copied) options.copyGesture(); return }
+      gesture.cancel()
+      if (action.type === 'left' && !action.pressed) { finishDrag(!!action.cancelled); return }
       if (!active()) return
-      options.focus()
-      if (action.type === 'left') { if (!left) { left = true; send(0) } }
+      if (!surface.contains(document.activeElement)) options.focus()
+      if (action.type === 'left') pressLeft()
       else if (action.type === 'click') click(action.button)
       else scroll(action.x, action.y)
     },

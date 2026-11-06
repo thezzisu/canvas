@@ -2,6 +2,7 @@ export default {
   test: '测试', testSound: '测试提示音', testSystemNotification: '测试系统通知',
   notificationTestTitle: 'Canvas · 测试通知', notificationTestBody: '系统通知可以正常显示。', notificationTestFailed: '未能显示测试通知',
   installApp: '安装 Canvas', updateApp: '刷新并更新', updateReady: '有新版本可用', pwaFailed: '操作未完成，请重试',
+  checkUpdate: '检查更新', checkingUpdate: '正在检查更新…', noUpdate: '检查完成，没有更新', checkUpdateFailed: '检查更新失败，请重试',
   close: '关闭设置', thisBrowser: '仅此浏览器', cutout: '顶部避让', position: '位置', width: '宽度',
   inputMode: '操作模式', inputAuto: '自动', inputTouch: '纯触摸', inputKeyboard: '键鼠',
   uiScale: '界面缩放',
