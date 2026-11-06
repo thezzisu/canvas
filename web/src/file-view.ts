@@ -79,4 +79,3 @@ export function pruneFileViews(instance: string, canvases: readonly { id: string
     }
   } catch { /* Storage may be unavailable. */ }
 }
-export function clearInstanceFileViews(instance: string, storage?: Storage) { pruneFileViews(instance, [], storage) }

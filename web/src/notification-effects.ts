@@ -2,11 +2,20 @@ import type { CanvasNotification } from '../../shared/notification'
 import { canPlayNotificationSound, notificationSystemEnabled, playNotificationSound, showSystemNotification } from './notification-settings'
 
 type Focus = { sourceId: string; windowId: string; paneId?: string }
-type Delivery = { id: string; sound?: boolean; system?: boolean; quiet?: boolean }
-const focusKey = (instance: string) => `canvas:notifications:focus:${instance}`
-const lockKey = (instance: string) => `canvas:notifications:${instance}`
+type Delivery = { backend: string; id: string; sound?: boolean; system?: boolean; quiet?: boolean }
+const effectsKey = 'canvas:notifications:effects'
+const focusKey = 'canvas:notifications:focus'
 const badgeKey = 'canvas:notifications:badge-owner'
 const ownerKey = (owner: string) => `canvas:notifications:owner:${owner}`
+
+// Retire the former per-startup caches. The fixed runtime keys below cannot grow
+// with server restarts and are separate from persistent notification preferences.
+try {
+  for (let index = localStorage.length - 1; index >= 0; index--) {
+    const key = localStorage.key(index)
+    if (key?.startsWith('canvas:notifications:delivered:') || key?.startsWith('canvas:notifications:focus:')) localStorage.removeItem(key)
+  }
+} catch { /* Optional runtime storage may be unavailable. */ }
 
 /** The browser releases this lease even when a tab closes without cleanup. */
 export function holdNotificationOwner(owner: string) {
@@ -29,15 +38,18 @@ async function locked(name: string, action: () => void | Promise<void>) {
   } catch { /* Optional browser effects never interrupt the workspace. */ }
 }
 function read(key: string) {
-  try { return JSON.parse(localStorage.getItem(key) || 'null') } catch { return null }
+  // A failed read aborts the enclosing locked operation before effects run; it
+  // must not look like an empty deduplication ledger and produce duplicates.
+  return JSON.parse(localStorage.getItem(key) || 'null')
 }
 
 /** Remember only the currently interacting pane, scoped to this frontend origin. */
 export function syncNotificationFocus(instance: string, owner: string, focus?: Focus, valid = () => true) {
-  return locked(lockKey(instance), () => {
-    const key = focusKey(instance)
-    if (focus && valid() && document.hasFocus() && !document.hidden) localStorage.setItem(key, JSON.stringify({ owner, ...focus }))
-    else if (read(key)?.owner === owner || valid() && document.hasFocus() && !document.hidden) localStorage.removeItem(key)
+  return locked(effectsKey, () => {
+    // A foreground page with no terminal focus still replaces the preceding
+    // page's attention. Its later blur may remove only its own record.
+    if (valid() && document.hasFocus() && !document.hidden) localStorage.setItem(focusKey, JSON.stringify({ backend: instance, owner, ...focus }))
+    else if (read(focusKey)?.owner === owner) localStorage.removeItem(focusKey)
   })
 }
 
@@ -64,27 +76,27 @@ export async function deliverNotificationEffects(instance: string, event: Canvas
   const system = notificationSystemEnabled.value && typeof Notification !== 'undefined' && Notification.permission === 'granted'
   const registration = system && !options.quiet && !options.suppressSystem ? await navigator.serviceWorker?.getRegistration().catch(() => undefined) : undefined
   if (!options.valid() || !options.quiet && !canPlayNotificationSound() && !registration?.active) return
-  await locked(lockKey(instance), async () => {
+  await locked(effectsKey, async () => {
     if (!options.valid()) return
-    const key = `canvas:notifications:delivered:${instance}`, value = read(key)
-    const recent: Delivery[] = Array.isArray(value?.events) ? value.events.filter((item: Delivery) => item && typeof item.id === 'string').slice(-64) : []
-    const record = recent.find(item => item.id === event.id) || { id: event.id }
+    const value = read(effectsKey)
+    const recent: Delivery[] = Array.isArray(value?.events) ? value.events.slice(-256).filter((item: Delivery) =>
+      item && typeof item.backend === 'string' && typeof item.id === 'string') : []
+    const record = recent.find(item => item.backend === instance && item.id === event.id) || { backend: instance, id: event.id }
     if (!recent.includes(record)) recent.push(record)
-    const storedFocus = read(focusKey(instance))
-    const focus: Focus | undefined = await ownerAlive(storedFocus?.owner) ? storedFocus : undefined
+    if (recent.length > 256) recent.shift()
+    const storedFocus = read(focusKey)
+    const focus: Focus | undefined = storedFocus?.backend === instance && await ownerAlive(storedFocus.owner) ? storedFocus : undefined
     if (!options.valid()) return
+    const now = Date.now(), backends = new Set(recent.map(item => item.backend))
+    const sounds = new Map(Object.entries(value?.sounds || {}).filter((entry): entry is [string, number] =>
+      backends.has(entry[0]) && typeof entry[1] === 'number' && Number.isFinite(entry[1]) && now >= entry[1] && now - entry[1] < 750))
     const attended = focus?.sourceId === event.sourceId && focus.windowId === event.windowId && (!event.paneId || event.paneId === focus.paneId)
     if (options.quiet || attended && event.kind !== 'done') record.quiet = true
-    if (record.quiet) {
-      localStorage.setItem(key, JSON.stringify({ events: recent.slice(-64), soundedAt: value?.soundedAt || 0 })); return
-    }
-    let soundedAt = typeof value?.soundedAt === 'number' ? value.soundedAt : 0
-    if (!record.sound && canPlayNotificationSound() && (event.kind === 'attention' || event.kind === 'done')) {
-      const now = Date.now()
-      if (now - soundedAt >= 750) { playNotificationSound(event.kind); soundedAt = now }
+    if (!record.quiet && !record.sound && canPlayNotificationSound() && (event.kind === 'attention' || event.kind === 'done')) {
+      if (!sounds.has(instance)) { playNotificationSound(event.kind); sounds.set(instance, now) }
       record.sound = true
     }
-    if (!record.system && !options.suppressSystem && !attended && options.valid() && notificationSystemEnabled.value && typeof Notification !== 'undefined' && Notification.permission === 'granted' && registration?.active) {
+    if (!record.quiet && !record.system && !options.suppressSystem && !attended && options.valid() && notificationSystemEnabled.value && typeof Notification !== 'undefined' && Notification.permission === 'granted' && registration?.active) {
       try {
         await showSystemNotification(registration, options.title, {
           body: options.body,
@@ -94,6 +106,6 @@ export async function deliverNotificationEffects(instance: string, event: Canvas
         record.system = true
       } catch { /* A different live tab may still deliver this channel. */ }
     }
-    localStorage.setItem(key, JSON.stringify({ events: recent.slice(-64), soundedAt }))
+    localStorage.setItem(effectsKey, JSON.stringify({ events: recent, sounds: Object.fromEntries(sounds) }))
   })
 }

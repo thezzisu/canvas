@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { effectScope, ref } from 'vue'
-import { clearInstanceFileViews, fileMode, fileModeKey, fileReading, fileReadingKey, filePreferenceKeys, pruneFileViews, useFileView } from './file-view.ts'
+import { fileMode, fileModeKey, fileReading, fileReadingKey, filePreferenceKeys, pruneFileViews, useFileView } from './file-view.ts'
 
 function storage(): Storage {
   const values = new Map<string, string>()
@@ -113,7 +113,7 @@ test('pruning respects instance and object identity without touching camera or o
   pruneFileViews('a', [{ id: 'canvas', nodes: [{ id: 'keep', type: 'file' }, { id: 'deleted', type: 'note' }] }], store)
   assert.equal(store.length, 5)
   for (const key of [...filePreferenceKeys('a', 'canvas', 'keep'), ...filePreferenceKeys('b', 'canvas', 'node')]) assert.notEqual(store.getItem(key), null)
-  clearInstanceFileViews('a', store); assert.equal(store.length, 3); assert.equal(store.getItem('canvas:view:a:canvas'), 'camera')
+  pruneFileViews('a', [], store); assert.equal(store.length, 3); assert.equal(store.getItem('canvas:view:a:canvas'), 'camera')
 })
 
 test('invalid or unavailable storage does not break reading; reading records never retain content', () => {
@@ -127,5 +127,5 @@ test('invalid or unavailable storage does not break reading; reading records nev
   const blocked = { ...storage(), getItem() { throw new Error('blocked') }, setItem() { throw new Error('full') } }
   const local = scope.run(() => useFileView('a', 'canvas', 'node', true, () => true, browser(blocked)))!
   local.wrap.value = true; assert.equal(local.wrap.value, true)
-  assert.doesNotThrow(() => clearInstanceFileViews('a', blocked)); scope.stop()
+  assert.doesNotThrow(() => pruneFileViews('a', [], blocked)); scope.stop()
 })
