@@ -20,7 +20,7 @@ test("authentication, CSRF rejection and persistent canvas CRUD", async () => {
       closeAll: async () => {
         closed++;
       },
-      closeSource: async () => {},
+      closeSource: async (_id: string, afterClose?: () => Promise<void>) => { await afterClose?.(); },
     } as unknown as TerminalManager,
   );
   const call = (
@@ -132,7 +132,7 @@ test("empty herdr settings explicitly clear overrides while omitted PATCH fields
   store.addSession("source-clear");
   const closed: string[] = [];
   const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {
-    closeSource: async (id: string) => { closed.push(id); },
+    closeSource: async (id: string, afterClose?: () => Promise<void>) => { closed.push(id); await afterClose?.(); },
   } as unknown as TerminalManager);
   const call = (path: string, method = "GET", body?: unknown) => app.request(`http://localhost${path}`, {
     method,

@@ -11,7 +11,9 @@ import { defaultSettings } from '../shared/settings.ts';
 
 test("terminal presentation dimensions are shared across canvases while positions and notes stay local", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "canvas-shared-sizes-")), store = new Store(join(dir, "state.db"));
-  const app = createApp(store, { username: "fixture", passwordHash: "unused" }, { closeSource: async () => {} } as unknown as TerminalManager);
+  const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {
+    closeSource: async (_id: string, afterClose?: () => Promise<void>) => { await afterClose?.(); },
+  } as unknown as TerminalManager);
   store.addSession("test");
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   const request = (path: string, method = "GET", body?: unknown) => app.request(`http://localhost${path}`, {

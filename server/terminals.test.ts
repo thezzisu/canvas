@@ -10,7 +10,7 @@ import type { WebSocket } from "ws";
 import headless from "@xterm/headless";
 import { terminalUnicodeAddon } from "../shared/terminal-unicode.ts";
 import { terminalInputChunks } from "../web/src/terminal-input-chunks.ts";
-import { Store, type Canvas, type TerminalNode } from "./state.ts";
+import { Store, sourceConnectionKey, type Canvas, type TerminalNode } from "./state.ts";
 import { CompletionReads } from "./completion-reads.ts";
 import { PASTE_SETTLE_QUIET_MS, TerminalManager } from "./terminals.ts";
 import { createSpace, createWindow, listResources, shellQuote, type Source } from "./runtimes.ts";
@@ -249,7 +249,8 @@ test('native agent metadata reaches both viewers and late joiners without resour
 test("a transport closing during queued browser join rejects the connection", async () => {
   const manager = new TerminalManager(), client = new Client();
   const source: Source = { id: "join-race", name: "Join race", transport: "local" };
-  const terminal = { closed: false, async join() { await Promise.resolve(); this.closed = true; } };
+  const terminal = { closed: false, connectionKey: sourceConnectionKey(source), spaceId: "space",
+    async join() { await Promise.resolve(); this.closed = true; } };
   manager.entries.set("join-race/window", Promise.resolve(terminal) as never);
   await assert.rejects(manager.connect(source, { sourceId: source.id, spaceId: "space", windowId: "window" }, client.socket), /detached while connecting/);
   manager.entries.clear();

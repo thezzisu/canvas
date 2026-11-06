@@ -242,7 +242,7 @@ test("source renames preserve active uploads and future uploads from the same at
   store.put("source", f.source); store.addSession("session-a");
   let closed = 0;
   const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {
-    closeSource: async () => { closed++; },
+    closeSource: async (_id: string, afterClose?: () => Promise<void>) => { closed++; await afterClose?.(); },
   } as unknown as TerminalManager, {
     uploads: f.service,
     closeOpenBridge: async id => f.service.closeSource(id),

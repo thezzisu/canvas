@@ -60,19 +60,51 @@ test('poll projection cannot revive read completion or overwrite a newer native 
   assert.equal(reads.project(source, window).panes[0]!.status, 'idle', 'transient offline does not clear reads')
 })
 
-test('confirmed pane/window/source removal prunes only its completion records; renaming preserves them', t => {
-  const { store, reads } = fixture(t), window = completed()
-  reads.observe(source, window); reads.acknowledge(source, 'window', 'left', window.panes[0]!.completion)
+test('only the full source snapshot prunes pane reads; window updates and renaming preserve them', t => {
+  const { store, reads } = fixture(t), window = completed(), owner = {}
+  reads.observeSnapshot(source, [window], { bootId: 'boot', revision: 1 }, owner)
+  reads.acknowledge(source, 'window', 'left', window.panes[0]!.completion)
   reads.acknowledge(source, 'window', 'right', window.panes[1]!.completion)
   const renamed = { ...source, name: 'Renamed' }; store.put('source', renamed)
   assert.equal(reads.project(renamed, window).status, 'idle')
-  reads.observe(renamed, { ...window, panes: window.panes.slice(1) })
+  const remaining = { ...window, panes: window.panes.slice(1) }
+  reads.observe(renamed, remaining)
+  assert.deepEqual(store.get<{ read: Record<string, number> }>('completion-read', source.id)!.read, { left: 3, right: 9 }, 'a partial update cannot distinguish a move from deletion')
+  reads.observeSnapshot(renamed, [remaining], { bootId: 'boot', revision: 2 }, owner)
   assert.deepEqual(store.get<{ read: Record<string, number> }>('completion-read', source.id)!.read, { right: 9 })
   reads.removeWindow(renamed, 'window')
+  assert.equal(reads.completion(renamed, 'right'), undefined, 'window retirement removes its live index')
+  assert.deepEqual(store.get<{ read: Record<string, number> }>('completion-read', source.id)!.read, { right: 9 }, 'the pane may have moved to a different window')
+  reads.observeSnapshot(renamed, [], { bootId: 'boot', revision: 3 }, owner)
   assert.deepEqual(store.get<{ read: Record<string, number> }>('completion-read', source.id)!.read, {})
+  assert.deepEqual(store.get<{ completed: Record<string, number> }>('completion-read', source.id)!.completed, {})
   store.remove('source', source.id)
   assert.equal(store.get('completion-read', source.id), undefined)
 })
+
+for (const order of ['source-first', 'destination-first', 'source-window-removed'] as const) {
+  test(`moving a read pane preserves its watermark (${order})`, t => {
+    const { store, reads } = fixture(t), first = completed(), owner = {}
+    const destination: WindowMetadata = { ...first, id: 'destination', panes: [
+      { id: 'other', name: 'Other', active: true, status: 'working', stateSequence: 4 },
+    ] }
+    const original = order === 'source-window-removed' ? { ...first, panes: first.panes.slice(0, 1) } : first
+    reads.observeSnapshot(source, [original, destination], { bootId: 'boot', revision: 1 }, owner)
+    assert(reads.acknowledge(source, original.id, 'left', first.panes[0]!.completion))
+    const before = store.get('completion-read', source.id), revision = store.revision
+    const moved = { ...destination, panes: [...destination.panes, first.panes[0]!] }
+    const remaining = { ...first, panes: first.panes.slice(1) }
+    const windows = order === 'source-first' ? [remaining, moved]
+      : order === 'destination-first' ? [moved, remaining] : [moved]
+    if (order === 'source-window-removed') reads.removeWindow(source, original.id)
+    reads.observeSnapshot(source, windows, { bootId: 'boot', revision: 2 }, owner)
+    assert.equal(reads.project(source, moved).panes[1]!.status, 'idle')
+    assert.equal(reads.completion(source, 'left')?.windowId, destination.id)
+    assert(!reads.acknowledge(source, destination.id, 'left', first.panes[0]!.completion), 'moving a pane does not create another unread completion')
+    assert.deepEqual(store.get('completion-read', source.id), before)
+    assert.equal(store.revision, revision, 'a move does not rewrite durable watermarks')
+  })
+}
 
 
 test('native projection revisions are local to the intake owner; pane transitions never regress on handoff', t => {

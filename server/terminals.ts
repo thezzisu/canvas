@@ -569,6 +569,8 @@ export class TerminalManager {
         try {
           const { cols, rows } = this.normalSize(source.id, target.windowId);
           transport = await handle.connect(cols, rows);
+          if (this.stopped || this.closingSources.has(source.id))
+            throw new Error("Terminal service is closing");
           const terminal = new LiveTerminal(
             key,
             source.id,
@@ -616,10 +618,14 @@ export class TerminalManager {
       creating.catch(() => this.entries.delete(key));
     }
     const terminal = await this.entries.get(key)!;
+    if (this.stopped || this.closingSources.has(source.id))
+      throw new Error("Terminal service is closing");
     if (terminal.closed)
       throw new Error("Terminal is detaching; reconnect in a moment");
+    if (terminal.connectionKey !== sourceConnectionKey(source))
+      throw new Error("Terminal connection changed");
     await terminal.join(ws);
-    if (terminal.closed)
+    if (terminal.closed || this.stopped || this.closingSources.has(source.id))
       throw new Error("Terminal detached while connecting; reconnect in a moment");
     if (!terminal.clients.size && !terminal.closed) {
       terminal.idle = setTimeout(() => void terminal.close(), 20_000);
@@ -661,7 +667,9 @@ export class TerminalManager {
     const terminal = await pending?.catch(() => undefined);
     return terminal?.captureFilePaste(ws);
   }
-  async closeSource(sourceId: string) {
+  /** Keep new viewers out until the caller has retired bridges and committed the source. */
+  async closeSource(sourceId: string, afterClose?: () => void | Promise<void>) {
+    if (this.closingSources.has(sourceId)) throw new Error("Connection is already changing");
     this.closingSources.add(sourceId);
     this.completionBoots.delete(sourceId);
     for (const [key, pending] of this.pendingCompletions) if (pending.source.id === sourceId) {
@@ -675,6 +683,7 @@ export class TerminalManager {
           if (t?.sourceId === sourceId) await t.close();
         }),
       );
+      await afterClose?.();
     } finally {
       this.closingSources.delete(sourceId);
     }

@@ -198,12 +198,12 @@ test('confirmed final pane closure removes only its tab and empty space, without
     const api = new FixtureApi(), layout = new CoreLayout(api)
     api.doc = { ...document([tab(root)]), retained: { opaque: true } }
     api.terminals[0]!.state = 'finished'
-    await layout.reconcileClosedPanes('space', 'tab', [{ id: 'p1', terminal: 't1' }])
+    await layout.reconcileClosedPanes([{ id: 'p1', terminal: 't1' }])
     assert.deepEqual(api.doc, { spaces: [], retained: { opaque: true } })
     assert.equal(api.terminals[0]!.state, 'finished')
     assert.deepEqual(api.calls.map(call => call.method), ['doc.get', 'doc.set'])
     const version = api.version
-    await layout.reconcileClosedPanes('space', 'tab', [{ id: 'p1', terminal: 't1' }])
+    await layout.reconcileClosedPanes([{ id: 'p1', terminal: 't1' }])
     assert.equal(api.version, version, 'replayed closure does not publish another document event')
   }
 })
@@ -219,7 +219,7 @@ test('closure reconciles hidden, stacked and floating panes while preserving liv
   api.doc = document([tab(root)])
   api.doc!.spaces.push({ id: 'other', name: 'Other', folder: '', tabs: [{ id: 'other-tab', name: '', root: pane('other-pane', 't1') }] })
   const other = copy(api.doc!.spaces[1])
-  await layout.reconcileClosedPanes('space', 'tab', [{ id: 'one', terminal: 't1' }, { id: 'hidden', terminal: 't1' }, { id: 'float', terminal: 't1' }])
+  await layout.reconcileClosedPanes([{ id: 'one', terminal: 't1' }, { id: 'hidden', terminal: 't1' }, { id: 'float', terminal: 't1' }])
   const remaining = api.doc!.spaces[0]!.tabs[0]!
   assert.deepEqual(panes(remaining).map(pane => pane.id), ['mod', 'two', 'float-mod'])
   assert.deepEqual(panes(remaining).find(pane => pane.id === 'mod')!.node, mod)
@@ -233,18 +233,18 @@ test('closure of the last terminal leaves a mod tab intact and does not remove a
   const api = new FixtureApi(), layout = new CoreLayout(api)
   api.doc = document([tab({ id: 'root', type: 'row', children: [pane('p1', 't1'), { id: 'mod', type: 'block', content: { mod: 'files' } }] }),
     { id: 'other-tab', name: 'Other', root: pane('other', 't2') }])
-  await layout.reconcileClosedPanes('space', 'tab', [{ id: 'p1', terminal: 't1' }])
+  await layout.reconcileClosedPanes([{ id: 'p1', terminal: 't1' }])
   assert.deepEqual(api.doc.spaces[0]!.tabs.map(tab => tab.id), ['tab', 'other-tab'])
   assert.deepEqual(panes(api.doc.spaces[0]!.tabs[0]!).map(pane => pane.id), ['mod'])
 })
 
 test('closure skips replaced or removed pane identities and does not materialize synthetic windows', async () => {
   const api = new FixtureApi(), layout = new CoreLayout(api)
-  await layout.reconcileClosedPanes('space', 'tab', [{ id: 'p1', terminal: 'old-terminal' }, { id: 'gone', terminal: 't1' }])
+  await layout.reconcileClosedPanes([{ id: 'p1', terminal: 'old-terminal' }, { id: 'gone', terminal: 't1' }])
   assert.equal(api.version, 1)
   assert.equal(panes(api.doc!.spaces[0]!.tabs[0]!)[0]!.terminal, 't1')
   api.doc = null; api.version = 0
-  await layout.reconcileClosedPanes('core:unplaced', 't1', [{ id: 'core-pane:t1', terminal: 't1' }])
+  await layout.reconcileClosedPanes([{ id: 'core-pane:t1', terminal: 't1' }])
   assert.equal(api.doc, null)
   assert.equal(api.version, 0)
   assert(!api.calls.some(call => call.method !== 'doc.get'))
@@ -257,7 +257,7 @@ test('closure CAS retries preserve concurrent edits and never remove a replaceme
     api.doc!.spaces[0]!.tabs[0]!.root.children!.push(pane('survivor', 't2'))
     api.doc!.spaces[0]!.name = 'Concurrent rename'; api.version++
   }
-  await layout.reconcileClosedPanes('space', 'tab', [{ id: 'p1', terminal: 't1' }])
+  await layout.reconcileClosedPanes([{ id: 'p1', terminal: 't1' }])
   assert.deepEqual(panes(api.doc!.spaces[0]!.tabs[0]!).map(pane => pane.id), ['survivor'])
   assert.equal(api.doc!.spaces[0]!.name, 'Concurrent rename')
   api.beforeWrite = () => {
@@ -265,7 +265,7 @@ test('closure CAS retries preserve concurrent edits and never remove a replaceme
     api.doc!.spaces[0]!.tabs[0]!.root.children![0]!.content!.terminal = 'replacement'; api.version++
   }
   const version = api.version
-  await layout.reconcileClosedPanes('space', 'tab', [{ id: 'survivor', terminal: 't2' }])
+  await layout.reconcileClosedPanes([{ id: 'survivor', terminal: 't2' }])
   assert.equal(api.version, version + 1, 'only the concurrent replacement commits')
   assert.equal(panes(api.doc!.spaces[0]!.tabs[0]!)[0]!.terminal, 'replacement')
 })
@@ -273,20 +273,37 @@ test('closure CAS retries preserve concurrent edits and never remove a replaceme
 test('concurrent subscribers converge through existing CAS without duplicate successful writes', async () => {
   const api = new FixtureApi(), one = new CoreLayout(api), two = new CoreLayout(api)
   const expected = [{ id: 'p1', terminal: 't1' }]
-  await Promise.all([one.reconcileClosedPanes('space', 'tab', expected), two.reconcileClosedPanes('space', 'tab', expected)])
+  await Promise.all([one.reconcileClosedPanes(expected), two.reconcileClosedPanes(expected)])
   assert.equal(api.version, 2)
   assert.deepEqual(api.doc!.spaces, [])
   assert.equal(api.calls.filter(call => call.method === 'doc.get').length, 3)
 })
 
+test('closure follows the same pane identity when a concurrent edit moves it to another tab', async () => {
+  const api = new FixtureApi(), layout = new CoreLayout(api)
+  api.beforeWrite = () => {
+    api.beforeWrite = undefined
+    api.doc!.spaces = [{ id: 'destination', name: 'Moved', folder: '', tabs: [
+      { id: 'moved-tab', name: '', root: pane('p1', 't1') },
+      { id: 'live-tab', name: '', root: pane('live-pane', 't2') },
+    ] }]
+    api.version++
+  }
+  await layout.reconcileClosedPanes([{ id: 'p1', terminal: 't1' }])
+  assert.equal(api.version, 3)
+  assert.equal(api.doc!.spaces[0]!.name, 'Moved')
+  assert.deepEqual(api.doc!.spaces[0]!.tabs.map(tab => tab.id), ['live-tab'])
+  assert(!api.calls.some(call => call.method.startsWith('terminal.')))
+})
+
 test('closure cancellation and unavailable document writes never fabricate a successful removal', async () => {
   const api = new FixtureApi(), layout = new CoreLayout(api), before = copy(api.doc)
   const expected = [{ id: 'p1', terminal: 't1' }]
-  await assert.rejects(layout.reconcileClosedPanes('space', 'tab', expected, () => false), /cancelled/u)
+  await assert.rejects(layout.reconcileClosedPanes(expected, () => false), /cancelled/u)
   assert.deepEqual(api.doc, before)
   assert(!api.calls.some(call => call.method === 'doc.set'))
   api.failWrite = true
-  await assert.rejects(layout.reconcileClosedPanes('space', 'tab', expected), /disk unavailable/u)
+  await assert.rejects(layout.reconcileClosedPanes(expected), /disk unavailable/u)
   assert.deepEqual(api.doc, before)
   assert(!api.calls.some(call => call.method.startsWith('terminal.')))
 })
@@ -294,7 +311,7 @@ test('closure cancellation and unavailable document writes never fabricate a suc
 test('a lost successful closure acknowledgement is confirmed without repeating the write', async () => {
   const api = new FixtureApi(), layout = new CoreLayout(api)
   api.loseWriteReply = true
-  await layout.reconcileClosedPanes('space', 'tab', [{ id: 'p1', terminal: 't1' }])
+  await layout.reconcileClosedPanes([{ id: 'p1', terminal: 't1' }])
   assert.deepEqual(api.doc!.spaces, [])
   assert.equal(api.version, 2)
   assert.deepEqual(api.calls.map(call => call.method), ['doc.get', 'doc.set', 'doc.get'])

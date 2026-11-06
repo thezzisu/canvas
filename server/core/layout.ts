@@ -312,31 +312,37 @@ export class CoreLayout {
 
   /** A final native exit removes its pane from the shared app document, not its
    * retained terminal record. Identity checks make delayed/duplicate events safe. */
-  async reconcileClosedPanes(spaceId: string, tabId: string, expected: readonly { id: string; terminal: string }[], authorized = () => true): Promise<void> {
+  async reconcileClosedPanes(expected: readonly { id: string; terminal: string }[], authorized = () => true): Promise<void> {
     if (!expected.length) return
     try {
       await this.write(undefined, doc => {
-        const space = doc.spaces.find(space => space.id === spaceId), tab = space?.tabs.find(tab => tab.id === tabId)
-        if (!space || !tab) return false
         let removed = false
-        for (const target of expected) {
-          const node = nodeAt(tab.root, target.id)
-          if (!node || localTerminal(node.content?.terminal) !== target.terminal) continue
-          if (tab.root.id === node.id) tab.root = { id: tab.id, type: 'row', children: [] }
-          else if (!removeNode(tab.root, node.id)) continue
-          removed = true
+        for (const space of doc.spaces) {
+          let spaceChanged = false
+          for (const tab of space.tabs) {
+            let tabChanged = false
+            for (const target of expected) {
+              const node = nodeAt(tab.root, target.id)
+              if (!node || localTerminal(node.content?.terminal) !== target.terminal) continue
+              if (tab.root.id === node.id) tab.root = { id: tab.id, type: 'row', children: [] }
+              else if (!removeNode(tab.root, node.id)) continue
+              tabChanged = true
+            }
+            if (!tabChanged) continue
+            spaceChanged = removed = true
+            if (!panes(tab).length) space.tabs = space.tabs.filter(item => item !== tab)
+          }
+          if (spaceChanged && !space.tabs.length) doc.spaces = doc.spaces.filter(item => item !== space)
         }
-        if (!removed) return false
-        if (!panes(tab).length) space.tabs = space.tabs.filter(item => item !== tab)
-        if (!space.tabs.length) doc.spaces = doc.spaces.filter(item => item !== space)
+        return removed
       }, authorized)
     } catch (error) {
       // A lost acknowledgement is not a failed write. Confirm only the target
       // identities, without retrying the mutation or touching native records.
       try {
         const current = await this.document()
-        const tab = current.value.spaces.find(space => space.id === spaceId)?.tabs.find(tab => tab.id === tabId)
-        if (!tab || expected.every(target => localTerminal(nodeAt(tab.root, target.id)?.content?.terminal) !== target.terminal)) return
+        const remaining = current.value.spaces.flatMap(space => space.tabs.flatMap(tab => panes(tab)))
+        if (expected.every(target => !remaining.some(pane => pane.id === target.id && pane.terminal === target.terminal))) return
       } catch { /* Preserve the original error if the outcome is still unknown. */ }
       throw error
     }

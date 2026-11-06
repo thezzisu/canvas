@@ -269,7 +269,7 @@ test('recoverable lost terminals and transport-only stream endings do not remove
 
 test('initial and missed snapshots reconcile already finished panes without attaching or emitting completion', async () => {
   const initial = fixture()
-  initial.terminal.state = 'finished'
+  Object.assign(initial.terminal, { state: 'finished', reason: 'exited' })
   await assert.rejects(createCoreClient({ rpc: initial.rpc, layout: initial.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 }), /closed|paint/u)
   assert.deepEqual(initial.document.spaces, []); assert.deepEqual(initial.attached, [])
   const f = fixture()
@@ -296,6 +296,121 @@ test('missing snapshot records need confirmed absence, not failed discovery, bef
       assert.deepEqual(f.document.spaces, [])
     }
   }
+})
+
+test('missed snapshots recover ended streams and initial waiting panes without a restarted event', async () => {
+  for (const initiallyWaiting of [false, true]) {
+    const f = fixture()
+    if (initiallyWaiting) Object.assign(f.terminal, { reason: 'signaled', pid: null })
+    const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
+    await tick()
+    if (!initiallyWaiting) f.stream.receive({ kind: 'data', data: Buffer.from('BEFORE\x1b[?9001l') })
+    const client = await opening, notices: unknown[] = []
+    client.onData(() => {}); client.onNotification(notice => notices.push(notice))
+    try {
+      if (!initiallyWaiting) {
+        f.stream.receive({ kind: 'close', reason: { reason: 'signaled', signal: 9 } })
+        await f.event('lost', { reason: 'signaled', pid: null })
+      }
+      Object.assign(f.terminal, { reason: null, pid: 999 })
+      await f.notification('missed', { terminals: [structuredClone(f.terminal)] }, 50)
+      assert.deepEqual(f.attached, initiallyWaiting ? ['t1'] : ['t1', 't1'])
+      const recovered = f.streams.at(-1)!
+      recovered.receive({ kind: 'data', data: Buffer.from('RECOVERED\x1b[?9001l') })
+      await client.completionFence()
+      assert.equal((await client.content())?.[0]?.lines[0]?.trim(), 'RECOVERED')
+      client.write('x'); await client.completionFence()
+      assert(f.sent.some(frame => frame.channel === recovered.channel && frame.kind === 0 && frame.data.toString() === 'x'))
+      assert.equal(f.controls.documentWrites, 0)
+      assert.deepEqual(notices, [], 'recovery restores state without replaying agent notifications')
+      await f.notification('missed', { terminals: [structuredClone(f.terminal)] }, 51)
+      assert.equal(f.streams.at(-1), recovered, 'a healthy stream survives a later snapshot')
+    } finally { client.kill() }
+  }
+})
+
+test('native snapshots and events clean up unopened tabs without attaching their streams', async () => {
+  for (const missed of [false, true]) {
+    const f = fixture()
+    const hidden = { ...structuredClone(f.terminal), address: 't2', pid: 456 }
+    f.terminals.push(hidden)
+    for (const id of ['hidden-one', 'hidden-two']) f.document.spaces[0]!.tabs.push({ id, name: id,
+      root: { id: `${id}-pane`, type: 'block', content: { terminal: 't2' } } })
+    const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
+    await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('VISIBLE\x1b[?9001l') })
+    const client = await opening
+    try {
+      Object.assign(hidden, { state: 'finished', reason: 'exited' })
+      if (missed) await f.notification('missed', { terminals: structuredClone(f.terminals) }, 50)
+      else await f.notification('event', { terminal: 't2', type: 'finished', data: { reason: 'exited' } })
+      assert.deepEqual(f.document.spaces[0]!.tabs.map(tab => tab.id), ['tab'])
+      assert.deepEqual(client.completionSnapshot()?.windows.map(window => window.id), ['tab'])
+      assert.deepEqual(f.attached, ['t1'])
+      assert.equal(f.controls.documentWrites, 1, 'all confirmed references share one CAS update')
+    } finally { client.kill() }
+  }
+})
+
+test('non-exit finished records retain their layout while Core owns recovery', async () => {
+  for (const reason of ['server_stop', 'host_shutdown', 'holder_lost', 'stopped_by_restart']) {
+    const f = fixture(), before = structuredClone(f.document)
+    Object.assign(f.terminal, { state: 'finished', reason, pid: null })
+    const client = await createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
+    try {
+      assert.deepEqual(f.document, before)
+      assert.equal(f.controls.documentWrites, 0)
+      assert.deepEqual(f.attached, [])
+      Object.assign(f.terminal, { state: 'live', reason: null, pid: 999 })
+      await f.notification('missed', { terminals: structuredClone(f.terminals) }, 50)
+      assert.deepEqual(f.attached, ['t1'])
+    } finally { client.kill() }
+  }
+})
+
+test('a missing-record lookup cannot commit an old layout after a newer pane action', async () => {
+  const f = fixture()
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
+  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('READY\x1b[?9001l') })
+  const client = await opening
+  let release!: () => void, started!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), entered = new Promise<void>(resolve => { started = resolve })
+  const call = f.rpc.call.bind(f.rpc)
+  f.rpc.call = async (method: string, params = {}) => {
+    if (method === 'terminal.get' && params.terminal === 'missing') {
+      started(); await gate
+      return { ...structuredClone(f.terminal), address: 'missing' } as never
+    }
+    return call(method, params)
+  }
+  try {
+    f.document.spaces[0]!.tabs[0]!.root.children!.push({ id: 'new-pane', type: 'block', content: { terminal: 'missing' } })
+    f.controls.documentVersion = 2
+    const delayed = f.event('doc', {})
+    await entered
+    f.document.spaces[0]!.tabs[0]!.root.children!.pop(); f.controls.documentVersion = 3
+    await client.paneAction({ bootId: 'core', paneId: 'pane', name: '' }, { action: 'rename', name: 'New title' })
+    release(); await delayed
+    assert.deepEqual(client.completionSnapshot()?.windows.find(window => window.id === 'tab')?.panes.map(pane => ({ id: pane.id, name: pane.name })),
+      [{ id: 'pane', name: 'New title' }])
+    assert.deepEqual(f.attached, ['t1'], 'the obsolete missing pane never attaches')
+  } finally { release(); client.kill() }
+})
+
+test('an unsequenced action result cannot close panes using different terminal facts', async () => {
+  const f = fixture(), before = structuredClone(f.document)
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
+  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('READY\x1b[?9001l') })
+  const client = await opening
+  try {
+    f.layout.paneAction = async () => f.layout.snapshot()
+    Object.assign(f.terminal, { state: 'finished', reason: 'exited' })
+    await client.paneAction({ bootId: 'core', paneId: 'pane', name: '' }, { action: 'rename', name: 'Ignored' })
+    assert.deepEqual(f.document, before)
+    assert.equal(f.controls.documentWrites, 0)
+    assert.equal(client.completionSnapshot()?.windows[0]?.status, 'working')
+    await f.event('finished', { reason: 'exited' })
+    assert.deepEqual(f.document.spaces, [], 'the sequenced terminal fact still closes the pane')
+  } finally { client.kill() }
 })
 
 test('a delayed seen-label write cannot replace newer event state with its response-time snapshot', async () => {
@@ -652,4 +767,57 @@ test('core scans recover native soft wraps without removing real filename spaces
     assert(!content?.[0]?.coloredText?.includes(path.replace(' ', '')), 'color hints cannot silently delete filename spaces')
     assert.deepEqual(content?.[0]?.lines.slice(1, 3), ['HARD_ONE', 'HARD_TWO'])
   } finally { client.kill() }
+})
+
+test('Core drag selection preserves spaces across soft wraps and trims logical line endings', async () => {
+  for (const sample of [
+    { data: 'abc  def', end: [3, 2], expected: 'abc  def' },
+    { data: 'ab   c   de', end: [1, 3], expected: 'ab   c   de' },
+    { data: 'abc    ', end: [2, 2], expected: 'abc' },
+    { data: 'abc\u00a0', end: [4, 1], expected: 'abc\u00a0' },
+    { data: 'ab\u3000', end: [4, 1], expected: 'ab\u3000' },
+    { data: 'abc  de  \r\nXYZ  ', end: [5, 3], expected: 'abc  de\nXYZ', reverse: true },
+  ]) {
+    const f = fixture(); f.terminal.cols = 5; f.terminal.rows = 4
+    const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 5, rows: 4 })
+    await tick(); f.stream.receive({ kind: 'data', data: Buffer.from(sample.data + '\x1b[?9001l') })
+    const client = await opening
+    try {
+      let output = ''; client.onData(data => { output += data })
+      await client.completionFence()
+      const [start, end] = sample.reverse ? [sample.end, [1, 1]] : [[1, 1], sample.end]
+      client.write(`\x1b[<0;${start!.join(';')}M`); await tick(); await client.completionFence()
+      client.write(`\x1b[<32;${end!.join(';')}M`); await tick(); await client.completionFence()
+      client.write(`\x1b[<0;${end!.join(';')}m`); await tick(); await client.completionFence()
+      const copied = output.match(/\x1b\]52;c;([A-Za-z0-9+/=]+)\x07/u)?.[1]
+      assert(copied, 'the ordinary mouse selection produces clipboard text')
+      assert.equal(Buffer.from(copied, 'base64').toString(), sample.expected)
+      assert.deepEqual(f.failures, [])
+    } finally { client.kill() }
+  }
+})
+
+test('Core typing and paste repaint the bottom immediately without waiting for program output', async () => {
+  for (const input of ['x', '\x1b[200~hello\x1b[201~']) {
+    const f = fixture(); f.terminal.cols = 20; f.terminal.rows = 3
+    const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 3 })
+    await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('line1\r\nline2\r\nline3\r\nline4\r\nline5\r\nline6\x1b[?9001l') })
+    const client = await opening
+    try {
+      let frames = 0; client.onData(() => { frames++ })
+      await client.completionFence()
+      const bottom = (await client.content())?.[0]?.lines
+      client.write('\x1b[<64;1;1M'); await tick(); await tick()
+      assert.notDeepEqual((await client.content())?.[0]?.lines, bottom)
+      const before = frames
+      client.write(input); await tick(); await tick()
+      assert(frames > before, 'input redraws a changed scroll position without any native output')
+      assert.deepEqual((await client.content())?.[0]?.lines, bottom)
+      assert.equal(f.sent.filter(frame => frame.kind === 0).at(-1)?.data.toString(), input === 'x' ? 'x' : 'hello')
+      const settled = frames
+      client.write('y'); await tick(); await tick()
+      assert.equal(frames, settled, 'ordinary input at the bottom adds no forced repaint')
+      assert.deepEqual(f.failures, [])
+    } finally { client.kill() }
+  }
 })

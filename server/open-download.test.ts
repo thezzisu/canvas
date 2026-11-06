@@ -119,7 +119,7 @@ async function fixture(t: TestContext, options: FixtureOptions = {}) {
   };
   await service.ensureSource(source);
   const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {
-    closeSource: async () => { observations.sourceCloses++; },
+    closeSource: async (_id: string, afterClose?: () => Promise<void>) => { observations.sourceCloses++; await afterClose?.(); },
   } as unknown as TerminalManager, {
     openDownload: (ticket, session) => service.open(ticket, session),
     prepareDownload: (ticket, session, context) => service.prepare(ticket, session, context),

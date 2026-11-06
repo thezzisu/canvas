@@ -53,6 +53,7 @@ export class CompletionReads {
     for (const id of this.windows.get(source.id)?.keys() || []) if (!present.has(id)) this.removeWindow(source, id)
     const record = this.record(source, state.bootId)
     if (record) {
+      // Panes can move between windows; only a full source snapshot proves removal.
       const panes = new Set(windows.flatMap(window => window.panes.map(pane => pane.id)))
       const removed = Object.keys(record.completed).filter(id => !panes.has(id))
       if (removed.length) {
@@ -89,15 +90,7 @@ export class CompletionReads {
     if (changed) this.store.put(kind, record!)
     metadata = this.project(source, metadata)
     windows.set(metadata.id, metadata); this.windows.set(source.id, windows)
-    if (old && record && record.bootId === metadata.bootId) {
-      const present = new Set(metadata.panes.map(pane => pane.id))
-      const removed = old.panes.filter(pane => !present.has(pane.id)).map(pane => pane.id)
-      if (removed.some(id => Object.hasOwn(record.completed, id))) {
-        for (const id of removed) { delete record.read[id]; delete record.completed[id] }
-        this.store.put(kind, record)
-      }
-    }
-    return this.project(source, metadata)
+    return metadata
   }
   project(source: Source, metadata: WindowMetadata): WindowMetadata {
     if (metadata.readAuthority === 'native') return metadata
@@ -132,14 +125,7 @@ export class CompletionReads {
     return true
   }
   removeWindow(source: Source, windowId: string) {
-    const windows = this.windows.get(source.id), window = windows?.get(windowId)
-    if (!window) return
-    windows!.delete(windowId)
-    const record = window.bootId && this.record(source, window.bootId)
-    if (record && window.panes.some(pane => Object.hasOwn(record.completed, pane.id))) {
-      for (const pane of window.panes) { delete record.read[pane.id]; delete record.completed[pane.id] }
-      this.store.put(kind, record)
-    }
+    this.windows.get(source.id)?.delete(windowId)
   }
   disconnected(sourceId: string) {
     this.windows.delete(sourceId); this.connections.delete(sourceId); this.snapshots.delete(sourceId)

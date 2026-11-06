@@ -503,20 +503,25 @@ export function createApp(
       id,
     });
     runtimes.validateSource({ ...s, id });
+    let updated = s;
     if (sourceConnectionKey({ ...s, id }) !== sourceConnectionKey(previous)) {
-      await terminals.closeSource(id);
-      await options.closeOpenBridge?.(id);
-      await runtimes.closeRuntimeConnections(id);
-    }
-    return c.json(store.put("source", s));
+      await terminals.closeSource(id, async () => {
+        await options.closeOpenBridge?.(id);
+        await runtimes.closeRuntimeConnections(id);
+        // A name-only edit may have completed while the old connection closed.
+        updated = store.put("source", sourceSchema.parse({ ...source(id), ...patch, id }));
+      });
+    } else updated = store.put("source", s);
+    return c.json(updated);
   });
   app.delete("/api/sources/:id", async (c) => {
     const id = c.req.param("id");
     source(id);
-    await terminals.closeSource(id);
-    await options.closeOpenBridge?.(id);
-    await runtimes.closeRuntimeConnections(id);
-    store.remove("source", id);
+    await terminals.closeSource(id, async () => {
+      await options.closeOpenBridge?.(id);
+      await runtimes.closeRuntimeConnections(id);
+      store.remove("source", id);
+    });
     return c.json({ ok: true });
   });
   app.post("/api/canvases", async (c) => {

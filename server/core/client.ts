@@ -173,41 +173,41 @@ class CoreWindowClient implements HerdrClientTransport {
 
   private async replace(state: CoreSnapshot, nativeSnapshot = false): Promise<void> {
     if (this.closed) return
+    if (!nativeSnapshot && this.state?.coreId === state.coreId && state !== this.state) state = { ...state, terminals: this.state.terminals }
+    const ended: Array<{ id: string; terminal: string }> = []
+    const tabs = state === this.state ? [] : state.spaces.flatMap(space => space.tabs).filter(tab => !tab.synthetic)
+    for (const tab of tabs) {
+      for (const pane of panes(tab)) {
+        if (!pane.terminal) continue
+        const terminal = state.terminals.find(item => item.address === pane.terminal)
+        if (terminal?.state === 'finished' && ['exited', 'killed'].includes(String(terminal.reason))) ended.push({ id: pane.id, terminal: pane.terminal })
+        else if (!terminal) {
+          // Missing from a snapshot is not an exit: layout and native facts
+          // have separate waterlines. Ask only whether the record is closed.
+          try {
+            const result = await this.options.rpc.call('terminal.get', { terminal: pane.terminal })
+            const record = result.terminal && typeof result.terminal === 'object' ? result.terminal as Record<string, unknown> : result
+            if (['exited', 'killed'].includes(String(record.reason))) ended.push({ id: pane.id, terminal: pane.terminal })
+          } catch (error) {
+            if (error instanceof CoreRpcError && error.kind === 'not_found') ended.push({ id: pane.id, terminal: pane.terminal })
+          }
+        }
+      }
+    }
+    if (ended.length) {
+      await this.options.layout.reconcileClosedPanes(ended, () => !this.closed)
+      state = await this.options.layout.snapshot(state.terminals)
+    }
+    if (this.closed) return
+    // Queries above may finish after a newer document action. Merge at commit,
+    // not before awaiting them; only sequenced snapshots replace native facts.
     if (this.state?.coreId === state.coreId && state !== this.state) {
-      // Document requests/actions may resolve around newer native events. Only
-      // sequenced snapshots may replace terminals; document versions own layout.
       const terminals = nativeSnapshot ? state.terminals : this.state.terminals
       state = projectCoreSnapshot({ ...(state.documentVersion < this.state.documentVersion ? this.state : state), terminals })
     }
     let tab: CoreTab
     try { tab = this.options.layout.findWindow(state, this.options.spaceId, this.options.tabId) }
     catch { this.finish({ exitCode: 0, reason: 'removed' }); return }
-    if (!tab.synthetic) {
-      const ended: Array<{ id: string; terminal: string }> = []
-      for (const pane of panes(tab)) {
-        if (!pane.terminal) continue
-        const terminal = state.terminals.find(item => item.address === pane.terminal)
-        if (terminal?.state === 'finished') ended.push({ id: pane.id, terminal: pane.terminal })
-        else if (!terminal) {
-          // The layout and subscription snapshots have separate waterlines. A
-          // missing record alone cannot prove that a newly placed pane exited.
-          try {
-            const result = await this.options.rpc.call('terminal.get', { terminal: pane.terminal })
-            const record = result.terminal && typeof result.terminal === 'object' ? result.terminal as Record<string, unknown> : result
-            if (record.state === 'finished') ended.push({ id: pane.id, terminal: pane.terminal })
-          } catch (error) {
-            if (error instanceof CoreRpcError && error.kind === 'not_found') ended.push({ id: pane.id, terminal: pane.terminal })
-          }
-        }
-      }
-      if (ended.length) {
-        await this.options.layout.reconcileClosedPanes(this.options.spaceId, this.options.tabId, ended, () => !this.closed)
-        state = await this.options.layout.snapshot(state.terminals)
-        try { tab = this.options.layout.findWindow(state, this.options.spaceId, this.options.tabId) }
-        catch { this.finish({ exitCode: 0, reason: 'removed' }); return }
-      }
-    }
-    if (this.closed) return
     this.state = state; this.tab = tab
     const projected = projectTab(tab, this.cols, this.rows, this.zoomed)
     const ids = new Set(projected.panes.filter(pane => pane.terminal).map(pane => pane.id))
@@ -216,11 +216,19 @@ class CoreWindowClient implements HerdrClientTransport {
     }
     if (!projected.panes.some(pane => pane.id === this.focused)) this.focused = projected.panes.find(pane => pane.terminal)?.id || projected.panes[0]?.id
     await Promise.all(projected.panes.map(async projected => {
-      if (!projected.terminal || this.attached.has(projected.id)) return
+      if (!projected.terminal) return
       const terminal = state.terminals.find(terminal => terminal.address === projected.terminal)
+      const available = terminal?.state === 'live' && !(terminal.reason && !terminal.pid)
+      const previous = this.attached.get(projected.id)
+      if (previous) {
+        // Fresh native facts recover ended streams and initial waiting panes in
+        // the same way, even when the restarted event was missed.
+        if (!nativeSnapshot || previous.stream || !previous.ready || !available) return
+        this.disposePane(previous); this.attached.delete(previous.id)
+      }
       const pane = this.makePane(projected.id, projected.terminal, projected.rect.width, projected.rect.height)
       this.attached.set(pane.id, pane)
-      if (terminal?.state !== 'live' || terminal.reason && !terminal.pid) {
+      if (!available) {
         await new Promise<void>(resolve => pane.emulator.write(terminal?.state === 'live' ? '[Waiting for terminal recovery]' : '[Terminal finished]', resolve))
         pane.ready = true; pane.painted(); return
       }
@@ -243,8 +251,7 @@ class CoreWindowClient implements HerdrClientTransport {
           pane.stream = undefined; pane.ready = true; pane.painted()
           if (!this.closed && !pane.disposed) void this.refresh(async () => {
             if (!pane.disposed && ['exited', 'killed', 'finished'].includes(String(reason?.reason))) {
-              await this.options.layout.reconcileClosedPanes(this.options.spaceId, this.options.tabId,
-                [{ id: pane.id, terminal: pane.address }], () => !this.closed)
+              await this.options.layout.reconcileClosedPanes([{ id: pane.id, terminal: pane.address }], () => !this.closed)
             }
             return this.options.layout.snapshot(this.state?.terminals)
           })
@@ -362,7 +369,7 @@ class CoreWindowClient implements HerdrClientTransport {
         if (update.address !== address) throw new Error('Invalid core terminal event')
         if (index < 0) terminals.push(update as CoreTerminal)
         else terminals[index] = update as CoreTerminal
-        for (const [id, pane] of this.attached) if (pane.address === address && (type === 'restarted' || !pane.stream)) {
+        for (const [id, pane] of this.attached) if (pane.address === address && type === 'restarted') {
           this.disposePane(pane); this.attached.delete(id)
         }
       } else if (index >= 0) {
@@ -544,6 +551,7 @@ class CoreWindowClient implements HerdrClientTransport {
     if ('ClientShellPaneInput' in message) {
       const input = message.ClientShellPaneInput, pane = this.attached.get(input.pane_id)
       if (!pane?.stream) return
+      const scrolled = pane.scroll !== 0
       pane.scroll = 0
       pane.modes.applicationCursor = pane.emulator.modes.applicationCursorKeysMode
       pane.modes.bracketedPaste = pane.emulator.modes.bracketedPasteMode
@@ -555,6 +563,7 @@ class CoreWindowClient implements HerdrClientTransport {
         }
         const bytes = coreInput(event, pane.modes); if (bytes.length) pane.stream.write(bytes)
       }
+      if (scrolled) this.render()
     } else if ('ClientShellFocus' in message) this.attached.get(this.focused || '')?.stream?.focus(message.ClientShellFocus.focused)
   }
 
@@ -593,7 +602,7 @@ class CoreWindowClient implements HerdrClientTransport {
     if ((end.row - start.row + 1) * pane.emulator.cols > 1_000_000) throw new Error('Selection is too large')
     const rendered = this.renderedContent, rect = rendered?.surface.panes.find(item => item.pane_id === pane.id)?.inner_rect
     const top = Math.max(0, pane.emulator.buffer.active.baseY - pane.scroll), owner = (rendered?.layers.indexOf(pane.id) ?? -1) + 1
-    let text = ''
+    const lines: string[] = []
     for (let row = start.row; row <= end.row; row++) {
       const line = pane.emulator.buffer.active.getLine(row)
       let part = ''
@@ -606,10 +615,10 @@ class CoreWindowClient implements HerdrClientTransport {
         }
         part += covered || cell?.isInvisible() ? ' '.repeat(cell?.getWidth() || 1) : cell?.getChars() || ' '
       }
-      if (row > start.row && !line?.isWrapped) text += '\n'
-      text += part.trimEnd()
+      if (row === start.row || !line?.isWrapped) lines.push(part)
+      else lines[lines.length - 1] += part
     }
-    return text
+    return lines.map(line => line.replace(/ +$/u, '')).join('\n')
   }
 
   async content(): Promise<NativeContentPane[] | undefined> {
