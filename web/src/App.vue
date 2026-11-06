@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, shallowRef, watch } from 'vue'
 import { VueFlow, useVueFlow, type Node, type NodeChange, type NodePositionChange, type NodeMouseEvent } from '@vue-flow/core'
-import { useMediaQuery, useLocalStorage, useTitle, watchDebounced } from '@vueuse/core'
+import { useMediaQuery, useLocalStorage, useMousePressed, useEventListener, useTimeoutFn, useTitle, watchDebounced } from '@vueuse/core'
 import CanvasMiniMap from './components/CanvasMiniMap.vue'
 import UApp from '@nuxt/ui/components/App.vue'
 import UTheme from '@nuxt/ui/components/Theme.vue'
@@ -96,7 +96,7 @@ import { developerMode } from './developer-mode'
 import { useScreenWakeLock } from './screen-wake-lock'
 import { canvasFrame, preserveCanvasCenter, useMobileViewport, type CanvasFrame } from './viewport'
 import { noteColor, statusColor, statusLabel } from './status'
-import { overviewResources, overviewFocusStatuses, overviewLayoutKey, overviewStatuses, type OverviewInteraction, type OverviewOrder } from './overview'
+import { overviewResources, overviewFocusStatuses, overviewStatuses, type OverviewInteraction, type OverviewOrder } from './overview'
 import { adjacentPage, pageViewport, retainPage, type OverviewPage, type PageDirection } from './overview-paging'
 import type { ProgramStatus } from '../../shared/status'
 import { insertNoteContent } from './note-document'
@@ -146,11 +146,10 @@ const { order: sidebarOrder, remember: rememberSidebarOrder } = useSidebarOrder(
 }, showError)
 const sources = ref<Source[]>([])
 const orderedSources = computed(() => orderedItems(sources.value, sidebarOrder.value.sources))
-const overviewSourceOrder = shallowRef<string[]>([])
 const polledResources = ref<SourceResource[]>([])
 const rawResources = computed(() => mergeLiveResources(polledResources.value, liveTerminalMetadata.value))
 const focusedStatus = computed<FocusedStatus | undefined>(previous => focusedCompletionStatus(rawResources.value, terminalReadFocus.value, previous))
-const resources = computed(() => orderedItems(projectFocusedResources(rawResources.value, focusedStatus.value), overviewSourceOrder.value))
+const resources = computed(() => orderedItems(projectFocusedResources(rawResources.value, focusedStatus.value), sidebarOrder.value.sources))
 const resourcesFresh = ref(false)
 const resourcesLoaded = ref(false)
 const loadFailure = shallowRef<unknown>()
@@ -387,7 +386,6 @@ const pages = computed<OverviewPage[]>(() => nodes.value.filter(node => node.typ
   id: node.type === 'terminal' ? `${node.data.sourceId}/${node.data.windowId}` : node.id, row: node.data.spaceId ? `${node.data.sourceId}/${node.data.spaceId}` : node.id,
   ...node.position, width: node.data.width, height: node.data.height,
 })))
-const pageLayout = computed(() => paging.value ? JSON.stringify(pages.value) : '')
 const pageDirections = computed(() => [
   { direction: 'left', key: 'ArrowLeft', label: t('app.previousWindow'), icon: 'chevron', rotation: 'rotate(180deg)' },
   { direction: 'up', key: 'ArrowUp', label: t('app.previousSpace'), icon: 'down', rotation: 'rotate(180deg)' },
@@ -643,10 +641,21 @@ const { surface: graphSurface, app: appElement, fullscreen: canvasFullscreen, re
   beforeFullscreen: () => { clearFitContext(); sourcePanel.value = false; sidebarOpen.value = false; canvasMenu.value = false },
 })
 const sidebarDrawer = computed(() => mobile.value || narrowNavigation.value || canvasFullscreen.value)
-useOrderTransition(overviewSourceOrder, {
-  order: () => orderedSources.value.map(source => source.id),
-  active: () => isOverview.value && pageVisible.value && !hasFocus.value && !navigation.requested.value,
-  instance: () => apiRevision.value, reduced: () => reducedMotion.value, host: () => graphSurface.value,
+const { pressed: overviewPointerDown } = useMousePressed({ target: graphSurface, capture: true })
+const { isPending: overviewWheelActive, start: overviewWheel } = useTimeoutFn(() => {}, 200, { immediate: false })
+// Keep a short quiet period through wheel tails and toolbar zoom animations.
+useEventListener(graphSurface, ['wheel', 'pointerup', 'keyup'], () => overviewWheel(), { passive: true, capture: true })
+const overviewMotion = useOrderTransition<Node>({
+  current: () => nodes.value, target: overviewNodes, commit: commitNodes, refresh: refreshNodeData,
+  enabled: () => isOverview.value && resourcesLoaded.value,
+  active: () => isOverview.value && pageVisible.value && !hasFocus.value && !navigation.requested.value && canvasPresented,
+  blocked: () => overviewPointerDown.value || overviewWheelActive.value || !!activeElement.value?.closest('.card-content'),
+  scope: () => `${apiRevision.value}/${activeId.value}`, reduced: () => reducedMotion.value, host: () => graphSurface.value,
+  settled: async manual => {
+    if (hasFocus.value || navigation.requested.value) return
+    if (paging.value) await fitPage()
+    else if (manual && nodes.value.length) { preferredPageX.value = undefined; await fitView({ padding: .14, maxZoom: 1, duration: 0 }) }
+  },
 })
 const currentBackground = computed(() => isOverview.value ? overviewBackground.value : currentCanvas.value?.background)
 const { url: backgroundUrl, material: backgroundMaterial } = useBackgroundUrl(() => currentBackground.value?.url, { material: true })
@@ -752,7 +761,7 @@ function overviewCreateNode(source: SourceResource, spaceId: string | undefined,
 function overviewNodes(): Node[] {
   const result: Node[] = []
   let y = 0
-  for (const config of orderedItems(sources.value, overviewSourceOrder.value)) {
+  for (const config of orderedItems(sources.value, sidebarOrder.value.sources)) {
     const source = resources.value.find(item => item.id === config.id)
     if (!source) continue
     const visible = visibleOverview.value.find(item => item.id === config.id)
@@ -809,11 +818,20 @@ function announceNodeMove(changes: NodeChange[]) {
   const name = node?.type === 'terminal' ? node.data.name : node?.type === 'note' ? node.data.title || t('app.note') : node?.data.asset?.filename || t('app.card')
   ariaLiveMessage.value = t('app.cardMoved', { name, x: n(Math.round(change.position.x)), y: n(Math.round(change.position.y)) })
 }
-function rebuildNodes() {
-  if (!resourcesLoaded.value) return
+function commitNodes(next: Node[]) {
   const previous = new Map(nodes.value.map(node => [node.id, node as Node & { selected?: boolean }]))
-  setNodes((isOverview.value ? overviewNodes() : (currentCanvas.value?.nodes || []).map(flowNode)).map(node => accessibleNode({ ...node, selected: previous.get(node.id)?.selected,
+  setNodes(next.map(node => accessibleNode({ ...node, selected: previous.get(node.id)?.selected,
     ...(morphAnchor(node) ? { class: 'canvas-morph-anchor' } : {}) })))
+}
+function refreshNodeData(next: Node[]) {
+  const updated = new Map(next.map(node => [node.id, node.data]))
+  setNodes(nodes.value.map(node => ({ ...node, data: updated.has(node.id)
+    ? { ...updated.get(node.id), width: node.data.width, height: node.data.height } : node.data })))
+}
+function rebuildNodes(change: 'auto' | 'order' | 'manual' = 'auto') {
+  if (!resourcesLoaded.value) return
+  if (isOverview.value) overviewMotion.request(change)
+  else commitNodes((currentCanvas.value?.nodes || []).map(flowNode))
 }
 function applySettings(value: GlobalSettings) {
   settings.value = value
@@ -1098,7 +1116,7 @@ function saveViewport() {
   navigation.save(currentLocation())
 }
 
-watch(resources, (next, previous) => {
+watch(resources, next => {
   if (!authenticated.value) return
   if (focused.value && liveTerminalMetadata.value.get(`${focused.value.sourceId}/${focused.value.windowId}`) === null) void closeFocus()
   const signature = JSON.stringify(next)
@@ -1107,15 +1125,12 @@ watch(resources, (next, previous) => {
     const config = sources.value.find(item => item.id === source.id)
     return [source.id, config?.transport, config?.target, source.spaces.map(space => [space.id, space.windows.map(window => window.id)])]
   }))
-  const overviewChanged = isOverview.value && overviewLayoutKey(overviewResources(previous, overviewSelected.value, overviewOrder.value, overviewInteraction.value))
-    !== overviewLayoutKey(overviewResources(next, overviewSelected.value, overviewOrder.value, overviewInteraction.value))
   resourceSignature = signature
-  if (layoutSignature !== resourceLayoutSignature || overviewChanged) { if (!layoutGesture) rebuildNodes() }
-  else {
-    // Status updates preserve the current drag, selection and card geometry.
-    const updated = new Map((isOverview.value ? overviewNodes() : (currentCanvas.value?.nodes || []).map(flowNode)).map(node => [node.id, node.data]))
-    setNodes(nodes.value.map(node => ({ ...node, data: updated.get(node.id) || node.data })))
-  }
+  if (isOverview.value) {
+    if (!layoutGesture) rebuildNodes(layoutSignature !== resourceLayoutSignature ? 'order' : 'auto')
+  } else if (layoutSignature !== resourceLayoutSignature) {
+    if (!layoutGesture) rebuildNodes()
+  } else refreshNodeData((currentCanvas.value?.nodes || []).map(flowNode))
   resourceLayoutSignature = layoutSignature
 })
 
@@ -1325,9 +1340,9 @@ watch(unknownInstance, async value => {
 watch(freshStatuses, () => {
   setNodes(nodes.value.map(node => node.type === 'terminal' ? { ...node, data: terminalData(node.data, isOverview.value) } : node))
 })
-watch(pageLayout, async () => { if (paging.value) { await nextTick(); await fitPage() } })
+
 watch(overviewInteraction, value => { if (value) lastOverviewInteraction = value; if (isOverview.value) rebuildNodes() })
-watch([overviewSelected, overviewOrder], async () => { preferredPageX.value = undefined; if (isOverview.value) { rebuildNodes(); await nextTick(); if (paging.value) await fitPage(); else void fitView({ padding: .14, maxZoom: 1, duration: reducedMotion.value ? 0 : 150 }) } })
+watch([overviewSelected, overviewOrder], () => { if (isOverview.value) rebuildNodes('manual') })
 watch(activeId, async () => { if (!authenticated.value) return; scanTarget.value = null; preferredPageX.value = undefined; cancelCreatedReveal(); lastOverviewInteraction = undefined; overviewMenuOpen.value = false; layoutGesture = ''; resizingCard = undefined; focused.value = null; focusedCardId.value = ''; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
 function switchCanvas(id: string, target?: CanvasTarget) {
   if (notificationReveal.value?.canvasId !== id) cancelNotificationReveal()
@@ -2291,6 +2306,7 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
         <span id="canvas-card-select-help" hidden>{{ t('app.cardSelectHelp') }}</span>
         <span id="canvas-card-move-help" hidden>{{ t('app.cardMoveHelp') }}</span>
         <div v-if="layoutEditing" class="layout-edit-bar" role="toolbar" :aria-label="t('app.layoutEdit')"><span>{{ t('app.layoutEdit') }}</span><span v-if="layoutError" role="alert">{{ layoutError }}</span><button type="button" class="button subtle" :disabled="layoutBusy" @click="discardLayout">{{ t('common.cancel') }}</button><button type="button" class="button primary" :disabled="layoutBusy" @click="applyLayout">{{ t(layoutBusy ? 'app.saving' : 'app.layoutApply') }}</button></div>
+        <div class="canvas-layout-layer" style="position:absolute;inset:0">
         <VueFlow :style="{ '--card-resize-hit': `${8 / Math.min(getViewport().zoom, 1)}px` }" :snap-to-grid="false" :apply-default="false" v-if="contentFontReady && nodes.length && !hasFocus" :key="graphKey" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && (!mobile || layoutEditing)" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @pane-click="layoutSelected = ''" @node-drag-start="layoutStarted" @node-drag="snapDraggedCards" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized" @nodes-change="changeNodes"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><template #node-create="nodeProps"><OverviewCreateNode v-bind="nodeProps" /></template><CanvasMiniMap v-if="showMinimap" :aria-label="t('app.windowNavigation')" @node-click="navigateMinimap" :node-class-name="node => node.type === 'terminal' ? `minimap-card minimap-window${node.data.statusFresh && needsAttention(node.data.status) ? ' minimap-pulse' : ''}${paging && currentPage?.id === `${node.data.sourceId}/${node.data.windowId}` ? ' minimap-current' : ''}` : node.type === 'note' || node.type === 'file' ? 'minimap-card' : 'minimap-decoration'" :pannable="!paging" :zoomable="!mobile && !paging" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? noteColor(node.data.color) : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
         <div v-if="workspacePending || !contentFontReady && (nodes.length || hasFocus) || !nodes.length && undiscoveredSources.length" class="workspace-status" :class="loadFailure ? 'workspace-error' : 'workspace-loading'" role="status">
           <template v-if="loadFailure"><span :title="loadFailure instanceof Error ? loadFailure.message : undefined">{{ t('app.loadFailed') }}</span><button class="button subtle" @click="load">{{ t('common.retry') }}</button></template>
@@ -2298,6 +2314,7 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
         </div>
         <div v-else-if="!nodes.length && isOverview" class="empty-state"><Icon name="server" :size="32" /><h2>{{ windowCount && overviewFiltered ? t('app.noMatchingWindows') : sources.length ? t('app.noWindows') : t('app.noConnections') }}</h2><button v-if="windowCount && overviewFiltered" class="button subtle" @click="overviewSelected = [...overviewStatuses]">{{ t('app.clearFilters') }}</button><button v-else class="button primary" @click="sources.length ? sourcePanel = true : openSource()"><Icon :name="sources.length ? 'server' : 'plus'" :size="17" />{{ sources.length ? t('app.connections') : t('app.addConnection') }}</button></div>
         <div v-else-if="!nodes.length && !isOverview" class="empty-state"><Icon name="canvas" :size="32" /><h2>{{ t('app.emptyCanvas') }}</h2><button class="button primary" @click="openAdd()"><Icon name="layers" :size="17" />{{ t('app.addWindows') }}</button></div>
+        </div>
         <button v-if="canvasFullscreen && !showNavigation && !focused" class="icon-button canvas-fullscreen-exit" :title="t('app.exitFullscreen')" :aria-label="t('app.exitFullscreen')" @click="exitFullscreen"><Icon name="collapse" :size="19" /></button>
         <div v-if="!workspacePending && showNavigation && !focused && !layoutEditing" ref="fitToolbar" class="canvas-toolbar"><button v-if="canvasFullscreen" :title="t('app.openCanvasList')" :aria-label="t('app.openCanvasList')" aria-controls="canvas-sidebar" :aria-expanded="sidebarOpen" @click="sidebarOpen = !sidebarOpen"><Icon name="menu" :size="17" /></button><button :title="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-label="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')" :aria-pressed="canvasFullscreen" @click="toggleFullscreen"><Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button><button v-if="isOverview" :title="t('app.pagedBrowsing')" :aria-label="t('app.pagedBrowsing')" :aria-pressed="overviewPaged" @click="togglePaging"><Icon name="pages" :size="17" /></button><button v-if="!isOverview" :title="t('app.snapToGrid')" :aria-label="t('app.snapToGrid')" :aria-pressed="!!currentCanvas?.snapToGrid" @click="toggleSnap"><Icon name="grid" :size="15" /></button><template v-if="paging"><button v-for="item in pageDirections" :key="item.direction" :title="item.label" :aria-label="item.label" :disabled="!pageNeighbor(item.direction)" @pointerdown.prevent @click="movePage(item.direction)"><Icon :name="item.icon" :size="16" :style="{ transform: item.rotation }" /></button></template><button v-if="!paging" :title="t('app.zoomOut')" :aria-label="t('app.zoomOut')" @click="clearFitContext(); zoomOut({ duration: reducedMotion ? 0 : 150 })"><Icon name="minus" :size="17" /></button><button class="canvas-fit" :disabled="!nodes.length" data-preserve-content-focus :title="t(paging ? 'app.centerWindow' : fitFocusedCard ? 'app.fitWindow' : 'app.fitCanvas')" :aria-label="t(paging ? 'app.centerWindow' : fitFocusedCard ? 'app.fitWindow' : 'app.fitCanvas')" @pointerdown.prevent @click="fitViewport"><Icon :name="fitFocusedCard ? 'fit-window' : 'fit'" :size="17" /></button><button v-if="!paging" :title="t('app.zoomIn')" :aria-label="t('app.zoomIn')" @click="clearFitContext(); zoomIn({ duration: reducedMotion ? 0 : 150 })"><Icon name="plus" :size="17" /></button></div>
       </div>
