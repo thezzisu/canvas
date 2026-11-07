@@ -128,8 +128,12 @@ function reconcile() {
     if (item.expires <= now || item.focus && !samePane(item.focus, props.focus)) { pending.delete(key); continue }
     const target = notificationTarget(item.event, props.resources)
     if (target && notificationCurrent(item.event, props.resources)) {
-      // Start the brief stability window only after the event matches live state.
-      item.notBefore ??= now + (item.event.kind === 'done' ? 250 : 0)
+      // A tool boundary can look completed briefly. Wait for stable completion,
+      // starting when live state matches, even if that state arrived late.
+      if (item.notBefore === undefined) {
+        item.notBefore = now + (item.event.kind === 'done' ? 1000 : 0)
+        item.expires = now + 3000
+      }
       if (now < item.notBefore) continue
       if (item.focus && item.event.completion && !sameCompletion(item.event.completion, props.focus?.painted)) continue
       pending.delete(key); show({ ...item.event, windowId: target.window.id, spaceId: target.space.id }, item.focus)
