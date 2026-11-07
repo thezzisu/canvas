@@ -13,7 +13,7 @@ test('instance retirement clears every owned view without touching auth, browser
   const retired = ['canvas:last-canvas:a', 'canvas:view:a:one', 'canvas:view:a:one:free', 'canvas:overview:a:order',
     'canvas:overview:a:statuses', 'canvas:file-mode:a:file', 'canvas:file-view:a:one:file', 'canvas:note-scroll:a:one:note', 'canvas:card-zoom:a:note', 'canvas:capture-view:a:source/window',
     ...['terminal-settings', 'terminal-zoom', 'window-canvas'].map(kind => `canvas:${kind}:${terminalIdentityKey('a', source, 'tab')}`)]
-  const retained = ['canvas:language', 'canvas:session:a', 'canvas:view:navigation', 'canvas:view:b:one', 'canvas:file-mode:ab:file',
+  const retained = ['canvas:language', 'canvas:session:a', 'canvas:view:navigation', 'canvas:view:auto-yield-controls', 'canvas:view:b:one', 'canvas:file-mode:ab:file',
     'canvas:last-canvas:b', 'canvas:notifications:delivered:a', `canvas:terminal-settings:${terminalIdentityKey('b', source, 'tab')}`]
   for (const key of [...retired, ...retained]) saved.setItem(key, 'value')
   clearInstancePreferences('a', saved)
@@ -36,7 +36,7 @@ test('blocked storage does not prevent instance or canvas retirement', () => {
 })
 test('unregistered preference namespaces are retired without touching sessions or unrelated browser data', () => {
   const saved = storage(), source = { id: 's', name: 'Source', transport: 'local' as const }
-  const keep = ['canvas:view:minimap', 'canvas:view:navigation', 'canvas:session:old-boot', 'canvas:notifications:delivered:old-boot',
+  const keep = ['canvas:view:minimap', 'canvas:view:navigation', 'canvas:view:auto-yield-controls', 'canvas:session:old-boot', 'canvas:notifications:delivered:old-boot',
     'unrelated', 'canvas:language', 'canvas:instances', 'canvas:card-zoom:a:note', `canvas:terminal-zoom:${terminalIdentityKey('a', source, 'tab')}`]
   const retire = ['canvas:card-zoom:old-boot:note', 'canvas:note-scroll:old-boot:c:note', 'canvas:capture-hidden:expired-lease',
     'canvas:overview:statuses', 'canvas:overview:order', 'canvas:last-canvas:removed', `canvas:terminal-settings:${terminalIdentityKey('old-boot', source, 'tab')}`]

@@ -1,6 +1,6 @@
 const objectPrefixes = ['canvas:view:', 'canvas:overview:', 'canvas:file-mode:', 'canvas:file-view:', 'canvas:note-scroll:', 'canvas:card-zoom:', 'canvas:capture-view:']
 const terminalPrefixes = ['canvas:terminal-settings:', 'canvas:terminal-zoom:', 'canvas:window-canvas:']
-const browserViews = new Set(['canvas:view:minimap', 'canvas:view:navigation'])
+const browserViews = new Set(['canvas:view:minimap', 'canvas:view:navigation', 'canvas:view:auto-yield-controls'])
 
 /** Storage cleanup is an explicit lifecycle operation, not another reactive mirror. */
 function removeWhere(matches: (key: string) => boolean, storage?: Storage) {
