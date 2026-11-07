@@ -28,9 +28,9 @@ export function captureRequestBase(request: IncomingMessage): URL {
   return new URL(normalizeCapturePublicBase(`${protocol}://${host}${proxyPrefix(request.headers['x-forwarded-prefix'])}/`))
 }
 
-/** The authenticated browser supplies its selected API base. Reverse proxies
- * may replace Host and terminate TLS, so transport headers cannot rebuild it.
- * This address is presentation metadata; the source target stays loopback.
+/** The authenticated browser supplies the startup command's selected API base.
+ * Later proxy requests use their own ingress headers through captureRequestBase.
+ * Both addresses are presentation metadata; the source target stays loopback.
  */
 export function captureAddress(url: URL, forwardedPrefix: string | string[] | undefined): string | undefined {
   const bases = url.searchParams.getAll('apiBase')

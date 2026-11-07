@@ -27,7 +27,7 @@ export default defineConfig({
       modal: {
         slots: { overlay: 'canvas-modal-overlay', content: 'canvas-modal-content' },
         compoundVariants: [{ scrollable: false, fullscreen: false, class: {
-          content: 'top-[calc(var(--dialog-top)+var(--dialog-height)/2)] max-h-[calc(var(--dialog-height)-2rem)] sm:max-h-[calc(var(--dialog-height)-4rem)]',
+          content: 'top-[calc(var(--dialog-top,0px)+var(--dialog-height,100dvh)/2)] max-h-[calc(var(--dialog-height,100dvh)-2rem)] sm:max-h-[calc(var(--dialog-height,100dvh)-4rem)]',
         } }],
       },
       toast: { slots: {

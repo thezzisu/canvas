@@ -107,7 +107,9 @@ apps must support the forwarded subpath.
 
 - An account grants terminal access to every connected machine. Expose Canvas
   only behind TLS, with WebSocket support and unbuffered uploads and SSE.
-- A subpath proxy must strip its prefix and send `X-Forwarded-Prefix`.
+- A subpath proxy must strip its prefix and send `X-Forwarded-Prefix` and
+  `X-Forwarded-Proto`. Preserve the public `Host`, or overwrite `X-Forwarded-Host`
+  with it, so captured apps and redirects use the current viewer's endpoint.
 - Back up the whole data directory, including the SQLite database and `files/`.
 - The frontend can be hosted separately: build it with
   `VITE_CANVAS_BUILTIN_SERVER=false npm run build:web` and add servers by URL.

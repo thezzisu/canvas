@@ -370,9 +370,10 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .capture-trust-prompt{position:absolute;inset:0;z-index:6;background:#1b1f26;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#a4afbe}
 .capture-toolbar{container:capture-toolbar / inline-size;flex:0 0 var(--capture-toolbar-height);display:flex;align-items:center;gap:4px;padding:0 8px;background:#252a33;color:#d5d7dd;font-size:12px}
 .capture-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.capture-error{color:#e4aaaa}
-.capture-toolbar :deep(.capture-action){flex:none;white-space:nowrap}.capture-toolbar :deep(.capture-action-icon:not(.animate-spin)){display:none}
+.capture-toolbar :deep(.capture-action){flex:none;white-space:nowrap}
 .capture-body{position:absolute;z-index:5;inset:0;background:#fff;outline:none}.capture-host,.capture-body :deep(.capture-frame){display:block;width:100%;height:100%;border:0}
 .capture-activate{position:absolute;inset:0;cursor:pointer;outline:none}
 .terminal-mobile.focused .capture-toolbar{flex-basis:44px}.terminal-mobile.focused .capture-toolbar :deep(.capture-action){min-width:44px;min-height:44px;justify-content:center}
-@container capture-toolbar (max-width:420px){.capture-toolbar :deep(.capture-action-icon){display:block}.capture-toolbar :deep(.capture-action-label){display:none}}
+@container capture-toolbar (width > 420px){.capture-toolbar :deep(.capture-action-icon:not(.animate-spin)){display:none}}
+@container capture-toolbar (width <= 420px){.capture-toolbar :deep(.capture-action-label){display:none}}
 </style>
