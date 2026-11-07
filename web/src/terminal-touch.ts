@@ -65,8 +65,12 @@ export function bindTerminalTouch(surface: HTMLElement, term: Terminal, options:
     if (!lines) return
     gesture.remainder -= lines * lineHeight
     if (term.modes.mouseTrackingMode !== 'none' || term.buffer.active.type === 'alternate') {
-      term.element?.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true,
-        clientX: touch.clientX, clientY: touch.clientY, deltaY: lines * lineHeight, deltaMode: 0 }))
+      // Already quantized: avoid xterm's pixel-wheel attenuation. It reports
+      // one native wheel step per event, matching the touchpad's bounded steps.
+      for (let i = 0; i < Math.min(15, Math.abs(lines)); i++) {
+        term.element?.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true,
+          clientX: touch.clientX, clientY: touch.clientY, deltaY: Math.sign(lines), deltaMode: WheelEvent.DOM_DELTA_LINE }))
+      }
     } else term.scrollLines(lines)
   }
   const end = (event: TouchEvent) => {

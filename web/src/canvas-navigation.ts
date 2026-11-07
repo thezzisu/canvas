@@ -246,7 +246,7 @@ export function useCanvasNavigation(options: {
     options.onNavigate?.()
     const current = options.getViewport()
     if (event.ctrlKey) {
-      const zoom = Math.max(.08, Math.min(2, current.zoom * 2 ** (-event.deltaY * unit * .02)))
+      const zoom = Math.max(.08, Math.min(2, current.zoom * 2 ** (-event.deltaY * unit * .002)))
       const scale = zoom / current.zoom
       const x = event.clientX - box.left, y = event.clientY - box.top
       void options.setViewport({ zoom, x: x - (x - current.x) * scale, y: y - (y - current.y) * scale })
