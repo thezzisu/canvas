@@ -272,6 +272,7 @@ test('capture explains known preparation limits without starting the command or 
     ['capture-address-unavailable', /API address; reload Canvas/u],
     ['capture-invalid-request', /CLI and server together/u],
     ['capture-limit', /32 captured applications.*stop one/u],
+    ['capture-already-active', /this window already has a captured application; stop it before starting another/u],
     ['capture-stopping', /server is stopping; reconnect after it restarts/u],
     ['capture-sign-in', /session has expired; sign in again/u],
     ['capture-connection-changed', /connection changed; reconnect/u],

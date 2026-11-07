@@ -12,6 +12,7 @@ import { terminalUnicodeAddon } from "../shared/terminal-unicode.ts";
 import { terminalInputChunks } from "../web/src/terminal-input-chunks.ts";
 import { Store, sourceConnectionKey, type Canvas, type TerminalNode } from "./state.ts";
 import { CompletionReads } from "./completion-reads.ts";
+import { CaptureService } from './capture.ts';
 import { PASTE_SETTLE_QUIET_MS, TerminalManager } from "./terminals.ts";
 import { createSpace, createWindow, listResources, shellQuote, type Source } from "./runtimes.ts";
 import type { CanvasNotification } from "../shared/notification.ts";
@@ -39,7 +40,7 @@ async function waitFor(check: () => boolean | Promise<boolean>, label: string) {
   assert.fail(label);
 }
 
-async function fixture(t: TestContext, probe = false, quietProbe = false, completionReads = false) {
+async function fixture(t: TestContext, probe = false, quietProbe = false, completionReads = false, captureLifecycle = false) {
   const binary = process.env.CANVAS_TEST_HERDR_SERVER_BINARY;
   if (!binary) { t.skip("Set CANVAS_TEST_HERDR_SERVER_BINARY to an unmodified upstream server"); return; }
   const root = mkdtempSync(join(tmpdir(), "cv-terminal-"));
@@ -60,13 +61,18 @@ async function fixture(t: TestContext, probe = false, quietProbe = false, comple
   const source: Source = { id: root, name: "Fixture", transport: "local", herdrSession: session,
     herdrSocket: join(config, "herdr/sessions", session, "herdr.sock") };
   const server = spawn(binary, ["--session", session, "server"], { env, stdio: "ignore" });
-  const store = completionReads ? new Store(join(root, "canvas.db")) : undefined;
+  const store = completionReads || captureLifecycle ? new Store(join(root, "canvas.db")) : undefined;
   store?.put("source", source);
-  const reads = store ? new CompletionReads(store) : undefined;
+  const reads = completionReads && store ? new CompletionReads(store) : undefined;
+  const captures = captureLifecycle && store ? new CaptureService(store, {
+    onChange: (sourceId, windowId) => { void manager.captureChanged(sourceId, windowId); },
+  }) : undefined;
   let normalSize = { cols: 100, rows: 30 };
-  const manager = new TerminalManager(reads, (source, windowId) => store?.removeWindowReferences(source, [windowId]), () => normalSize);
+  const manager = new TerminalManager(reads, (source, windowId) => store?.removeWindowReferences(source, [windowId]), () => normalSize,
+    (sourceId, windowId) => captures?.current(sourceId, windowId) ?? null);
   const setNormalSize = (cols: number, rows: number) => { normalSize = { cols, rows }; manager.refreshNormalSizes(); };
   t.after(async () => {
+    await captures?.close();
     await manager.closeAll();
     try { execFileSync(binary, ["--session", session, "server", "stop"], { env, stdio: "ignore", timeout: 5000 }); } catch {}
     server.kill();
@@ -107,7 +113,7 @@ async function fixture(t: TestContext, probe = false, quietProbe = false, comple
     }, 'native notification API remained rate-limited');
     return result!;
   };
-  return { root, bytes, manager, store, reads, source, target, shellResult, assertSize, ready, text, reportAgent, notify, setNormalSize };
+  return { root, bytes, manager, store, reads, captures, source, target, shellResult, assertSize, ready, text, reportAgent, notify, setNormalSize };
 }
 
 test('geometry controls cannot overtake queued terminal output', async t => {
@@ -703,27 +709,33 @@ test('explicit native right and middle input preserve Unicode paste bytes withou
   assert.deepEqual(readFileSync(f.bytes), Buffer.concat([right, Buffer.from(pasted), middle]), 'middle input is one native press/release without a duplicate paste');
 });
 
-test('a captured application reaches every viewer of its native window, including later ones, until it ends', async t => {
-  const f = await fixture(t, true, true); if (!f) return;
-  const messages = (client: Client) => client.received.filter((item): item is string => typeof item === 'string').map(item => JSON.parse(item)).filter(item => item.type === 'capture' || item.type === 'capture-ended');
+test('capture snapshots survive native-client disposal and clear missed end events on reconnect', async t => {
+  const f = await fixture(t, true, true, false, true); if (!f) return;
+  f.store!.addSession('creator'); f.store!.addSession('peer');
+  const messages = (client: Client) => client.received.filter((item): item is string => typeof item === 'string').map(item => JSON.parse(item)).filter(item => item.type === 'capture');
   const first = new Client(), second = new Client(), late = new Client();
   await f.manager.connect(f.source, f.target, first.socket); await f.manager.connect(f.source, f.target, second.socket);
   await f.ready();
-  const capture = { type: 'capture' as const, id: 'c'.repeat(43), url: 'https://canvas.test/api/capture/' + 'c'.repeat(43) + '/', windowId: f.target.windowId, paneId: 'pane', title: 'App' };
-  await f.manager.publishCapture(f.source.id, f.target.windowId, capture);
-  await f.manager.publishCapture(f.source.id, 'other-window', { ...capture, id: 'o'.repeat(43) });
-  await waitFor(() => messages(first).length === 1 && messages(second).length === 1, 'existing viewers receive the capture');
-  assert.deepEqual(messages(first)[0], capture);
+  assert.deepEqual(messages(first), [{ type: 'capture', capture: null }], 'every connection starts with an explicit current state');
+  const lease = f.captures!.prepareCapture(f.source, { publicBase: 'https://canvas.test/', windowId: f.target.windowId,
+    paneId: 'pane', port: 12345, session: 'creator', title: 'App', onStop: () => lease.close() });
+  await lease.ready('http://127.0.0.1:12345/app?q=1#draft');
+  const capture = { type: 'capture', capture: f.captures!.current(f.source.id, f.target.windowId) };
+  await waitFor(() => messages(first).length === 2 && messages(second).length === 2, 'existing viewers receive the capture');
+  assert.deepEqual(messages(first).at(-1), capture);
   await f.manager.connect(f.source, f.target, late.socket);
   await waitFor(() => messages(late).length === 1, 'a late viewer receives the current capture');
-  await f.manager.publishCapture(f.source.id, f.target.windowId, { type: 'capture-ended', id: 'unknown'.padEnd(43, 'x') });
-  await f.manager.publishCapture(f.source.id, f.target.windowId, { type: 'capture-ended', id: capture.id });
-  await waitFor(() => [first, second, late].every(client => messages(client).at(-1)?.type === 'capture-ended'), 'every viewer learns the capture ended');
-  assert.equal(messages(first).length, 2, 'an unknown capture end is not broadcast');
-  const after = new Client();
-  await f.manager.connect(f.source, f.target, after.socket);
-  await new Promise(resolve => setTimeout(resolve, 100));
-  assert.deepEqual(messages(after), [], 'an ended capture is not replayed');
+  assert.deepEqual(messages(late)[0], capture);
+  const native = (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!;
+  first.close(); second.close(); late.close(); await native.close();
+  assert.equal(f.manager.entries.size, 0, 'the temporary native renderer has been disposed');
+  assert.equal(f.captures!.current(f.source.id, f.target.windowId)?.id, lease.id, 'capture lifetime is independent of viewers');
+  const resumed = new Client(); await f.manager.connect(f.source, f.target, resumed.socket);
+  assert.deepEqual(messages(resumed), [capture], 'a replacement native renderer replays the running capture');
+  resumed.close();
+  assert(f.captures!.stop(lease.id, 'peer'), 'another authenticated session can stop the shared app');
+  const after = new Client(); await f.manager.connect(f.source, f.target, after.socket);
+  assert.deepEqual(messages(after).at(-1), { type: 'capture', capture: null }, 'a viewer that missed closure receives authoritative absence');
 });
 
 test('keyboard input typed during a paced attachment paste follows the complete paste', async t => {

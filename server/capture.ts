@@ -3,6 +3,8 @@ import { request as httpRequest, type IncomingMessage, type OutgoingHttpHeaders,
 import type { Duplex } from 'node:stream'
 import { prepareLoopback } from './runtimes.ts'
 import { sourceConnectionKey, type Source, type Store } from './state.ts'
+import type { CaptureDescriptor } from '../shared/capture.ts'
+import { captureRequestBase, normalizeCapturePublicBase } from './capture-address.ts'
 
 const PREFIX = '/api/capture/'
 const hop = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade'])
@@ -12,20 +14,11 @@ const unavailable = 'Captured application unavailable'
 /** Public failure categories; transport responses never expose internal errors. */
 export class CaptureError extends Error {
   constructor(readonly reason: 'capture-stopping' | 'capture-sign-in' | 'capture-connection-changed' | 'capture-invalid-request' |
-    'capture-limit' | 'capture-expired' | 'capture-bootstrap-invalid' | 'capture-forward-unavailable', message: string) {
+    'capture-limit' | 'capture-already-active' | 'capture-expired' | 'capture-bootstrap-invalid' | 'capture-forward-unavailable', message: string) {
     super(message)
   }
 }
 
-export interface CapturePresentation {
-  type: 'capture'
-  id: string
-  url: string
-  windowId?: string
-  paneId?: string
-  title: string
-  preview?: 'static'
-}
 export interface CapturePreparation {
   /** Exact browser API base bound to the authenticated terminal connection. */
   publicBase: string
@@ -38,12 +31,12 @@ export interface CapturePreparation {
   /** Browser-opened previews expire without traffic; CLI captures keep their owner lifetime. */
   idleTtlMs?: number
   onStop?(): void
-  onEnded?(message: { type: 'capture-ended'; id: string; windowId?: string; paneId?: string }): void
+  onEnded?(): void
 }
 export interface CaptureLease {
   id: string
   publicUrl: string
-  ready(bootstrapUrl?: string): Promise<CapturePresentation>
+  ready(bootstrapUrl?: string): Promise<{ id: string; url: string }>
   close(): void
 }
 interface Capture extends CapturePreparation {
@@ -51,7 +44,7 @@ interface Capture extends CapturePreparation {
   source: Source
   sourceKey: string
   publicUrl: URL
-  ready: boolean
+  path?: string
   lastActivity: number
   endpoint?: ReturnType<typeof prepareLoopback>
   closing?: Promise<void>
@@ -61,19 +54,7 @@ interface Capture extends CapturePreparation {
 interface AppCookie { name: string; value: string; path: string; expires?: number; secure: boolean }
 export interface CaptureOptions {
   prepare?: typeof prepareLoopback
-}
-
-/** Canonical presentation URL only; this value never selects the source target. */
-export function normalizeCapturePublicBase(value: unknown): string {
-  if (typeof value !== 'string' || value.length > 2048 || /[\s\\?#]/u.test(value)) throw new Error('Capture public base must be a canonical HTTP(S) API base')
-  let url: URL
-  try { url = new URL(value) } catch { throw new Error('Capture public base must be a canonical HTTP(S) API base') }
-  const canonical = value.endsWith('/') ? value : value + '/'
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash
-    || (url.href !== canonical && url.href + '/' !== canonical)
-    || (url.pathname !== '/' && !/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\/?$/u.test(url.pathname)))
-    throw new Error('Capture public base must be a canonical HTTP(S) API base')
-  return canonical
+  onChange?(sourceId: string, windowId: string): void
 }
 
 /** Explicitly trusted commands, bound to a live source/account lease.
@@ -86,7 +67,7 @@ export class CaptureService {
   private readonly prepare: typeof prepareLoopback
   private closed = false
   private timer: ReturnType<typeof setInterval>
-  constructor(private readonly store: Store, options: CaptureOptions = {}) {
+  constructor(private readonly store: Store, private readonly options: CaptureOptions = {}) {
     this.prepare = options.prepare || prepareLoopback
     store.on('sessions', this.prune); store.on('change', this.prune)
     this.timer = setInterval(this.prune, 1000); this.timer.unref()
@@ -99,12 +80,15 @@ export class CaptureService {
     if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) throw new CaptureError('capture-invalid-request', 'Capture port must be between 1 and 65535')
     if ((options.windowId !== undefined || options.paneId !== undefined)
       && (!options.windowId || !options.paneId || options.windowId.length > 4096 || options.paneId.length > 4096)) throw new CaptureError('capture-invalid-request', 'Capture terminal identity is invalid')
+    this.prune()
+    if (options.windowId && [...this.captures.values()].some(capture => capture.source.id === source.id && capture.windowId === options.windowId))
+      throw new CaptureError('capture-already-active', 'This window already has a captured application; stop it before starting another')
     if (this.captures.size >= 32) throw new CaptureError('capture-limit', 'At most 32 captured applications are supported')
     const publicBase = new URL(normalizeCapturePublicBase(options.publicBase))
     const id = randomBytes(32).toString('base64url')
     const publicUrl = new URL(publicBase.pathname.replace(/\/$/u, '') + PREFIX + id + '/', publicBase)
     const title = (options.title || 'Application').replace(/[\x00-\x1f\x7f]/gu, '').slice(0, 160)
-    const capture: Capture = { ...options, title, id, source: { ...source }, sourceKey: sourceConnectionKey(source), publicUrl, ready: false,
+    const capture: Capture = { ...options, title, id, source: { ...source }, sourceKey: sourceConnectionKey(source), publicUrl,
       cookies: new Map(), connections: new Set(), lastActivity: Date.now() }
     this.captures.set(id, capture)
     return { id, publicUrl: publicUrl.href, ready: async bootstrapUrl => {
@@ -117,10 +101,17 @@ export class CaptureService {
         await capture.endpoint
       } catch { throw new CaptureError('capture-forward-unavailable', 'Capture forwarding is unavailable') }
       if (!this.valid(capture)) throw new CaptureError('capture-expired', 'Capture expired')
-      capture.ready = true
+      capture.path = url.slice(capture.publicUrl.href.length - 1)
       capture.lastActivity = Date.now()
-      return { type: 'capture', id, url, windowId: capture.windowId, paneId: capture.paneId, title, ...(capture.preview ? { preview: capture.preview } : {}) }
+      if (capture.windowId) this.options.onChange?.(source.id, capture.windowId)
+      return { id, url }
     }, close: () => { void this.remove(capture) } }
+  }
+  current(sourceId: string, windowId: string): CaptureDescriptor | null {
+    const capture = [...this.captures.values()].find(capture => capture.source.id === sourceId && capture.windowId === windowId
+      && capture.path !== undefined && this.valid(capture))
+    return capture ? { id: capture.id, path: capture.path!, title: capture.title!, windowId, paneId: capture.paneId!,
+      ...(capture.preview ? { preview: capture.preview } : {}) } : null
   }
   private bootstrap(capture: Capture, value?: string): string {
     if (!value) return capture.publicUrl.href
@@ -147,19 +138,20 @@ export class CaptureService {
     for (const cancel of capture.connections) cancel()
     capture.connections.clear()
     capture.cookies.clear()
-    capture.ready = false
+    capture.path = undefined
     capture.closing = (capture.endpoint || Promise.resolve(undefined)).then(endpoint => endpoint?.close(), () => {}).catch(() => {})
-    capture.onEnded?.({ type: 'capture-ended', id: capture.id, windowId: capture.windowId, paneId: capture.paneId })
+    if (capture.windowId) this.options.onChange?.(capture.source.id, capture.windowId)
+    capture.onEnded?.()
     return capture.closing
   }
   closeSource(sourceId: string): void { for (const capture of this.captures.values()) if (capture.source.id === sourceId) void this.remove(capture) }
   hasStaticPreview(id: string): boolean {
     const capture = this.captures.get(id)
-    return !!capture && capture.preview === 'static' && capture.ready && this.valid(capture)
+    return !!capture && capture.preview === 'static' && capture.path !== undefined && this.valid(capture)
   }
   stop(id: string, session: string): boolean {
     const capture = this.captures.get(id)
-    if (!capture || capture.session !== session || !this.valid(capture)) return false
+    if (!capture || !this.store.hasSession(session) || (!capture.windowId && capture.session !== session) || !this.valid(capture)) return false
     capture.onStop?.()
     return true
   }
@@ -169,25 +161,25 @@ export class CaptureService {
     this.store.off('sessions', this.prune); this.store.off('change', this.prune)
     await Promise.all([...this.captures.values()].map(capture => this.remove(capture)))
   }
-  private target(request: IncomingMessage): { capture: Capture; path: string } | undefined {
+  private target(request: IncomingMessage): { capture: Capture; path: string; publicUrl: URL } | undefined {
     const url = new URL(request.url || '/', 'http://canvas.invalid')
     const match = /^\/api\/capture\/([A-Za-z0-9_-]{43})(\/.*)?$/u.exec(url.pathname)
     const capture = match && this.captures.get(match[1]!)
-    if (!capture || !capture.ready || !this.valid(capture)) return
+    if (!capture || capture.path === undefined || !this.valid(capture)) return
+    let base: URL
+    try { base = captureRequestBase(request) } catch { return }
+    if (request.headers.origin && request.headers.origin !== base.origin) return
     capture.lastActivity = Date.now()
-    return { capture, path: (match![2] || '/') + url.search }
-  }
-  private logicalPath(capture: Capture, path: string): string {
-    return capture.publicUrl.pathname.slice(0, -1) + path.split('?')[0]
+    return { capture, path: (match![2] || '/') + url.search, publicUrl: new URL(`api/capture/${capture.id}/`, base) }
   }
   private pruneCookies(capture: Capture): void {
     const now = Date.now()
     for (const [key, cookie] of capture.cookies) if (cookie.expires !== undefined && cookie.expires <= now) capture.cookies.delete(key)
   }
-  private rememberCookies(lines: string[], capture: Capture, path: string): void {
+  private rememberCookies(lines: string[], capture: Capture, path: string, publicUrl: URL): void {
     if (!this.valid(capture)) return
     this.pruneCookies(capture)
-    const requestPath = this.logicalPath(capture, path), mount = capture.publicUrl.pathname.slice(0, -1)
+    const requestPath = path.split('?')[0]!
     for (const line of lines) {
       if (line.length > 16384) continue
       const parts = line.split(';'), at = parts[0]!.indexOf('='), name = parts[0]!.slice(0, at).trim()
@@ -201,8 +193,10 @@ export class CaptureService {
       const declaredPath = attributes.get('path')
       // Apps may issue an upstream-relative Path or their public forwarded
       // prefix. Match both against the browser's logical public request path.
+      const mount = [publicUrl, capture.publicUrl].map(url => url.pathname.slice(0, -1))
+        .find(mount => declaredPath === mount || declaredPath?.startsWith(mount + '/'))
       const cookiePath = declaredPath?.startsWith('/')
-        ? (declaredPath === mount || declaredPath.startsWith(mount + '/') ? declaredPath : mount + declaredPath)
+        ? (mount ? declaredPath.slice(mount.length) || '/' : declaredPath)
         : requestPath.slice(0, requestPath.lastIndexOf('/')) || '/'
       const maxAge = attributes.get('max-age')
       let expires = attributes.has('expires') ? Date.parse(attributes.get('expires')!) : undefined
@@ -213,40 +207,40 @@ export class CaptureService {
       capture.cookies.set(key, { name, value, path: cookiePath, expires: Number.isNaN(expires) ? undefined : expires, secure: attributes.has('secure') })
     }
   }
-  private requestHeaders(request: IncomingMessage, capture: Capture, path: string, upgrade = false): OutgoingHttpHeaders {
+  private requestHeaders(request: IncomingMessage, capture: Capture, path: string, publicUrl: URL, upgrade = false): OutgoingHttpHeaders {
     const headers: OutgoingHttpHeaders = {}
     const blocked = new Set([...hop, ...String(request.headers.connection || '').toLowerCase().split(/\s*,\s*/u),
       'cookie', 'authorization', 'host', 'origin', 'referer', 'forwarded'])
     for (const [name, value] of Object.entries(request.headers))
       if (!blocked.has(name) && !name.startsWith('x-forwarded-') && !name.startsWith('sec-fetch-')) headers[name] = value
-    headers.host = capture.publicUrl.host
-    if (request.headers.origin) headers.origin = capture.publicUrl.origin
-    headers['x-forwarded-prefix'] = capture.publicUrl.pathname.replace(/\/$/u, '')
-    headers['x-forwarded-proto'] = capture.publicUrl.protocol.slice(0, -1)
+    headers.host = publicUrl.host
+    if (request.headers.origin) headers.origin = publicUrl.origin
+    headers['x-forwarded-prefix'] = publicUrl.pathname.replace(/\/$/u, '')
+    headers['x-forwarded-proto'] = publicUrl.protocol.slice(0, -1)
     // Never trust or require browser Cookie headers. Only this capture's own
     // upstream responses can populate its temporary application credentials.
     this.pruneCookies(capture)
-    const logicalPath = this.logicalPath(capture, path)
-    const cookies = [...capture.cookies.values()].filter(cookie => (!cookie.secure || capture.publicUrl.protocol === 'https:')
+    const logicalPath = path.split('?')[0]!
+    const cookies = [...capture.cookies.values()].filter(cookie => (!cookie.secure || publicUrl.protocol === 'https:')
       && (logicalPath === cookie.path || logicalPath.startsWith(cookie.path) && (cookie.path.endsWith('/') || logicalPath[cookie.path.length] === '/')))
       .sort((a, b) => b.path.length - a.path.length).map(cookie => cookie.name + '=' + cookie.value)
     if (cookies.length) headers.cookie = cookies.join('; ')
     if (upgrade) { headers.connection = 'Upgrade'; headers.upgrade = 'websocket' }
     return headers
   }
-  private responseHeaders(headers: IncomingMessage['headers'], capture: Capture, path: string): OutgoingHttpHeaders {
+  private responseHeaders(headers: IncomingMessage['headers'], capture: Capture, path: string, publicUrl: URL): OutgoingHttpHeaders {
     const result: OutgoingHttpHeaders = {}
     const blocked = new Set([...hop, ...String(headers.connection || '').toLowerCase().split(/\s*,\s*/u), 'set-cookie', 'clear-site-data', 'service-worker-allowed'])
     for (const [name, value] of Object.entries(headers)) if (!blocked.has(name)) result[name] = value
-    this.rememberCookies(headers['set-cookie'] || [], capture, path)
+    this.rememberCookies(headers['set-cookie'] || [], capture, path, publicUrl)
     if (headers.location) {
       try {
         const upstream = new URL(`http://127.0.0.1:${capture.port}`)
         const location = new URL(headers.location, upstream.origin + path)
         const local = location.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(location.hostname) && Number(location.port || 80) === capture.port
-        if (local || location.origin === capture.publicUrl.origin) {
-          result.location = location.pathname.startsWith(capture.publicUrl.pathname) ? capture.publicUrl.origin + location.pathname + location.search + location.hash
-            : capture.publicUrl.origin + capture.publicUrl.pathname.replace(/\/$/u, '') + location.pathname + location.search + location.hash
+        if (local || location.origin === publicUrl.origin || location.origin === capture.publicUrl.origin && location.pathname.startsWith(capture.publicUrl.pathname)) {
+          const mount = [publicUrl.pathname, capture.publicUrl.pathname].find(prefix => location.pathname.startsWith(prefix))
+          result.location = publicUrl.href.replace(/\/$/u, '') + (mount ? '/' + location.pathname.slice(mount.length) : location.pathname) + location.search + location.hash
         }
       } catch { delete result.location }
     }
@@ -255,16 +249,13 @@ export class CaptureService {
     result['x-content-type-options'] = 'nosniff'
     return result
   }
-  private compatibleOrigin(request: IncomingMessage, capture: Capture): boolean {
-    return !request.headers.origin || request.headers.origin === capture.publicUrl.origin
-  }
   handle(request: IncomingMessage, response: ServerResponse): boolean {
     if (!request.url?.startsWith(PREFIX)) return false
     const target = this.target(request)
-    if (!target || ['CONNECT', 'TRACE'].includes(request.method || '') || !this.compatibleOrigin(request, target.capture)) {
+    if (!target || ['CONNECT', 'TRACE'].includes(request.method || '')) {
       response.writeHead(404).end(unavailable); return true
     }
-    const { capture, path } = target
+    const { capture, path, publicUrl } = target
     const url = new URL(request.url, capture.publicUrl)
     const requestedMode = url.searchParams.get('canvas')
     const mode = capture.preview === 'static' && ['raw', 'download'].includes(requestedMode || '') ? requestedMode : null
@@ -275,7 +266,7 @@ export class CaptureService {
     const browserNavigation = request.headers['sec-fetch-mode'] === 'navigate'
       || !request.headers['sec-fetch-mode'] && /\btext\/html\b/iu.test(request.headers.accept || '')
     if (capture.preview === 'static' && document && !mode && browserNavigation) {
-      const viewer = new URL(capture.publicUrl.href.replace(/\/api\/capture\/([^/]+)\/$/u, '/api/document/$1/'))
+      const viewer = new URL(publicUrl.href.replace(/\/api\/capture\/([^/]+)\/$/u, '/api/document/$1/'))
       viewer.searchParams.set('path', pathname)
       response.writeHead(302, { Location: viewer.href, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' }).end()
       return true
@@ -285,10 +276,10 @@ export class CaptureService {
     void capture.endpoint!.then(transport => {
       if (response.destroyed || !this.valid(capture)) return cancel()
       const upstream = httpRequest({ ...transport, port: capture.port, method: request.method, path,
-        headers: this.requestHeaders(request, capture, path), timeout: 30_000 }, incoming => {
+        headers: this.requestHeaders(request, capture, path, publicUrl), timeout: 30_000 }, incoming => {
         // The startup timeout must not terminate a healthy idle SSE stream.
         upstream.setTimeout(0)
-        const headers = this.responseHeaders(incoming.headers, capture, path)
+        const headers = this.responseHeaders(incoming.headers, capture, path, publicUrl)
         if (capture.preview === 'static' && (mode === 'raw' || mode === 'download')) {
           if (mode === 'raw') headers['content-type'] = 'text/plain; charset=utf-8'
           else headers['content-disposition'] = 'attachment'
@@ -307,22 +298,22 @@ export class CaptureService {
   handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): boolean {
     if (!request.url?.startsWith(PREFIX)) return false
     const target = this.target(request)
-    if (!target || request.headers.upgrade?.toLowerCase() !== 'websocket' || !this.compatibleOrigin(request, target.capture)) {
+    if (!target || request.headers.upgrade?.toLowerCase() !== 'websocket') {
       socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n'); return true
     }
-    const { capture, path } = target
+    const { capture, path, publicUrl } = target
     let upstreamSocket: Duplex | undefined
     const cancel = () => socket.destroy(); capture.connections.add(cancel)
     socket.on('error', cancel)
     socket.once('close', () => { capture.connections.delete(cancel); upstreamSocket?.destroy() })
     void capture.endpoint!.then(transport => {
       if (socket.destroyed || !this.valid(capture)) return cancel()
-      const upstream = httpRequest({ ...transport, port: capture.port, path, headers: this.requestHeaders(request, capture, path, true), timeout: 10_000 })
+      const upstream = httpRequest({ ...transport, port: capture.port, path, headers: this.requestHeaders(request, capture, path, publicUrl, true), timeout: 10_000 })
       socket.once('close', () => upstream.destroy())
       upstream.once('upgrade', (response, peer, remaining) => {
         upstream.setTimeout(0); peer.setTimeout(0)
         upstreamSocket = peer
-        const headers = this.responseHeaders(response.headers, capture, path)
+        const headers = this.responseHeaders(response.headers, capture, path, publicUrl)
         headers.connection = 'Upgrade'; headers.upgrade = 'websocket'
         socket.write('HTTP/1.1 101 Switching Protocols\r\n' + Object.entries(headers).filter(([, value]) => value !== undefined)
           .flatMap(([name, value]) => (Array.isArray(value) ? value : [value]).map(item => `${name}: ${item}`)).join('\r\n') + '\r\n\r\n')

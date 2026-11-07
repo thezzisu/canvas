@@ -13,11 +13,9 @@ import type { WindowMetadata } from "../shared/window-metadata.ts";
 import { randomUUID } from "node:crypto";
 import type { CanvasNotification } from "../shared/notification.ts";
 import type { PasteSegment } from "../shared/paste.ts";
-import type { CapturePresentation } from "./capture.ts";
+import type { CaptureDescriptor, CaptureState } from "../shared/capture.ts";
 import { defaultTerminalCell } from '../shared/settings.ts';
 import { defaultWindowSize, normalTerminalGrid } from '../shared/window-size.ts';
-type CaptureMessage = CapturePresentation;
-type CaptureEnded = { type: 'capture-ended'; id: string };
 const { Terminal } = headless;
 const { SerializeAddon } = serialize;
 export type TerminalTarget = {
@@ -58,8 +56,6 @@ class LiveTerminal {
   private cursorVisible = true;
   private cursorShape = 0;
   private outputWaiters = new Set<() => void>();
-  // A captured application belongs to the native window: every viewer shows it.
-  private capture?: CaptureMessage;
   // Keyboard input typed during a paced paste follows the complete paste.
   private pasting?: Promise<void>;
   controller?: WebSocket;
@@ -88,6 +84,7 @@ class LiveTerminal {
     readonly source: Source,
     readonly reads?: CompletionReads,
     readonly onFocusedRemove?: () => void,
+    readonly capture: () => CaptureDescriptor | null = () => null,
   ) {
     this.cols = cols;
     this.rows = rows;
@@ -198,11 +195,9 @@ class LiveTerminal {
     return !this.hidden.has(ws) && this.rendered.has(ws) &&
       (!this.maximized || !this.maximized.releasing && this.maximized.owner === ws);
   }
-  publishCapture(message: CaptureMessage | CaptureEnded) {
+  publishCapture() {
     if (this.closed) return;
-    if (message.type === 'capture') this.capture = message;
-    else if (this.capture?.id === message.id) this.capture = undefined;
-    else return;
+    const message: CaptureState = { type: 'capture', capture: this.capture() };
     for (const ws of this.clients) json(ws, message);
   }
   downloadRecipient(): WebSocket | undefined {
@@ -323,7 +318,7 @@ class LiveTerminal {
       this.clients.add(ws);
       if (!this.controller) this.controller = ws;
       if (this.metadata) json(ws, { type: "metadata", window: this.metadata });
-      if (this.capture) json(ws, this.capture);
+      json(ws, { type: 'capture', capture: this.capture() } satisfies CaptureState);
       this.snapshot(ws);
       this.status();
       json(ws, this.geometry.state(ws));
@@ -516,7 +511,8 @@ export class TerminalManager {
   private deliveredCompletions = new Map<string, CompletionToken>();
   private completionBoots = new Map<string, string>();
   constructor(private readonly reads?: CompletionReads, private readonly onFocusedWindowRemoved?: (source: Source, windowId: string) => void,
-    private readonly normalSize: (sourceId: string, windowId: string) => Size = () => normalTerminalGrid(defaultWindowSize, defaultTerminalCell())) {}
+    private readonly normalSize: (sourceId: string, windowId: string) => Size = () => normalTerminalGrid(defaultWindowSize, defaultTerminalCell()),
+    private readonly capture: (sourceId: string, windowId: string) => CaptureDescriptor | null = () => null) {}
   refreshNormalSizes() {
     if (this.stopped) return;
     for (const terminal of this.live) terminal.setNormalSize(this.normalSize(terminal.sourceId, terminal.windowId));
@@ -583,6 +579,7 @@ export class TerminalManager {
             () => { this.entries.delete(key); this.live.delete(terminal); this.observeCompletionSource(source); },
             transport,
             source, this.reads, () => this.onFocusedWindowRemoved?.(source, target.windowId),
+            () => this.capture(source.id, target.windowId),
           );
           this.live.add(terminal);
           // A card/font edit may have committed while the native socket opened.
@@ -641,9 +638,12 @@ export class TerminalManager {
     return { socket, isCurrent: () => terminal.downloadRecipient() === socket };
   }
   /** Captures follow the native window to all its viewers, including later ones. */
-  async publishCapture(sourceId: string, windowId: string, message: CaptureMessage | CaptureEnded) {
+  async captureChanged(sourceId: string, windowId: string) {
     const terminal = await this.entries.get(`${sourceId}/${windowId}`)?.catch(() => undefined);
-    terminal?.publishCapture(message);
+    if (terminal) {
+      terminal.setNormalSize(this.normalSize(sourceId, windowId));
+      terminal.publishCapture();
+    }
   }
   async content(source: Source, spaceId: string, windowId: string) {
     const terminal = await this.entries.get(`${source.id}/${windowId}`)?.catch(() => undefined);

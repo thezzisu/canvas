@@ -23,6 +23,8 @@ import { isFileReference, readFileReference } from '../file-reference'
 import { copiedFile } from '../file-clipboard'
 import { capturedApp, setCaptureVisible } from '../capture'
 import { useRetainedFrame } from '../retained-frame'
+import { useCardContentFocus } from '../card-content-focus'
+import { captureToolbarHeight } from '../../../shared/capture'
 import { api } from '../api'
 import { cachedTerminalView, mountTerminal, type TerminalStatus } from '../terminals'
 import { emptyModifiers, type TerminalModifiers } from '../terminal-input'
@@ -46,13 +48,14 @@ const { editing } = useLayoutCard(layoutRoot)
 const host = ref<HTMLElement>()
 const app = computed(() => capturedApp(props.data.sourceId, props.data.windowId))
 const captureHost = ref<HTMLElement>()
-const trustedApp = computed(() => !!app.value && (app.value.preview !== 'static' || captureTrusted(app.value.id) || isMarkdownFile(new URL(app.value.url).pathname)))
+const captureBody = ref<HTMLElement>()
+const trustedApp = computed(() => !!app.value && (app.value.preview !== 'static' || captureTrusted(props.data.sourceId, props.data.windowId, app.value.id) || isMarkdownFile(new URL(app.value.url).pathname)))
 function withTrustedApp(run: (url: string) => void) {
   const current = app.value, context = apiContext()
   if (!current) return
   const execute = () => {
     if (!isCurrentApi(context) || app.value?.id !== current.id) return
-    if (!trustedApp.value) trustCapture(current.id)
+    if (!trustedApp.value) trustCapture(props.data.sourceId, props.data.windowId, current.id)
     run(current.url)
   }
   if (trustedApp.value) execute(); else requestTrustedPreview(current.title, execute)
@@ -60,13 +63,13 @@ function withTrustedApp(run: (url: string) => void) {
 function activateApp() { withTrustedApp(() => showCapturedApp()) }
 function openApp() { withTrustedApp(url => window.open(url, '_blank', 'noopener,noreferrer')) }
 
-useRetainedFrame(captureHost, () => app.value && trustedApp.value ? { key: `capture:${app.value.id}`, src: app.value.url, attributes: {
-  class: 'capture-frame', title: app.value.title, sandbox: 'allow-scripts allow-forms allow-same-origin allow-downloads allow-popups', referrerpolicy: 'no-referrer' } } : undefined)
+
 const showApp = computed(() => !!app.value?.visible && !closed.value && !maximizedElsewhere.value && status.value.status === 'connected')
 function showCapturedApp() { setCaptureVisible(props.data.sourceId, props.data.windowId, true) }
 function returnToTerminal() {
+  const current = terminal
   setCaptureVisible(props.data.sourceId, props.data.windowId, false)
-  nextTick(() => { if (!showApp.value) terminal?.focus({ keyboard: false }) })
+  nextTick(() => { if (!showApp.value && host.value?.isConnected && terminal === current) current?.focus({ keyboard: false }) })
 }
 const stoppingAppId = ref('')
 const stoppingApp = computed(() => stoppingAppId.value === app.value?.id)
@@ -77,7 +80,7 @@ async function stopCapturedApp() {
   stoppingAppId.value = current.id; captureError.value = ''
   try {
     await api(`/api/captured-apps/${current.id}/stop`, { method: 'POST', body: '{}' })
-    if (app.value?.id === current.id) returnToTerminal()
+    if (app.value?.id === current.id) setCaptureVisible(props.data.sourceId, props.data.windowId, false)
   } catch (error) {
     if (app.value?.id === current.id) captureError.value = error instanceof Error ? error.message : String(error)
   } finally { if (stoppingAppId.value === current.id) stoppingAppId.value = '' }
@@ -97,6 +100,11 @@ const modifiers = computed(() => status.value.modifiers || emptyModifiers())
 const reconnecting = computed(() => status.value.status === 'connecting' && !!status.value.retryAttempt)
 const keepTerminal = computed(() => !!closed.value && !!cachedTerminalView(props.data.sourceId, props.data.windowId) || props.data.available || !!props.data.sourceOffline && (status.value.status === 'connected' || reconnecting.value))
 const maximizedElsewhere = computed(() => !!status.value.presentation?.maximized && (!status.value.presentation.owned || !props.data.focus))
+const { active: captureActive, focus: focusCapture, pointerDown: capturePointerDown } = useCardContentFocus(captureBody,
+  () => !showApp.value || !trustedApp.value || mobilePreview.value || editing.value)
+useRetainedFrame(captureHost, () => app.value && trustedApp.value ? { key: `capture:${app.value.id}`, src: app.value.url, attributes: {
+  class: 'capture-frame', title: app.value.title, sandbox: 'allow-scripts allow-forms allow-same-origin allow-downloads allow-popups', referrerpolicy: 'no-referrer', tabindex: !props.data.mobile && !captureActive.value ? '-1' : '0' } } : undefined)
+const captureButtonUi = { base: 'capture-action', label: 'capture-action-label', leadingIcon: 'capture-action-icon' }
 const noteDropAvailable = computed(() => !showApp.value && keepTerminal.value && !mobilePreview.value && !maximizedElsewhere.value && status.value.status === 'connected')
 const noteDropLabel = computed(() => showApp.value ? t('terminal.capture.terminal') : mobilePreview.value ? t('panels.note.openToPaste') : maximizedElsewhere.value ? t('terminal.maximized')
   : status.value.status !== 'connected' || !keepTerminal.value ? t('terminal.upload.disconnected') : t('panels.note.paste'))
@@ -258,7 +266,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
 </script>
 <template>
   <NodeResizer v-if="!data.mobile && !data.overview && !data.focus && !maximizedElsewhere" :min-width="360" :min-height="220" :max-width="4000" :max-height="3000" @resize-start="resizeStarted" @resize-end="resized" />
-  <article ref="layoutRoot" tabindex="-1" class="terminal-card" :class="[{ selected, 'terminal-transition': status.transitioning, unavailable: !closed && !keepTerminal, focused: data.focus, 'input-focused': inputFocused, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview, closed }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="closed ? 'closed' : keepTerminal ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :data-content-mode="showApp ? 'app' : 'terminal'" :data-input-focused="inputFocused" :data-note-drop="noteDrag ? noteDropAvailable ? 'ready' : 'unavailable' : undefined" @dragenter.capture="noteDragOver" @dragover.capture="noteDragOver" @dragleave="noteDragLeave" @drop.capture="dropNote" :style="{ '--program-color': statusColor(frameStatus), width: dimensions || data.focus ? '100%' : `${data.width}px`, height: dimensions || data.focus ? '100%' : `${data.height}px` }" :aria-label="`${label} · ${data.subtitle}`">
+  <article ref="layoutRoot" tabindex="-1" class="terminal-card" :class="[{ selected, 'terminal-transition': status.transitioning || status.layoutRestoring, unavailable: !closed && !keepTerminal, focused: data.focus, 'input-focused': inputFocused || captureActive, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview, closed }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="closed ? 'closed' : keepTerminal ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :data-content-mode="showApp ? 'app' : 'terminal'" :data-input-focused="inputFocused" :data-note-drop="noteDrag ? noteDropAvailable ? 'ready' : 'unavailable' : undefined" @dragenter.capture="noteDragOver" @dragover.capture="noteDragOver" @dragleave="noteDragLeave" @drop.capture="dropNote" :style="{ '--program-color': statusColor(frameStatus), '--capture-toolbar-height': `${captureToolbarHeight}px`, width: dimensions || data.focus ? '100%' : `${data.width}px`, height: dimensions || data.focus ? '100%' : `${data.height}px` }" :aria-label="`${label} · ${data.subtitle}`">
     <header class="terminal-header drag-handle" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :class="{ 'cutout-header': mobileFocus }" :data-cutout-position="mobileFocus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="mobileFocus ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` } : undefined">
       <PaneIndicators :panes="data.panes" :status="data.status" :available="keepTerminal" :connection="closed ? 'closed' : status.status" :error="status.error" :read-only="status.readOnly" :pulse="statusPulse" />
       <WindowTitle class="terminal-name" :class="{ 'cutout-title': mobileFocus }" :window="data" :pane-id="status.focusedPaneId" :description="data.subtitle" />
@@ -271,18 +279,21 @@ async function resized(event: { params: { width: number; height: number; x: numb
       </CardHeaderActions>
     </header>
     <div v-if="app" :inert="mobilePreview || editing || undefined" class="capture-toolbar nodrag nopan" @pointerdown.stop @mousedown.stop>
-      <span class="capture-title">{{ app.title }}</span>
-      <UButton v-if="data.focus" type="button" color="neutral" variant="ghost" :size="mobileFocus ? 'sm' : 'xs'" :ui="{ base: mobileFocus ? 'min-h-[44px]' : undefined }" :disabled="status.status !== 'connected' || closed || maximizedElsewhere" @click="showApp ? returnToTerminal() : activateApp()">{{ showApp ? t('terminal.capture.terminal') : t('terminal.capture.app') }}</UButton>
-      <UButton type="button" color="neutral" variant="ghost" :size="mobileFocus ? 'sm' : 'xs'" :ui="{ base: mobileFocus ? 'min-h-[44px]' : undefined }" @click="openApp">{{ t('terminal.capture.open') }}</UButton>
-      <span v-if="captureError" class="capture-error" role="alert" :title="captureError">{{ captureError }}</span>
-      <UButton type="button" color="neutral" variant="ghost" :size="mobileFocus ? 'sm' : 'xs'" :ui="{ base: mobileFocus ? 'min-h-[44px]' : undefined }" :loading="stoppingApp" :disabled="stoppingApp" @click="stopCapturedApp">{{ t('terminal.capture.stop') }}</UButton>
+      <span class="capture-title" :class="{ 'capture-error': captureError }" :role="captureError ? 'alert' : undefined" :title="captureError || app.title">{{ captureError || app.title }}</span>
+      <UButton type="button" color="neutral" variant="ghost" :size="mobileFocus ? 'sm' : 'xs'" :ui="captureButtonUi" :icon="showApp ? 'i-lucide-terminal' : 'i-lucide-globe'" :label="t(showApp ? 'terminal.capture.terminal' : 'terminal.capture.app')" :title="t(showApp ? 'terminal.capture.terminal' : 'terminal.capture.app')" :aria-label="t(showApp ? 'terminal.capture.terminal' : 'terminal.capture.app')" :disabled="status.status !== 'connected' || closed || maximizedElsewhere" @click="showApp ? returnToTerminal() : activateApp()" />
+      <UButton type="button" color="neutral" variant="ghost" :size="mobileFocus ? 'sm' : 'xs'" :ui="captureButtonUi" icon="i-lucide-external-link" :label="t('terminal.capture.open')" :title="t('terminal.capture.open')" :aria-label="t('terminal.capture.open')" @click="openApp" />
+      <UButton type="button" color="neutral" variant="ghost" :size="mobileFocus ? 'sm' : 'xs'" :ui="captureButtonUi" icon="i-lucide-square" :label="t('terminal.capture.stop')" :title="t('terminal.capture.stop')" :aria-label="t('terminal.capture.stop')" :loading="stoppingApp" :disabled="stoppingApp" @click="stopCapturedApp" />
     </div>
-    <div v-if="app" v-show="showApp && trustedApp" ref="captureHost" :inert="mobilePreview || editing || undefined" class="capture-body card-content nodrag nopan nowheel" @pointerdown.stop @mousedown.stop @wheel.stop />
+    <div class="terminal-body">
+    <div v-if="app" v-show="showApp && trustedApp" ref="captureBody" class="capture-body card-content nodrag nopan nowheel" :data-content-active="captureActive" :tabindex="mobilePreview ? -1 : 0" :inert="mobilePreview || editing || undefined" :aria-label="app.title" @pointerdown.capture="capturePointerDown" @pointerdown.stop @mousedown.stop @wheel.stop>
+      <div ref="captureHost" class="capture-host" />
+      <div v-if="!data.mobile && !captureActive" class="capture-activate card-content-activate" role="button" tabindex="0" :aria-label="t('common.openCard', { name: app.title })" @click.stop="focusCapture" @keydown.enter.stop.prevent="focusCapture" @keydown.space.stop.prevent="focusCapture" />
+    </div>
     <div v-if="showApp && !trustedApp" class="capture-trust-prompt card-content" :inert="mobilePreview || editing || undefined"><Icon name="globe" :size="32" /><span>{{ app?.title }}</span><UButton v-if="!mobilePreview" color="neutral" variant="outline" @click="activateApp">{{ t('terminal.capture.app') }}</UButton></div>
     <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || closed || showApp || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop><div class="terminal-transition-surface" aria-hidden="true" /></div>
     <PaneContextMenu :host="host" :enabled="!showApp && keepTerminal && !mobilePreview && !closed && !maximizedElsewhere && status.status === 'connected'" :allows-menu="allowsContextMenu" :lookup="paneContext" :action="paneAction" />
     <TerminalSettingsDialog v-model="settings" :open="settingsOpen" :portal="portal" @close="settingsOpen = false" />
-    <div v-if="mobilePreview && !closed && !editing" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: label })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
+
     <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">{{ t('terminal.upload.drop') }}</div>
     <div v-if="noteDrag || fileDrag" class="terminal-file-drop terminal-note-drop" :class="{ 'note-drop-unavailable': !noteDropAvailable }" aria-hidden="true">{{ !noteDropAvailable ? noteDropLabel : fileDrag ? t(status.fileReading ? 'fileTransfer.preparing' : 'fileTransfer.drop') : noteDropLabel }}</div>
     <span v-if="status.upload?.rejected" class="terminal-copy-notice copy-failed" role="alert">{{ status.upload.rejected }}</span>
@@ -299,14 +310,17 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <div v-if="closed" class="terminal-closed" role="status">{{ t('terminal.closed') }}</div>
     <div v-else-if="!keepTerminal" class="terminal-unavailable"><Icon name="terminal" :size="28" /><strong>{{ t('terminal.unavailable') }}</strong></div>
     <div v-if="!closed && data.available && status.status === 'disconnected'" class="terminal-disconnected nodrag" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined"><span>{{ status.error || t('terminal.connection.disconnected') }}</span><button @click.stop="action('reconnect')"><Icon name="refresh" :size="13" />{{ t('terminal.connection.reconnect') }}</button></div>
-    <div v-if="!closed && keepTerminal && !maximizedElsewhere && (status.status === 'connecting' || status.status === 'connected' && !status.screenReady)" class="terminal-loading nodrag" :class="{ 'terminal-loading-initial': !status.screenReady }" role="status"><span class="spinner" />{{ status.retryAttempt ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt }) : t('common.loading') }}</div>
+    <div v-if="!showApp && !closed && keepTerminal && !maximizedElsewhere && (status.status === 'connecting' || status.status === 'connected' && !status.screenReady)" class="terminal-loading nodrag" :class="{ 'terminal-loading-initial': !status.screenReady }" role="status"><span class="spinner" />{{ status.retryAttempt ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt }) : t('common.loading') }}</div>
+    </div>
+    <div v-if="mobilePreview && !closed && !editing" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: label })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
     <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :read-text="readText" :copy-text="copyText" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @pointer="mobilePointer" @files="mobileFiles" @paste="mobilePaste" @paste-file="pasteFile" @reading="reading" />
   </article>
-  <CardLayoutControls :id="id" :label="label" :kind="app ? 'app' : 'terminal'" :width="data.width" :height="data.height" :waiting="!!status.layoutRestoring && !showApp && !closed && !maximizedElsewhere && status.status === 'connected'" />
+  <CardLayoutControls :id="id" :label="label" :kind="app ? 'app' : 'terminal'" :width="data.width" :height="data.height" />
 </template>
 
 <style scoped>
-.terminal-closed{position:absolute;inset:30px 0 0;display:flex;align-items:center;justify-content:center;background:#171a20bb;color:#a0a9b6;font-size:12px;pointer-events:none}
+.terminal-body{position:relative;flex:1;min-height:0;display:flex;flex-direction:column;overflow:clip}
+.terminal-closed{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#171a20bb;color:#a0a9b6;font-size:12px;pointer-events:none}
 .closed .terminal-host{opacity:.45}.closed .terminal-actions{opacity:1;pointer-events:auto}
 
 .terminal-host{position:relative}
@@ -318,15 +332,15 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-card.input-focused.program-unknown{--frame-rest:#aeb9c8}
 .terminal-card.input-focused .terminal-header{background:color-mix(in srgb,var(--program-color) 27%,#22262d)}
 .terminal-card.input-focused .terminal-name{color:#f4f6f9;--window-title-color:#c4cbd5}
-.terminal-loading{background:#11131799;color:#b0b8c5}
+.terminal-loading{inset:0;background:#11131799;color:#b0b8c5}
 .terminal-loading-initial{z-index:12;background:#111317}
-.terminal-maximized{z-index:5;flex-direction:column;gap:10px}
+.terminal-maximized{inset:0;z-index:5;flex-direction:column;gap:10px}
 .terminal-maximized>button{padding:5px 9px;gap:5px;min-height:28px}
 .terminal-drop-target{outline:1px solid var(--accent);outline-offset:-3px;background:#e9b18808}
 .terminal-copy-notice{position:absolute;bottom:8px;right:9px;padding:4px 7px;border:1px solid #424a56;border-radius:4px;background:#242930f2;color:#b6c0ce;font-size:10px;pointer-events:none}
 .terminal-copy-notice.copy-failed{border-color:#79545470;background:#33262bf2;color:#d6aaaa}
 .terminal-note-drop{z-index:5}.terminal-note-drop.note-drop-unavailable{color:#9aa4b3;background:#171b21df}
-.terminal-file-drop{position:absolute;inset:30px 0 0;display:flex;align-items:center;justify-content:center;pointer-events:none;background:#12151aca;color:var(--accent);font-size:12px}
+.terminal-file-drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;background:#12151aca;color:var(--accent);font-size:12px}
 .terminal-upload{position:absolute;bottom:6px;left:8px;right:8px;padding:4px 7px;border:1px solid #424a56;border-radius:4px;background:#242930f2;color:#b6c0ce;box-shadow:0 2px 8px #0003;font-size:10px}
 .terminal-upload-row{display:flex;align-items:center;gap:8px;min-height:19px}
 .terminal-upload-name{min-width:0;flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
@@ -349,14 +363,16 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-mobile.focused{container-type:inline-size}
 .terminal-mobile.focused :deep(.terminal-status-trigger){width:44px;height:44px;min-width:44px}
 .terminal-mobile.focused .terminal-host{min-height:0;flex:1;touch-action:none}
-.terminal-mobile.focused .terminal-loading,.terminal-mobile.focused .terminal-maximized,.terminal-mobile.focused .terminal-file-drop{top:var(--terminal-header-height);bottom:calc(49px + var(--mobile-safe-bottom,0px))}
-.terminal-mobile.focused .terminal-upload{bottom:calc(55px + var(--mobile-safe-bottom,0px))}
-.terminal-mobile.focused .terminal-copy-notice{bottom:calc(57px + var(--mobile-safe-bottom,0px))}
-.terminal-mobile.focused .terminal-disconnected{bottom:calc(49px + var(--mobile-safe-bottom,0px))}
 </style>
 
 <style scoped>
 .terminal-mobile-preview .capture-body,.terminal-mobile-preview .capture-toolbar{pointer-events:none}.terminal-mobile-preview .terminal-preview-button{z-index:10}
-.capture-trust-prompt{position:absolute;inset:64px 0 0;z-index:6;background:#1b1f26;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#a4afbe}
-.capture-toolbar{position:absolute;z-index:6;top:30px;left:0;right:0;height:34px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#252a33;color:#d5d7dd;font-size:12px}.capture-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.capture-error{max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.capture-body{position:absolute;z-index:5;inset:64px 0 0;background:#fff}.capture-body :deep(.capture-frame){display:block;width:100%;height:100%;border:0}.terminal-mobile.focused .capture-toolbar{top:var(--terminal-header-height);height:44px}.terminal-mobile.focused .capture-body{top:calc(var(--terminal-header-height) + 44px)}
+.capture-trust-prompt{position:absolute;inset:0;z-index:6;background:#1b1f26;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:#a4afbe}
+.capture-toolbar{container:capture-toolbar / inline-size;flex:0 0 var(--capture-toolbar-height);display:flex;align-items:center;gap:4px;padding:0 8px;background:#252a33;color:#d5d7dd;font-size:12px}
+.capture-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.capture-error{color:#e4aaaa}
+.capture-toolbar :deep(.capture-action){flex:none;white-space:nowrap}.capture-toolbar :deep(.capture-action-icon:not(.animate-spin)){display:none}
+.capture-body{position:absolute;z-index:5;inset:0;background:#fff;outline:none}.capture-host,.capture-body :deep(.capture-frame){display:block;width:100%;height:100%;border:0}
+.capture-activate{position:absolute;inset:0;cursor:pointer;outline:none}
+.terminal-mobile.focused .capture-toolbar{flex-basis:44px}.terminal-mobile.focused .capture-toolbar :deep(.capture-action){min-width:44px;min-height:44px;justify-content:center}
+@container capture-toolbar (max-width:420px){.capture-toolbar :deep(.capture-action-icon){display:block}.capture-toolbar :deep(.capture-action-label){display:none}}
 </style>

@@ -30,17 +30,19 @@ import { UrlForwardService } from "./url-forward.ts";
 import { CaptureError, CaptureService, type CaptureLease } from './capture.ts';
 import { captureAddress } from './capture-address.ts';
 import { SourcePreviewService } from './source-preview.ts';
+import { captureToolbarHeight } from '../shared/capture.ts';
 const dataDir =
   process.env.CANVAS_DATA_DIR ?? join(homedir(), ".local/share/canvas");
 const accounts = new AccountStore(dataDir);
 const account = accounts.account;
 const store = new Store(join(dataDir, "canvas.db"));
 const urlForwards = new UrlForwardService(store);
-const captures = new CaptureService(store);
+const captures = new CaptureService(store, { onChange: (sourceId, windowId) => { void terminals.captureChanged(sourceId, windowId); } });
 const assets = new AssetStore(dataDir, store);
 const completionReads = new CompletionReads(store);
 const terminals = new TerminalManager(completionReads, (source, windowId) => store.removeWindowReferences(source, [windowId]),
-  (sourceId, windowId) => store.normalTerminalSize(sourceId, windowId));
+  (sourceId, windowId) => store.normalTerminalSize(sourceId, windowId, captures.current(sourceId, windowId) ? captureToolbarHeight : 0),
+  (sourceId, windowId) => captures.current(sourceId, windowId));
 store.on('change', (normalGeometryChanged: boolean) => { if (normalGeometryChanged) terminals.refreshNormalSizes(); });
 const uploads = new UploadService(terminals);
 const helperBytes = readFileSync(new URL("../cli/canvas", import.meta.url));
@@ -60,7 +62,7 @@ const downloads = new OpenDownloadService({
     try { lease = captures.prepareCapture(source, { windowId, paneId, session: recipient.sessionId, publicBase, port: Number(header.port), title: header.title,
       ...(header.preview === 'static' ? { preview: 'static' } : {}),
       onStop: () => { if (!socket.destroyed) socket.write(JSON.stringify({ action: 'stop' }) + '\n') },
-      onEnded: message => { void terminals.publishCapture(source.id, windowId, message); socket.destroy() },
+      onEnded: () => socket.destroy(),
     }); } catch (error) { reject(error instanceof CaptureError ? error.reason : 'capture-failed'); return; }
     socket.once('close', () => lease.close());
     socket.once('end', () => { lease.close(); socket.end() });
@@ -75,11 +77,8 @@ const downloads = new OpenDownloadService({
         const value = JSON.parse(pending.subarray(0, newline).toString('utf8')); pending = pending.subarray(newline + 1);
         if (ready || value.action !== 'ready' || pending.length || value.port !== undefined) { socket.destroy(); return }
         ready = true;
-        if (!recipient.isCurrent()) { reject('not-attached'); return }
-        void lease.ready(typeof value.bootstrapUrl === 'string' ? value.bootstrapUrl : undefined).then(presentation => {
+        void lease.ready(typeof value.bootstrapUrl === 'string' ? value.bootstrapUrl : undefined).then(() => {
           if (socket.destroyed) { lease.close(); return; }
-          if (!recipient.isCurrent()) { reject('not-attached'); return; }
-          void terminals.publishCapture(source.id, windowId, presentation);
           socket.write(JSON.stringify({ ok: true, state: 'ready' }) + '\n');
         }).catch(error => { reject(error instanceof CaptureError ? error.reason : 'capture-failed'); });
       } catch { socket.destroy() }

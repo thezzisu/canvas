@@ -27,7 +27,7 @@ export function useLayoutCard(root: Ref<HTMLElement | undefined>) {
   function freezeNewContent() {
     const element = root.value
     if (!editing.value || !element) return
-    const contents = [...element.querySelectorAll<HTMLElement>(':scope > .card-content, :scope > .capture-toolbar')].filter(node => !frozen.has(node))
+    const contents = [...element.querySelectorAll<HTMLElement>(':scope > .card-content, :scope > .terminal-body, :scope > .capture-toolbar')].filter(node => !frozen.has(node))
     const measurements = contents.map(node => ({ node, width: node.offsetWidth, height: node.offsetHeight, left: node.offsetLeft, top: node.offsetTop }))
     for (const { node, width, height, left, top } of measurements) {
       frozen.set(node, { styles: properties.map(name => ({ name, value: node.style.getPropertyValue(name), priority: node.style.getPropertyPriority(name) })), inert: node.inert })

@@ -86,6 +86,7 @@ test('normal native geometry derives from the latest shared dimensions and atomi
   let store = new Store(path);
   t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
   assert.deepEqual(store.normalTerminalSize('source', 'window'), { cols: 150, rows: 40 });
+  assert.deepEqual(store.normalTerminalSize('source', 'window', 34), { cols: 150, rows: 37 }, 'capture toolbar reservation changes rows, never font metrics or columns');
   store.setWindowSize('source', 'window', { width: 802, height: 572 });
   const snapshots: unknown[] = [];
   store.on('change', () => snapshots.push({ settings: store.settings(), grid: store.normalTerminalSize('source', 'window') }));

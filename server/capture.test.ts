@@ -7,7 +7,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { WebSocket, WebSocketServer } from 'ws'
-import { CaptureError, CaptureService, normalizeCapturePublicBase } from './capture.ts'
+import { CaptureError, CaptureService } from './capture.ts'
+import { normalizeCapturePublicBase } from './capture-address.ts'
 import { Store, type Source } from './state.ts'
 
 async function listen(server: Server) {
@@ -15,7 +16,7 @@ async function listen(server: Server) {
   const address = server.address(); assert(address && typeof address !== 'string')
   return { base: `http://127.0.0.1:${address.port}`, port: address.port }
 }
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, onChange?: (sourceId: string, windowId: string) => void) {
   const root = await mkdtemp(join(tmpdir(), 'cv-capture-test-')), store = new Store(join(root, 'state.db'))
   const source: Source = { id: 'source', name: 'Fixture', transport: 'local' }
   store.put('source', source); store.addSession('first'); store.addSession('other')
@@ -49,12 +50,17 @@ async function fixture(t: TestContext) {
   const target = await listen(upstream)
   let service: CaptureService
   // Simulate a reverse proxy stripping exactly its public mount before Canvas.
-  const stripMount = (req: import('node:http').IncomingMessage) => { if (req.url?.startsWith('/operator/canvas/')) req.url = req.url.slice('/operator/canvas'.length) }
+  const stripMount = (req: import('node:http').IncomingMessage) => {
+    if (req.url?.startsWith('/operator/canvas/')) {
+      req.url = req.url.slice('/operator/canvas'.length)
+      req.headers['x-forwarded-prefix'] = '/operator/canvas'
+    }
+  }
   const backend = createServer((req, res) => { stripMount(req); if (!service.handle(req, res)) res.writeHead(418).end() })
   backend.on('upgrade', (req, socket, head) => { stripMount(req); if (!service.handleUpgrade(req, socket, head)) socket.destroy() })
   const { base } = await listen(backend)
   let endpointsClosed = 0
-  service = new CaptureService(store, { prepare: async (_source, host, port) => {
+  service = new CaptureService(store, { onChange, prepare: async (_source, host, port) => {
     assert.equal(host, '127.0.0.1'); assert.equal(port, target.port)
     return { hostname: host, close: async () => { endpointsClosed++ } }
   } })
@@ -107,7 +113,7 @@ test('capture authenticates without browser cookies, preserves app frame policy 
 
 test('capture WebSocket input uses app cookies and closes on account or source revocation', async t => {
   const f = await fixture(t), ended: string[] = []
-  const lease = f.service.prepareCapture(f.source, { publicBase: f.base, windowId: 'window', paneId: 'pane', port: f.target.port, session: 'first', onEnded: value => ended.push(value.id) })
+  const lease = f.service.prepareCapture(f.source, { publicBase: f.base, windowId: 'window', paneId: 'pane', port: f.target.port, session: 'first', onEnded: () => ended.push(lease.id) })
   const app = await lease.ready(f.target.base + '/login')
   const response = await fetch(app.url, { redirect: 'manual' })
   assert.deepEqual(response.headers.getSetCookie(), [])
@@ -124,14 +130,14 @@ test('capture WebSocket input uses app cookies and closes on account or source r
   assert.equal((await fetch(next.publicUrl)).status, 404)
 })
 
-test('only the owning session stops a capture and revocation also closes a pending launcher', async t => {
+test('authenticated sessions share capture stop while creator revocation still closes a pending launcher', async t => {
   const f = await fixture(t)
   assert.throws(() => f.service.prepareCapture(f.source, { publicBase: f.base, windowId: 'window', paneId: 'pane', port: f.target.port, session: 'missing' }), /sign in/u)
   let stopped = 0, ended = 0
   const lease = f.service.prepareCapture(f.source, { publicBase: f.base, windowId: 'window', paneId: 'pane', port: f.target.port, session: 'first',
     onStop: () => { stopped++ }, onEnded: () => { ended++ } })
-  assert.equal(f.service.stop(lease.id, 'other'), false); assert.equal(stopped, 0)
-  assert.equal(f.service.stop(lease.id, 'first'), true); assert.equal(stopped, 1)
+  assert.equal(f.service.stop(lease.id, 'missing'), false); assert.equal(stopped, 0)
+  assert.equal(f.service.stop(lease.id, 'other'), true); assert.equal(stopped, 1)
   f.store.removeSession('first')
   assert.equal(ended, 1, 'a preparing launcher is revoked too, before an iframe exists')
   assert.equal(f.service.stop(lease.id, 'first'), false)
@@ -152,11 +158,61 @@ test('capture fixes its source port before startup and exposes it only after rea
   assert.equal(await (await fetch(lease.publicUrl)).text(), '<title>Captured fixture</title>', 'a later ready message cannot redirect the proxy to another listener')
 })
 
+test('one pending or ready capture owns a native window until cleanup permits a new command', async t => {
+  const changes: Array<[string, string]> = []
+  const f = await fixture(t, (source, window) => changes.push([source, window]))
+  const options = { publicBase: f.base, windowId: 'window', paneId: 'pane', port: f.target.port, session: 'first', title: 'Shared app' }
+  const first = f.service.prepareCapture(f.source, options)
+  const duplicate = () => assert.throws(() => f.service.prepareCapture(f.source, { ...options, session: 'other' }),
+    (error: unknown) => error instanceof CaptureError && error.reason === 'capture-already-active')
+  duplicate()
+  assert.equal(f.service.current(f.source.id, 'window'), null, 'preparing apps are not presented')
+  await first.ready(f.target.base + '/launch?q=one#anchor')
+  duplicate()
+  assert.deepEqual(f.service.current(f.source.id, 'window'), { id: first.id, path: '/launch?q=one#anchor', title: 'Shared app', windowId: 'window', paneId: 'pane' })
+  assert.equal(f.service.current(f.source.id, 'another'), null)
+  first.close()
+  assert.equal(f.service.current(f.source.id, 'window'), null, 'the snapshot is absent immediately on closure')
+  const next = f.service.prepareCapture(f.source, { ...options, preview: 'static' })
+  await next.ready()
+  assert.equal(f.service.current(f.source.id, 'window')?.id, next.id)
+  assert.equal(f.service.current(f.source.id, 'window')?.preview, 'static')
+  first.close()
+  assert.equal(f.service.current(f.source.id, 'window')?.id, next.id, 'late old-lease cleanup never clears a replacement')
+  assert.deepEqual(changes, [['source', 'window'], ['source', 'window'], ['source', 'window']])
+})
+
+test('a shared capture follows each viewer API authority and mount for HTTP, cookies and WebSockets', async t => {
+  const f = await fixture(t)
+  const lease = f.service.prepareCapture(f.source, { publicBase: f.base, windowId: 'window', paneId: 'pane', port: f.target.port, session: 'first' })
+  await lease.ready(f.target.base + '/login')
+  await (await fetch(lease.publicUrl + 'login', { redirect: 'manual' })).text()
+  const viewerOrigin = 'https://viewer.example', viewerBase = `${viewerOrigin}/operator/canvas/api/capture/${lease.id}/`
+  const requestUrl = `${f.base}/operator/canvas/api/capture/${lease.id}/`
+  const headers = { 'x-forwarded-host': 'viewer.example', 'x-forwarded-proto': 'https', Origin: viewerOrigin }
+  const redirect = await fetch(requestUrl + 'mounted-redirect?' + encodeURIComponent(lease.publicUrl + 'next?q=one'), { headers, redirect: 'manual' })
+  assert.equal(redirect.headers.get('location'), viewerBase + 'next?q=one', 'creator-prefixed redirects remain on the viewing endpoint')
+  assert.equal((await fetch(requestUrl + 'authenticated', { method: 'POST', body: 'input', headers })).status, 200)
+  assert.equal(f.received.at(-1)!.headers.host, 'viewer.example')
+  assert.equal(f.received.at(-1)!.headers.origin, viewerOrigin)
+  assert.equal(f.received.at(-1)!.headers['x-forwarded-prefix'], new URL(viewerBase).pathname.slice(0, -1))
+  assert.equal(f.received.at(-1)!.headers.cookie, 'session=application-only', 'capture cookie paths survive a different viewer prefix')
+  const before = f.received.length
+  assert.equal((await fetch(requestUrl, { headers: { ...headers, Origin: 'https://unrelated.example' } })).status, 404)
+  assert.equal((await fetch(requestUrl, { headers: { ...headers, 'x-forwarded-host': 'one.example,two.example' } })).status, 404)
+  assert.equal(f.received.length, before, 'mismatched or ambiguous origins never reach the app')
+  const ws = new WebSocket(requestUrl.replace(/^http/u, 'ws') + 'socket', { headers })
+  t.after(() => ws.terminate()); await once(ws, 'open')
+  const message = once(ws, 'message'); ws.send('alternate viewer'); assert.equal(String((await message)[0]), 'alternate viewer')
+  assert.equal(f.received.at(-1)!.headers.host, 'viewer.example')
+  assert.equal(f.received.at(-1)!.headers['x-forwarded-prefix'], new URL(viewerBase).pathname.slice(0, -1))
+})
+
 test('each capture keeps its authenticated API mount through cookies, redirects and WebSocket routing', async t => {
   const f = await fixture(t)
   const options = { windowId: 'window', paneId: 'pane', port: f.target.port, session: 'first' }
   const root = f.service.prepareCapture(f.source, { ...options, publicBase: f.base })
-  const mounted = f.service.prepareCapture(f.source, { ...options, publicBase: f.base + '/operator/canvas/' })
+  const mounted = f.service.prepareCapture(f.source, { ...options, windowId: 'mounted', publicBase: f.base + '/operator/canvas/' })
   const rootUrl = new URL(root.publicUrl), mountedUrl = new URL(mounted.publicUrl)
   assert.equal(rootUrl.origin, mountedUrl.origin, 'a mounted capture uses the same public server authority')
   assert.equal(rootUrl.pathname, `/api/capture/${root.id}/`)
@@ -187,7 +243,7 @@ test('each capture keeps its authenticated API mount through cookies, redirects 
     f.base + '/operator//canvas/', f.base + '/operator/../canvas/', f.base + '/operator/./canvas/',
     f.base + '/operator%2Fcanvas/', f.base + '/operator/%2e%2e/canvas/', f.base + '/operator\\canvas/',
     f.base + '/operator/?q=1', f.base + '/operator/#part', f.base + '/operator/?',
-  ]) assert.throws(() => f.service.prepareCapture(f.source, { ...options, publicBase: invalid as string }), /canonical HTTP/u)
+  ]) assert.throws(() => f.service.prepareCapture(f.source, { ...options, windowId: 'invalid', publicBase: invalid as string }), /canonical HTTP/u)
 })
 
 test('application cookie paths, expiry and deletion apply to the logical public mount', async t => {
@@ -270,8 +326,8 @@ test('capture failures preserve their specific public category', async t => {
   const lease = f.service.prepareCapture(f.source, options)
   for (const url of ['not-a-url', 'http://127.0.0.1:1/'])
     await assert.rejects(lease.ready(url), reason('capture-bootstrap-invalid'))
-  for (let index = 1; index < 32; index++) f.service.prepareCapture(f.source, options)
-  assert.throws(() => f.service.prepareCapture(f.source, options), reason('capture-limit'))
+  for (let index = 1; index < 32; index++) f.service.prepareCapture(f.source, { ...options, windowId: `window-${index}` })
+  assert.throws(() => f.service.prepareCapture(f.source, { ...options, windowId: 'overflow' }), reason('capture-limit'))
   f.store.removeSession('first')
   await assert.rejects(lease.ready(), reason('capture-expired'))
   f.store.put('source', { ...f.source, transport: 'ssh', target: 'changed.invalid' })

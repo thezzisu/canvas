@@ -239,7 +239,7 @@ function syncViewVisibility(session: Session) {
 }
 function reportViewState(session: Session) {
   if (session.state.status !== 'connected' || session.socket?.readyState !== WebSocket.OPEN) return
-  const visible = !!session.host?.isConnected && session.viewVisible !== false && !document.hidden && !session.editing
+  const visible = !!session.host?.isConnected && session.viewVisible !== false && !document.hidden && !session.editing && !session.appShowing
   const focus = terminalReadFocus.value
   const focused = visible && !!focus && focus.sourceId === session.resource.sourceId && focus.windowId === session.resource.windowId
   if (session.reportedVisible === visible && session.reportedFocused === focused) return
@@ -392,13 +392,31 @@ function setState(session: Session, state: TerminalStatus) {
   session.listeners.forEach(listener => listener(next))
   refreshReadFocus()
 }
-function interactive(session: Session) { return !session.editing && !session.resumePaint && !session.appShowing && (!session.mobile || session.magnified) }
+function contentFocusable(session: Session) { return !session.editing && !session.appShowing && (!session.mobile || session.magnified) }
+function interactive(session: Session) { return contentFocusable(session) && session.resumePaint === undefined }
+function setContentHidden(session: Session, reason: 'editing' | 'appShowing', value: boolean) {
+  if (session[reason] === value) return
+  const wasHidden = !!(session.editing || session.appShowing)
+  session[reason] = value
+  const hidden = !!(session.editing || session.appShowing)
+  if (hidden) {
+    session.touchpad?.cancel(); session.term.blur(); session.keyboard?.blur()
+    session.resumePaint = undefined; session.resumeReset = false
+  } else if (wasHidden && session.state.status === 'connected') {
+    session.resumePaint = (session.paintRevision || 0) + 1; session.resumeReset = false
+  }
+  session.term.options.disableStdin = !interactive(session)
+  setState(session, { ...session.state, layoutRestoring: !hidden && session.resumePaint !== undefined })
+  syncViewVisibility(session)
+  if (!hidden) schedulePresentation(session)
+  else present(session)
+}
 function setModifiers(session: Session, modifiers: Partial<TerminalModifiers> = {}) {
   session.modifiers = { shift: modifiers.shift === true, ctrl: modifiers.ctrl === true, alt: modifiers.alt === true, meta: modifiers.meta === true }
   setState(session, { ...session.state, modifiers: session.modifiers })
 }
 function focusTerminal(session: Session, keyboard?: boolean) {
-  if (!interactive(session) || session.state.status === 'closed') return
+  if (!contentFocusable(session) || session.state.status === 'closed') return
   claimFocus(session)
   if (session.mobile) session.keyboard?.focus(keyboard)
   else session.term.focus()
@@ -774,6 +792,9 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
         current.resumePaint = undefined; current.resumeReset = false
         current.term.options.disableStdin = !interactive(current)
         setState(current, { ...current.state, layoutRestoring: false })
+        // An explicit Return may focus the input while its fresh frame is pending.
+        // Claim it only if the user has not moved focus elsewhere in the meantime.
+        if (terminalInputHasFocus(current.mobile ? current.mobileInput?.element : current.term.textarea)) claimFocus(current)
       }
       if (frameReady) {
         current.paintedGrid = { cols: term.cols, rows: term.rows }
@@ -1048,23 +1069,9 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       if (!canPasteText()) throw new Error(t('terminal.unavailable'))
       await api(`${windowPath}/pane-action`, { method: 'POST', body: JSON.stringify({ pane: { paneId: pane.paneId, bootId: pane.bootId }, command }) }, mountingContext)
     },
-    setEditing(value: boolean) {
-      if (current.editing === value) return
-      if (value) current.touchpad?.cancel()
-      current.editing = value
-      if (value) {
-        current.term.blur(); current.keyboard?.blur()
-        current.resumePaint = undefined; current.resumeReset = false
-      } else if (current.state.status === 'connected') {
-        current.resumePaint = (current.paintRevision || 0) + 1; current.resumeReset = false
-      }
-      current.term.options.disableStdin = !interactive(current)
-      setState(current, { ...current.state, layoutRestoring: !value && current.resumePaint !== undefined })
-      syncViewVisibility(current)
-      if (!value) schedulePresentation(current)
-    },
-    setAppShowing(value: boolean) { if (value) current.touchpad?.cancel(); current.appShowing = value; if (value) { current.term.blur(); current.keyboard?.blur() }; current.term.options.disableStdin = !interactive(current); current.touchpad?.refresh(); present(current); refreshReadFocus() },
-    focus(options: { keyboard?: boolean } = {}) { focusTerminal(current, options.keyboard) },
+    setEditing(value: boolean) { if (current.host === host && isCurrentApi(mountingContext)) setContentHidden(current, 'editing', value) },
+    setAppShowing(value: boolean) { if (current.host === host && isCurrentApi(mountingContext)) setContentHidden(current, 'appShowing', value) },
+    focus(options: { keyboard?: boolean } = {}) { if (current.host === host && isCurrentApi(mountingContext)) focusTerminal(current, options.keyboard) },
     blur() { current.touchpad?.cancel(); if (current.mobile) current.keyboard?.blur(); else current.term.blur(); setModifiers(current) },
     setModifiers(modifiers: Partial<TerminalModifiers>) { setModifiers(current, modifiers) },
     setZoom(percent: number) { if (current.host === host && isCurrentApi(mountingContext)) setTerminalZoom(current, percent) },

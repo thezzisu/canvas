@@ -190,6 +190,7 @@ def capture_rejected(response, stage):
         "capture-address-unavailable": "the connected browser did not provide a capture API address; reload Canvas and reconnect this terminal",
         "capture-invalid-request": "capture request is invalid; update the Canvas CLI and server together",
         "capture-limit": "32 captured applications are already active; stop one before starting another",
+        "capture-already-active": "this window already has a captured application; stop it before starting another",
         "capture-stopping": "the Canvas server is stopping; reconnect after it restarts and retry",
         "capture-sign-in": "the Canvas session has expired; sign in again and reconnect this terminal",
         "capture-connection-changed": "the Canvas connection changed; reconnect this terminal before capturing",

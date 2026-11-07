@@ -400,8 +400,9 @@ export class Store extends EventEmitter {
     const stored = this.get<WindowSize>("window-size", `${sourceId}/${windowId}`);
     return stored ? { width: stored.width, height: stored.height } : { ...defaultWindowSize };
   }
-  normalTerminalSize(sourceId: string, windowId: string) {
-    return normalTerminalGrid(this.windowSize(sourceId, windowId), this.settings().terminalCell);
+  normalTerminalSize(sourceId: string, windowId: string, reservedHeight = 0) {
+    const size = this.windowSize(sourceId, windowId);
+    return normalTerminalGrid({ ...size, height: size.height - reservedHeight }, this.settings().terminalCell);
   }
   setWindowSize(sourceId: string, windowId: string, patch: Partial<WindowSize>) {
     const id = `${sourceId}/${windowId}`;
