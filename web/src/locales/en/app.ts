@@ -76,6 +76,7 @@ export default {
   "background": "Background image",
   "minimap": "Minimap",
   "navigation": "Navigation",
+  "autoYieldControls": "Auto-yield controls",
   "renameCanvas": "Rename canvas",
   "windowNavigation": "Window navigation",
   "noMatchingWindows": "No matching windows",

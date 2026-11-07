@@ -76,6 +76,7 @@ export default {
   "background": "背景图片",
   "minimap": "小地图",
   "navigation": "导航条",
+  "autoYieldControls": "控件自动避让",
   "renameCanvas": "重命名画布",
   "windowNavigation": "窗口导航",
   "noMatchingWindows": "没有匹配的窗口",

@@ -46,13 +46,14 @@ const { editing } = useLayoutCard(layoutRoot)
 const host = ref<HTMLElement>()
 const app = computed(() => capturedApp(props.data.sourceId, props.data.windowId))
 const captureHost = ref<HTMLElement>()
-const trustedApp = computed(() => !!app.value && (captureTrusted(app.value.id) || app.value.preview === 'static' && isMarkdownFile(new URL(app.value.url).pathname)))
+const trustedApp = computed(() => !!app.value && (app.value.preview !== 'static' || captureTrusted(app.value.id) || isMarkdownFile(new URL(app.value.url).pathname)))
 function withTrustedApp(run: (url: string) => void) {
   const current = app.value, context = apiContext()
   if (!current) return
   const execute = () => {
     if (!isCurrentApi(context) || app.value?.id !== current.id) return
-    trustCapture(current.id); run(current.url)
+    if (!trustedApp.value) trustCapture(current.id)
+    run(current.url)
   }
   if (trustedApp.value) execute(); else requestTrustedPreview(current.title, execute)
 }

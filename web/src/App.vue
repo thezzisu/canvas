@@ -227,6 +227,7 @@ const canvasMenuItems = computed<DropdownMenuItem[][]>(() => [
   [
     { ui: { item: 'aria-checked:before:bg-[var(--toggle-bg)] aria-checked:text-[var(--toggle-fg)]' }, type: 'checkbox', label: t('app.minimap'), icon: 'i-lucide-map', checked: showMinimap.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { showMinimap.value = value } },
     { ui: { item: 'aria-checked:before:bg-[var(--toggle-bg)] aria-checked:text-[var(--toggle-fg)]' }, type: 'checkbox', label: t('app.navigation'), icon: 'i-lucide-panel-bottom', checked: showNavigation.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { showNavigation.value = value } },
+    { ui: { item: 'aria-checked:before:bg-[var(--toggle-bg)] aria-checked:text-[var(--toggle-fg)]' }, type: 'checkbox', label: t('app.autoYieldControls'), icon: 'i-lucide-mouse-pointer-2', checked: autoYieldControls.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { autoYieldControls.value = value } },
   ],
   ...(!isOverview.value ? [[
     { label: t('app.renameCanvas'), icon: 'i-lucide-pencil', onSelect: () => openCanvasDialog(currentCanvas.value) },
@@ -500,6 +501,7 @@ const overviewOrder = useLocalStorage<OverviewOrder>(() => `canvas:overview:${ac
 const overviewCreation = computed(() => overviewSelected.value.includes('unknown'))
 const showMinimap = useLocalStorage('canvas:view:minimap', true, { listenToStorageChanges: false, writeDefaults: false })
 const showNavigation = useLocalStorage('canvas:view:navigation', true, { listenToStorageChanges: false, writeDefaults: false })
+const autoYieldControls = useLocalStorage('canvas:view:auto-yield-controls', true, { listenToStorageChanges: false, writeDefaults: false })
 const overviewMenuOpen = ref(false)
 const overviewTrigger = ref<HTMLElement>()
 const overviewDismiss = usePointerDismiss(overviewMenuOpen, overviewTrigger)
@@ -638,6 +640,7 @@ const { surface: graphSurface, app: appElement, fullscreen: canvasFullscreen, re
 const sidebarDrawer = computed(() => mobile.value || narrowNavigation.value || canvasFullscreen.value)
 const minimap = ref<InstanceType<typeof CanvasMiniMap>>()
 const [toolbarOverlap, minimapOverlap] = useTerminalOverlays({
+  enabled: () => autoYieldControls.value,
   surface: graphSurface, controls: [fitToolbar, () => minimap.value?.$el as HTMLElement | undefined],
   geometry: () => {
     const viewport = getViewport(), id = activeElement.value?.closest<HTMLElement>('.vue-flow__node')?.dataset.id

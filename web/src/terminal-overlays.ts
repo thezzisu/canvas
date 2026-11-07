@@ -4,12 +4,14 @@ import { useDocumentFocus } from './document-focus'
 
 /** Keep native pointer targeting while the canvas controls yield to terminal input. */
 export function useTerminalOverlays(options: {
+  enabled(): boolean
   surface: MaybeComputedElementRef<HTMLElement | undefined>
   controls: MaybeComputedElementRef[]
   geometry(): unknown
 }) {
   const { activeElement, windowFocused } = useDocumentFocus()
   const body = computed(() => {
+    if (!options.enabled()) return
     const active = activeElement.value
     if (!windowFocused.value || !active?.matches('.xterm-helper-textarea, .terminal-mobile-input')) return
     const host = active.closest<HTMLElement>('.terminal-host')
