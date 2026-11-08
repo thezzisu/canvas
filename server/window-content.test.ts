@@ -772,6 +772,93 @@ test('colored inline paths share token extraction instead of requiring a path-on
   assert(contentCandidates([content]).panes.flatMap(pane => pane.items).some(item => item.kind === 'file' && item.path === path))
 })
 
+test('application-indented code paths join unfinished fragments without reaching the pane edge', async t => {
+  const f = await fixture(t), directory = join(f.root, 'pkuandroid-lite-client')
+  await mkdir(directory)
+  const path = join(directory, 'pkuandroid-v3.0.1-lite.apk')
+  await writeFile(path, 'synthetic package')
+  const split = path.indexOf('pkuandroid-lite-client') + 'pkuan'.length
+  for (const [prefix, indent] of [['    ', '    '], ['  adb install -r ', '                 '], ['  Reading ', '  ']]) {
+    const first = prefix + path.slice(0, split)
+    for (const margin of [2, 12, 40]) {
+      f.setContent([{ ...pane([first, indent + path.slice(split)], f.root), columns: terminalCellWidth(first) + margin }])
+      assert.deepEqual((await f.scan()).panes.flatMap(group => group.items.flatMap(item => item.kind === 'file' ? [item.path] : [])), [path])
+    }
+  }
+  assert.equal(f.reads(), 0, 'only regular-file metadata is checked')
+})
+
+test('versioned filename fragments join a visible suffix in indented displays and stable table cells', async t => {
+  const f = await fixture(t)
+  for (const extension of ['apk', 'zip', 'pdf']) {
+    const name = `pkuandroid-v3.0.1-lite.${extension}`, path = join(f.root, name)
+    await writeFile(path, 'synthetic file')
+    for (const lines of [
+      ['    pkuandroid-v3.0.1', `    -lite.${extension}`],
+      ['│ 文件 │ pkuandroid-v3.0.1       │', `│      │ ${`-lite.${extension}`.padEnd(24)}│`],
+      ['| file | pkuandroid-v3.0.1       |', `|      | ${`-lite.${extension}`.padEnd(24)}|`],
+      ['file │ pkuandroid-v3.0.1', `     │ -lite.${extension}`],
+      ['file │ 交付物路径: pkuandroid-v3.0.1', `     │ -lite.${extension}`],
+      ['file │ 交付物路径: pkuandroid-v3.0.1', `     │ -lite.${extension} (2.1 MB, ready)`],
+    ]) {
+      f.setContent([{ ...pane(lines, f.root), columns: 120 }])
+      assert.deepEqual((await f.scan()).panes.flatMap(group => group.items.flatMap(item => item.kind === 'file' ? [item.path] : [])), [path])
+    }
+  }
+  f.setContent([{ ...pane(['    missing-v3.0.1', '    -lite.apk'], f.root), columns: 120 }])
+  assert.deepEqual((await f.scan()).panes, [], 'reconstruction never bypasses source file validation')
+  const parenthesized = 'package-v1.2.3-lite(1).apk'
+  await writeFile(join(f.root, parenthesized), 'synthetic file')
+  f.setContent([{ ...pane(['file │ package-v1.2.3', '     │ -lite(1).apk (2.1 MB)'], f.root), columns: 120 }])
+  assert.deepEqual((await f.scan()).panes.flatMap(group => group.items.flatMap(item => item.kind === 'file' ? [item.path] : [])), [join(f.root, parenthesized)], 'parentheses inside the filename remain literal')
+})
+
+test('layout continuation does not merge independent files, records, panes or changed indentation', async t => {
+  const f = await fixture(t)
+  for (const name of ['report.md', 'other.md', 'report.mdother.md', 'report.md-lite.apk', 'version-v3.0.1-lite.apk', 'shortname.apk'])
+    await writeFile(join(f.root, name), 'synthetic file')
+  const paths = (groups: NativeContentPane[]) => contentCandidates(groups).panes.flatMap(group => group.items.flatMap(item => item.kind === 'file' ? [item.path] : []))
+  for (const first of ['report.md', 'report.md,', 'report.md:3']) {
+    assert(!paths([pane([`  ${first}`, '  -lite.apk'], f.root)]).includes(join(f.root, 'report.md-lite.apk')))
+  }
+  assert(!paths([pane(['  report.md', '  other.md'], f.root)]).includes(join(f.root, 'report.mdother.md')))
+  for (const lines of [['  short', '  name.apk'], ['file │ short', '     │ name.apk'], ['│ file │ /tmp/short        │', '│      │ name.apk          │']])
+    assert(!paths([pane(lines, f.root)]).some(path => path?.endsWith('/shortname.apk')), JSON.stringify(lines))
+  for (const following of ['  - lite.apk', '  --lite.apk', '  ./lite.apk', '  ../lite.apk', '  /tmp/lite.apk', '   -lite.apk', '', '  words here'])
+    assert(!paths([pane(['  version-v3.0.1', following], f.root)]).includes(join(f.root, 'version-v3.0.1-lite.apk')), following)
+  assert(!paths([pane(['  version-v3.0.1'], f.root), pane(['  -lite.apk'], f.root, 'other')]).includes(join(f.root, 'version-v3.0.1-lite.apk')))
+  const top = '│ file │ version-v3.0.1     │', continuation = '│      │ -lite.apk          │'
+  for (const lines of [
+    [top, continuation.replace('│      │', '│ next │')],
+    [top, continuation.replace('│      │', '│ 文文 │')],
+    [top, ' ' + continuation],
+    [top, '├──────┼────────────────────┤', continuation],
+    [top, '', continuation],
+    [top, continuation.replace('          │', '           │')],
+  ]) assert(!paths([{ ...pane(lines, f.root), columns: 120 }]).includes(join(f.root, 'version-v3.0.1-lite.apk')), JSON.stringify(lines))
+  f.setContent([{ ...pane(['  report.md', '  other.md'], f.root), columns: 120 }])
+  assert.deepEqual((await f.scan()).panes.flatMap(group => group.items.flatMap(item => item.kind === 'file' ? [item.path] : [])), [join(f.root, 'report.md'), join(f.root, 'other.md')])
+})
+
+test('layout wraps preserve two whitespace interpretations and share the bounded scan budget', async t => {
+  const f = await fixture(t)
+  await writeFile(join(f.root, 'version-v3.0.1-lite.apk'), 'compact')
+  await writeFile(join(f.root, 'version-v3.0.1  -lite.apk'), 'spaced')
+  f.setContent([{ ...pane(['  version-v3.0.1', '  -lite.apk'], f.root), columns: 120 }])
+  assert.deepEqual((await f.scan()).panes, [], 'multiple existing whitespace interpretations remain ambiguous')
+  f.setContent([{ ...pane(['  version-v3.0.1', '  -lite.apk (2.1 MB)'], f.root), columns: 120 }])
+  assert.deepEqual((await f.scan()).panes, [], 'a trailing annotation does not discard the literal boundary whitespace interpretation')
+  await rm(join(f.root, 'version-v3.0.1-lite.apk'))
+  assert.deepEqual((await f.scan()).panes.flatMap(group => group.items.flatMap(item => item.kind === 'file' ? [item.path] : [])), [join(f.root, 'version-v3.0.1  -lite.apk')])
+  const rows = Array.from({ length: 250 }, (_, index) => [`│ file │ version${index.toString().padStart(3, '0')}.1 │`, '│      │ -lite.apk    │']).flat()
+  const candidates = contentCandidates([{ ...pane(rows, f.root), columns: 120 }])
+  assert(candidates.truncated)
+  assert(candidates.panes.flatMap(group => group.items).length <= 200)
+  assert([...candidates.fileChoices.values()].every(choice => choice.paths.length <= 2 && choice.references.length <= 2))
+  const oversized = contentCandidates([pane([`│ file │ /tmp/${'x'.repeat(9000)} │`, '│      │ -lite.apk │'], f.root)])
+  assert(!oversized.panes.flatMap(group => group.items).some(item => item.kind === 'file' && (item.path?.length || 0) > 8192))
+})
+
 
 test('path seed discovery shares the reconstruction budget on delimiter-heavy text', () => {
   const result = contentCandidates([pane(['('.repeat(8000) + 'word', 'Later (/tmp/unreached/', 'file.png)'])])

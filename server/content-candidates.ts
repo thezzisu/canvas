@@ -49,7 +49,7 @@ function presentationPath(line: string): { value: string; closing?: string } {
 /** Whole path displays only; ordinary prose and shell command lines stay tokenized. */
 function pathDisplay(value: string): boolean {
   return (/^(?:\/|~\/|\.{1,2}\/|[^\s<>"'`]+\/)/u.test(value)
-      || /^[^\s<>"'`/]+\.[\p{L}][\p{L}\p{N}_-]{0,15}$/u.test(value))
+      || /^[^\s<>"'`/]+\.[\p{L}\p{N}][\p{L}\p{N}_-]{0,15}$/u.test(value))
     && !/[<>"'`]/u.test(value) && !/\s+[^\s]*\//u.test(value) && !/^[a-z][a-z\d+.-]*:\/\//iu.test(value)
 }
 
@@ -78,6 +78,16 @@ function* pathSpans(lines: readonly string[], columns: number | undefined, budge
       const offset = match.index + match[0].length - match[1]!.length
       if (!seeds.has(offset)) seeds.set(offset, undefined)
     }
+    // A version number may end the visible fragment before the real extension.
+    // Seed it after a prose label too; final filePath validation stays unchanged.
+    const end = line.trimEnd().length
+    let start = end
+    while (start > 0 && end - start <= 8192 && !/\s/u.test(line[start - 1]!)) start--
+    if (end - start <= 8192) {
+      const version = line.slice(start, end)
+      if (!/[<>"'`|/]/u.test(version) && /\p{L}/u.test(version) && /^\.[\p{N}][\p{L}\p{N}_-]*$/u.test(posix.extname(version))
+        && !seeds.has(start)) seeds.set(start, undefined)
+    }
     const shown = presentationPath(line)
     if (pathDisplay(shown.value.replace(/^@/u, ''))) {
       const offset = line.indexOf(shown.value)
@@ -88,10 +98,17 @@ function* pathSpans(lines: readonly string[], columns: number | undefined, budge
       if (line.length - offset > 8192) continue
       budget.remaining--
       const stack = closing ? [closing] : []
-      let value = '', spaced = '', joined = false, finished = false
+      let value = '', spaced = '', joined = false, finished = false, layoutContinuation = false
       for (let next = row; next < lines.length; next++) {
         const raw = next === row ? line.slice(offset) : lines[next]!.replace(/^\s*(?:>\s*)+/u, '')
-        const part = next === row ? raw : raw.trimStart()
+        let part = next === row ? raw : raw.trimStart()
+        const whitespace = next > row ? raw.slice(0, raw.length - part.length) : ''
+        const token = part.match(/^\S+/u)?.[0] || ''
+        // A strongly aligned unquoted suffix follows the ordinary token rule:
+        // a completed filename ends before a separate prose annotation.
+        const annotated = !closing && layoutContinuation && token.length < part.length
+          && /\.[\p{L}][\p{L}\p{N}_-]{0,15}$/u.test(withoutFileLocation(trimPunctuation(value + token)))
+        if (annotated) part = token
         if (!part || next > row && /^(?:[-+*•]\s|\d{1,4}[.)]\s)/u.test(part)) break
         if (!closing && next > row && (/^(?:[\/@~+*•]|--|\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:\/\/)/iu.test(part)
             || /\s/u.test(part) || !/[\p{L}\p{N}_]/u.test(part))) break
@@ -110,18 +127,61 @@ function* pathSpans(lines: readonly string[], columns: number | undefined, budge
         }
         if (!segment || value.length + segment.length > 8192 || budget.characters < 0) break
         // Keep observed whitespace as a second complete interpretation, never a combinatorial search.
-        const whitespace = next > row ? raw.slice(0, raw.length - part.length) : ''
         value += segment; spaced += whitespace + segment
         joined ||= next > row
-        if (complete) { finished = true; break }
+        if (complete || annotated) { finished = true; break }
         if (closing) continue
-        const width = terminalCellWidth(lines[next]!.trimEnd())
-        if (!/[/-]$/u.test(segment) && (!columns || width < columns - 1 || width > columns)) { finished = true; break }
         const following = lines[next + 1]?.trim()
         if (following && !joined && /\.[\p{L}][\p{L}\p{N}_-]{0,15}$/u.test(value) && /^[^./\s]+\.[\p{L}][\p{L}\p{N}_-]*$/u.test(following)) { finished = true; break }
+        const width = terminalCellWidth(lines[next]!.trimEnd())
+        const indent = lines[next + 1]?.match(/^\s*/u)?.[0] || ''
+        // Applications wrap code inside a padded region narrower than the pane.
+        // Matching indentation plus an unfinished path/suffix is stronger evidence
+        // than widening the terminal-edge tolerance or joining arbitrary filenames.
+        const aligned = indent.length > 0 && (indent === line.match(/^\s*/u)?.[0]
+          || terminalCellWidth(indent) === terminalCellWidth(line.slice(0, offset)))
+        const continuation = aligned && !/\.[\p{L}][\p{L}\p{N}_-]{0,15}$/u.test(withoutFileLocation(trimPunctuation(value)))
+          && !!following && /^(?:[-_.][\p{L}\p{N}_]|[^\s/]+\/)/u.test(following)
+        layoutContinuation = continuation
+        if (!continuation && !/[/-]$/u.test(segment) && (!columns || width < columns - 1 || width > columns)) { finished = true; break }
       }
       if ((!closing || finished) && value && (joined || closing || offset === line.indexOf(shown.value) && pathDisplay(value.replace(/^@/u, ''))))
         yield { values: [...new Set([value, spaced].map(text => closing ? text : trimPunctuation(text)))].filter(value => value.length <= 8192) }
+    }
+  }
+}
+
+/** Read only stable vertical table columns; continuation rows must
+ * leave every sibling cell empty so independent records cannot be joined. */
+function* tablePathSpans(lines: readonly string[], budget: { remaining: number; characters: number }): Generator<PathSpan> {
+  const row = (line: string | undefined) => {
+    if (!line || line.length > 8192) return
+    const border = /[│┃║]/u.exec(line)?.[0] || (/^\s*\|.*\|\s*$/u.test(line) ? '|' : undefined)
+    if (!border) return
+    if (budget.characters < line.length) { budget.characters = 0; return }
+    budget.characters -= line.length
+    const cells = line.split(border)
+    if (cells.length < 2) return
+    // Last cells may have no closing border. Only observed separators define
+    // a width; trailing whitespace or short text never invents a right edge.
+    const widths = cells.slice(0, -1).map(terminalCellWidth)
+    return { cells, shape: `${border}:${widths.join(',')}` }
+  }
+  for (let start = 0; start < lines.length && budget.remaining > 0 && budget.characters > 0; start++) {
+    const first = row(lines[start])
+    if (!first) continue
+    for (let column = 0; column < first.cells.length && budget.remaining > 0 && budget.characters > 0; column++) {
+      const cell = first.cells[column]!
+      if (!cell.trim()) continue
+      const lane = [cell]
+      for (let next = start + 1; next < lines.length; next++) {
+        const following = row(lines[next])
+        if (!following || following.shape !== first.shape || !following.cells[column]!.trim()
+          || following.cells.some((value, index) => index !== column && value.trim())) break
+        lane.push(following.cells[column]!)
+      }
+      const columns = column < first.cells.length - 1 ? terminalCellWidth(cell) - (cell.endsWith(' ') ? 1 : 0) : undefined
+      if (lane.length > 1) yield* pathSpans(lane.map(value => value.trimEnd()), columns, budget)
     }
   }
 }
@@ -186,6 +246,8 @@ export function contentCandidates(panes: NativeContentPane[]): { panes: WindowCo
       }
     }
     for (const span of pathSpans(pane.lines, pane.columns, wrapBudget))
+      add(span.values[0]!, true, false, undefined, span.values.slice(1))
+    for (const span of tablePathSpans(pane.lines, wrapBudget))
       add(span.values[0]!, true, false, undefined, span.values.slice(1))
     if (items.length) result.push({ id: pane.id, name: pane.name, ...(pane.cwd ? { cwd: pane.cwd } : {}), items })
   }
