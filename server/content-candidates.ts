@@ -160,12 +160,13 @@ function* tablePathSpans(lines: readonly string[], budget: { remaining: number; 
     if (!border) return
     if (budget.characters < line.length) { budget.characters = 0; return }
     budget.characters -= line.length
-    const cells = line.split(border)
+    const cells = line.split(border), allSeparators = [...line.matchAll(new RegExp(border, 'gu'))]
+      .map(match => terminalCellWidth(line.slice(0, match.index)))
+    const separators = allSeparators
     if (cells.length < 2) return
     // Last cells may have no closing border. Only observed separators define
     // a width; trailing whitespace or short text never invents a right edge.
-    const widths = cells.slice(0, -1).map(terminalCellWidth)
-    return { cells, shape: `${border}:${widths.join(',')}` }
+    return { cells, shape: `${border}:${separators.join(',')}` }
   }
   for (let start = 0; start < lines.length && budget.remaining > 0 && budget.characters > 0; start++) {
     const first = row(lines[start])
