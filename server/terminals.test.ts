@@ -170,6 +170,28 @@ test('normal geometry starts from shared state and changes without browser focus
   assert.equal(existsSync(f.bytes) ? readFileSync(f.bytes).length : 0, 0, 'size changes never inject terminal input');
 });
 
+test('an authenticated terminal liveness probe is answered for passive hidden views without taking input control', async t => {
+  const f = await fixture(t); if (!f) return;
+  const controller = new Client(), passive = new Client();
+  await f.manager.connect(f.source, f.target, controller.socket); await f.ready();
+  await f.manager.connect(f.source, f.target, passive.socket);
+  const terminal = (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!;
+  assert.equal(terminal.controller, controller.socket);
+  passive.command({ type: 'view-visible', visible: false });
+  passive.command({ type: 'ping', id: 'picker-return-1' });
+  await waitFor(() => messages(passive).some(message => message.type === 'pong' && message.id === 'picker-return-1'), 'same native terminal did not confirm liveness');
+  assert.deepEqual(messages(passive).slice(-1)[0], { type: 'pong', id: 'picker-return-1' });
+  assert.equal(terminal.controller, controller.socket, 'liveness does not claim input control');
+  assert.equal(await f.manager.downloadRecipient(f.source.id, f.target.windowId), undefined, 'liveness does not claim the upload recipient');
+  assert.equal(existsSync(f.bytes) ? readFileSync(f.bytes).length : 0, 0, 'liveness does not write terminal input');
+
+  const invalid = passive.received.length;
+  for (const id of ['', 'has space', 'x'.repeat(65)]) passive.command({ type: 'ping', id });
+  assert.equal(passive.received.length, invalid, 'invalid correlation ids are ignored');
+  assert.equal(terminal.controller, controller.socket);
+  controller.close(); passive.close();
+});
+
 test('one existing native endpoint per source delivers live notifications across viewers, owner closure and reconnect', async t => {
   const f = await fixture(t); if (!f) return;
   const first = new Client(), duplicateView = new Client(), siblingView = new Client();

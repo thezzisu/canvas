@@ -122,6 +122,9 @@ interface Session {
   // Browsers without a paste event for Ctrl+Shift+V fall back to the async clipboard.
   shiftPaste?: ReturnType<typeof setTimeout>
   mouseDefaults?: ReturnType<typeof bindTerminalMouseDefaults>
+  selectionRevision?: number
+  uploadUnverified?: boolean
+  pickerPing?: { id: string; timer: ReturnType<typeof setTimeout> }
 }
 const sessions = new Map<string, Session>()
 let logicalFocus: WindowFocus | undefined
@@ -206,6 +209,8 @@ export function retainTerminalMetadata(sourceIds: readonly string[], changedSour
   const next = new Map(liveTerminalMetadata.value)
   for (const session of sessions.values()) if (!metadataSources.has(session.resource.sourceId) || changedSources.includes(session.resource.sourceId)) {
     if (changedSources.includes(session.resource.sourceId)) {
+      session.selectionRevision = (session.selectionRevision || 0) + 1
+      session.uploads.invalidate(t('terminal.upload.targetChanged'))
       session.reconnect?.pause(); disconnect(session)
       setState(session, { ...session.state, status: 'disconnected', error: undefined, retryAttempt: undefined })
     }
@@ -390,7 +395,30 @@ function setState(session: Session, state: TerminalStatus) {
   session.keyboardLock?.refresh()
   session.touchpad?.refresh()
   session.listeners.forEach(listener => listener(next))
+  refreshUploads(session)
   refreshReadFocus()
+}
+function clearPickerPing(session: Session) {
+  if (session.pickerPing) clearTimeout(session.pickerPing.timer)
+  session.pickerPing = undefined
+}
+function refreshUploads(session: Session) {
+  if (!session.uploads.hasPending) { session.uploadUnverified = false; clearPickerPing(session); return }
+  const socket = session.socket
+  // A picker may deliver its change event while the page is still hidden.
+  // Probe this socket only after return, without spending background retry time.
+  if (session.uploadUnverified && !session.pickerPing && !document.hidden && session.host?.isConnected &&
+      session.state.status === 'connected' && socket?.readyState === WebSocket.OPEN) {
+    const id = uuid()
+    const timer = setTimeout(() => {
+      if (session.pickerPing?.id !== id || session.socket !== socket) return
+      clearPickerPing(session)
+      if (!document.hidden) connectionFailed(session, t('terminal.connection.timeout'))
+    }, 3000)
+    session.pickerPing = { id, timer }
+    socket.send(JSON.stringify({ type: 'ping', id }))
+  }
+  session.uploads.refresh()
 }
 function contentFocusable(session: Session) { return !session.editing && !session.appShowing && (!session.mobile || session.magnified) }
 function interactive(session: Session) { return contentFocusable(session) && session.resumePaint === undefined }
@@ -437,6 +465,10 @@ function schedulePresentation(session: Session) {
   })
 }
 function disconnect(session: Session) {
+  const socket = session.socket
+  session.socket = undefined
+  clearPickerPing(session)
+  if (session.uploads.hasPending) session.uploadUnverified = true
   session.touchpad?.cancel()
   session.pastePreview?.(); session.pastePreview = undefined
   updateMetadata(session)
@@ -450,8 +482,6 @@ function disconnect(session: Session) {
   session.paintRevision = (session.paintRevision || 0) + 1
   session.connectionProbe?.abort(); session.connectionProbe = undefined
   endFocusSize(session)
-  const socket = session.socket
-  session.socket = undefined
   if (socket) { disconnectDownloads(socket); socket.close() }
   session.uploads.disconnected()
   session.presentationRevision = (session.presentationRevision || 0) + 1
@@ -467,6 +497,8 @@ function windowRemoved(session: Session) {
   removeCaptures(sourceId, windowId)
   for (const view of sessions.values()) if (view.resource.sourceId === sourceId && view.resource.windowId === windowId) {
     if (view.state.status === 'closed') continue
+    view.selectionRevision = (view.selectionRevision || 0) + 1
+    view.uploads.invalidate(t('terminal.closed'))
     view.reconnect?.stop()
     disconnect(view)
     view.fileRead?.abort(); view.fileRead = undefined
@@ -483,6 +515,8 @@ function terminalVisibilityChanged() {
   for (const session of sessions.values()) {
     syncViewVisibility(session)
     if (document.hidden) {
+      clearPickerPing(session)
+      if (session.uploads.hasPending) session.uploadUnverified = true
       session.reconnect?.pause()
       // Keep healthy sockets alive. Pending authentication and handshakes are
       // restarted in the foreground instead of timing out behind the user.
@@ -492,6 +526,7 @@ function terminalVisibilityChanged() {
         if (session.socket?.readyState === WebSocket.OPEN) session.reconnect?.connected()
         else connectionFailed(session)
       } else session.reconnect?.resume()
+      refreshUploads(session)
     }
   }
 }
@@ -550,6 +585,9 @@ async function connect(session: Session, probe: boolean) {
     else {
       try {
         const message = JSON.parse(event.data)
+        if (message.type === 'pong' && session.pickerPing?.id === message.id) {
+          clearPickerPing(session); session.uploadUnverified = false; refreshUploads(session); return
+        }
         if (receiveDownload(socket, message, session.resource)) return
         if (receiveCapture(session.resource.sourceId, session.resource.windowId, message) || receiveDirectory(socket, message) || receiveUrl(socket, message) || session.uploads.receive(message)) return
         if (message.type === 'metadata' && isWindowMetadata(message.window) && message.window.id === session.resource.windowId) updateMetadata(session, message.window)
@@ -745,6 +783,7 @@ function sendTerminalData(session: Session, data: string) {
 }
 export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, options: { magnified?: boolean; mobile?: boolean; zoom?: number; closed?: boolean; settings?: TerminalSettings } = {}) {
   installTerminalEvents()
+  const mountingContext = apiContext()
   const id = key(resource.sourceId, resource.spaceId, resource.windowId)
   let session = sessions.get(id)
   if (!session) {
@@ -763,7 +802,19 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     surface.className = 'terminal-surface'
     Object.assign(surface.style, { transformOrigin: 'top left', width: '100%', height: '100%' })
     const uploads = new TerminalUploads({
-      available: () => interactive(session!) && session!.state.status === 'connected' && !(session!.state.presentation?.maximized && !session!.state.presentation.owned),
+      readiness: () => {
+        const value = session!
+        if (!isCurrentApi(mountingContext) || !value.host?.isConnected || !contentFocusable(value) ||
+            value.state.status === 'closed' || value.state.status === 'disconnected' ||
+            value.state.presentation?.maximized && !value.magnified) return 'unavailable'
+        if (document.hidden || value.uploadUnverified || value.resumePaint !== undefined || !value.state.screenReady ||
+            value.state.status !== 'connected' || value.socket?.readyState !== WebSocket.OPEN ||
+            value.magnified && (!value.state.focusResize?.owned || value.state.presentation?.maximized && !value.state.presentation.owned)) return 'waiting'
+        return 'ready'
+      },
+      unavailableReason: () => session!.state.status === 'closed' ? t('terminal.closed') :
+        session!.state.presentation?.maximized && !session!.state.presentation.owned ? t('terminal.maximized') :
+        session!.state.status === 'disconnected' ? t('terminal.upload.disconnected') : t('terminal.upload.targetChanged'),
       focus: () => { focusTerminal(session!) },
       send: message => {
         if (session!.socket?.readyState !== WebSocket.OPEN) return false
@@ -1000,7 +1051,6 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     session.reconnect?.resume(liveTerminalMetadata.value.get(`${resource.sourceId}/${resource.windowId}`) !== null)
   else if (session.state.status === 'connected') session.reconnect?.connected()
   const current = session
-  const mountingContext = apiContext()
   const canPasteText = () => isCurrentApi(mountingContext) && current.host === host && host.isConnected && interactive(current) && current.state.status === 'connected' && current.socket?.readyState === WebSocket.OPEN &&
     !(current.state.presentation?.maximized && (!current.state.presentation.owned || !current.magnified))
   const mouseDefaults = bindTerminalMouseDefaults(current.surface, canPasteText, () => current.settings.rightClick, (event, action) => {
@@ -1079,6 +1129,19 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       sendTerminalKey(current, key, modifiers)
     },
     uploadFiles(files: File[]) { current.uploads.enqueue(files) },
+    prepareFiles() {
+      if (current.host !== host || !isCurrentApi(mountingContext)) return
+      const context = apiContext(), revision = current.selectionRevision || 0
+      let selected = false
+      return (files: File[]) => {
+        if (selected || !files.length) return
+        selected = true
+        if (current.host !== host || !isCurrentApi(context) || revision !== (current.selectionRevision || 0)) return
+        current.uploadUnverified = true
+        current.uploads.enqueue(files, undefined, context)
+        refreshUploads(current)
+      }
+    },
     uploadReference(reference: CanvasFileReference) { return uploadReference(current, reference) },
     cancelMaximized() {
       const presentation = current.state.presentation
@@ -1116,6 +1179,9 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       intersection?.disconnect()
       current.listeners.delete(listener)
       if (current.host === host) {
+        current.selectionRevision = (current.selectionRevision || 0) + 1
+        current.uploads.invalidate(t('terminal.upload.targetChanged'))
+        current.uploadUnverified = false; clearPickerPing(current)
         current.touchpad?.cancel()
         current.pastePreview?.(); current.pastePreview = undefined
         endFocusSize(current)

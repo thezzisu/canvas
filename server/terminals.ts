@@ -329,6 +329,10 @@ class LiveTerminal {
       if (isBinary || Buffer.byteLength(data.toString()) > 128 * 1024) return;
       try {
         const msg = JSON.parse(data.toString());
+        if (msg.type === 'ping') {
+          if (typeof msg.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(msg.id)) json(ws, { type: 'pong', id: msg.id });
+          return;
+        }
         if (msg.type === "view-visible" && typeof msg.visible === "boolean") {
           if (msg.visible && msg.focused === true) this.focused.add(ws);
           else if (!msg.visible || msg.focused === false) this.focused.delete(ws);

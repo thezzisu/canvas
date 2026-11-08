@@ -14,7 +14,7 @@ export default {
   },
   upload: {
     file: '上传文件', drop: '松开以上传并插入路径', failed: '上传失败', disconnected: '终端未连接', invalidSize: '文件大小无效', files: '{count} 个文件',
-    preparing: '准备上传…', prepareTimeout: '上传准备超时', invalidUrl: '上传地址无效', cancelling: '取消中…',
+    waiting: '等待终端恢复…', targetChanged: '原上传目标已不可用', preparing: '准备上传…', prepareTimeout: '上传准备超时', invalidUrl: '上传地址无效', cancelling: '取消中…',
     cancelled: '已取消', pathInserted: '已插入路径', cancel: '取消上传', close: '关闭上传状态', progress: '文件上传进度',
     foldersUnsupported: '不支持文件夹', unreadable: '无法读取所选文件', fileFailed: '{name}：{error}',
   },

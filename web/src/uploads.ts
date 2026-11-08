@@ -1,6 +1,6 @@
 import { t } from './i18n'
 import { MAX_PASTE_PARTS, MAX_UPLOAD_BEGIN_BYTES, type PastePart } from '../../shared/paste'
-import { apiContext, apiFetch, apiUrl, uuid, type ApiContext } from './api'
+import { apiContext, apiFetch, apiUrl, isCurrentApi, uuid, type ApiContext } from './api'
 import { hasFileTransfer, readFileTransfer } from './browser-file-input'
 
 export interface TerminalUploadState {
@@ -9,7 +9,7 @@ export interface TerminalUploadState {
   fileCount?: number
   transferred: number
   total: number
-  state: 'preparing' | 'uploading' | 'completed' | 'cancelled' | 'failed'
+  state: 'waiting' | 'preparing' | 'uploading' | 'completed' | 'cancelled' | 'failed'
   error?: string
   queued?: number
   cancelling?: boolean
@@ -17,7 +17,8 @@ export interface TerminalUploadState {
 }
 interface Batch { context: ApiContext; id: string; files: File[]; parts?: PastePart[]; total: number; request?: AbortController; running: boolean; cancelling?: boolean }
 interface UploadOptions {
-  available(): boolean
+  readiness(): 'ready' | 'waiting' | 'unavailable'
+  unavailableReason(): string
   focus(): void
   send(message: unknown): boolean
   changed(state: TerminalUploadState | undefined): void
@@ -46,18 +47,18 @@ export class TerminalUploads {
     this.dismissed = setTimeout(() => { this.state = undefined; this.options.changed(undefined) }, 6000)
   }
 
-  enqueue(files: File[], parts?: PastePart[]) {
+  enqueue(files: File[], parts?: PastePart[], context = apiContext()) {
     if (!files.length) return
-    if (!this.options.available()) { this.reject(t('terminal.upload.disconnected')); return }
+    if (!isCurrentApi(context)) { this.reject(t('terminal.upload.targetChanged')); return }
+    if (this.options.readiness() === 'unavailable') { this.reject(this.options.unavailableReason()); return }
     if (files.some(file => file.webkitRelativePath)) { this.reject(t('terminal.upload.foldersUnsupported')); return }
     if (this.current?.cancelling) return
     const total = files.reduce((sum, file) => sum + file.size, 0)
     if (!Number.isSafeInteger(total)) { this.reject(t('terminal.upload.invalidSize')); return }
-    const batch: Batch = { context: apiContext(), id: uuid(), files, parts, total, running: false }
+    const batch: Batch = { context, id: uuid(), files, parts, total, running: false }
     if (files.length > 64 || (parts?.length || 0) > MAX_PASTE_PARTS || new TextEncoder().encode(JSON.stringify(this.beginMessage(batch))).length > MAX_UPLOAD_BEGIN_BYTES) {
       this.reject(t('terminal.richPaste.tooLarge')); return
     }
-    this.options.focus()
     this.pending.push(batch)
     if (this.current) this.update({ rejected: undefined })
     else this.next()
@@ -68,12 +69,25 @@ export class TerminalUploads {
   }
 
   private next() {
+    if (this.current || !this.pending.length) return
     clearTimeout(this.dismissed)
-    const batch = this.current = this.pending.shift()
-    if (!batch) return
+    const readiness = this.options.readiness()
+    const batch = this.pending[0]!
+    if (!isCurrentApi(batch.context)) { this.invalidate(t('terminal.upload.targetChanged')); return }
+    if (readiness === 'waiting') {
+      if (this.state?.state === 'waiting' && this.state.id === batch.id && this.state.queued === this.pending.length - 1) return
+      this.state = { id: batch.id, name: batch.files.length === 1 ? batch.files[0]!.name : '', fileCount: batch.files.length,
+        transferred: 0, total: batch.total, state: 'waiting', queued: this.pending.length - 1 }
+      this.options.changed(this.state)
+      return
+    }
+    if (readiness === 'unavailable') { this.invalidate(this.options.unavailableReason()); return }
+    this.pending.shift()
+    this.current = batch
     this.state = { id: batch.id, name: batch.files.length === 1 ? batch.files[0]!.name : '', fileCount: batch.files.length,
       transferred: 0, total: batch.total, state: 'preparing', queued: this.pending.length }
     this.options.changed(this.state)
+    this.options.focus()
     if (!this.options.send(this.beginMessage(batch))) {
       this.finish('failed', t('terminal.connection.interrupted'))
       return
@@ -82,6 +96,18 @@ export class TerminalUploads {
       this.options.send({ type: 'upload-cancel', id: batch.id })
       this.finish('failed', t('terminal.upload.prepareTimeout'))
     }, 30_000)
+  }
+
+  /** Retry only an unsent picker batch after the owning terminal is ready. */
+  refresh() { this.next() }
+
+  get hasPending() { return this.pending.length > 0 }
+
+  /** Drop only unsent picker batches when their target is no longer valid. */
+  invalidate(error = t('terminal.upload.disconnected')) {
+    if (!this.pending.length) return
+    this.pending = []
+    this.reject(error)
   }
 
   receive(message: Record<string, unknown>): boolean {
@@ -157,13 +183,14 @@ export class TerminalUploads {
     this.current = undefined
     if (state !== 'completed') { batch.request?.abort(); this.pending = [] }
     this.update({ state, error, cancelling: false, rejected: undefined, ...(state === 'completed' ? { transferred: batch.total } : {}) })
+    if (this.current) return
     if (this.pending.length) { this.next(); return }
     this.dismissed = setTimeout(() => { this.state = undefined; this.options.changed(undefined) }, state === 'failed' ? 6000 : 1800)
   }
 
   cancel() {
-    this.pending = []
     if (this.current) {
+      this.pending = []
       const batch = this.current
       if (batch.cancelling) return
       batch.cancelling = true
@@ -172,12 +199,17 @@ export class TerminalUploads {
       clearTimeout(this.timer)
       this.update({ cancelling: true })
       this.timer = setTimeout(() => { if (this.current === batch) this.finish('cancelled') }, 5000)
+    } else if (this.pending.length) {
+      this.pending = []
+      clearTimeout(this.dismissed)
+      this.state = { name: '', transferred: 0, total: 0, state: 'cancelled' }
+      this.options.changed(this.state)
+      this.dismissed = setTimeout(() => { this.state = undefined; this.options.changed(undefined) }, 1800)
     } else this.clear()
   }
 
   disconnected() {
     if (this.current) this.finish('failed', t('terminal.connection.interrupted'))
-    this.pending = []
   }
 
   clear() {

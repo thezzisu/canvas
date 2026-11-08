@@ -115,7 +115,7 @@ const inputFocused = computed(() => !showApp.value && windowFocused.value && !mo
 const frameStatus = computed(() => !closed.value && !props.data.sourceOffline ? props.data.status : 'unknown')
 const statusPulse = computed(() => props.data.statusFresh === true && !props.data.sourceOffline && needsAttention(frameStatus.value))
 const resizeState = computed(() => !props.data.focus ? 'passive' : !status.value.focusResize ? 'pending' : status.value.focusResize.owned ? 'owned' : 'passive')
-const uploadActive = computed(() => status.value.upload && ['preparing', 'uploading'].includes(status.value.upload.state))
+const uploadActive = computed(() => status.value.upload && ['waiting', 'preparing', 'uploading'].includes(status.value.upload.state))
 const uploadPercent = computed(() => {
   const upload = status.value.upload
   return upload?.total ? Math.min(100, Math.floor(upload.transferred / upload.total * 100)) : upload?.state === 'completed' ? 100 : 0
@@ -128,7 +128,7 @@ const uploadLabel = computed(() => {
   if (upload.state === 'failed') return upload.error || t('terminal.upload.failed')
   if (upload.state === 'cancelled') return t('terminal.upload.cancelled')
   if (upload.state === 'completed') return t('terminal.upload.pathInserted')
-  return upload.state === 'preparing' ? t('terminal.upload.preparing') : `${uploadPercent.value}%`
+  return upload.state === 'waiting' ? t('terminal.upload.waiting') : upload.state === 'preparing' ? t('terminal.upload.preparing') : `${uploadPercent.value}%`
 })
 const label = computed(() => windowLabel(props.data, status.value.focusedPaneId))
 const canvasJumps = computed(() => props.data.focus || props.data.mobile || !props.data.canvasJump ? [] : (['previous', 'next'] as const).map(direction => {
@@ -190,6 +190,7 @@ function mobileModifiers(value: TerminalModifiers) { terminal?.setModifiers(valu
 function mobileMode(mode: TerminalTouchMode) { terminal?.setTouchMode(mode) }
 function mobilePointer(action: TouchpadControl) { terminal?.touchpadControl(action) }
 function mobileFiles(files: File[]) { terminal?.uploadFiles(files) }
+function prepareFiles() { return terminal?.prepareFiles() }
 function mobilePaste(text: string) { terminal?.pasteText(text) }
 function noteDragOver(event: DragEvent) {
   if (isFileReference(event.dataTransfer)) {
@@ -313,7 +314,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <div v-if="!showApp && !closed && keepTerminal && !maximizedElsewhere && (status.status === 'connecting' || status.status === 'connected' && !status.screenReady)" class="terminal-loading nodrag" :class="{ 'terminal-loading-initial': !status.screenReady }" role="status"><span class="spinner" />{{ status.retryAttempt ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt }) : t('common.loading') }}</div>
     </div>
     <div v-if="mobilePreview && !closed && !editing" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: label })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
-    <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :read-text="readText" :copy-text="copyText" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @pointer="mobilePointer" @files="mobileFiles" @paste="mobilePaste" @paste-file="pasteFile" @reading="reading" />
+    <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :read-text="readText" :copy-text="copyText" :prepare-files="prepareFiles" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @pointer="mobilePointer" @files="mobileFiles" @paste="mobilePaste" @paste-file="pasteFile" @reading="reading" />
   </article>
   <CardLayoutControls :id="id" :label="label" :kind="app ? 'app' : 'terminal'" :width="data.width" :height="data.height" />
 </template>

@@ -21,6 +21,7 @@ const props = defineProps<{
   touchMode: TouchMode
   readText(signal: AbortSignal): Promise<string>
   copyText(text?: string): Promise<boolean>
+  prepareFiles(): ((files: File[]) => void) | undefined
 }>()
 const emit = defineEmits<{
   key: [key: string, modifiers?: Partial<TerminalModifiers>]
@@ -40,6 +41,7 @@ const sheet = ref<'select' | 'paste'>()
 const snapshot = ref('')
 const loadingText = ref(false), textFailed = ref(false)
 let textRequest: AbortController | undefined
+let pendingFiles: ((files: File[]) => void) | undefined
 const draft = ref('')
 const selected = ref(false)
 const textArea = ref<HTMLTextAreaElement>()
@@ -278,21 +280,28 @@ function pasteFiles(event: ClipboardEvent) {
   emit('files', files)
   closeSheet()
 }
-function pickFiles() { more.value = false; emit('reading', true); fileInput.value?.click() }
+function pickFiles() {
+  more.value = false; pendingFiles = props.prepareFiles()
+  if (!pendingFiles) return
+  emit('reading', true); fileInput.value?.click()
+}
 function filesChanged(event: Event) {
   const input = event.target as HTMLInputElement
   const files = [...input.files || []]
   input.value = ''
-  if (files.length) emit('files', files)
+  const accept = pendingFiles; pendingFiles = undefined
+  if (files.length) accept?.(files)
+  emit('reading', false)
 }
-function escape() { if (sheet.value) closeSheet(); else more.value = false; stopRepeat() }
-function reset() { cancelPress(); more.value = false; caps.value = false; closeSheet(); emit('modifiers', { shift: false, ctrl: false, alt: false, meta: false }) }
+function filesCancelled() { pendingFiles = undefined; emit('reading', false) }
+function escape() { if (sheet.value) closeSheet(); else more.value = false; pendingFiles = undefined; emit('reading', false); stopRepeat() }
+function reset(clearFileSelection = true) { cancelPress(); more.value = false; caps.value = false; if (clearFileSelection) pendingFiles = undefined; emit('reading', false); closeSheet(); emit('modifiers', { shift: false, ctrl: false, alt: false, meta: false }) }
 function visibilityChanged() { if (document.hidden) cancelPress() }
-watch(() => props.sessionKey, reset)
-watch(() => props.disabled, disabled => { if (disabled) reset() })
+watch(() => props.sessionKey, () => reset())
+watch(() => props.disabled, disabled => { if (disabled) reset(false) })
 watch(() => props.touchMode, () => releasePointer(true))
 onMounted(() => { window.addEventListener('blur', cancelPress); document.addEventListener('visibilitychange', visibilityChanged) })
-onBeforeUnmount(() => { textRequest?.abort(); cancelPress(); window.removeEventListener('blur', cancelPress); document.removeEventListener('visibilitychange', visibilityChanged) })
+onBeforeUnmount(() => { textRequest?.abort(); pendingFiles = undefined; cancelPress(); window.removeEventListener('blur', cancelPress); document.removeEventListener('visibilitychange', visibilityChanged) })
 </script>
 
 <template>
@@ -325,7 +334,7 @@ onBeforeUnmount(() => { textRequest?.abort(); cancelPress(); window.removeEventL
       <button v-for="key in keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :aria-pressed="keyPressed(key.key)" :class="{ 'arrow-key': key.symbol }" @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ key.symbol || key.label }}</button>
       <button ref="moreTrigger" type="button" :aria-label="t('terminal.keyboard.more')" :aria-expanded="more" :class="{ active: more || modifiers.shift || modifiers.alt || modifiers.meta }" @pointerdown.prevent @click="toggleMore"><Icon name="more" :size="19" /></button>
     </div>
-    <input ref="fileInput" class="mobile-file-input" type="file" multiple tabindex="-1" :aria-label="t('terminal.upload.file')" @change="filesChanged" />
+    <input ref="fileInput" class="mobile-file-input" type="file" multiple tabindex="-1" :aria-label="t('terminal.upload.file')" @change="filesChanged" @cancel="filesCancelled" />
     <UModal :open="!!sheet" :portal="portal" :transition="false" :title="sheet === 'select' ? t('terminal.keyboard.selectText') : t('terminal.keyboard.pasteText')"
       :close="{ 'aria-label': t('common.close') }" :content="{ onCloseAutoFocus: event => { event.preventDefault(); moreTrigger?.focus({ preventScroll: true }) } }"
       :ui="{ content: 'mobile-text-sheet', overlay: 'mobile-text-backdrop', header: 'shrink-0 px-4 py-3', title: 'text-sm font-medium', body: 'flex flex-1 min-h-0 p-0 sm:p-0', footer: 'shrink-0 justify-end gap-2 p-2', close: 'min-w-[44px] min-h-[44px]' }"
