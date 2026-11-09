@@ -6,7 +6,7 @@ export function terminalIdentityKey(instance: string, source: Source, windowId: 
     source.herdrSession?.trim() || '', source.herdrSocket?.trim() || '', windowId])
 }
 
-const prefixes = ['canvas:terminal-zoom:', 'canvas:terminal-settings:', 'canvas:window-canvas:']
+const prefixes = ['canvas:terminal-settings:', 'canvas:window-canvas:']
 /** Remove individual confirmed-closed tabs; unrelated concurrent writes remain untouched. */
 export function pruneTerminalPreferences(instance: string, sources: readonly Source[], resources: readonly SourceResource[], storage?: Storage) {
   const configured = new Map(sources.map(source => [source.id, source]))

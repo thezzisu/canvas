@@ -39,7 +39,7 @@ const { active: contentActive, pointerDown: contentPointerDown } = useCardConten
 const shortcuts = computed(() => [...(props.data.focus ? ['zoom'] : []), 'copy'])
 const menu = computed<DropdownMenuItem[]>(() => [
   ...(props.data.focus ? contentZoomMenu(zoom) : []),
-  { label: t('panels.note.copy'), icon: 'i-lucide-copy', disabled: !content.value, onSelect: copyNote },
+  { slot: 'copy', label: t('panels.note.copy'), icon: 'i-lucide-copy', disabled: !content.value, onSelect: copyNote },
   { label: t('app.uploadFile'), icon: 'i-lucide-upload', disabled: noteEditor.value?.pending, onSelect: () => noteEditor.value?.chooseFiles() },
   { label: t('panels.note.rename'), icon: 'i-lucide-pencil', onSelect: () => { void rename() } },
   { label: t('common.settings'), icon: 'i-lucide-settings', onSelect: () => props.data.onAction('settings', props.id) },

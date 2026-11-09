@@ -8,6 +8,7 @@ import { windowMetadata } from './metadata.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import type { NativeNotification } from '../../shared/notification.ts'
 import type { PaneAction, PaneContext, PanePoint } from '../../shared/pane-context.ts'
+import { isTerminalHoverInput, terminalSurfaceModes } from '../../shared/terminal-mouse.ts'
 
 export interface HerdrClientTransport {
   onData(listener: (data: string) => void): { dispose(): void }
@@ -42,7 +43,6 @@ const MAX_BUFFER = 8 * 1024 * 1024
 // Semantic surfaces always use cell-based SGR mouse reports. Native pane modes
 // are handled by the input router and never alter this outer terminal encoding.
 export const HERDR_MOUSE_ENCODING = '\x1b[?1016l\x1b[?1006h'
-const INITIAL_MODES = '\x1b[?1049h\x1b[?7l\x1b[?1h\x1b[?2004h\x1b[?1000h\x1b[?1002h' + HERDR_MOUSE_ENCODING + '\x1b[?1004h'
 
 function dimensions(cols: number, rows: number) {
   if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1 || cols > 4096 || rows > 4096 || cols * rows > 1_000_000) throw new Error('Invalid herdr viewport size')
@@ -320,7 +320,7 @@ class HerdrClient implements HerdrClientTransport {
     if (!this.initialized) {
       this.initialized = true
       clearTimeout(this.deadline)
-      this.emit(INITIAL_MODES)
+      this.emit(terminalSurfaceModes)
       this.resolve(this)
     }
     this.renderedMetadata = this.metadata ? { ...this.metadata, layout: this.layout.token, ...(surface.popup ? { panes: [] } : {}) } : undefined
@@ -419,10 +419,11 @@ class HerdrClient implements HerdrClientTransport {
     if (this.closed || !this.initialized || !data.length) return
     const bytes = typeof data === 'string' ? Buffer.from(data) : Buffer.from(data)
     if (this.pendingInputBytes + bytes.length > MAX_BUFFER) { this.fail(new Error('Herdr input buffer exceeded its limit')); return }
-    // A passive browser blur must not focus this tab or mark completed work as
-    // seen. Keep it behind any user input already waiting for its focus barrier.
-    if (!this.pendingInputBytes && bytes.length === 3 && bytes.toString() === '\x1b[O') {
-      this.input.write(bytes)
+    // Passive motion/blur cannot focus a tab. Keep it behind any active input
+    // already waiting for its focus barrier, without creating another barrier.
+    const hover = isTerminalHoverInput(bytes.toString())
+    if (!this.pendingInputBytes && (hover || bytes.length === 3 && bytes.toString() === '\x1b[O')) {
+      if (!hover || this.coherentSurface()) this.input.write(bytes)
       return
     }
     this.pendingInput.push(bytes); this.pendingInputBytes += bytes.length

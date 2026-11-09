@@ -16,6 +16,7 @@ import type { PasteSegment } from "../shared/paste.ts";
 import type { CaptureDescriptor, CaptureState } from "../shared/capture.ts";
 import { defaultTerminalCell } from '../shared/settings.ts';
 import { defaultWindowSize, normalTerminalGrid } from '../shared/window-size.ts';
+import { isTerminalHoverInput } from '../shared/terminal-mouse.ts';
 const { Terminal } = headless;
 const { SerializeAddon } = serialize;
 export type TerminalTarget = {
@@ -413,7 +414,7 @@ class LiveTerminal {
           (msg.encoding === undefined || msg.encoding === "binary")
         ) {
           // Outer window focus reports cannot change the native pane or pixels.
-          if (msg.data !== '\x1b[I' && msg.data !== '\x1b[O') this.sentFrames.delete(ws);
+          if (msg.data !== '\x1b[I' && msg.data !== '\x1b[O' && !isTerminalHoverInput(msg.data)) this.sentFrames.delete(ws);
           const data = msg.encoding === "binary" ? Buffer.from(msg.data, "latin1") : msg.data;
           if (this.pasting) this.holdInput(this.pasting.then(() => { if (!this.closed) this.proc.write(data); }));
           else this.proc.write(data);

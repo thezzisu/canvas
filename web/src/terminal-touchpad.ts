@@ -7,6 +7,7 @@ import { TouchpadGesture, type TouchpadButton, type TouchpadControl } from './to
 interface TouchpadOptions {
   active(): boolean
   enabled(): boolean
+  hover(): boolean
   focus(): void
   modifiers(): TerminalModifiers
   copyGesture(): void
@@ -43,7 +44,7 @@ export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, optio
     code += (modifiers.shift ? 4 : 0) + (modifiers.alt ? 8 : 0) + (modifiers.ctrl ? 16 : 0)
     // The existing client protocol accepts movement and horizontal wheel even
     // when the outer xterm reports only button drags / vertical WheelEvents.
-    term.input(`\x1b[<${code};${Math.min(term.cols - 1, Math.floor(position.x * term.cols)) + 1};${Math.min(term.rows - 1, Math.floor(position.y * term.rows)) + 1}${up ? 'm' : 'M'}`, true)
+    term.input(`\x1b[<${code};${Math.min(term.cols - 1, Math.floor(position.x * term.cols)) + 1};${Math.min(term.rows - 1, Math.floor(position.y * term.rows)) + 1}${up ? 'm' : 'M'}`, (code & ~28) !== 35)
   }
   function release() {
     if (left) send(0, true)
@@ -78,7 +79,8 @@ export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, optio
     if (!rect.width || !rect.height) return
     position.x = Math.max(0, Math.min(1 - 1 / rect.width, position.x + x / rect.width))
     position.y = Math.max(0, Math.min(1 - 1 / rect.height, position.y + y / rect.height))
-    render(); dragged ||= left; send(left ? 32 : 35)
+    render(); dragged ||= left
+    if (left || options.hover() && !term.hasSelection()) send(left ? 32 : 35)
   }
   function scroll(x: number, y: number) {
     if (!active() || left) return

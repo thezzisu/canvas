@@ -20,6 +20,7 @@ import { terminalInputChunks } from './terminal-input-chunks'
 import { bindTerminalKeyboardLock } from './terminal-keyboard-lock'
 import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch'
 import { bindTerminalTouchpad } from './terminal-touchpad'
+import { bindTerminalHover } from './terminal-hover'
 import type { TouchpadControl } from './touchpad-gesture'
 import { bindTerminalMouseDefaults, rightMouseInput } from './terminal-mouse-defaults'
 import { defaultTerminalSettings, type TerminalSettings } from './terminal-settings'
@@ -33,7 +34,7 @@ import { readNoteClipboard, loadNoteClipboard, terminalNoteClipboard, NOTE_CLIPB
 import type { CanvasFileReference } from './file-reference'
 import { containTerminalScale, fitTerminalGrid, sameTerminalGrid, terminalBox, terminalFrameReady, terminalMetrics, type RenderedTerminalGrid, type TerminalGrid } from './terminal-geometry'
 import { TerminalReconnect, terminalInputHasFocus } from './terminal-reconnect'
-import { normalizeTerminalZoom } from './terminal-zoom'
+import { normalizeContentZoom } from './content-zoom'
 import { fillTerminalBackground } from './terminal-background'
 import type { SourceResource } from './types'
 import type { PaneAction, PaneContext } from '../../shared/pane-context'
@@ -724,7 +725,7 @@ function present(session: Session) {
   Object.assign(session.surface.style, { width: `${width}px`, height: `${height}px`, transform: scale === 1 ? 'none' : `scale(${scale})` })
 }
 function setTerminalZoom(session: Session, percent: number) {
-  const fontSize = 12 * (session.magnified ? normalizeTerminalZoom(percent) : 100) / 100
+  const fontSize = 12 * (session.magnified ? normalizeContentZoom(percent) : 100) / 100
   if (session.term.options.fontSize === fontSize) return
   session.rendered = undefined; session.metrics = undefined
   session.paintedGrid = undefined
@@ -997,6 +998,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       active: () => current.mobile && current.magnified && interactive(current) && current.state.status === 'connected' && !current.state.readOnly
         && !(current.state.presentation?.maximized && !current.state.presentation.owned),
       enabled: () => current.touchMode === 'touchpad', focus: () => focusTerminal(current),
+      hover: () => current.settings.mouseHover,
       modifiers: () => current.modifiers, copyGesture: () => current.clipboard?.touchSelectionCompleted(),
     })
   }
@@ -1051,6 +1053,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     session.reconnect?.resume(liveTerminalMetadata.value.get(`${resource.sourceId}/${resource.windowId}`) !== null)
   else if (session.state.status === 'connected') session.reconnect?.connected()
   const current = session
+  const removeHover = bindTerminalHover(current.surface, current.term, () => current.settings.mouseHover)
   const canPasteText = () => isCurrentApi(mountingContext) && current.host === host && host.isConnected && interactive(current) && current.state.status === 'connected' && current.socket?.readyState === WebSocket.OPEN &&
     !(current.state.presentation?.maximized && (!current.state.presentation.owned || !current.magnified))
   const mouseDefaults = bindTerminalMouseDefaults(current.surface, canPasteText, () => current.settings.rightClick, (event, action) => {
@@ -1172,6 +1175,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       current.reconnect?.restart()
     },
     dispose() {
+      removeHover()
       mouseDefaults.dispose()
       if (current.mouseDefaults === mouseDefaults) current.mouseDefaults = undefined
       removeFileInput()

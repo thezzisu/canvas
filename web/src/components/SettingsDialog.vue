@@ -24,12 +24,15 @@ import PwaControls from './PwaControls.vue'
 import { frontendBuild } from '../build-info'
 import { buildLabel } from '../../../shared/build-info'
 import { copyText } from '../clipboard'
+import TerminalSettingsFields from './TerminalSettingsFields.vue'
+import { useTerminalDefaults } from '../terminal-settings'
 
 const { t, n } = useI18n()
 
 const props = defineProps<{ open: boolean; settings: GlobalSettings; portal?: HTMLElement; hasDisplayCutout?: boolean }>()
 const emit = defineEmits<{ close: []; saved: [settings: GlobalSettings]; error: [message: string] }>()
 const mobile = useMobileLayout()
+const terminalDefaults = useTerminalDefaults()
 const fullVersionLabel = buildLabel(frontendBuild)
 function copyVersion() { void copyText(JSON.stringify(frontendBuild, null, 2)) }
 watch(() => props.open, open => { if (open) refreshNotificationPermission() }, { immediate: true })
@@ -207,6 +210,10 @@ defineExpose({ close })
         <div class="settings-preference-row"><label for="input-mode">{{ t('settings.inputMode') }}</label><USelect id="input-mode" v-model="inputMode" :items="inputModes" :portal="portal || false" :ui="viewportSelectUi" color="neutral" size="sm" class="settings-select" :aria-label="t('settings.inputMode')" /></div>
         <div class="settings-preference-row"><label for="ui-scale">{{ t('settings.uiScale') }}</label><USelect id="ui-scale" v-model="uiScale" :items="uiScales" :portal="portal || false" :ui="viewportSelectUi" color="neutral" size="sm" class="settings-select" :aria-label="t('settings.uiScale')" /></div>
       </div>
+      <section class="grid gap-3 py-4 border-y border-default" :aria-label="t('terminal.settings.defaults')">
+        <div class="flex items-center justify-between gap-3"><span class="text-sm">{{ t('terminal.settings.defaults') }}</span><small class="text-muted">{{ t('settings.thisBrowser') }}</small></div>
+        <TerminalSettingsFields :model-value="terminalDefaults" :portal="portal" show-zoom @update:model-value="value => { terminalDefaults = { ...terminalDefaults, ...value } }" />
+      </section>
       <section v-if="mobile && hasDisplayCutout" class="cutout-settings" :aria-label="t('settings.cutout')">
         <div class="cutout-heading"><span>{{ t('settings.cutout') }}</span><small>{{ t('settings.thisBrowser') }}</small></div>
         <div class="cutout-row"><span id="cutout-position-label">{{ t('settings.position') }}</span><div class="cutout-positions" role="group" aria-labelledby="cutout-position-label"><UButton v-for="position in cutoutPositions" :key="position.value" type="button" color="neutral" :variant="cutoutPosition === position.value ? 'solid' : 'outline'" :aria-pressed="cutoutPosition === position.value" @click="cutoutPosition = position.value">{{ position.label }}</UButton></div></div>

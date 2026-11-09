@@ -55,7 +55,7 @@ const textShortcuts = computed(() => preview.value === 'text' && props.data.focu
 const shortcuts = computed(() => [...textShortcuts.value, ...(preview.value === 'text' && props.data.focus ? ['zoom'] : []), 'copy'])
 const menu = computed<DropdownMenuItem[]>(() => [
   ...(preview.value === 'text' ? [...contentZoomMenu(zoom), ...textActions.value] : []),
-  { label: t('fileTransfer.copy'), icon: 'i-lucide-copy', onSelect: copyFile },
+  { slot: 'copy', label: t('fileTransfer.copy'), icon: 'i-lucide-copy', onSelect: copyFile },
   { label: t('panels.file.download'), icon: 'i-lucide-download', onSelect: download },
   { label: t('common.settings'), icon: 'i-lucide-settings', onSelect: () => props.data.onAction?.('settings', props.id) },
 ])

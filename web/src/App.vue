@@ -89,6 +89,7 @@ import { mergeLiveResources, windowIsClosed } from './live-resources'
 import { buildFontPresentation, ensureContentFont } from './fonts'
 import type { GlobalSettings } from '../../shared/settings'
 import { useCanvasNavigation } from './canvas-navigation'
+import { cardMenuOpen } from './card-menu'
 import { inputMode, useMobileLayout } from './mobile-layout'
 import { uiZoom } from './ui-scale'
 import { hideMobileKeyboard } from './mobile-keyboard'
@@ -584,7 +585,7 @@ watch([allWindows, existingAddWindows], () => {
 })
 const modalOpen = computed(() => trustedPreviewRequest.value || notificationSurface.value || richPasteRequest.value || sourceDialog.value || canvasDialog.value || actionDialog.value || addDialog.value || shareCard.value || windowMenu.value || backgroundCanvas.value || settingsDialog.value || accountDialog.value || accountMenuOpen.value || scanTarget.value)
 const logicalWindowFocus = computed<WindowFocus | undefined>(() => {
-  if (!authenticated.value || !pageVisible.value || !windowFocused.value || modalOpen.value || activeElement.value?.closest('[role="menu"]') || directoryRequest.value || urlRequest.value || downloadPreview.value || sidebarOpen.value || sourcePanel.value || focusedCardId.value) return
+  if (!authenticated.value || !pageVisible.value || !windowFocused.value || modalOpen.value || cardMenuOpen.value || activeElement.value?.closest('[role="menu"]') || directoryRequest.value || urlRequest.value || downloadPreview.value || sidebarOpen.value || sourcePanel.value || focusedCardId.value) return
   return focused.value || selectedTerminal.value
 })
 watch(logicalWindowFocus, value => setTerminalReadFocus(value), { flush: 'sync' })

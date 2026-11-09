@@ -6,8 +6,9 @@ import UButton from '@nuxt/ui/components/Button.vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
 import Icon from './Icon.vue'
 import { contentZoomLimits } from '../content-zoom'
+import type { ZoomReset } from '../content-zoom-menu'
 
-const props = defineProps<{ modelValue: number; label: string; mobile?: boolean; disabled?: boolean }>()
+const props = defineProps<{ modelValue: number; label: string; mobile?: boolean; disabled?: boolean } & ZoomReset>()
 const emit = defineEmits<{ 'update:modelValue': [value: number] }>()
 const { t, n } = useI18n()
 const trigger = ref<HTMLElement>(), open = ref(false), pointer = ref(false)
@@ -30,7 +31,7 @@ function change(value: number) { emit('update:modelValue', Math.max(contentZoomL
     <button ref="trigger" class="content-zoom-trigger card-header-action" data-preserve-content-focus :title="label" :aria-label="label" :aria-expanded="open" @pointerdown.stop.prevent="pointer = true" @keydown="pointer = false"><Icon v-if="mobile" name="zoom-in" :size="18" /><span v-else>{{ percentage }}</span></button>
     <template #content><div class="content-zoom-controls" data-preserve-content-focus role="group" :aria-label="label" @pointerdown.stop @wheel.stop @keydown="pointer = false">
       <UButton color="neutral" variant="ghost" :disabled="disabled || modelValue <= contentZoomLimits.min" :aria-label="t('common.zoomOut')" :title="t('common.zoomOut')" @pointerdown.prevent @click="change(modelValue - contentZoomLimits.step)"><Icon name="minus" :size="17" /></UButton>
-      <UButton color="neutral" variant="ghost" class="content-zoom-reset" :disabled="disabled" :aria-label="t('common.resetZoom')" :title="t('common.resetZoom')" @pointerdown.prevent @click="change(100)">{{ percentage }}</UButton>
+      <UButton color="neutral" variant="ghost" class="content-zoom-reset" :disabled="disabled" :aria-label="resetLabel || t('common.resetZoom')" :title="resetLabel || t('common.resetZoom')" @pointerdown.prevent @click="reset ? reset() : change(100)">{{ percentage }}</UButton>
       <UButton color="neutral" variant="ghost" :disabled="disabled || modelValue >= contentZoomLimits.max" :aria-label="t('common.zoomIn')" :title="t('common.zoomIn')" @pointerdown.prevent @click="change(modelValue + contentZoomLimits.step)"><Icon name="plus" :size="17" /></UButton>
     </div></template>
   </UPopover>

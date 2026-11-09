@@ -13,11 +13,11 @@ import type { CellData, ClientMessage, ClientShellSnapshot, FrameData, PaneSurfa
 import { coreInput, type CoreInputModes } from './input.ts'
 import { CoreLayout, coreWindowMetadata, panes, projectCoreSnapshot, projectTab, type CoreSnapshot, type CoreTab, type CoreTerminal } from './layout.ts'
 import { CoreRpc, CoreRpcError, type CoreNotification, type CoreStream } from './rpc.ts'
+import { terminalSurfaceModes } from '../../shared/terminal-mouse.ts'
 
 const { Terminal } = headless
 type Emulator = InstanceType<typeof Terminal>
 type Subscription = { dispose(): void }
-const INITIAL_MODES = '\x1b[?1049h\x1b[?7l\x1b[?1h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1016l\x1b[?1006h\x1b[?1004h'
 const MAX_OUTPUT = 8 * 1024 * 1024
 const blank = (symbol = ' '): CellData => ({ symbol, fg: 0, bg: 0, modifier: 0, skip: false, hyperlink: null })
 /** OSC 8 permits Unicode and spaces; emit a valid URI without losing the target. */
@@ -158,7 +158,7 @@ class CoreWindowClient implements HerdrClientTransport {
       ])
       if (this.closed) throw new Error('Core window closed while attaching')
       this.initialized = true
-      this.emit(INITIAL_MODES)
+      this.emit(terminalSurfaceModes)
       this.render()
       return this
     } catch (error) { this.kill(); throw error }
@@ -551,8 +551,9 @@ class CoreWindowClient implements HerdrClientTransport {
     if ('ClientShellPaneInput' in message) {
       const input = message.ClientShellPaneInput, pane = this.attached.get(input.pane_id)
       if (!pane?.stream) return
-      const scrolled = pane.scroll !== 0
-      pane.scroll = 0
+      const active = input.events.some(event => !('Mouse' in event) || event.Mouse.kind !== 'Moved')
+      const scrolled = active && pane.scroll !== 0
+      if (active) pane.scroll = 0
       pane.modes.applicationCursor = pane.emulator.modes.applicationCursorKeysMode
       pane.modes.bracketedPaste = pane.emulator.modes.bracketedPasteMode
       pane.modes.mouse = pane.emulator.modes.mouseTrackingMode

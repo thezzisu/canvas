@@ -32,7 +32,6 @@ import type { TerminalTouchMode } from '../terminal-touch'
 import type { TouchpadControl } from '../touchpad-gesture'
 import { cutoutPosition, cutoutWidth } from '../display-cutout'
 import { useDocumentFocus } from '../document-focus'
-import { useTerminalZoom } from '../terminal-zoom'
 import { useTerminalSettings } from '../terminal-settings'
 import TerminalSettingsDialog from './TerminalSettingsDialog.vue'
 import ContentZoom from './ContentZoom.vue'
@@ -86,8 +85,7 @@ async function stopCapturedApp() {
   } finally { if (stoppingAppId.value === current.id) stoppingAppId.value = '' }
 }
 const shortcuts = computed(() => [...(showCanvasJumps.value ? ['previous', 'next'] : []), ...(mobileFocus.value && !showApp.value ? ['keyboard'] : []), ...(props.data.focus && !showApp.value ? ['zoom'] : [])])
-const zoom = useTerminalZoom(() => props.data.preferenceKey)
-const settings = useTerminalSettings(() => props.data.preferenceKey)
+const { effective: settings, overrides, zoom, resetZoom } = useTerminalSettings(() => props.data.preferenceKey)
 const settingsOpen = ref(false)
 const portal = computed(() => host.value?.closest<HTMLElement>('.app-shell') || undefined)
 const status = ref<TerminalStatus>({ status: 'connecting' })
@@ -244,8 +242,8 @@ function action(name: string) {
   else { if (name === 'unfocus' && props.data.mobile) terminal?.blur(); props.data.onAction(name, props.id) }
 }
 const menu = computed<DropdownMenuItem[]>(() => [
-  ...(!showApp.value && mobileFocus.value ? [{ label: t(status.value.keyboardRequested ? 'terminal.action.hideKeyboard' : 'terminal.action.showKeyboard'), icon: 'i-lucide-keyboard', onSelect: toggleKeyboard }] : []),
-  ...(props.data.focus && !showApp.value ? contentZoomMenu(zoom, !props.data.available) : []),
+  ...(!showApp.value && mobileFocus.value ? [{ slot: 'keyboard', label: t(status.value.keyboardRequested ? 'terminal.action.hideKeyboard' : 'terminal.action.showKeyboard'), icon: 'i-lucide-keyboard', onSelect: toggleKeyboard }] : []),
+  ...(props.data.focus && !showApp.value ? contentZoomMenu(zoom, !props.data.available, { reset: resetZoom, resetLabel: t('terminal.settings.restoreDefault') }) : []),
   ...(props.data.newTab ? [{ label: t('app.newTab'), icon: 'i-lucide-square-plus', disabled: !props.data.available || closed.value || props.data.newTab.pending(), onSelect: () => props.data.newTab?.create() }] : []),
   { label: t('panels.scan.title'), icon: 'i-lucide-scan-text', disabled: !keepTerminal.value || closed.value, onSelect: () => action('scan') },
   ...(copiedFile.value && !showApp.value ? [{ label: t('fileTransfer.paste'), icon: 'i-lucide-clipboard', disabled: !noteDropAvailable.value || !!status.value.fileReading, onSelect: pasteFile }] : []),
@@ -276,7 +274,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
         @add="action('add')" @toggle="action(data.focus ? 'unfocus' : 'focus')" @remove="action('remove')">
         <template v-for="jump in canvasJumps" :key="jump.direction" #[jump.direction]><button type="button" class="card-header-action" :class="`card-${jump.direction}-canvas`" data-preserve-content-focus :disabled="!jump.target" :title="jump.label" :aria-label="jump.label" @pointerdown.prevent @click="jumpCanvas(jump.direction, $event)"><Icon name="down" :size="15" :style="{ transform: jump.direction === 'next' ? '' : 'rotate(180deg)' }" /></button></template>
         <template #keyboard><button type="button" class="card-header-action terminal-keyboard" :title="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-label="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-pressed="status.keyboardRequested" @pointerdown.prevent @click="toggleKeyboard"><Icon name="keyboard" :size="18" /></button></template>
-        <template #zoom><ContentZoom v-model="zoom" :mobile="data.mobile" :disabled="!data.available" :label="t('terminal.zoom.title')" /></template>
+        <template #zoom><ContentZoom v-model="zoom" :mobile="data.mobile" :disabled="!data.available" :label="t('terminal.zoom.title')" :reset="resetZoom" :reset-label="t('terminal.settings.restoreDefault')" /></template>
       </CardHeaderActions>
     </header>
     <div v-if="app" :inert="mobilePreview || editing || undefined" class="capture-toolbar nodrag nopan" @pointerdown.stop @mousedown.stop>
@@ -293,7 +291,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <div v-if="showApp && !trustedApp" class="capture-trust-prompt card-content" :inert="mobilePreview || editing || undefined"><Icon name="globe" :size="32" /><span>{{ app?.title }}</span><UButton v-if="!mobilePreview" color="neutral" variant="outline" @click="activateApp">{{ t('terminal.capture.app') }}</UButton></div>
     <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || closed || showApp || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop><div class="terminal-transition-surface" aria-hidden="true" /></div>
     <PaneContextMenu :host="host" :enabled="!showApp && keepTerminal && !mobilePreview && !closed && !maximizedElsewhere && status.status === 'connected'" :allows-menu="allowsContextMenu" :lookup="paneContext" :action="paneAction" />
-    <TerminalSettingsDialog v-model="settings" :open="settingsOpen" :portal="portal" @close="settingsOpen = false" />
+    <TerminalSettingsDialog v-model="overrides" :open="settingsOpen" :portal="portal" @close="settingsOpen = false" />
 
     <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">{{ t('terminal.upload.drop') }}</div>
     <div v-if="noteDrag || fileDrag" class="terminal-file-drop terminal-note-drop" :class="{ 'note-drop-unavailable': !noteDropAvailable }" aria-hidden="true">{{ !noteDropAvailable ? noteDropLabel : fileDrag ? t(status.fileReading ? 'fileTransfer.preparing' : 'fileTransfer.drop') : noteDropLabel }}</div>

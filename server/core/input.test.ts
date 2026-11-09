@@ -48,3 +48,9 @@ test('core mouse input respects tracking, coordinates, modifiers and wheel count
   if ('Mouse' in mouse) { mouse.Mouse.kind = 'ScrollDown'; mouse.Mouse.modifiers = 0; mouse.Mouse.lines = 3 }
   assert.equal(coreInput(mouse, modes({ mouse: 'drag', sgrMouse: true })).toString(), '\x1b[<65;5;3M'.repeat(3))
 })
+
+test('hover follows the child application tracking mode without inventing a press', () => {
+  const hover: ClientPaneInputEvent = { Mouse: { kind: 'Moved', position: { Cell: { column: 4, row: 2 } }, geometry: null, modifiers: 7, lines: 1 } }
+  for (const mouse of ['none', 'x10', 'vt200', 'drag'] as const) assert.equal(coreInput(hover, modes({ mouse, sgrMouse: true })).length, 0)
+  assert.equal(coreInput(hover, modes({ mouse: 'any', sgrMouse: true })).toString(), '\x1b[<63;5;3M')
+})

@@ -159,6 +159,21 @@ test('SGR and byte-oriented X10 mouse parsing survives fragmentation and high co
   ]);
 });
 
+test('hover preserves selection and focus while reaching only the hovered mouse-reporting pane', async () => {
+  const f = fixture(); f.panes[1]!.mouse_reporting = true;
+  f.router.write(mouse(0, 3, 3) + mouse(32, 8, 3) + mouse(0, 8, 3, true)); await f.router.drain();
+  const selected = f.selections.at(-1), requests = f.requests.length;
+  assert(selected, 'native selection remains highlighted after the drag');
+  f.router.write(mouse(35, 25, 4)); await f.router.drain();
+  assert.equal(f.requests.length, requests, 'hover never requests pane focus or scrolling');
+  assert.equal(f.selections.at(-1), selected, 'hover cannot clear the existing selection');
+  assert.deepEqual(f.inputs().at(-1), { pane_id: 'b', events: [{ Mouse: { kind: 'Moved', position: { Cell: { column: 4, row: 3 } }, geometry: null, modifiers: 0, lines: 3 } }] });
+  const count = f.messages.length;
+  f.router.write(mouse(35, 3, 3)); await f.router.drain();
+  assert.equal(f.messages.length, count, 'ordinary shell panes do not receive hover input');
+  f.router.dispose();
+});
+
 test('standalone escape is emitted after its delay and disposal cancels pending escape', async () => {
   const values: Parsed[] = [], parser = new VtInputParser(value => values.push(value), error => { throw error; }, 5);
   parser.write('\x1b'); await new Promise(resolve => setTimeout(resolve, 15));

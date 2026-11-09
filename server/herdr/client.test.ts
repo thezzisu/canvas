@@ -19,7 +19,7 @@ function readHeader(payload: Buffer) {
   return { tag: payload[0]!, string }
 }
 
-async function fixture(t: TestContext, options: { holdFocus?: boolean; badWelcome?: boolean; closeEarly?: boolean; missingTarget?: boolean; readSelection?: (params: Record<string, unknown>) => Promise<unknown>; readContent?: (params: Record<string, unknown>) => Promise<unknown> } = {}) {
+async function fixture(t: TestContext, options: { holdFocus?: boolean; mouseReporting?: boolean; badWelcome?: boolean; closeEarly?: boolean; missingTarget?: boolean; readSelection?: (params: Record<string, unknown>) => Promise<unknown>; readContent?: (params: Record<string, unknown>) => Promise<unknown> } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'cv-native-')), path = join(directory, 'client.sock')
   const sockets = new Set<Socket>(), requests: { id: string; method: string; params: Record<string, unknown> }[] = [], tags: number[] = [], focuses: boolean[] = []
   let peer: Socket, pending = Buffer.alloc(0), hello: Record<string, unknown> | undefined
@@ -41,7 +41,7 @@ async function fixture(t: TestContext, options: { holdFocus?: boolean; badWelcom
     writer.uint(8).uint(1).byte(0).uint(0).uint(0) // frame dimensions, cursor, links, graphics
     writer.uint(1).string(pane).uint(surfaceRevision)
     for (let i = 0; i < 2; i++) writer.uint(0).uint(0).uint(8).uint(1)
-    writer.byte(0).byte(0).bool(true).bool(false).bool(false).bool(false).uint(0).uint(0)
+    writer.byte(0).byte(0).bool(true).bool(!!options.mouseReporting).bool(false).bool(false).uint(0).uint(0)
     writer.uint(0).byte(popup ? 1 : 0) // splits, optional popup
     if (popup) {
       writer.string('popup').string('Overlay').byte(0).byte(0).uint(8)
@@ -212,6 +212,24 @@ test('input waits behind a serialized tab-focus barrier and cannot escape before
   assert.equal(f.tags.includes(13), false)
   f.response(); await until(() => f.tags.includes(13))
   assert.equal(f.requests.length, 2, 'the pending input burst shares one focus request')
+})
+
+test('hover reaches the current pane without a tab-focus barrier or synthetic repaint', async t => {
+  const f = await fixture(t, { holdFocus: true, mouseReporting: true }), pending = f.connect()
+  await until(() => f.requests.length === 1); f.response(); const client = await pending
+  t.after(() => client.kill())
+  let output = ''; client.onData(data => { output += data })
+  await until(() => output.includes('\x1b[?1003h'))
+  const painted = output, inputs = () => f.tags.filter(tag => tag === 13).length
+  client.write('\x1b[<35;2;1M'); await until(() => inputs() === 1)
+  client.write(Buffer.from('\x1b[<63;3;1M')); await until(() => inputs() === 2)
+  assert.equal(f.requests.length, 1, 'passive movement never asks tab.focus')
+  assert.equal(output, painted, 'passive movement without native output causes no paint')
+  client.write('q'); await until(() => f.requests.length === 2)
+  client.write('\x1b[<35;4;1M'); await delay(10)
+  assert.equal(inputs(), 2, 'hover cannot overtake a pending active-input barrier')
+  f.response(); await until(() => inputs() > 2)
+  assert.equal(f.requests.length, 2, 'queued hover adds no second focus barrier')
 })
 
 test('passive focus loss never focuses a tab and remains ordered behind already queued user input', async t => {

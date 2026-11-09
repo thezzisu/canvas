@@ -797,6 +797,33 @@ test('Core drag selection preserves spaces across soft wraps and trims logical l
   }
 })
 
+test('Core hover follows native tracking without clearing history, focusing or repainting', async () => {
+  const f = fixture(); f.terminal.cols = 20; f.terminal.rows = 3
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 3 })
+  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('line1\r\nline2\r\nline3\r\nline4\r\nline5\r\nline6\x1b[?9001l') })
+  const client = await opening
+  try {
+    let frames = 0, output = ''; client.onData(data => { frames++; output += data })
+    await client.completionFence()
+    assert(output.includes('\x1b[?1003h'), 'the outer surface requests passive moves')
+    const bottom = (await client.content())?.[0]?.lines
+    client.write('\x1b[<64;1;1M'); await tick(); await tick()
+    const history = (await client.content())?.[0]?.lines
+    assert.notDeepEqual(history, bottom)
+    for (const mode of [1002, 1003]) {
+      f.stream.receive({ kind: 'data', data: Buffer.from(`\x1b[?${mode}h\x1b[?1006h`) })
+      await tick(); await client.content()
+      const before = f.sent.length, painted = frames
+      client.write('\x1b[<35;2;2M'); await tick(); await tick()
+      assert.deepEqual((await client.content())?.[0]?.lines, history, `${mode}: hover never jumps to live output`)
+      assert.equal(frames, painted, 'passive input does not force a render')
+      assert.deepEqual(f.sent.slice(before).map(frame => ({ kind: frame.kind, data: frame.data.toString() })),
+        mode === 1003 ? [{ kind: 0, data: '\x1b[<35;2;2M' }] : [], 'only a native ANY-motion application receives hover')
+    }
+    assert.deepEqual(f.failures, [])
+  } finally { client.kill() }
+})
+
 test('Core typing and paste repaint the bottom immediately without waiting for program output', async () => {
   for (const input of ['x', '\x1b[200~hello\x1b[201~']) {
     const f = fixture(); f.terminal.cols = 20; f.terminal.rows = 3

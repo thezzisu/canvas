@@ -905,6 +905,22 @@ test('shared completion reads follow native frame fences and persist without con
   assert.equal(messages(peer).filter(message => message.type === 'status').at(-1).readOnly, true, 'viewing does not take input control');
 });
 
+test('passive hover leaves the already-painted completion frame available for acknowledgement', async t => {
+  const f = await fixture(t, false, false, true); if (!f) return;
+  const client = new Client(); await f.manager.connect(f.source, f.target, client.socket); await f.ready();
+  const resource = await listResources(f.source), paneId = resource.spaces.find(space => space.id === f.target.spaceId)!.windows[0]!.panes[0]!.id;
+  f.reportAgent(paneId, 'working');
+  await waitFor(() => messages(client).some(message => message.type === 'metadata' && message.window.panes.some((pane: { id: string; status: string }) => pane.id === paneId && pane.status === 'working')), 'working state arrives');
+  f.reportAgent(paneId, 'idle');
+  await waitFor(() => messages(client).some(message => message.type === 'completion-frame' && message.panes.some((pane: { id: string; completion?: unknown }) => pane.id === paneId && pane.completion)), 'native completion frame arrives');
+  const frame = messages(client).filter(message => message.type === 'completion-frame').at(-1);
+  const token = frame.panes.find((pane: { id: string }) => pane.id === paneId).completion;
+  client.command({ type: 'input', data: '\x1b[<35;3;3M\x1b[<63;4;3M' });
+  assert.deepEqual(f.store!.get<{ read: unknown }>('completion-read', f.source.id)!.read, {}, 'hover itself does not mark work read');
+  client.command({ type: 'completion-read', generation: frame.generation, paneId, ...token });
+  await waitFor(() => f.store!.get<{ read: Record<string, number> }>('completion-read', f.source.id)?.read[paneId] === token.sequence, 'hover did not invalidate the painted read evidence');
+});
+
 test('initial completed panes remain unread without replaying notifications, then a new completion notifies once', async t => {
   const f = await fixture(t, false, false, true); if (!f) return;
   const resource = await listResources(f.source), paneId = resource.spaces.find(space => space.id === f.target.spaceId)!.windows[0]!.panes[0]!.id;
