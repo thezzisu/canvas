@@ -43,7 +43,7 @@ function update(key: 'rightClick' | 'shiftPaste' | 'mouseHover', value: string |
       </div>
       <div v-if="showZoom" class="grid min-w-0 items-center gap-2 @min-[360px]:grid-cols-[minmax(0,1fr)_240px] @min-[360px]:gap-x-4">
         <label :for="`${id}-zoom`" class="text-sm text-muted">{{ t('terminal.settings.defaultZoom') }}</label>
-        <UInputNumber :id="`${id}-zoom`" :model-value="modelValue.maximizedZoom" :min="contentZoomLimits.min" :max="contentZoomLimits.max" :step="contentZoomLimits.step" :format-options="{ style: 'unit', unit: 'percent' }" class="w-full" color="neutral" :aria-label="t('terminal.settings.defaultZoom')" @update:model-value="value => emit('update:modelValue', { ...modelValue, maximizedZoom: value })" />
+        <UInputNumber :id="`${id}-zoom`" :model-value="modelValue.maximizedZoom" :min="contentZoomLimits.min" :max="contentZoomLimits.max" :step="contentZoomLimits.step" :step-snapping="false" :format-options="{ style: 'unit', unit: 'percent' }" class="w-full" color="neutral" :aria-label="t('terminal.settings.defaultZoom')" @update:model-value="value => emit('update:modelValue', { ...modelValue, maximizedZoom: value })" />
       </div>
     </div>
   </div>
