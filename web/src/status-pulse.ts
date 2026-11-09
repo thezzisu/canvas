@@ -5,7 +5,8 @@ function alignPulse(event: AnimationEvent) {
   }
 }
 
-/** Share the document timeline without animating inherited styles or running a JS frame loop. */
+/** Join the same document timeline on mount, status changes and motion preference
+ * changes. No inherited animated property, observer or JS frame loop is needed. */
 export function initializeStatusPulse() {
   document.addEventListener('animationstart', alignPulse, true)
 }

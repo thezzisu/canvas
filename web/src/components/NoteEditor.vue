@@ -21,6 +21,7 @@ import { clearCopiedFile } from '../file-clipboard'
 import { beginCopyFeedback } from '../copy-feedback'
 import type { FileAsset } from '../types'
 import NoteAttachment from './NoteAttachment.vue'
+import UploadProgress from './UploadProgress.vue'
 import { useNoteScroll } from '../note-scroll'
 
 const props = defineProps<{ content: string; attachments: FileAsset[]; canvasId: string; noteId: string; scrollKey: string; canPersist?: () => boolean; readOnly: boolean; insertAttachment: (value: NoteInsertion) => void }>()
@@ -36,6 +37,9 @@ const uploaded = shallowRef<FileAsset[]>([])
 const assets = computed(() => [...props.attachments, ...uploaded.value.filter(asset => !props.attachments.some(item => item.id === asset.id))])
 const task = computed(() => noteUpload(props.noteId))
 const pending = computed(() => !!task.value)
+const uploadName = computed(() => task.value && task.value.fileCount > 1 ? t('terminal.upload.files', { count: task.value.fileCount }) : task.value?.name || '')
+const uploadLabel = computed(() => task.value?.total && task.value.transferred < task.value.total
+  ? `${Math.floor(task.value.transferred / task.value.total * 100)}%` : t('panels.file.adding'))
 const extension = Node.create({
   name: 'noteAttachment', inline: true, group: 'inline', atom: true, selectable: true,
   addOptions: () => ({ assets: () => assets.value, preview: (asset: FileAsset) => {
@@ -233,14 +237,14 @@ defineExpose({ chooseFiles, pending })
     :on-transaction="transaction"
     :on-blur="() => emit('flush')" @update:model-value="changed" />
   </div>
-  <span v-if="task?.uploading" class="note-upload-status" role="status">{{ t('panels.file.adding') }}</span>
+  <UploadProgress v-if="task?.uploading" class="note-upload-status" :name="uploadName" :status="uploadLabel" :transferred="task.transferred" :total="task.total" active @cancel="task.controller.abort()" />
 </template>
 
 <style scoped>
 .note-editor-shell{position:relative;height:100%;min-height:0}
-.note-editor :deep(.note-editor-content){padding:11px 12px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;overscroll-behavior:contain;font-family:var(--content-font-family);font-feature-settings:var(--content-font-features);font-size:inherit;line-height:inherit}
+.note-editor :deep(.note-editor-content){padding:11px 12px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;overscroll-behavior:contain;font-family:var(--content-font-family);font-feature-settings:var(--content-font-features);font-size:inherit;line-height:inherit;-webkit-tap-highlight-color:transparent}
 .note-editor :deep(p){margin:0;min-height:1lh}
 .note-editor :deep(.is-editor-empty:first-child::before){content:attr(data-placeholder);float:left;height:0;pointer-events:none;color:#75808d}
 .note-editor :deep(.ProseMirror-selectednode .note-attachment-button){outline:1px solid var(--accent)}
-.note-upload-status{position:absolute;right:12px;bottom:8px;padding:3px 7px;border-radius:4px;background:#20252eef;font-size:11px;color:#aebaca;pointer-events:none}
+.note-upload-status{position:absolute;left:8px;right:8px;bottom:6px}
 </style>

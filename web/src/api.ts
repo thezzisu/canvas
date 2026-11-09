@@ -56,6 +56,34 @@ export async function api<T = unknown>(path: string, init?: RequestInit, context
   }
   return body as T
 }
+/** Native upload progress without introducing a server-side presentation protocol. */
+export function apiUpload<T>(path: string, file: File, progress: (loaded: number) => void,
+  signal: AbortSignal, context = apiContext()): Promise<T> {
+  requireCurrentApi(context)
+  const lifetime = AbortSignal.any([context.signal, signal])
+  lifetime.throwIfAborted()
+  const request = new XMLHttpRequest()
+  let abort: () => void
+  return new Promise<T>((resolve, reject) => {
+    abort = () => { request.abort(); reject(lifetime.reason) }
+    request.open('POST', apiUrl(path, context)); request.responseType = 'json'
+    request.setRequestHeader('Content-Type', 'application/octet-stream')
+    if (context.token) request.setRequestHeader('Authorization', `Bearer ${context.token}`)
+    request.upload.onprogress = event => progress(Math.min(file.size, event.loaded))
+    request.onerror = () => reject(new TypeError(t('terminal.upload.failed')))
+    request.onload = () => {
+      try {
+        requireCurrentApi(context); lifetime.throwIfAborted()
+        if (request.status === 401 && context.token) window.dispatchEvent(new Event('canvas:unauthorized'))
+        if (request.status < 200 || request.status >= 300)
+          throw new ApiError(request.status, request.response?.error || request.response?.message || t('common.requestFailed', { status: request.status }))
+        resolve(request.response as T)
+      } catch (error) { reject(error) }
+    }
+    lifetime.addEventListener('abort', abort, { once: true })
+    request.send(file)
+  }).finally(() => lifetime.removeEventListener('abort', abort))
+}
 export function write<T = unknown>(path: string, method: string, body?: unknown): Promise<T> {
   return api<T>(path, { method, body: body === undefined ? undefined : JSON.stringify(body) })
 }

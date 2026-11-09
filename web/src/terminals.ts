@@ -1135,14 +1135,20 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     prepareFiles() {
       if (current.host !== host || !isCurrentApi(mountingContext)) return
       const context = apiContext(), revision = current.selectionRevision || 0
+      const finishKeyboard = current.keyboard?.filePicker()
       let selected = false
-      return (files: File[]) => {
-        if (selected || !files.length) return
-        selected = true
-        if (current.host !== host || !isCurrentApi(context) || revision !== (current.selectionRevision || 0)) return
-        current.uploadUnverified = true
-        current.uploads.enqueue(files, undefined, context)
-        refreshUploads(current)
+      return {
+        complete(files: File[]) {
+          if (selected) return
+          selected = true
+          const valid = current.host === host && isCurrentApi(context) && revision === (current.selectionRevision || 0)
+          finishKeyboard?.(valid)
+          if (!valid || !files.length) return
+          current.uploadUnverified = true
+          current.uploads.enqueue(files, undefined, context)
+          refreshUploads(current)
+        },
+        dispose() { selected = true; finishKeyboard?.(false) },
       }
     },
     uploadReference(reference: CanvasFileReference) { return uploadReference(current, reference) },

@@ -179,9 +179,9 @@ html{zoom:var(--ui-zoom)}#app{position:fixed;inset:0;width:auto;height:auto}.app
 .card-focused{container-type:inline-size}
 
 /* Toggle state remains visible on dark headers, menus and canvas controls. */
-:is(.text-preview-action,.download-preview-expand,.canvas-toolbar button,.card-header-action)[aria-pressed=true],.overview-display-trigger.active,.card-action-menu [role=menuitemcheckbox][aria-checked=true]{background:var(--toggle-bg);color:var(--toggle-fg)}
-@media(hover:hover){:is(.text-preview-action,.download-preview-expand,.canvas-toolbar button,.card-header-action)[aria-pressed=true]:hover:not(:disabled),.overview-display-trigger.active:hover:not(:disabled),.card-action-menu [role=menuitemcheckbox][aria-checked=true][data-highlighted]{background:var(--toggle-hover)}}
-:is(.text-preview-action,.download-preview-expand,.canvas-toolbar button,.card-header-action)[aria-pressed=true]:active:not(:disabled),.overview-display-trigger.active:active:not(:disabled),.card-action-menu [role=menuitemcheckbox][aria-checked=true]:active{background:var(--toggle-pressed)}
+:is(.text-preview-action,.download-preview-expand,.canvas-toolbar button)[aria-pressed=true],.overview-display-trigger.active,.card-action-menu [role=menuitemcheckbox][aria-checked=true]{background:var(--toggle-bg);color:var(--toggle-fg)}
+@media(hover:hover){:is(.text-preview-action,.download-preview-expand,.canvas-toolbar button)[aria-pressed=true]:hover:not(:disabled),.overview-display-trigger.active:hover:not(:disabled),.card-action-menu [role=menuitemcheckbox][aria-checked=true][data-highlighted]{background:var(--toggle-hover)}}
+:is(.text-preview-action,.download-preview-expand,.canvas-toolbar button)[aria-pressed=true]:active:not(:disabled),.overview-display-trigger.active:active:not(:disabled),.card-action-menu [role=menuitemcheckbox][aria-checked=true]:active{background:var(--toggle-pressed)}
 
 .source-probe-status{display:flex;align-items:center;gap:6px;flex:1;min-width:0;margin-right:auto;color:#8996a5;font-size:11px}.source-probe-status>span:not(.spinner){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.source-probe-status.failed{color:#d49c9c}.source-probe-status .spinner{width:12px;height:12px;flex:none}.source-probe-status .icon-button{width:24px;height:24px;margin:0;flex:none}
 

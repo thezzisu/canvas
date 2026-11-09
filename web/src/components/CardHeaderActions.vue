@@ -73,9 +73,12 @@ useEventListener(computed(() => open.value ? document : undefined), 'keydown', (
 <style>
 .card-header-actions{display:flex;flex:none;align-items:center;gap:2px;margin-left:auto;opacity:0;pointer-events:none;transition:opacity .12s}
 :is(.terminal-card,.note-card,.file-card):is(:hover,:focus-within) .card-header-actions,.vue-flow__node.selected .card-header-actions,.terminal-card.focused .card-header-actions,.card-focused .card-header-actions{opacity:1;pointer-events:auto}
-.card-header-action{display:inline-flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;min-width:24px;height:24px;padding:0;border:0;border-radius:4px;background:transparent;color:#93a1b4;cursor:pointer}
-.card-header-action:hover:not(:disabled){background:#ffffff0b;color:#e0d5c6}.card-header-action:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}.card-header-action:disabled{opacity:.4;cursor:not-allowed}
-.card-header-action[aria-pressed=true],.card-header-action[aria-expanded=true]{background:var(--toggle-bg);color:var(--toggle-fg)}
+.card-header-action{display:inline-flex;align-items:center;justify-content:center;flex:0 0 24px;width:24px;min-width:24px;height:24px;padding:0;border:0;border-radius:4px;background-color:transparent;color:#93a1b4;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.card-header-action:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}.card-header-action:disabled{opacity:.4;cursor:not-allowed}
+.card-header-action:is([aria-pressed=true],[aria-expanded=true]){background-color:var(--toggle-bg);color:var(--toggle-fg)}
+.card-header-action:active:not(:disabled){background-color:#ffffff0b;color:#e0d5c6}
+.card-header-action:is([aria-pressed=true],[aria-expanded=true]):active:not(:disabled){background-color:var(--toggle-pressed);color:var(--toggle-fg)}
+@media(hover:hover){.card-header-action:hover:not(:disabled){background-color:#ffffff0b;color:#e0d5c6}.card-header-action:is([aria-pressed=true],[aria-expanded=true]):hover:not(:active):not(:disabled){background-color:var(--toggle-hover);color:var(--toggle-fg)}}
 .card-header-mobile{--header-action-size:44px;--text-preview-action-gap:0px;gap:0;opacity:1;pointer-events:auto;justify-content:flex-end;min-width:0;width:min(var(--header-actions-width),max(88px,calc(100cqw - 88px)))}
 .card-header-mobile .card-header-action{width:44px;min-width:44px;height:44px;flex-basis:44px}
 .mobile-layout .card-header-actions{opacity:1;pointer-events:auto}

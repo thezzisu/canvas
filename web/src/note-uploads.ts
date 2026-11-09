@@ -1,5 +1,5 @@
 import { shallowReactive, watch } from 'vue'
-import { api, apiContext, apiRevision, requireCurrentApi, segment } from './api'
+import { api, apiContext, apiRevision, apiUpload, requireCurrentApi, segment } from './api'
 import { reportDownloadError } from './downloads'
 import { loadCanvasFile } from './file-transfer'
 import { attachmentToken } from './note-document'
@@ -12,6 +12,10 @@ export interface NoteInsertion extends NoteRange { content: string; assets: File
 export interface NoteUpload extends NoteRange {
   controller: AbortController
   uploading: boolean
+  name: string
+  fileCount: number
+  transferred: number
+  total?: number
   insert?: (value: NoteInsertion) => boolean
 }
 const pending = shallowReactive(new Map<string, NoteUpload>())
@@ -25,19 +29,25 @@ watch(apiRevision, () => {
 async function upload(canvasId: string, noteId: string, offset: number, end: number, replaced: string,
   prepare: (signal: AbortSignal) => Promise<{ files: (File | FileAsset)[]; parts: PastePart[] }>, insert: (value: NoteInsertion) => void, uploading = true) {
   if (pending.has(noteId)) return
-  const context = apiContext(), task: NoteUpload = { offset, end, replaced, controller: new AbortController(), uploading }
+  const context = apiContext(), task = shallowReactive<NoteUpload>({ offset, end, replaced, controller: new AbortController(), uploading,
+    name: '', fileCount: 0, transferred: 0 })
   pending.set(noteId, task)
   try {
     const signal = AbortSignal.any([context.signal, task.controller.signal])
     const { files, parts } = await prepare(signal), assets: FileAsset[] = []
+    const incoming = files.filter(file => file instanceof File)
+    task.name = incoming.length === 1 ? incoming[0]!.name : ''
+    task.fileCount = incoming.length; task.total = incoming.reduce((total, file) => total + file.size, 0)
+    let transferred = 0
     for (const file of files) {
       requireCurrentApi(context); signal.throwIfAborted()
       if (!(file instanceof File)) { assets.push(file); continue }
       const query = new URLSearchParams({ filename: file.name, size: String(file.size) })
-      assets.push(await api<FileAsset>(`/api/canvases/${segment(canvasId)}/notes/${segment(noteId)}/files?${query}`,
-        { method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream' }, signal }, context))
+      assets.push(await apiUpload<FileAsset>(`/api/canvases/${segment(canvasId)}/notes/${segment(noteId)}/files?${query}`,
+        file, loaded => { task.transferred = transferred + loaded }, signal, context))
+      transferred += file.size; task.transferred = transferred
     }
-    requireCurrentApi(context)
+    requireCurrentApi(context); signal.throwIfAborted()
     if (pending.get(noteId) !== task) return
     const value: NoteInsertion = { content: parts.map(part => typeof part === 'string' ? part : attachmentToken(assets[part.file]!.id)).join(''),
       assets, offset: task.offset, end: task.end, replaced: task.replaced }

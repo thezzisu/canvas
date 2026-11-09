@@ -6,16 +6,18 @@ import UCheckbox from '@nuxt/ui/components/Checkbox.vue'
 import type { Source, SourceResource } from '../types'
 import { pickerChecked, pickerGroups, updatePickerSelection } from '../window-picker'
 import { statusColor } from '../status'
+import { needsAttention } from '../canvas-status'
 import Icon from './Icon.vue'
 import WindowTitle from './WindowTitle.vue'
 import { windowLabel } from '../window-title'
 
-const props = defineProps<{ resources: SourceResource[]; sources: Source[]; query: string; selected: string[]; existing: Set<string> }>()
+const props = defineProps<{ resources: SourceResource[]; sources: Source[]; query: string; selected: string[]; existing: Set<string>; fresh?: boolean }>()
 const emit = defineEmits<{ 'update:selected': [value: string[]] }>()
 const { t, n } = useI18n()
 const touch = useMobileLayout()
 const pending = computed(() => props.sources.some(source => !props.resources.some(resource => resource.id === source.id)))
 const groups = computed(() => pickerGroups(props.sources, props.resources, props.query, props.existing))
+const online = computed(() => new Set(props.resources.filter(source => source.status === 'online' && !source.error).map(source => source.id)))
 const selected = computed(() => new Set(props.selected))
 const collapsed = ref(new Set<string>())
 const expanded = (key: string) => !!props.query.trim() || !collapsed.value.has(key)
@@ -45,7 +47,7 @@ const checkboxUi = { root: 'picker-checkbox', base: 'picker-checkbox-base' }
         </summary>
         <label v-for="window in space.windows" :key="window.key" class="picker-window-row" :class="{ added: window.added }">
           <UCheckbox :model-value="!window.added && selected.has(window.key)" :disabled="window.added" :aria-label="windowLabel(window)" :ui="checkboxUi" @update:model-value="toggle([window.key], $event)" />
-          <span class="program-dot" :style="{ '--program-color': statusColor(window.status) }" />
+          <span class="program-dot" :data-status-pulse="fresh && online.has(source.id) && needsAttention(window.status)" :style="{ '--program-color': statusColor(window.status) }" />
           <WindowTitle class="picker-window-name" :window="window" /><span v-if="window.added" class="picker-added">{{ t('windowPicker.added') }}</span>
         </label>
       </details>

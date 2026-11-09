@@ -6,6 +6,7 @@ import UButton from '@nuxt/ui/components/Button.vue'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import { NodeResizer } from '@vue-flow/node-resizer'
 import Icon from './Icon.vue'
+import UploadProgress from './UploadProgress.vue'
 import CardLayoutControls from './CardLayoutControls.vue'
 import { useLayoutCard } from '../layout-editing'
 import { requestTrustedPreview } from '../trusted-preview'
@@ -17,7 +18,6 @@ import { windowLabel } from '../window-title'
 import PaneIndicators from './PaneIndicators.vue'
 import MobileKeyboard from './MobileKeyboard.vue'
 import { statusColor } from '../status'
-import { needsAttention } from '../canvas-status'
 import { claimNoteDrop, readNoteTransfer } from '../note-transfer'
 import { isFileReference, readFileReference } from '../file-reference'
 import { copiedFile } from '../file-clipboard'
@@ -111,7 +111,6 @@ const inputFocused = computed(() => !showApp.value && windowFocused.value && !mo
   keepTerminal.value && status.value.status === 'connected' && !status.value.readOnly &&
   !!activeElement.value?.matches('.xterm-helper-textarea, .terminal-mobile-input') && !!host.value?.contains(activeElement.value))
 const frameStatus = computed(() => !closed.value && !props.data.sourceOffline ? props.data.status : 'unknown')
-const statusPulse = computed(() => props.data.statusFresh === true && !props.data.sourceOffline && needsAttention(frameStatus.value))
 const resizeState = computed(() => !props.data.focus ? 'passive' : !status.value.focusResize ? 'pending' : status.value.focusResize.owned ? 'owned' : 'passive')
 const uploadActive = computed(() => status.value.upload && ['waiting', 'preparing', 'uploading'].includes(status.value.upload.state))
 const uploadPercent = computed(() => {
@@ -267,7 +266,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
   <NodeResizer v-if="!data.mobile && !data.overview && !data.focus && !maximizedElsewhere" :min-width="360" :min-height="220" :max-width="4000" :max-height="3000" @resize-start="resizeStarted" @resize-end="resized" />
   <article ref="layoutRoot" tabindex="-1" class="terminal-card" :class="[{ selected, 'terminal-transition': status.transitioning || status.layoutRestoring, unavailable: !closed && !keepTerminal, focused: data.focus, 'input-focused': inputFocused || captureActive, 'terminal-mobile': data.mobile, 'terminal-mobile-preview': mobilePreview, closed }, `program-${frameStatus}`]" :data-source-id="data.sourceId" :data-space-id="data.spaceId" :data-window-id="data.windowId" :data-connection-status="closed ? 'closed' : keepTerminal ? status.status : 'unavailable'" :data-presentation="maximizedElsewhere ? 'paused' : data.focus ? 'maximized' : 'normal'" :data-program-status="data.status" :data-resize-state="resizeState" :data-content-mode="showApp ? 'app' : 'terminal'" :data-input-focused="inputFocused" :data-note-drop="noteDrag ? noteDropAvailable ? 'ready' : 'unavailable' : undefined" @dragenter.capture="noteDragOver" @dragover.capture="noteDragOver" @dragleave="noteDragLeave" @drop.capture="dropNote" :style="{ '--program-color': statusColor(frameStatus), '--capture-toolbar-height': `${captureToolbarHeight}px`, width: dimensions || data.focus ? '100%' : `${data.width}px`, height: dimensions || data.focus ? '100%' : `${data.height}px` }" :aria-label="`${label} · ${data.subtitle}`">
     <header class="terminal-header drag-handle" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :class="{ 'cutout-header': mobileFocus }" :data-cutout-position="mobileFocus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="mobileFocus ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` } : undefined">
-      <PaneIndicators :panes="data.panes" :status="data.status" :available="keepTerminal" :connection="closed ? 'closed' : status.status" :error="status.error" :read-only="status.readOnly" :pulse="statusPulse" />
+      <PaneIndicators :panes="data.panes" :status="data.status" :available="keepTerminal" :connection="closed ? 'closed' : status.status" :error="status.error" :read-only="status.readOnly" :fresh="data.statusFresh && !data.sourceOffline" />
       <WindowTitle class="terminal-name" :class="{ 'cutout-title': mobileFocus }" :window="data" :pane-id="status.focusedPaneId" :description="data.subtitle" />
       <CardHeaderActions class="terminal-actions" :class="{ 'cutout-actions': mobileFocus }" :items="menu" :expanded="data.focus" :removable="!data.overview" :mobile="mobileFocus" :shortcuts="shortcuts" :disabled="closed && !data.focus"
         :add-label="t('terminal.action.addToCanvas')" :remove-label="t('terminal.action.removeFromCanvas')" :maximize-label="t('terminal.action.focus')" :restore-label="t('terminal.action.restore')" :more-label="t('terminal.action.windowActions')"
@@ -298,10 +297,8 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <span v-if="status.upload?.rejected" class="terminal-copy-notice copy-failed" role="alert">{{ status.upload.rejected }}</span>
     <span v-if="status.fileReading && !fileDrag" class="terminal-copy-notice" role="status">{{ t('fileTransfer.preparing') }}</span>
     <span v-if="status.clipboardError" class="terminal-copy-notice" role="status">{{ t(`terminal.clipboard.${status.clipboardError}`) }}</span>
-    <div v-if="status.upload" class="terminal-upload nodrag nopan" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :class="{ 'upload-failed': status.upload.state === 'failed' }" :data-upload-id="status.upload.id" :data-upload-state="status.upload.state" @pointerdown.stop @mousedown.stop>
-      <div class="terminal-upload-row"><span class="terminal-upload-name" :title="uploadName">{{ uploadName }}</span><small v-if="status.upload.queued">+{{ status.upload.queued }}</small><span class="terminal-upload-status" role="status">{{ uploadLabel }}</span><button :aria-label="uploadActive ? t('terminal.upload.cancel') : t('terminal.upload.close')" :disabled="status.upload.cancelling" @click.stop="terminal?.cancelUpload()"><Icon name="close" :size="13" /></button></div>
-      <div v-if="uploadActive" class="terminal-upload-track" role="progressbar" :aria-valuenow="status.upload.transferred" :aria-valuemin="0" :aria-valuemax="status.upload.total" :aria-valuetext="`${uploadPercent}%`" :aria-label="t('terminal.upload.progress')"><span :style="{ width: `${uploadPercent}%` }" /></div>
-    </div>
+    <UploadProgress v-if="status.upload" class="terminal-upload" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :data-upload-id="status.upload.id" :data-upload-state="status.upload.state"
+      :name="uploadName" :status="uploadLabel" :transferred="status.upload.transferred" :total="status.upload.total" :active="!!uploadActive" :queued="status.upload.queued" :cancelling="status.upload.cancelling" :failed="status.upload.state === 'failed'" @cancel="terminal?.cancelUpload()" />
     <div v-if="data.available && maximizedElsewhere" class="terminal-maximized nodrag nopan" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.stop @mousedown.stop @click.stop>
       <span>{{ t('terminal.maximized') }}</span>
       <UButton type="button" color="neutral" variant="outline" size="xs" :loading="status.presentationCancelling" :disabled="status.status !== 'connected' || status.presentation?.lease === undefined" @click.stop="terminal?.cancelMaximized()">{{ t('terminal.action.cancelMaximized') }}</UButton>
@@ -340,16 +337,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-copy-notice.copy-failed{border-color:#79545470;background:#33262bf2;color:#d6aaaa}
 .terminal-note-drop{z-index:5}.terminal-note-drop.note-drop-unavailable{color:#9aa4b3;background:#171b21df}
 .terminal-file-drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;background:#12151aca;color:var(--accent);font-size:12px}
-.terminal-upload{position:absolute;bottom:6px;left:8px;right:8px;padding:4px 7px;border:1px solid #424a56;border-radius:4px;background:#242930f2;color:#b6c0ce;box-shadow:0 2px 8px #0003;font-size:10px}
-.terminal-upload-row{display:flex;align-items:center;gap:8px;min-height:19px}
-.terminal-upload-name{min-width:0;flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.terminal-upload-status{flex-shrink:0;font-variant-numeric:tabular-nums;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.terminal-upload-row>small{color:#7f8b9b;font-size:9px}
-.terminal-upload button{height:18px;width:18px;min-width:18px;padding:0;color:#8c98a9;border-radius:3px}
-.terminal-upload button:hover{color:#e3c9b5;background:#ffffff09}
-.terminal-upload-track{height:2px;margin-top:3px;border-radius:1px;background:#414a57;overflow:hidden}
-.terminal-upload-track>span{display:block;height:100%;background:var(--accent)}
-.upload-failed .terminal-upload-status{color:var(--danger)}
+.terminal-upload{position:absolute;bottom:6px;left:8px;right:8px}
 .terminal-preview-button{position:absolute;inset:0;z-index:4;pointer-events:auto;cursor:pointer;outline:none;touch-action:none;-webkit-tap-highlight-color:transparent}
 .terminal-preview-button:focus-visible{box-shadow:inset 0 0 0 2px var(--accent)}
 .terminal-mobile-preview .terminal-host{pointer-events:none}

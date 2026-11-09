@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, ref, useId } from 'vue'
 import { useEventListener } from '@vueuse/core'
 import UPopover from '@nuxt/ui/components/Popover.vue'
 import { paneLabel, paneName, statusColor, statusLabel } from '../status'
+import { needsAttention } from '../canvas-status'
 import type { PaneResource, ProgramStatus } from '../types'
 
 const { t } = useI18n()
@@ -14,7 +15,7 @@ const props = defineProps<{
   connection: 'connecting' | 'connected' | 'disconnected' | 'closed'
   error?: string
   readOnly?: boolean
-  pulse?: boolean
+  fresh?: boolean
 }>()
 const trigger = ref<HTMLButtonElement>()
 const panel = ref<HTMLElement>()
@@ -25,6 +26,7 @@ const portal = computed(() => trigger.value?.closest<HTMLElement>('.app-shell') 
 let leaveTimer: ReturnType<typeof setTimeout> | undefined
 const summary = computed(() => props.connection === 'closed' ? t('terminal.closed') : !props.available ? t('terminal.unavailable') : props.connection === 'connecting' ? t('terminal.connection.connecting') : props.connection === 'disconnected' ? t('terminal.connection.disconnected') : statusLabel(props.status))
 const color = computed(() => props.connection === 'closed' ? statusColor('unknown') : !props.available || props.connection === 'disconnected' ? statusColor('error') : props.connection === 'connecting' ? statusColor('working') : statusColor(props.status))
+const live = computed(() => !!props.fresh && props.available && props.connection === 'connected')
 
 function contains(target: EventTarget | null) { return target instanceof Node && (trigger.value?.contains(target) || panel.value?.closest('.terminal-status-popover')?.contains(target)) }
 function close() { clearTimeout(leaveTimer); open.value = false; pinned.value = false }
@@ -60,14 +62,14 @@ onBeforeUnmount(() => clearTimeout(leaveTimer))
 </script>
 
 <template>
-  <button ref="trigger" class="terminal-status-trigger nodrag cutout-status" :style="{ '--status-color': color }" :data-connection-status="available ? connection : 'unavailable'" :aria-label="t('terminal.statusSummary', { status: summary })" :aria-expanded="open" :aria-controls="panelId" @pointerdown.stop @mouseenter="enter" @mouseleave="leave" @focus="enter" @blur="blur" @click.stop="toggle" @keydown.esc.stop.prevent="close"><i :data-status-pulse="pulse && available && connection === 'connected'" /></button>
+  <button ref="trigger" class="terminal-status-trigger nodrag cutout-status" :style="{ '--status-color': color }" :data-connection-status="available ? connection : 'unavailable'" :aria-label="t('terminal.statusSummary', { status: summary })" :aria-expanded="open" :aria-controls="panelId" @pointerdown.stop @mouseenter="enter" @mouseleave="leave" @focus="enter" @blur="blur" @click.stop="toggle" @keydown.esc.stop.prevent="close"><i :data-status-pulse="live && needsAttention(status)" /></button>
   <UPopover :open="open" :reference="trigger" :portal="portal" :content="content" :ui="{ content: 'terminal-status-popover' }" @update:open="value => { if (!value) close() }">
     <template #content><div :id="panelId" ref="panel" role="region" :aria-label="t('terminal.windowStatus')" @pointerdown.stop @wheel.stop @keydown.esc.stop.prevent="close">
-      <div class="terminal-status-summary"><i class="program-dot" :style="{ '--program-color': color }" /><span>{{ summary }}</span><small v-if="readOnly && connection === 'connected'">{{ t('terminal.readOnly') }}</small></div>
+      <div class="terminal-status-summary"><i class="program-dot" :data-status-pulse="live && needsAttention(status)" :style="{ '--program-color': color }" /><span>{{ summary }}</span><small v-if="readOnly && connection === 'connected'">{{ t('terminal.readOnly') }}</small></div>
       <p v-if="error" class="terminal-status-error">{{ error }}</p>
       <div v-if="available && panes.length" class="pane-status-list">
         <div v-for="pane in panes" :key="pane.id" class="pane-status-row" :class="{ active: pane.active }" :style="{ '--program-color': statusColor(pane.status) }" :data-pane-id="pane.id" :data-program-status="pane.status" :title="paneLabel(pane)">
-          <i class="program-dot" /><span class="pane-status-name">{{ paneName(pane) }}<small v-if="pane.agent && pane.agent !== pane.name">{{ pane.agent }}</small></span><span class="pane-status-value">{{ statusLabel(pane.status) }}</span>
+          <i class="program-dot" :data-status-pulse="live && needsAttention(pane.status)" /><span class="pane-status-name">{{ paneName(pane) }}<small v-if="pane.agent && pane.agent !== pane.name">{{ pane.agent }}</small></span><span class="pane-status-value">{{ statusLabel(pane.status) }}</span>
         </div>
       </div>
     </div></template>

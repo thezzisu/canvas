@@ -39,7 +39,6 @@ function change(value: number) { emit('update:modelValue', Math.max(contentZoomL
 
 <style scoped>
 .content-zoom-trigger{flex-basis:auto;width:43px;min-width:43px;height:24px;font-size:10px;font-variant-numeric:tabular-nums;padding:0 4px;border-radius:4px}
-.content-zoom-trigger[aria-expanded=true]{background:#ffffff12;color:#e3c9b5}
 .mobile-layout .content-zoom-trigger{width:44px;min-width:44px;height:44px}
 </style>
 

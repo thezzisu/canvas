@@ -1,10 +1,22 @@
-@media(prefers-reduced-motion:no-preference) {
-  .minimap-pulse { animation: minimap-breathe 2.4s ease-in-out infinite; }
-  .terminal-status-trigger>i[data-status-pulse=true] { animation: status-breathe 2.4s ease-in-out infinite; }
+:is(.terminal-card,.note-card,.file-card) {
+  --card-accent: var(--program-color,var(--note-color,#93a1b4));
+  --toggle-bg: color-mix(in srgb,var(--card-accent) 55%,#1c1f25);
+  --toggle-hover: color-mix(in srgb,var(--card-accent) 65%,#1c1f25);
+  --toggle-pressed: color-mix(in srgb,var(--card-accent) 70%,#1c1f25);
+  --toggle-fg: color-mix(in srgb,var(--card-accent) 30%,#fff);
 }
-/* Avoid a separate composited layer for each minimap window. */
-@keyframes minimap-breathe { 0%,100% { fill-opacity: .58; } 50% { fill-opacity: 1; } }
-@keyframes status-breathe { 0%,100% { opacity: .58; } 50% { opacity: 1; } }
+
+@media(prefers-reduced-motion:no-preference) {
+  .minimap-pulse,[data-status-pulse=true] {
+    --attention-low-opacity: .25;
+    animation: status-breathe 2.4s ease-in-out infinite;
+  }
+  .minimap-pulse { animation-name: minimap-breathe; }
+}
+/* One rhythm/amplitude, native paint properties: SVG fill avoids a composited
+   layer per minimap window; HTML changes only the small indicator's opacity. */
+@keyframes minimap-breathe { 0%,100% { fill-opacity: var(--attention-low-opacity); } 50% { fill-opacity: 1; } }
+@keyframes status-breathe { 0%,100% { opacity: var(--attention-low-opacity); } 50% { opacity: 1; } }
 
 .vue-flow__node-note:is(.selected,:focus-visible,:focus-within)>.note-card { border-color: color-mix(in srgb,var(--note-color) 78%,#e7edf5); }
 .vue-flow__node-file:is(.selected,:focus-visible,:focus-within)>.file-card { border-color: #8793a3; }

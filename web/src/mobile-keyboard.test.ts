@@ -266,3 +266,56 @@ test('overlay mode with no reported keyboard geometry retains the bounded openin
   assert.equal(mobileKeyboardFrame.value, undefined)
   assert.equal(readViewportFrame().height, 844)
 })
+
+test('native file selection suspends keyboard recovery and resumes once after foreground return', async t => {
+  const f = fixture(t); f.open()
+  const finish = f.control.filePicker()!, before = f.textarea.focusCalls
+  f.document.hidden = true; f.document.dispatchEvent(new Event('visibilitychange'))
+  f.textarea.blur(); f.resize(844)
+  await Promise.resolve(); t.mock.timers.tick(2000)
+  assert.equal(f.requested(), true, 'the system picker does not turn off the user keyboard intent')
+  assert.equal(f.textarea.focusCalls, before, 'no hidden recovery attempts')
+  assert.equal(mobileKeyboardFrame.value, undefined, 'old keyboard geometry is not imposed on the picker')
+  finish(true)
+  assert.equal(f.textarea.focusCalls, before, 'a hidden change event waits for foreground')
+  f.document.hidden = false; f.document.dispatchEvent(new Event('visibilitychange'))
+  assert.equal(f.textarea.focusCalls, before + 1)
+  f.resize(500); finish(true); await Promise.resolve(); t.mock.timers.tick(2000)
+  assert.equal(f.requested(), true); assert.equal(f.textarea.focusCalls, before + 1)
+})
+
+test('picker cancellation preserves a still-visible IME without cycling native focus', async t => {
+  const f = fixture(t); f.open()
+  let blurs = 0; f.textarea.addEventListener('blur', () => blurs++)
+  const finish = f.control.filePicker()!
+  finish(true); await Promise.resolve()
+  assert.equal(blurs, 0); assert.equal(f.requested(), true)
+  assert.equal(f.document.activeElement, f.textarea)
+})
+
+test('picker disposal, explicit keyboard hiding and another editor never restore the old input', async t => {
+  const f = fixture(t); f.open()
+  const discarded = f.control.filePicker()!, before = f.textarea.focusCalls
+  discarded(false); discarded(true)
+  assert.equal(f.requested(), false); assert.equal(f.textarea.focusCalls, before)
+  f.resize(844); f.open()
+  const hidden = f.control.filePicker()!
+  hideMobileKeyboard(); hidden(true)
+  assert.equal(f.requested(), false)
+  f.resize(844); f.open()
+  const moved = f.control.filePicker()!, other = {}
+  f.textarea.blur(); f.document.activeElement = other
+  f.document.dispatchEvent(new Event('focusin')); moved(true); await Promise.resolve()
+  assert.equal(f.document.activeElement, other); assert.equal(f.requested(), false)
+})
+
+test('picker never opens an initially closed keyboard and a declined restoration remains bounded', async t => {
+  const f = fixture(t)
+  f.control.focus(false); assert.equal(f.control.filePicker(), undefined)
+  f.open(); const finish = f.control.filePicker()!, before = f.textarea.focusCalls
+  f.resize(844); finish(true)
+  await Promise.resolve(); t.mock.timers.tick(1000)
+  assert.equal(f.requested(), false); assert.equal(f.textarea.focusCalls, before + 1)
+  f.resize(844); t.mock.timers.tick(4000)
+  assert.equal(f.textarea.focusCalls, before + 1)
+})

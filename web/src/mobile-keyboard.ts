@@ -22,6 +22,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   let baseline = { width: window.innerWidth, height: Math.max(window.innerHeight, read().height) }
   let requested = false
   let changingFocus = false
+  let picker: { returned: boolean } | undefined
   let lastVisible: ViewportFrame | undefined
   let recovery: { frame: ViewportFrame; moved: boolean } | undefined
   let openingTimer: ReturnType<typeof setTimeout> | undefined
@@ -58,7 +59,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     mobileKeyboardFrame.value = undefined
   }
   function recover() {
-    if (recovery || !lastVisible || !requested || !options.active() || document.hidden) return
+    if (picker || recovery || !lastVisible || !requested || !options.active() || document.hidden) return
     clearTimeout(visibleTimer); visibleTimer = undefined
     recovery = { frame: { ...lastVisible }, moved: read().height > lastVisible.height + 2 }
     mobileKeyboardFrame.value = recovery.frame
@@ -81,6 +82,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   }
   function observe() {
     if (owner !== controller) return
+    if (picker) return
     if (!options.active() || document.hidden) { controller.blur(); mobileKeyboardVisible.value = false; return }
     const frame = read()
     if (Math.abs(window.innerWidth - baseline.width) > 1) {
@@ -121,12 +123,38 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   function blurred() { if (!changingFocus && requested) recover() }
   function focusChanged() {
     queueMicrotask(() => {
-      if (requested && document.activeElement !== textarea && document.activeElement !== document.body && document.activeElement !== document.documentElement) controller.blur()
+      if (!picker && requested && document.activeElement !== textarea && document.activeElement !== document.body && document.activeElement !== document.documentElement) controller.blur()
     })
   }
-  function visibilityChanged() { if (document.hidden && owner === controller) controller.blur() }
+  function finishPicker() {
+    if (!picker?.returned || document.hidden) return
+    picker = undefined
+    if (!requested || owner !== controller || !options.active()) return
+    const active = document.activeElement
+    if (active !== textarea && active !== document.body && active !== document.documentElement) { controller.blur(); return }
+    const visible = occluded(read())
+    show(!visible)
+    if (!visible) confirmOpening()
+    observe()
+  }
+  function visibilityChanged() {
+    if (picker) { finishPicker(); return }
+    if (document.hidden && owner === controller) controller.blur()
+  }
   const controller = {
     refreshViewport: observe,
+    /** A native picker temporarily hides the page; it does not turn off the IME. */
+    filePicker() {
+      if (!requested || owner !== controller) return
+      const current: { returned: boolean } = { returned: false }
+      picker = current
+      cancelTimers(); lastVisible = undefined
+      return (restore: boolean) => {
+        if (picker !== current) return
+        if (!restore) { controller.blur(); return }
+        current.returned = true; finishPicker()
+      }
+    },
     focus(value?: boolean) {
       if (!options.active()) return
       if (owner !== controller) { owner?.blur(); owner = controller }
@@ -149,6 +177,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       observe()
     },
     blur() {
+      picker = undefined
       cancelTimers(); lastVisible = undefined; updateIntent(false)
       if (options.active() || owner === controller) {
         changingFocus = true

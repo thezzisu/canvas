@@ -8,11 +8,11 @@ import WindowTitle from './WindowTitle.vue'
 import { paneName, statusColor, statusLabel } from '../status'
 import { windowLabel } from '../window-title'
 import { usePointerDismiss } from '../pointer-dismiss'
-import type { CanvasIndicator } from '../canvas-status'
+import { needsAttention, type CanvasIndicator } from '../canvas-status'
 import type { CanvasAgent } from '../canvas-agents'
 
 defineOptions({ inheritAttrs: false })
-const props = defineProps<{ name: string; overview?: boolean; active?: boolean; indicator?: CanvasIndicator; agents(): CanvasAgent[]; actionsAvailable?: boolean; open?: boolean }>()
+const props = defineProps<{ name: string; overview?: boolean; active?: boolean; indicator?: CanvasIndicator; fresh?: boolean; agents(): CanvasAgent[]; actionsAvailable?: boolean; open?: boolean }>()
 const emit = defineEmits<{ select: []; 'update:open': [open: boolean]; go: [target: Pick<CanvasAgent, 'sourceId' | 'windowId'>] }>()
 const { t, n } = useI18n()
 const label = computed(() => props.indicator?.status ? t('canvasUi.canvasStatus', { name: props.name, status: statusLabel(props.indicator.status) }) : props.name)
@@ -72,7 +72,7 @@ const content = computed(() => ({ 'aria-label': t('canvasUi.agentsInCanvas', { n
       <span class="canvas-nav-name"><span>{{ name }}</span><small v-if="indicator" class="canvas-nav-count">{{ n(indicator.count) }}</small></span>
     </button>
     <button v-if="indicator?.status" ref="trigger" type="button" class="canvas-nav-status canvas-agent-trigger" aria-haspopup="dialog" data-no-reorder :aria-label="t('canvasUi.agentsInCanvas', { name })" :aria-expanded="open" :aria-controls="panelId" @pointerenter="enter" @pointerleave="leave()" @click.stop="toggle" @keydown.esc.stop.prevent="close">
-      <i class="program-dot" :style="{ '--program-color': statusColor(indicator.status) }" />
+      <i class="program-dot" :data-status-pulse="fresh && needsAttention(indicator.status)" :style="{ '--program-color': statusColor(indicator.status) }" />
     </button>
     <UPopover v-model:open="open" :modal="false" :reference="trigger" :portal="portal" :content="content"
       :ui="{ content: 'canvas-agent-popover z-[80] w-[320px] max-w-[calc(var(--ui-viewport-width)-16px)] max-h-[min(420px,var(--reka-popover-content-available-height))] overflow-y-auto' }">
@@ -81,7 +81,7 @@ const content = computed(() => ({ 'aria-label': t('canvasUi.agentsInCanvas', { n
           <div class="canvas-agents-heading"><span>{{ t('canvasUi.agents') }}</span><small>{{ n(agents.length) }}</small></div>
           <p v-if="!agents.length" class="canvas-agents-empty">{{ t('canvasUi.noAgents') }}</p>
           <button v-for="agent in agents" :key="agent.key" type="button" class="canvas-agent-row" :data-agent-id="agent.key" :data-window-id="agent.windowId" :disabled="!agent.available || actionsAvailable === false" :title="[agent.context, windowLabel(agent.window, agent.pane.id)].join('\n')" @click="go(agent)">
-            <i class="program-dot" :style="{ '--program-color': statusColor(agent.status) }" />
+            <i class="program-dot" :data-status-pulse="fresh && agent.available && needsAttention(agent.status)" :style="{ '--program-color': statusColor(agent.status) }" />
             <span class="canvas-agent-description"><strong>{{ agent.pane.agent || paneName(agent.pane) }}</strong><WindowTitle :window="agent.window" :pane-id="agent.pane.id" /><small>{{ agent.context }}</small></span>
             <span class="canvas-agent-state" :style="{ color: statusColor(agent.status) }">{{ agent.available ? statusLabel(agent.status) : t('canvasUi.agentUnavailable') }}</span>
           </button>

@@ -9,8 +9,8 @@ const asset = computed<FileAsset | undefined>(() => props.extension.options.asse
 </script>
 
 <template>
-  <NodeViewWrapper as="span" class="note-attachment" contenteditable="false">
-    <UButton size="xs" color="neutral" variant="soft" :icon="asset?.mime.startsWith('image/') ? 'i-lucide-image' : 'i-lucide-file'" :label="asset?.filename || '[file]'" :title="asset?.filename" :disabled="!asset" class="note-attachment-button" :ui="{ label: 'truncate' }" @mousedown.prevent @click="extension.options.preview(asset)" />
+  <NodeViewWrapper as="span" class="note-attachment select-all" contenteditable="false">
+    <UButton size="xs" color="neutral" variant="soft" :icon="asset?.mime.startsWith('image/') ? 'i-lucide-image' : 'i-lucide-file'" :label="asset?.filename || '[file]'" :title="asset?.filename" :disabled="!asset" class="note-attachment-button" :ui="{ base: 'select-all', label: 'truncate' }" @mousedown.prevent @click="extension.options.preview(asset)" />
   </NodeViewWrapper>
 </template>
 
