@@ -14,7 +14,7 @@ const { t } = useI18n()
 <template>
   <UModal :open="open" :portal="portal || false" :title="t('terminal.settings.title')" :close="{ 'aria-label': t('common.close') }"
     :ui="{ content: 'terminal-settings-dialog', overlay: 'app-dialog-overlay' }" @update:open="value => { if (!value) emit('close') }">
-    <template #body><TerminalSettingsFields v-model="settings" :defaults="defaults" :portal="portal" /></template>
+    <template #body><TerminalSettingsFields v-model="settings" :defaults="defaults" /></template>
   </UModal>
 </template>
 

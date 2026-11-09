@@ -212,7 +212,7 @@ defineExpose({ close })
       </div>
       <section class="grid gap-3 py-4 border-y border-default" :aria-label="t('terminal.settings.defaults')">
         <div class="flex items-center justify-between gap-3"><span class="text-sm">{{ t('terminal.settings.defaults') }}</span><small class="text-muted">{{ t('settings.thisBrowser') }}</small></div>
-        <TerminalSettingsFields :model-value="terminalDefaults" :portal="portal" show-zoom @update:model-value="value => { terminalDefaults = { ...terminalDefaults, ...value } }" />
+        <TerminalSettingsFields :model-value="terminalDefaults" show-zoom @update:model-value="value => { terminalDefaults = { ...terminalDefaults, ...value } }" />
       </section>
       <section v-if="mobile && hasDisplayCutout" class="cutout-settings" :aria-label="t('settings.cutout')">
         <div class="cutout-heading"><span>{{ t('settings.cutout') }}</span><small>{{ t('settings.thisBrowser') }}</small></div>
