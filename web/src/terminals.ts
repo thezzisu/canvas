@@ -20,6 +20,7 @@ import { pendingWrites } from './pending-writes'
 import { clipboardRestoringFocus, TerminalClipboard, type ClipboardNotice } from './clipboard'
 import { emptyModifiers, hasModifiers, modifiedText, terminalKey, terminalShortcut, type TerminalModifiers } from './terminal-input'
 import { terminalInputChunks } from './terminal-input-chunks'
+import { TerminalInputHold } from './terminal-input-hold'
 import { bindTerminalKeyboardLock } from './terminal-keyboard-lock'
 import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch'
 import { bindTerminalTouchpad } from './terminal-touchpad'
@@ -123,6 +124,8 @@ interface Session {
   listeners: Set<(state: TerminalStatus) => void>
   resource: { sourceId: string; spaceId: string; windowId: string }
   uploads: TerminalUploads
+  /** Keystrokes typed while a composer send is in flight follow its paste. */
+  input: TerminalInputHold
   pastePreview?: () => void
   fileRead?: AbortController
   fileLink?: Promise<void>
@@ -846,7 +849,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
         else pendingWrites.stop(transfer, 'upload')
       },
     })
-    session = { term, surface, uploads, opened: false, magnified: false, mobile: !!options.mobile, connectionRevision: 0,
+    session = { term, surface, uploads, input: new TerminalInputHold(), opened: false, magnified: false, mobile: !!options.mobile, connectionRevision: 0,
       modifiers: emptyModifiers(), touchMode: 'scroll', keyboardRequested: false, settings: options.settings || defaultTerminalSettings,
       state: { status: 'connecting' }, listeners: new Set(), resource: { sourceId: resource.sourceId, spaceId: resource.spaceId, windowId: resource.windowId } }
     const current = session
@@ -902,10 +905,12 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
         data = modifiedText(data, current.modifiers)
         setModifiers(current)
       }
-      for (const chunk of binary ? [data] : terminalInputChunks(data)) {
-        if (!writable()) return
-        socket!.send(JSON.stringify({ type: 'input', data: chunk, ...(binary ? { encoding: 'binary' } : {}) }))
-      }
+      current.input.write(() => {
+        for (const chunk of binary ? [data] : terminalInputChunks(data)) {
+          if (!writable()) return
+          socket!.send(JSON.stringify({ type: 'input', data: chunk, ...(binary ? { encoding: 'binary' } : {}) }))
+        }
+      })
     }
     term.onData(data => sendInput(data))
     // Legacy mouse coordinates are bytes, not UTF-8 text. Encoding them as
@@ -1229,10 +1234,15 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     setResizing(value: boolean) { current.resizing = value; present(current) },
     close() { if (current.host === host && isCurrentApi(mountingContext)) windowRemoved(current) },
     cancelUpload() { current.uploads.cancel() },
+    /** Hold keystrokes until the returned release; they then follow in order. */
+    holdInput() { return current.input.hold() },
     /** Deliver the stored draft version the user saw; Canvas streams its files to the native inbox. */
     sendComposer(composer: string, version: number, files: string[], done: (error?: string) => void) {
       const name = files.length === 1 ? files[0]! : files.length ? t('terminal.upload.files', { count: files.length }) : ''
-      current.uploads.enqueueStored({ type: 'composer-send', composer, version }, { name, fileCount: files.length, done }, mountingContext)
+      // The server answers once the paste is written or the send failed; keystrokes typed until then follow it.
+      const release = current.input.hold()
+      current.uploads.enqueueStored({ type: 'composer-send', composer, version }, { name, fileCount: files.length,
+        done: error => { release(); done(error) } }, mountingContext)
     },
     reconnect() {
       disconnect(current)

@@ -195,6 +195,7 @@ function openComposer() {
 }
 // A late claim from a collapsing composer is ignored.
 function holdKeyboardForPicker() { return terminal?.holdKeyboardForPicker() }
+function holdInput() { return terminal?.holdInput() }
 function composerKeyboard(editor?: HTMLElement) { if (!editor || composerOpen.value) terminal?.composerKeyboard(editor, closeComposer) }
 function closeComposer(focusTerminal = false) {
   if (!composerOpen.value) return
@@ -344,7 +345,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     </div>
     <div v-if="showApp && !trustedApp" class="capture-trust-prompt card-content" :inert="mobilePreview || editing || undefined"><Icon name="globe" :size="32" /><span>{{ app?.title }}</span><UButton v-if="!mobilePreview" color="neutral" variant="outline" @click="activateApp">{{ t('terminal.capture.app') }}</UButton></div>
     <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || closed || showApp || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop><div class="terminal-transition-surface" aria-hidden="true" /></div>
-    <Transition name="terminal-composer"><TerminalComposer v-if="composerOpen && canCompose" :target="composerTarget()" :can-send="canSendComposer" :mobile="data.mobile" :hold-keyboard="data.mobile ? holdKeyboardForPicker : undefined" :error="composerError" @close="closeComposer(true)" @send="sendComposer" @edited="composerError = ''" @keyboard="composerKeyboard" /></Transition>
+    <Transition name="terminal-composer"><TerminalComposer v-if="composerOpen && canCompose" :target="composerTarget()" :can-send="canSendComposer" :mobile="data.mobile" :hold-keyboard="data.mobile ? holdKeyboardForPicker : undefined" :hold-input="holdInput" :error="composerError" @close="closeComposer(true)" @send="sendComposer" @edited="composerError = ''" @keyboard="composerKeyboard" /></Transition>
     <PaneContextMenu :host="host" :enabled="!showApp && keepTerminal && !mobilePreview && !closed && !maximizedElsewhere && status.status === 'connected'" :allows-menu="allowsContextMenu" :lookup="paneContext" :action="paneAction" />
     <TerminalSettingsDialog v-model="overrides" :open="settingsOpen" @close="settingsOpen = false" />
 

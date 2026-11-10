@@ -9,7 +9,7 @@ import { composerHasContent, sentFiles, composerOwner, editComposer, flushCompos
 import { readStoredHeight, storeHeight, composerHeightBounds } from '../composer-height'
 import { useCardContentFocus } from '../card-content-focus'
 
-const props = defineProps<{ target: ComposerTarget; canSend: boolean; mobile?: boolean; error?: string; holdKeyboard?: () => ((returned: boolean) => void) | undefined }>()
+const props = defineProps<{ target: ComposerTarget; canSend: boolean; mobile?: boolean; error?: string; holdKeyboard?: () => ((returned: boolean) => void) | undefined; holdInput?: () => (() => void) | undefined }>()
 const emit = defineEmits<{ close: []; send: [composer: string, version: number, files: string[]]; edited: []; keyboard: [editor?: HTMLElement] }>()
 const { t } = useI18n()
 const composer = useComposer(() => props.target)
@@ -30,6 +30,8 @@ function keepFocus(event: PointerEvent) { if (props.mobile) event.preventDefault
 
 async function send() {
   if (!props.canSend || !hasText.value || sending.value || editor.value?.pending) return
+  // Terminal keystrokes wait from here until dispatch, where the delivery holds them until its paste.
+  const release = props.holdInput?.()
   // Return the IME before the draft turns read-only so it never closes under the editor.
   if (props.mobile) emit('keyboard')
   // The draft is read-only from flush to dispatch, so no keystroke can follow the sent version.
@@ -38,7 +40,7 @@ async function send() {
     const view = await flushComposer(props.target)
     if (view?.id) emit('send', view.id, view.version, sentFiles(view.content, view.attachments))
   } catch (error) { window.dispatchEvent(new CustomEvent('canvas:error', { detail: error })) }
-  finally { sending.value = false }
+  finally { sending.value = false; release?.() }
   // A send that did not collapse the composer, or was refused at once, takes the IME back.
   await nextTick(); claimKeyboard()
 }
