@@ -317,7 +317,7 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
 <template>
   <section ref="keyboard" class="mobile-keyboard" :class="{ 'has-dock': hasDock, 'reduced-motion': reducedMotion }" @pointerdown.stop @mousedown.stop @keydown.esc.stop.prevent="escape">
     <div ref="safeArea" class="mobile-key-safe" aria-hidden="true" />
-    <div class="mobile-key-row" role="toolbar" :aria-label="t('terminal.keyboard.helperKeys')" @contextmenu.prevent>
+    <div class="mobile-key-row" role="toolbar" :aria-label="t('terminal.keyboard.helperKeys')" @contextmenu.prevent @pointerdown="composing && $event.preventDefault()" @mousedown="composing && $event.preventDefault()">
       <button v-for="key in keys" :key="key.key" type="button" :disabled="inactive" :aria-label="key.label" :aria-pressed="keyPressed(key.key)" :class="{ 'arrow-key': key.symbol }" @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ key.symbol || key.label }}</button>
       <button type="button" :disabled="composing" :aria-label="switchLabel" :title="switchLabel" :aria-pressed="keyboardMode === 'builtin'" :class="{ active: keyboardOpen && keyboardMode === 'builtin' || modifiers.shift || modifiers.alt || modifiers.meta }" @pointerdown.prevent @click="switchKeyboard"><Icon name="keyboard-switch" :size="19" /></button>
     </div>

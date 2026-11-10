@@ -221,6 +221,8 @@ function chooseFiles() {
 let pickerReturned: ((returned: boolean) => void) | undefined
 function pickerFinished() { const finish = pickerReturned; pickerReturned = undefined; finish?.(true) }
 fileDialog.onChange(files => {
+  // `open()` resets a previous selection with a null change before the picker shows.
+  if (files === null) return
   pickerFinished()
   if (!files?.length) return
   const target = selection; selection = undefined

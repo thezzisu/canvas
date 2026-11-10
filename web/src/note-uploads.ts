@@ -60,7 +60,7 @@ async function upload(owner: NoteOwner, offset: number, end: number, replaced: s
       assets, offset: task.offset, end: task.end, replaced: task.replaced }
     // Settle before inserting, so the inserting transaction already drops the placeholders.
     const target = task.insert
-    pending.delete(owner.key)
+    pending.delete(owner.key); pendingWrites.stop(owner.key, 'upload')
     if (!target?.(value)) insert(value)
   } catch (error) { if (!task.controller.signal.aborted && !context.signal.aborted) reportDownloadError(error) }
   finally { if (pending.get(owner.key) === task) { pending.delete(owner.key); pendingWrites.stop(owner.key, 'upload') } }
