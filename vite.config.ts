@@ -24,10 +24,12 @@ export default defineConfig({
     icon: { clientBundle: { scan: { globInclude: ['src/**/*.{vue,ts}'] } } },
     ui: {
       colors: { primary: 'peach', neutral: 'canvas' },
+      // One modal geometry: centred in the unobstructed frame (window controls, visual
+      // viewport, safe areas); dialogs choose only --dialog-width.
       modal: {
-        slots: { overlay: 'canvas-modal-overlay', content: 'canvas-modal-content' },
+        slots: { overlay: 'canvas-modal-overlay', content: 'canvas-modal-content', title: 'text-base', footer: 'justify-end' },
         compoundVariants: [{ scrollable: false, fullscreen: false, class: {
-          content: 'top-[calc(var(--dialog-top,0px)+var(--dialog-height,100dvh)/2)] max-h-[calc(var(--dialog-height,100dvh)-2rem)] sm:max-h-[calc(var(--dialog-height,100dvh)-4rem)]',
+          content: 'w-[min(var(--dialog-width,32rem),calc(var(--dialog-frame-width)-1.5rem))] max-w-none left-(--dialog-center-x) top-(--dialog-center-y) max-h-[calc(var(--dialog-frame-height)-1.5rem)]',
         } }],
       },
       toast: { slots: {

@@ -1,7 +1,7 @@
 export default {
   test: 'Test', testSound: 'Test sound', testSystemNotification: 'Test system notification',
   notificationTestTitle: 'Canvas · Test notification', notificationTestBody: 'System notifications are working.', notificationTestFailed: 'Could not show the test notification',
-  installApp: 'Install Canvas', updateApp: 'Reload to update', updateReady: 'Update available', pwaFailed: 'Could not complete this action',
+  app: 'App', installApp: 'Install Canvas', updateApp: 'Reload to update', updateReady: 'Update available', pwaFailed: 'Could not complete this action',
   checkUpdate: 'Check for updates', checkingUpdate: 'Checking for updates…', noUpdate: 'Check complete. No updates found.', checkUpdateFailed: 'Could not check for updates. Try again.',
   close: 'Close settings', thisBrowser: 'This browser', cutout: 'Display cutout', position: 'Position', width: 'Width',
   inputMode: 'Input mode', inputAuto: 'Automatic', inputTouch: 'Touch', inputKeyboard: 'Keyboard & mouse',
@@ -13,7 +13,7 @@ export default {
   left: 'Left', center: 'Center', right: 'Right', contentFont: 'Content font', addFont: 'Add font', add: 'Add',
   fontOrder: 'Font order', primaryFont: 'Primary font', fallbackFont: 'Fallback font', font: 'Font {index}',
   fontPlaceholder: 'Choose or enter a font family', localFont: 'Use a local font', moveFontUp: 'Move font {index} up',
-  moveFontDown: 'Move font {index} down', deleteFont: 'Remove font {index}', ligatures: 'Ligatures', fallbackOrder: 'Fallback from top to bottom',
+  moveFontDown: 'Move font {index} down', deleteFont: 'Remove font {index}', ligatures: 'Ligatures',
   preview: 'Preview', applying: 'Applying…', loadingFont: 'Loading font', fontPreview: 'Font preview',
   fontFailed: 'Could not apply font settings', retryFont: 'Retry font settings', keepAwake: 'Keep screen awake',
   active: 'Active', requesting: 'Requesting…', wakeDenied: 'Could not keep screen awake', wakePaused: 'Wake lock paused', retryWake: 'Retry wake lock',

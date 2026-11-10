@@ -1,21 +1,26 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import UButton from '@nuxt/ui/components/Button.vue'
+import UFormField from '@nuxt/ui/components/FormField.vue'
 import { canInstall, canCheckUpdate, updateAvailable, updateCheck, pwaBusy, pwaFailure, checkPwaUpdates, installPwa, applyPwaUpdate } from '../pwa'
-const props = defineProps<{ canReload?: boolean }>()
+
+// One Settings row: the app's install/update state, with its actions on the right.
+const props = defineProps<{ canReload?: boolean; field?: Record<string, string> }>()
 const { t } = useI18n()
+const status = computed(() => pwaFailure.value ? t('settings.pwaFailed')
+  : updateAvailable.value ? t('settings.updateReady')
+  : updateCheck.value === 'failed' ? t('settings.checkUpdateFailed')
+  : updateCheck.value === 'current' ? t('settings.noUpdate') : undefined)
+const failed = computed(() => pwaFailure.value || updateCheck.value === 'failed' && !updateAvailable.value)
 </script>
+
 <template>
-  <div v-if="canInstall || canCheckUpdate || updateAvailable" class="pwa-settings">
-    <UButton v-if="canInstall" color="neutral" variant="outline" size="sm" :loading="pwaBusy" @click="installPwa">{{ t('settings.installApp') }}</UButton>
-    <UButton v-if="canCheckUpdate" color="neutral" variant="outline" size="sm" :loading="updateCheck === 'checking'" :disabled="pwaBusy || updateCheck === 'checking'" @click="checkPwaUpdates">{{ t(updateCheck === 'checking' ? 'settings.checkingUpdate' : 'settings.checkUpdate') }}</UButton>
-    <UButton v-if="updateAvailable" color="neutral" variant="outline" size="sm" :loading="pwaBusy" :disabled="props.canReload === false" @click="applyPwaUpdate">{{ t('settings.updateApp') }}</UButton>
-    <small v-if="updateCheck === 'failed' && !updateAvailable" role="alert">{{ t('settings.checkUpdateFailed') }}</small>
-    <small v-else-if="updateCheck === 'current' && !updateAvailable" role="status">{{ t('settings.noUpdate') }}</small>
-    <small v-if="pwaFailure" role="alert">{{ t('settings.pwaFailed') }}</small>
-  </div>
+  <UFormField v-if="canInstall || canCheckUpdate || updateAvailable" :label="t('settings.app')" :description="failed ? undefined : status" :error="failed ? status : undefined" orientation="horizontal" :ui="field" class="pwa-settings">
+    <div class="flex items-center gap-2">
+      <UButton v-if="canInstall" color="neutral" variant="outline" size="sm" :loading="pwaBusy" @click="installPwa">{{ t('settings.installApp') }}</UButton>
+      <UButton v-if="updateAvailable" color="primary" variant="soft" size="sm" :loading="pwaBusy" :disabled="props.canReload === false" @click="applyPwaUpdate">{{ t('settings.updateApp') }}</UButton>
+      <UButton v-else-if="canCheckUpdate" color="neutral" variant="outline" size="sm" :loading="updateCheck === 'checking'" :disabled="pwaBusy || updateCheck === 'checking'" @click="checkPwaUpdates">{{ t(updateCheck === 'checking' ? 'settings.checkingUpdate' : 'settings.checkUpdate') }}</UButton>
+    </div>
+  </UFormField>
 </template>
-<style scoped>
-.pwa-settings{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.pwa-settings>small{font-size:11px;color:#d5a8b0}
-.pwa-settings>small[role=status]{color:var(--ui-text-muted)}
-</style>

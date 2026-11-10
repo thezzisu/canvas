@@ -1,7 +1,7 @@
 export default {
   test: '测试', testSound: '测试提示音', testSystemNotification: '测试系统通知',
   notificationTestTitle: 'Canvas · 测试通知', notificationTestBody: '系统通知可以正常显示。', notificationTestFailed: '未能显示测试通知',
-  installApp: '安装 Canvas', updateApp: '刷新并更新', updateReady: '有新版本可用', pwaFailed: '操作未完成，请重试',
+  app: '应用', installApp: '安装 Canvas', updateApp: '刷新并更新', updateReady: '有新版本可用', pwaFailed: '操作未完成，请重试',
   checkUpdate: '检查更新', checkingUpdate: '正在检查更新…', noUpdate: '检查完成，没有更新', checkUpdateFailed: '检查更新失败，请重试',
   close: '关闭设置', thisBrowser: '仅此浏览器', cutout: '顶部避让', position: '位置', width: '宽度',
   inputMode: '操作模式', inputAuto: '自动', inputTouch: '纯触摸', inputKeyboard: '键鼠',
@@ -13,7 +13,7 @@ export default {
   left: '左', center: '中', right: '右', contentFont: '内容字体', addFont: '添加字体', add: '添加',
   fontOrder: '字体顺序', primaryFont: '主字体', fallbackFont: '回退字体', font: '字体 {index}',
   fontPlaceholder: '选择或输入字体名称', localFont: '使用本机字体', moveFontUp: '上移字体 {index}',
-  moveFontDown: '下移字体 {index}', deleteFont: '删除字体 {index}', ligatures: '连字', fallbackOrder: '从上到下依次回退',
+  moveFontDown: '下移字体 {index}', deleteFont: '删除字体 {index}', ligatures: '连字',
   preview: '预览', applying: '应用中…', loadingFont: '加载字体', fontPreview: '字体预览',
   fontFailed: '字体设置失败', retryFont: '重试字体设置', keepAwake: '保持屏幕常亮',
   active: '已开启', requesting: '请求中…', wakeDenied: '未能保持常亮', wakePaused: '常亮已暂停', retryWake: '重试常亮',

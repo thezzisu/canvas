@@ -18,14 +18,10 @@ function update(value: TerminalOverrides) {
 
 <template>
   <UModal v-if="open" :open="true" :title="t(defaultsMode ? 'terminal.settings.defaults' : 'terminal.settings.title')" :description="defaultsMode ? t('settings.thisBrowser') : undefined"
-    :close="{ 'aria-label': t('common.close') }" :ui="{ content: 'terminal-settings-dialog' }" @update:open="value => { if (!value) emit('close') }">
+    :close="{ 'aria-label': t('common.close') }" :ui="{ content: 'terminal-settings-dialog [--dialog-width:28rem]' }" @update:open="value => { if (!value) emit('close') }">
     <template #body>
       <TerminalSettingsFields v-if="defaultsMode" :model-value="defaults" show-zoom @update:model-value="update" />
       <TerminalSettingsFields v-else :model-value="settings" :defaults="defaults" @update:model-value="update" />
     </template>
   </UModal>
 </template>
-
-<style>
-.terminal-settings-dialog{width:min(440px,calc(var(--ui-viewport-width) - 28px));max-height:calc(var(--dialog-height) - 32px)}
-</style>
