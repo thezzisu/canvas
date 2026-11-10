@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { Editor, Node } from '@tiptap/core'
 import { AllSelection, EditorState, NodeSelection, TextSelection, type Selection, type Transaction } from '@tiptap/pm/state'
 import { closeHistory, history, undo } from '@tiptap/pm/history'
-import { NoteSelectionEnter, mapNoteRange, noteRange, replaceNoteRange, uploadPlaceholder } from './note-editing'
+import { NoteSelectionEnter, mapNoteRange, noteRange, replaceNoteRange, selectedAttachment, uploadPlaceholder } from './note-editing'
 import { attachmentToken, noteDocument, noteOffset, notePosition, serializeNote } from './note-document'
 
 const id = '11111111-1111-4111-8111-111111111111'
@@ -135,5 +135,16 @@ test('upload placeholders are display-only widgets at the mapped insertion point
   assert.equal(next.doc.nodeAt(at)?.type.name, 'noteAttachment', 'Completion inserts exactly where the placeholder was')
   assert.equal(text(next), `Aone B${attachmentToken(id)}${attachmentToken(id)}\ntwoC`)
   assert.deepEqual(rendered, [], 'Widgets render only in a view')
+  editor.destroy()
+})
+
+test('only a selection covering exactly one attachment names it for preview', () => {
+  const editor = create(`a${attachmentToken(id)}${attachmentToken(id)}\nb`), doc = editor.state.doc
+  const at = (selection: Selection) => selectedAttachment(EditorState.create({ doc, selection }))
+  assert.equal(at(TextSelection.create(doc, 2, 3)), id)
+  assert.equal(at(TextSelection.create(doc, 3, 2)), id, 'A backward selection names it too')
+  assert.equal(at(TextSelection.create(doc, 3, 4)), id)
+  for (const [from, to] of [[2, 2], [3, 3], [4, 4], [1, 3], [2, 4], [3, 7]]) assert.equal(at(TextSelection.create(doc, from!, to!)), undefined)
+  assert.equal(at(new AllSelection(doc)), undefined)
   editor.destroy()
 })

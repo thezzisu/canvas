@@ -14,7 +14,7 @@ import { apiContext, segment } from '../api'
 import { hasFileTransfer, readFileTransfer } from '../browser-file-input'
 import { presentDownload, reportDownloadError } from '../downloads'
 import { attachmentToken, noteDocument, noteOffset, serializeNote } from '../note-document'
-import { NoteSelectionEnter, mapNoteRange, noteRange, replaceNoteRange, uploadPlaceholder, type NoteRange } from '../note-editing'
+import { NoteSelectionEnter, mapNoteRange, noteRange, replaceNoteRange, selectedAttachment, uploadPlaceholder, type NoteRange } from '../note-editing'
 import { noteUpload, uploadNoteAttachment, pasteNoteAttachments, type NoteInsertion, type NoteOwner } from '../note-uploads'
 import { clipboardText, noteClipboard, readNoteClipboard, NOTE_CLIPBOARD_TYPE } from '../note-clipboard'
 import { beginCopyFeedback } from '../copy-feedback'
@@ -55,6 +55,13 @@ const attachmentTarget = (event: Event) => (event.target as Element).closest?.('
 function preview(id: string) {
   const asset = assets.value.find(item => item.id === id)
   if (asset) void presentDownload({ ...asset, url: `/api/files/${segment(asset.id)}` }).catch(reportDownloadError)
+  return !!asset
+}
+// Keyboard users select a capsule, as with Shift+Arrow, and press Enter to preview it.
+function previewSelected(view: EditorView, event: KeyboardEvent) {
+  if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return false
+  const id = selectedAttachment(view.state)
+  return !!id && preview(id)
 }
 // Pending ranges map before the view renders a transaction, so placeholders stay
 // current. A filtered transaction leaves the state, and the ranges, unchanged.
@@ -264,7 +271,7 @@ defineExpose({ chooseFiles, pending, focus: () => editor()?.commands.focus('end'
         // A capsule keeps the caret and focus; clicking it previews the file.
         mousedown: (_view, event) => { if (!attachmentTarget(event)) return false; event.preventDefault(); return true },
         click: (_view, event) => { const id = attachmentTarget(event); if (!id) return false; preview(id); return true } },
-      handleDrop: (_view, event) => drop(event), handlePaste: (_view, event) => paste(event) }"
+      handleKeyDown: previewSelected, handleDrop: (_view, event) => drop(event), handlePaste: (_view, event) => paste(event) }"
     :on-blur="() => emit('flush')" @update:model-value="changed" />
   </div>
   <UploadProgress v-if="task?.uploading" class="note-upload-status" :name="uploadName" :status="uploadLabel" :transferred="task.transferred" :total="task.total" active @cancel="task.controller.abort()" />

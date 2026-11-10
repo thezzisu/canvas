@@ -19,6 +19,12 @@ export function noteRange(state: EditorState): NoteRange {
   return { offset, end, replaced: serializeNote(state.doc.toJSON()).slice(offset, end) }
 }
 
+/** The attachment a selection covers exactly; Enter previews it as a click does. */
+export function selectedAttachment(state: EditorState): string | undefined {
+  const { from, to } = state.selection, node = state.doc.nodeAt(from)
+  return to === from + 1 && node?.type.name === 'noteAttachment' ? node.attrs.id : undefined
+}
+
 /** Keep a pending range on the same content while the editor changes around it. */
 export function mapNoteRange(range: NoteRange, tr: Transaction) {
   const before = notePosition(tr.before, range.offset), end = notePosition(tr.before, range.end)
