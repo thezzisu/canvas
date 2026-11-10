@@ -1169,6 +1169,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       current.keyboard?.suspend(value)
     },
     /** The open composer editor owns the system IME; `lost` collapses it when that IME cannot stay. */
+    /** The composer's file picker borrows foreground without ending the keyboard's open intent. */
+    holdKeyboardForPicker() { return current.host === host ? current.keyboard?.filePicker() : undefined },
     composerKeyboard(editor?: HTMLElement, lost?: () => void) {
       if (current.host !== host || !isCurrentApi(mountingContext)) return
       if (editor) { current.touchpad?.cancel(); setModifiers(current) }

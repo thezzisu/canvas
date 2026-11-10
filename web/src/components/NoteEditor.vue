@@ -23,7 +23,7 @@ import NoteAttachment from './NoteAttachment.vue'
 import UploadProgress from './UploadProgress.vue'
 import { useNoteScroll } from '../note-scroll'
 
-const props = defineProps<{ content: string; attachments: FileAsset[]; owner: NoteOwner; scrollKey: string; placeholder?: string; canPersist?: () => boolean; readOnly: boolean; insertAttachment: (value: NoteInsertion) => void }>()
+const props = defineProps<{ content: string; attachments: FileAsset[]; owner: NoteOwner; scrollKey: string; placeholder?: string; holdKeyboard?: () => ((returned: boolean) => void) | undefined; canPersist?: () => boolean; readOnly: boolean; insertAttachment: (value: NoteInsertion) => void }>()
 const emit = defineEmits<{ change: [content: string]; flush: [] }>()
 const { t } = useI18n()
 const input = ref<{ editor?: Editor }>()
@@ -190,16 +190,21 @@ let selection: { context: ReturnType<typeof apiContext>; owner: string; range: N
 function chooseFiles() {
   const current = editor()
   if (props.readOnly || !current) return
+  // A mobile keyboard owner keeps its open intent across the native picker.
+  pickerReturned = props.holdKeyboard?.()
   selection = { context: apiContext(), owner: props.owner.key, range: noteRange(current.state) }
   fileDialog.open()
 }
+let pickerReturned: ((returned: boolean) => void) | undefined
+function pickerFinished() { const finish = pickerReturned; pickerReturned = undefined; finish?.(true) }
 fileDialog.onChange(files => {
+  pickerFinished()
   if (!files?.length) return
   const target = selection; selection = undefined
   if (target && !target.context.signal.aborted && target.owner === props.owner.key)
     void upload([...files], target.range)
 })
-fileDialog.onCancel(() => { selection = undefined })
+fileDialog.onCancel(() => { pickerFinished(); selection = undefined })
 function dragOver(event: DragEvent) {
   if (!hasFileTransfer(event.dataTransfer)) return
   event.preventDefault(); event.stopPropagation()

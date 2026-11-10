@@ -9,7 +9,7 @@ import { composerHasContent, sentFiles, composerOwner, editComposer, flushCompos
 import { readStoredHeight, storeHeight, composerHeightBounds } from '../composer-height'
 import { useCardContentFocus } from '../card-content-focus'
 
-const props = defineProps<{ target: ComposerTarget; canSend: boolean; mobile?: boolean; error?: string }>()
+const props = defineProps<{ target: ComposerTarget; canSend: boolean; mobile?: boolean; error?: string; holdKeyboard?: () => ((returned: boolean) => void) | undefined }>()
 const emit = defineEmits<{ close: []; send: [composer: string, version: number, files: string[]]; edited: []; keyboard: [editor?: HTMLElement] }>()
 const { t } = useI18n()
 const composer = useComposer(() => props.target)
@@ -85,7 +85,7 @@ defineExpose({ send })
   <section ref="root" class="terminal-composer card-content nodrag nopan nowheel" :data-content-active="contentActive" :class="{ full: fraction >= 1, mobile }" :style="{ height: `${fraction * 100}%` }" role="region" :aria-label="t('terminal.composer.title')"
     @pointerdown.stop @mousedown.stop @keydown.capture="keydown">
     <div class="terminal-composer-editor">
-      <NoteEditor ref="editor" :content="composer.content" :attachments="composer.attachments" :owner="owner" :scroll-key="owner.key" :can-persist="() => false" :read-only="sending" placeholder=""
+      <NoteEditor ref="editor" :content="composer.content" :attachments="composer.attachments" :owner="owner" :scroll-key="owner.key" :can-persist="() => false" :read-only="sending" placeholder="" :hold-keyboard="holdKeyboard"
         :insert-attachment="value => insertComposerAttachment(target, value)" @change="value => { editComposer(target, value); emit('edited') }" @flush="saveComposer(target)" />
     </div>
     <p v-if="error" class="terminal-composer-error" role="alert">{{ error }}</p>

@@ -669,3 +669,17 @@ test('modal dismissal and another editor taking focus collapse the composer', as
   f.document.activeElement = {}; f.document.dispatchEvent(new Event('focusin')); await Promise.resolve()
   assert.equal(f.lost(), 2); assert.equal(f.requested(), false); assert.equal(f.control.state.composer, false)
 })
+
+test('the composer file picker keeps the composer and its IME through the native chooser', async t => {
+  const f = fixture(t); f.open(); f.compose(); t.mock.timers.tick(1000)
+  const finish = f.control.filePicker()
+  assert(finish, 'an open composer IME can be held for the picker')
+  f.editor.blur(); f.resize(844); t.mock.timers.tick(2000); await Promise.resolve()
+  assert.equal(f.lost(), 0, 'leaving for the chooser does not collapse the composer')
+  assert.equal(f.control.state.composer, true)
+  finish(true); await Promise.resolve()
+  assert.equal(f.document.activeElement, f.editor, 'returning restores the composer editor')
+  f.resize(500); t.mock.timers.tick(1000)
+  assert.equal(f.lost(), 0); assert.equal(f.control.state.composer, true)
+  assert(f.states.every(state => !state.unavailable))
+})
