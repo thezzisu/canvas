@@ -98,7 +98,7 @@ import { developerMode } from './developer-mode'
 import { useScreenWakeLock } from './screen-wake-lock'
 import { canvasFrame, preserveCanvasCenter, useMobileViewport, type CanvasFrame } from './viewport'
 import { noteColor, statusColor, statusLabel } from './status'
-import { overviewResources, overviewFocusStatuses, overviewStatuses, type OverviewInteraction, type OverviewOrder } from './overview'
+import { overviewResources, overviewPerRowChoices, overviewSpaceLayout, overviewFocusStatuses, overviewStatuses, type OverviewInteraction, type OverviewOrder } from './overview'
 import { adjacentPage, pageViewport, retainPage, type OverviewPage, type PageDirection } from './overview-paging'
 import type { ProgramStatus } from '../../shared/status'
 import { insertNoteContent } from './note-document'
@@ -382,7 +382,8 @@ function selectPage(page: OverviewPage | undefined) {
   preferredPageX.value = page ? page.x + page.width / 2 : undefined
 }
 const pages = computed<OverviewPage[]>(() => nodes.value.filter(node => node.type === 'terminal' || node.type === 'create' && node.data.spaceId).map(node => ({
-  id: node.type === 'terminal' ? `${node.data.sourceId}/${node.data.windowId}` : node.id, row: node.data.spaceId ? `${node.data.sourceId}/${node.data.spaceId}` : node.id,
+  // A space may wrap into several visual rows; cards in one row share their y.
+  id: node.type === 'terminal' ? `${node.data.sourceId}/${node.data.windowId}` : node.id, row: `${node.data.sourceId}/${node.data.spaceId}/${node.position.y}`,
   ...node.position, width: node.data.width, height: node.data.height,
 })))
 const pageDirections = computed(() => [
@@ -500,16 +501,20 @@ watch(() => {
 
 const overviewSelected = useLocalStorage<ProgramStatus[]>(() => `canvas:overview:${activeInstance.value.id}:statuses`, [...overviewStatuses], { listenToStorageChanges: false, writeDefaults: false })
 const overviewOrder = useLocalStorage<OverviewOrder>(() => `canvas:overview:${activeInstance.value.id}:order`, 'native', { listenToStorageChanges: false, writeDefaults: false })
+const overviewPerRow = useLocalStorage(() => `canvas:overview:${activeInstance.value.id}:per-row`, 0, { listenToStorageChanges: false, writeDefaults: false })
 const overviewCreation = computed(() => overviewSelected.value.includes('unknown'))
 const showMinimap = useLocalStorage('canvas:view:minimap', true, { listenToStorageChanges: false, writeDefaults: false })
 const showNavigation = useLocalStorage('canvas:view:navigation', true, { listenToStorageChanges: false, writeDefaults: false })
 const autoYieldControls = useLocalStorage('canvas:view:auto-yield-controls', true, { listenToStorageChanges: false, writeDefaults: false })
 const overviewMenuOpen = ref(false)
 const overviewTrigger = ref<HTMLElement>()
-const overviewDismiss = usePointerDismiss(overviewMenuOpen, overviewTrigger)
+const overviewDismiss = usePointerDismiss(overviewMenuOpen, overviewTrigger, {
+  // Reka owns the portalled submenu; only canvas gestures can stop its outside listener.
+  outside: event => event.target instanceof Element && !!event.target.closest('.graph-wrap, .focus-overlay'),
+})
 const overviewFiltered = computed(() => overviewSelected.value.length !== overviewStatuses.length)
 const overviewFocused = computed(() => overviewSelected.value.length === overviewFocusStatuses.length && overviewFocusStatuses.every(status => overviewSelected.value.includes(status)))
-const overviewChanged = computed(() => overviewFiltered.value || overviewOrder.value !== 'native')
+const overviewChanged = computed(() => overviewFiltered.value || overviewOrder.value !== 'native' || overviewPerRow.value !== 0)
 const { activeElement, windowFocused } = useDocumentFocus()
 const fittedFocusedCard = ref(false)
 const fitToolbar = ref<HTMLDivElement>()
@@ -561,7 +566,7 @@ useWindowCanvasHistory(() => {
 }, () => activeId.value, activeElement)
 const visibleOverview = computed(() => overviewResources(resources.value, overviewSelected.value, overviewOrder.value, overviewInteraction.value))
 const visibleOverviewCount = computed(() => visibleOverview.value.reduce((total, source) => total + source.spaces.reduce((sum, space) => sum + space.windows.length, 0), 0))
-function resetOverview() { overviewSelected.value = [...overviewStatuses]; overviewOrder.value = 'native' }
+function resetOverview() { overviewSelected.value = [...overviewStatuses]; overviewOrder.value = 'native'; overviewPerRow.value = 0 }
 const overviewMenu = computed<DropdownMenuItem[][]>(() => [
   [{ type: 'label', label: t('app.status') },
     { type: 'checkbox', label: t('app.allStatuses'), checked: !overviewFiltered.value, onSelect: event => event.preventDefault(), onUpdateChecked: checked => { overviewSelected.value = checked ? [...overviewStatuses] : [] } },
@@ -572,6 +577,8 @@ const overviewMenu = computed<DropdownMenuItem[][]>(() => [
   [{ type: 'label', label: t('app.sort') }, ...(['native', 'status'] as const).map(order => ({ type: 'checkbox' as const,
     label: order === 'native' ? t('app.nativeOrder') : t('app.statusOrder'), checked: overviewOrder.value === order, onSelect: (event: Event) => event.preventDefault(), onUpdateChecked: () => { overviewOrder.value = order } })),
   ],
+  [{ label: t('app.windowsPerRow'), children: [overviewPerRowChoices.map(count => ({ type: 'checkbox' as const, label: count ? String(count) : t('app.noWrapping'),
+      checked: overviewPerRow.value === count, onSelect: (event: Event) => event.preventDefault(), onUpdateChecked: () => { overviewPerRow.value = count } }))] }],
   [{ label: t('app.reset'), disabled: !overviewChanged.value, onSelect: resetOverview }],
 ])
 const currentName = computed(() => isOverview.value ? t('app.overview') : currentCanvas.value?.name || t('app.canvas'))
@@ -778,26 +785,23 @@ function overviewNodes(): Node[] {
     const rows = source.spaces.flatMap(space => {
       const windows = visible?.spaces.find(item => item.id === space.id)?.windows || []
       if (!windows.length && !overviewCreation.value) return []
-      const last = windows.at(-1)
-      const cardWidth = last ? windowSize({ sourceId: source.id, windowId: last.id }).width : defaultWindowSize.width
-      const cardHeight = windows.length ? Math.max(...windows.map(window => windowSize({ sourceId: source.id, windowId: window.id }).height)) : defaultWindowSize.height
-      return [{ space: { ...space, windows }, cardWidth, cardHeight, height: 54 + cardHeight }]
+      const layout = overviewSpaceLayout(windows.map(window => windowSize({ sourceId: source.id, windowId: window.id })), overviewPerRow.value, overviewCreation.value, defaultWindowSize, { x: 24, y: 34 })
+      return [{ space: { ...space, windows }, layout, height: 54 + layout.height }]
     })
     if (!rows.length && !overviewCreation.value) continue
-    const width = Math.max(defaultWindowSize.width + 48, ...rows.map(row => 32 + (overviewCreation.value ? row.cardWidth + 16 : 0) + row.space.windows.reduce((sum, window) => sum + windowSize({ sourceId: source.id, windowId: window.id }).width + 16, 0)))
+    const width = Math.max(defaultWindowSize.width + 48, ...rows.map(row => 48 + row.layout.width))
     const count = rows.reduce((sum, row) => sum + row.space.windows.length, 0)
     const height = (overviewCreation.value ? 132 : 78) + rows.reduce((sum, row) => sum + row.height, 0)
     result.push({ id: `source:${source.id}`, type: 'group', position: { x: 0, y }, data: { kind: 'source', name: config.name, subtitle: config.transport === 'local' ? t('app.local') : 'SSH', count, width, height }, draggable: false, selectable: false, style: { width: `${width}px`, height: `${height}px`, zIndex: '-1', pointerEvents: 'none' } })
     let rowY = y + 68
-    for (const { space, height: rowHeight, cardWidth, cardHeight } of rows) {
+    for (const { space, height: rowHeight, layout } of rows) {
       result.push({ id: `space:${source.id}:${space.id}`, type: 'group', position: { x: 24, y: rowY }, data: { kind: 'space', name: space.name, count: space.windows.length }, draggable: false, selectable: false, style: { width: `${width - 48}px`, pointerEvents: 'none' } })
-      let windowX = 24
-      for (const window of space.windows) {
-        const target = { sourceId: source.id, windowId: window.id }
-        result.push(terminalFlowNode({ type: 'terminal', id: `window:${source.id}:${space.id}:${window.id}`, ...target, spaceId: space.id, x: windowX, y: rowY + 34, ...windowSize(target) }, true))
-        windowX += windowSize(target).width + 16
-      }
-      if (overviewCreation.value) result.push(overviewCreateNode(source, space.id, windowX, rowY + 34, cardWidth, cardHeight))
+      space.windows.forEach((window, index) => {
+        const { x, y: cardY, width: cardWidth, height: cardHeight } = layout.cards[index]!
+        result.push(terminalFlowNode({ type: 'terminal', id: `window:${source.id}:${space.id}:${window.id}`, sourceId: source.id, windowId: window.id, spaceId: space.id, x, y: rowY + cardY, width: cardWidth, height: cardHeight }, true))
+      })
+      const create = layout.cards[space.windows.length]
+      if (create) result.push(overviewCreateNode(source, space.id, create.x, rowY + create.y, create.width, create.height))
       rowY += rowHeight
     }
     if (overviewCreation.value) result.push(overviewCreateNode(source, undefined, 24, rowY + 4, width - 48, 32))
@@ -1353,7 +1357,7 @@ watch(freshStatuses, () => {
 })
 
 watch(overviewInteraction, value => { if (value) lastOverviewInteraction = value; if (isOverview.value) rebuildNodes() })
-watch([overviewSelected, overviewOrder], () => { if (isOverview.value) rebuildNodes('manual') })
+watch([overviewSelected, overviewOrder, overviewPerRow], () => { if (isOverview.value) rebuildNodes('manual') })
 watch(activeId, async () => { if (!authenticated.value) return; scanTarget.value = null; preferredPageX.value = undefined; cancelCreatedReveal(); lastOverviewInteraction = undefined; overviewMenuOpen.value = false; layoutGesture = ''; resizingCard = undefined; focused.value = null; focusedCardId.value = ''; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
 function switchCanvas(id: string, target?: CanvasTarget) {
   if (notificationReveal.value?.canvasId !== id) cancelNotificationReveal()

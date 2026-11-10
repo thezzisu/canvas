@@ -4,6 +4,7 @@ import type { SourceResource } from './types'
 export const overviewStatuses = ['attention', 'done', 'working', 'idle', 'unknown'] as const
 /** The task-focused preset keeps windows that need attention or are active. */
 export const overviewFocusStatuses = ['attention', 'done', 'working'] as const
+export const overviewPerRowChoices = [0, 1, 2, 3, 4, 6, 8] as const
 export type OverviewOrder = 'native' | 'status'
 export type OverviewInteraction = { sourceId: string; windowId: string }
 
@@ -22,4 +23,28 @@ export function overviewResources(resources: readonly SourceResource[], statuses
 
 export function overviewLayoutKey(resources: readonly SourceResource[]): string {
   return JSON.stringify(resources.map(source => [source.id, source.spaces.map(space => [space.id, space.windows.map(window => window.id)])]))
+}
+
+export type OverviewCard = { width: number; height: number }
+export type OverviewCardPlacement = OverviewCard & { x: number; y: number }
+
+/** Lay out one space's cards from `origin`, starting a continuation line every
+ * `perRow` windows (0 keeps one line). A create card ends the last line with the
+ * last window's width and that line's tallest height. */
+export function overviewSpaceLayout(windows: readonly OverviewCard[], perRow: number, create: boolean, fallback: OverviewCard, origin = { x: 0, y: 0 }) {
+  const gap = 16
+  const lines: OverviewCard[][] = []
+  for (let index = 0; index < windows.length; index += perRow > 0 ? perRow : windows.length) lines.push(windows.slice(index, perRow > 0 ? index + perRow : undefined))
+  if (!lines.length) lines.push([])
+  const last = lines.at(-1)!
+  if (create) last.push({ width: windows.at(-1)?.width ?? fallback.width, height: last.length ? Math.max(...last.map(card => card.height)) : fallback.height })
+  const cards: OverviewCardPlacement[] = []
+  let y = origin.y, width = 0
+  for (const line of lines) {
+    let x = origin.x
+    for (const card of line) { cards.push({ ...card, x, y }); x += card.width + gap }
+    width = Math.max(width, x - gap - origin.x)
+    y += Math.max(0, ...line.map(card => card.height)) + gap
+  }
+  return { cards, width, height: y - gap - origin.y }
 }

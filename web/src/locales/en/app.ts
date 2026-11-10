@@ -27,6 +27,8 @@ export default {
   "sort": "Sort",
   "nativeOrder": "Tab order",
   "statusOrder": "Status priority",
+  "windowsPerRow": "Windows per row",
+  "noWrapping": "No wrapping",
   "reset": "Reset",
   "overview": "Overview",
   "canvas": "Canvas",

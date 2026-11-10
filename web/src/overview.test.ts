@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { overviewFocusStatuses, overviewLayoutKey, overviewResources, overviewStatuses } from './overview.ts'
+import { overviewFocusStatuses, overviewLayoutKey, overviewResources, overviewSpaceLayout, overviewStatuses } from './overview.ts'
 import type { SourceResource, WindowResource } from './types.ts'
 
 const window = (id: string, status?: WindowResource['status']): WindowResource => ({ id, name: id, status })
@@ -70,4 +70,33 @@ test('interaction exemption matches both source and native window, preserving gr
   assert.deepEqual(overviewResources(resources, [], 'native', { sourceId: 'a', windowId: 'missing' }), [])
   assert.deepEqual(resources, original)
   assert.deepEqual(selected, ['done'])
+})
+
+const card = (width: number, height: number) => ({ width, height }), fallback = card(800, 450)
+const placed = (layout: ReturnType<typeof overviewSpaceLayout>) => layout.cards.map(({ x, y, width, height }) => [x, y, width, height])
+
+test('an unwrapped space keeps one row whose create card takes the last width and tallest height', () => {
+  const layout = overviewSpaceLayout([card(400, 300), card(600, 500), card(200, 100)], 0, true, fallback)
+  assert.deepEqual(placed(layout), [[0, 0, 400, 300], [416, 0, 600, 500], [1032, 0, 200, 100], [1248, 0, 200, 500]])
+  assert.deepEqual([layout.width, layout.height], [1448, 500])
+  assert.deepEqual(overviewSpaceLayout([], 0, true, fallback), { cards: [{ x: 0, y: 0, ...fallback }], width: 800, height: 450 })
+  assert.deepEqual(overviewSpaceLayout([card(400, 300)], 3, false, fallback), overviewSpaceLayout([card(400, 300)], 0, false, fallback))
+  const offset = overviewSpaceLayout([card(400, 300), card(600, 500)], 1, true, fallback, { x: 24, y: 34 })
+  assert.deepEqual(placed(offset), [[24, 34, 400, 300], [24, 350, 600, 500], [640, 350, 600, 500]])
+  assert.deepEqual([offset.width, offset.height], [1216, 816])
+})
+
+test('wrapping starts continuation rows sized by their tallest card and ends the short last row with the create card', () => {
+  const windows = [card(400, 300), card(600, 500), card(200, 100), card(300, 200), card(500, 250)]
+  const layout = overviewSpaceLayout(windows, 2, true, fallback)
+  assert.deepEqual(placed(layout), [
+    [0, 0, 400, 300], [416, 0, 600, 500],
+    [0, 516, 200, 100], [216, 516, 300, 200],
+    [0, 732, 500, 250], [516, 732, 500, 250],
+  ])
+  assert.deepEqual([layout.width, layout.height], [1016, 982])
+  const exact = overviewSpaceLayout(windows.slice(0, 4), 2, true, fallback)
+  assert.deepEqual(exact.cards.at(-1), { x: 532, y: 516, width: 300, height: 200 }, 'a full last row still receives the create card')
+  assert.deepEqual(placed(overviewSpaceLayout(windows, 2, false, fallback)).map(value => value[1]), [0, 0, 516, 516, 732])
+  assert.equal(overviewSpaceLayout(windows, 2, false, fallback).width, 1016)
 })

@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { adjacentPage, pageViewport, pageDragOffset, PageWheelGesture, retainPage, swipePage, type OverviewPage } from './overview-paging.ts'
+import { overviewSpaceLayout } from './overview.ts'
 
 const page = (id: string, row: string, x: number, y: number, width = 800, height = 450): OverviewPage => ({ id, row, x, y, width, height })
 const pages = [page('a', 'one', 0, 0), page('b', 'one', 820, 0), page('c', 'one', 1640, 0),
@@ -216,4 +217,21 @@ test('zero movement never starts or prolongs a wheel gesture', () => {
   assert.equal(wheel.consume(60, 0, 10), 'right')
   for (let now = 26; now < 1000; now += 16) assert.equal(wheel.consume(0, 0, now), undefined)
   assert.equal(wheel.consume(60, 0, 1000), 'right')
+})
+
+test('wrapped space rows page continuously: left/right stop at row ends, up/down crosses continuation rows', () => {
+  const size = { width: 800, height: 450 }
+  const space = (name: string, top: number, count: number) => overviewSpaceLayout(Array.from({ length: count }, () => size), 2, true, size).cards
+    .map((card, index) => page(index < count ? `${name}${index}` : `${name}+`, `${name}/${top + card.y}`, card.x, top + card.y, card.width, card.height))
+  const wrapped = [...space('a', 0, 3), ...space('b', 2000, 1)]
+  assert.deepEqual(wrapped.map(value => value.id), ['a0', 'a1', 'a2', 'a+', 'b0', 'b+'])
+  assert.equal(adjacentPage(wrapped, 'a1', 'right'), undefined)
+  assert.equal(adjacentPage(wrapped, 'a2', 'left'), undefined)
+  assert.equal(adjacentPage(wrapped, 'a2', 'right')?.id, 'a+')
+  assert.equal(adjacentPage(wrapped, 'a1', 'down')?.id, 'a+')
+  assert.equal(adjacentPage(wrapped, 'a+', 'up')?.id, 'a1')
+  assert.equal(adjacentPage(wrapped, 'a2', 'down')?.id, 'b0')
+  assert.equal(adjacentPage(wrapped, 'b+', 'up')?.id, 'a+')
+  assert.equal(adjacentPage(wrapped, 'a0', 'up'), undefined)
+  assert.equal(adjacentPage(wrapped, 'b0', 'down'), undefined)
 })

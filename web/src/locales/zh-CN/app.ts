@@ -27,6 +27,8 @@ export default {
   "sort": "排序",
   "nativeOrder": "原始顺序",
   "statusOrder": "状态优先",
+  "windowsPerRow": "每行窗口数",
+  "noWrapping": "不换行",
   "reset": "恢复默认",
   "overview": "总览",
   "canvas": "画布",
