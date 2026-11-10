@@ -53,29 +53,29 @@ export class UploadService {
   }
   private deadline(batch: Batch) {
     clearTimeout(batch.timer);
-    batch.timer = setTimeout(() => this.fail(batch, "上传超时", false, batch.files[batch.next]?.name), 60_000);
+    batch.timer = setTimeout(() => this.fail(batch, "timeout", false, batch.files[batch.next]?.name), 60_000);
     batch.timer.unref();
   }
   async begin(source: Source, windowId: string, socket: WebSocket, session: string, input: unknown) {
     let id = "";
     try {
       const request = beginSchema.parse(input); id = request.id;
-      if (Buffer.byteLength(JSON.stringify(request)) > MAX_UPLOAD_BEGIN_BYTES) throw new Error("粘贴内容过长");
+      if (Buffer.byteLength(JSON.stringify(request)) > MAX_UPLOAD_BEGIN_BYTES) throw new Error("tooLarge");
       for (const file of request.files) validateInboxFile(file);
       if (request.parts) {
         const referenced = new Set(request.parts.filter(part => typeof part !== "string").map(part => part.file));
         if (referenced.size !== request.files.length || [...referenced].some(index => index >= request.files.length))
-          throw new Error("粘贴文件引用无效");
+          throw new Error("invalidReference");
       }
       const total = request.files.reduce((sum, file) => sum + file.size, 0);
-      if (!Number.isSafeInteger(total)) throw new Error("文件大小无效");
+      if (!Number.isSafeInteger(total)) throw new Error("invalidSize");
       const key = `${source.id}/${windowId}`;
-      if (this.stopped || this.batches.has(key)) throw new Error("窗口已有上传任务");
+      if (this.stopped || this.batches.has(key)) throw new Error("busy");
       const generation = this.sourceGenerations.get(source.id) || 0;
       const paste = await this.terminals.captureFilePaste(source.id, windowId, socket);
-      if (this.stopped || (this.sourceGenerations.get(source.id) || 0) !== generation) throw new Error("连接已关闭");
-      if (!paste || socket.readyState !== 1) throw new Error("请先连接目标窗口");
-      if (this.batches.has(key)) throw new Error("窗口已有上传任务");
+      if (this.stopped || (this.sourceGenerations.get(source.id) || 0) !== generation) throw new Error("closed");
+      if (!paste || socket.readyState !== 1) throw new Error("notConnected");
+      if (this.batches.has(key)) throw new Error("busy");
       const batch: Batch = { key, id, source, windowId, socket, session, files: request.files, parts: request.parts ?? filePasteParts(request.files.length),
         tokens: request.files.map(() => randomBytes(32).toString("base64url")), paths: [], next: 0,
         busy: false, completedBytes: 0, transferred: 0, total, controller: new AbortController(),
@@ -88,7 +88,7 @@ export class UploadService {
     } catch (error) {
       if (!id && input && typeof input === "object" && "id" in input && typeof input.id === "string") id = input.id.slice(0, 100);
       this.send(socket, { type: "upload-progress", id, state: "failed", transferred: 0, total: 0,
-        error: error instanceof z.ZodError ? "上传参数无效" : error instanceof Error ? error.message : "无法开始上传" });
+        error: error instanceof z.ZodError ? "invalidRequest" : error instanceof Error ? error.message : "startFailed" });
     }
   }
   /** Deliver Canvas-held files and text through the same ordered native paste as browser uploads. */
@@ -97,20 +97,20 @@ export class UploadService {
     const { id } = request;
     let batch: Batch | undefined;
     try {
-      if (request.files.length > 64 || request.parts.length > MAX_PASTE_PARTS) throw new Error("粘贴内容过长");
+      if (request.files.length > 64 || request.parts.length > MAX_PASTE_PARTS) throw new Error("tooLarge");
       for (const file of request.files) validateInboxFile(file);
       // Inbox paths stay below 4 KiB; reject an oversized paste before streaming any file.
       const text = request.parts.reduce((size, part) => size + (typeof part === "string" ? Buffer.byteLength(part) : 4096), 0);
-      if (text > MAX_TERMINAL_PASTE_BYTES) throw new Error("粘贴内容过长");
+      if (text > MAX_TERMINAL_PASTE_BYTES) throw new Error("tooLarge");
       const total = request.files.reduce((sum, file) => sum + file.size, 0);
-      if (!Number.isSafeInteger(total)) throw new Error("文件大小无效");
+      if (!Number.isSafeInteger(total)) throw new Error("invalidSize");
       const key = `${source.id}/${windowId}`;
-      if (this.stopped || this.batches.has(key)) throw new Error("窗口已有上传任务");
+      if (this.stopped || this.batches.has(key)) throw new Error("busy");
       const generation = this.sourceGenerations.get(source.id) || 0;
       const paste = await this.terminals.captureFilePaste(source.id, windowId, socket);
-      if (this.stopped || (this.sourceGenerations.get(source.id) || 0) !== generation) throw new Error("连接已关闭");
-      if (!paste || socket.readyState !== 1) throw new Error("请先连接目标窗口");
-      if (this.batches.has(key)) throw new Error("窗口已有上传任务");
+      if (this.stopped || (this.sourceGenerations.get(source.id) || 0) !== generation) throw new Error("closed");
+      if (!paste || socket.readyState !== 1) throw new Error("notConnected");
+      if (this.batches.has(key)) throw new Error("busy");
       const current: Batch = batch = { key, id, source, windowId, socket, session, files: request.files, parts: request.parts, tokens: [], paths: [],
         next: 0, busy: true, completedBytes: 0, transferred: 0, total, controller: new AbortController(), lastProgress: 0, paste, stored: true };
       this.batches.set(key, current);
@@ -118,7 +118,7 @@ export class UploadService {
       this.progress(current, "uploading");
       for (const [index, file] of request.files.entries()) {
         const bytes = await file.open();
-        if (!bytes) throw new Error(`${file.name} 已不存在`);
+        if (!bytes) throw new Error("fileMissing");
         let path: string;
         try {
           if (this.batches.get(key) !== current) return;
@@ -131,7 +131,7 @@ export class UploadService {
       }
       if (await this.deliver(current)) request.delivered();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "发送失败";
+      const message = error instanceof Error ? error.message : "failed";
       if (batch) this.fail(batch, message, false, batch.files[batch.next]?.name);
       else this.send(socket, { type: "upload-progress", id, state: "failed", transferred: 0, total: 0, error: message });
     }
@@ -145,10 +145,10 @@ export class UploadService {
   /** Paste all segments once every file is in the inbox; returns whether this batch was delivered. */
   private async deliver(batch: Batch): Promise<boolean> {
     const native = await this.options.resources(batch.source);
-    if (!native.spaces.some(space => space.windows.some(window => window.id === batch.windowId))) throw new Error("目标窗口已关闭");
+    if (!native.spaces.some(space => space.windows.some(window => window.id === batch.windowId))) throw new Error("windowClosed");
     if (this.batches.get(batch.key) !== batch) return false;
     const segments = renderPasteSegments(batch.parts, batch.paths);
-    if (segments.reduce((size, segment) => size + Buffer.byteLength(segment.text), 0) > MAX_TERMINAL_PASTE_BYTES) throw new Error("粘贴内容过长");
+    if (segments.reduce((size, segment) => size + Buffer.byteLength(segment.text), 0) > MAX_TERMINAL_PASTE_BYTES) throw new Error("tooLarge");
     // Pasting is paced by the target's output. Once it starts, the batch is
     // committed: cancellation and disconnects can no longer split it.
     batch.committed = true;
@@ -156,7 +156,7 @@ export class UploadService {
     try { await batch.paste(segments); }
     catch (error) {
       this.removeBatch(batch);
-      this.progress(batch, "failed", error instanceof Error ? error.message : "粘贴失败");
+      this.progress(batch, "failed", error instanceof Error ? error.message : "pasteFailed");
       return false;
     }
     this.removeBatch(batch);
@@ -183,19 +183,19 @@ export class UploadService {
   }
   failed(socket: WebSocket, id: string) {
     for (const batch of this.batches.values())
-      if (batch.socket === socket && batch.id === id) this.fail(batch, "上传请求失败");
+      if (batch.socket === socket && batch.id === id) this.fail(batch, "requestFailed");
   }
   cancel(socket: WebSocket, id?: string) {
     for (const batch of this.batches.values())
-      if (batch.socket === socket && (id === undefined || batch.id === id)) this.fail(batch, "上传已取消", true);
+      if (batch.socket === socket && (id === undefined || batch.id === id)) this.fail(batch, "cancelled", true);
   }
   disconnected(socket: WebSocket) {
     for (const batch of this.batches.values())
-      if (batch.socket === socket) this.fail(batch, "上传连接中断", false, batch.files[batch.next]?.name);
+      if (batch.socket === socket) this.fail(batch, "interrupted", false, batch.files[batch.next]?.name);
   }
   closeSource(sourceId: string) {
     this.sourceGenerations.set(sourceId, (this.sourceGenerations.get(sourceId) || 0) + 1);
-    for (const batch of this.batches.values()) if (batch.source.id === sourceId) this.fail(batch, "连接已移除");
+    for (const batch of this.batches.values()) if (batch.source.id === sourceId) this.fail(batch, "connectionRemoved");
   }
   async receive(token: string, session: string, request: Request): Promise<204 | 404 | 409> {
     const entry = this.tokens.get(token);
@@ -205,7 +205,7 @@ export class UploadService {
     batch.busy = true;
     this.tokens.delete(token);
     const reader = request.body?.getReader();
-    const interrupted = () => this.fail(batch, "上传连接中断", false, batch.files[index]!.name);
+    const interrupted = () => this.fail(batch, "interrupted", false, batch.files[index]!.name);
     request.signal.addEventListener("abort", interrupted, { once: true });
     const abortReader = () => { void reader?.cancel().catch(() => {}); };
     batch.controller.signal.addEventListener("abort", abortReader, { once: true });
@@ -219,7 +219,7 @@ export class UploadService {
     };
     let written = false;
     try {
-      if (request.signal.aborted) throw new Error("上传已取消");
+      if (request.signal.aborted) throw new Error("cancelled");
       const path = await this.options.write(batch.source, batch.files[index]!, chunks(), batch.controller.signal, received => this.written(batch, received));
       written = true;
       if (this.batches.get(batch.key) !== batch) { this.cleanup(batch.source, [path]); return 409; }
@@ -232,7 +232,7 @@ export class UploadService {
       } else this.progress(batch, "uploading");
       return 204;
     } catch (error) {
-      this.fail(batch, error instanceof Error ? error.message : "文件上传失败", false, written ? undefined : batch.files[index]!.name);
+      this.fail(batch, error instanceof Error ? error.message : "failed", false, written ? undefined : batch.files[index]!.name);
       return 409;
     } finally {
       request.signal.removeEventListener("abort", interrupted);
@@ -242,7 +242,7 @@ export class UploadService {
   }
   async closeAll() {
     this.stopped = true;
-    for (const batch of this.batches.values()) this.fail(batch, "连接已关闭");
+    for (const batch of this.batches.values()) this.fail(batch, "closed");
     await Promise.all([...this.closing]);
   }
 }

@@ -16,7 +16,7 @@ import { presentUrl } from '../urls'
 type Target = { sourceId: string; spaceId: string; windowId: string; name: string }
 type FileItem = Extract<WindowContentItem, { kind: 'file' }>
 type FileAction = 'download' | 'preview' | Canvas
-const props = defineProps<{ target: Target | null; canvases: Canvas[]; portal?: HTMLElement }>()
+const props = defineProps<{ target: Target | null; canvases: Canvas[] }>()
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
 const result = shallowRef<{ scan: WindowContentScan; target: Target }>()
@@ -130,7 +130,7 @@ onBeforeUnmount(() => { cancelRequests() })
 </script>
 
 <template>
-  <UModal v-if="target" :open="true" :transition="false" :title="t('panels.scan.title')" :portal="portal || false" :content="modalContent"
+  <UModal v-if="target" :open="true" :transition="false" :title="t('panels.scan.title')" :content="modalContent"
     :close="{ 'aria-label': t('common.close') }"
     :ui="{ content: 'content-scan-modal', overlay: 'content-scan-overlay', header: 'content-scan-header', wrapper: 'content-scan-heading', title: 'content-scan-title', description: 'content-scan-description', body: 'content-scan-body', close: 'content-scan-close' }"
     @update:open="close">
@@ -156,7 +156,7 @@ onBeforeUnmount(() => { cancelRequests() })
           <div v-if="item.kind === 'file' && item.path" class="content-scan-file-actions">
             <UButton v-if="item.previewable" type="button" color="neutral" variant="ghost" size="xs" :disabled="!!opening" @click="openFile(item, 'preview')"><Icon name="eye" :size="13" />{{ t('panels.scan.preview') }}</UButton>
             <UButton type="button" color="neutral" variant="ghost" size="xs" :disabled="!!opening" @click="openFile(item)"><Icon name="download" :size="13" />{{ t('panels.file.download') }}</UButton>
-            <UDropdownMenu :items="destinations(item)" :portal="portal || false" :content="{ side: 'bottom', align: 'start' }" :ui="{ content: 'content-scan-destinations' }">
+            <UDropdownMenu :items="destinations(item)" :content="{ side: 'bottom', align: 'start' }" :ui="{ content: 'content-scan-destinations' }">
               <UButton type="button" color="neutral" variant="ghost" size="xs" :disabled="!!opening || !canvases.length" :title="!canvases.length ? t('panels.scan.createCanvasFirst') : undefined"><Icon :name="added === item.id ? 'check' : 'plus'" :size="13" />{{ t(added === item.id ? 'panels.scan.added' : 'panels.scan.addNote') }}<Icon name="down" :size="11" /></UButton>
             </UDropdownMenu>
           </div>
@@ -170,8 +170,8 @@ onBeforeUnmount(() => { cancelRequests() })
 </template>
 
 <style>
-.content-scan-overlay{z-index:82}
-.content-scan-modal{--scan-safe-top:var(--mobile-safe-top,var(--ui-safe-top));--scan-safe-bottom:var(--mobile-safe-bottom,var(--ui-safe-bottom));position:fixed;left:calc(var(--mobile-left,0px) + (var(--mobile-width,var(--ui-viewport-width)) + var(--ui-safe-left) - var(--ui-safe-right))/2);top:calc(var(--dialog-top) + (var(--dialog-height) + var(--scan-safe-top) - var(--scan-safe-bottom))/2);translate:-50% -50%;z-index:83;display:flex;flex-direction:column;gap:0;width:min(620px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px - var(--ui-safe-left) - var(--ui-safe-right)));max-width:none;max-height:min(680px,calc(var(--dialog-height) - 24px - var(--scan-safe-top) - var(--scan-safe-bottom)));overflow:hidden;border:1px solid #414b59;border-radius:10px;background:#20252d;color:#cbd4df;box-shadow:0 16px 50px #0007}
+.content-scan-overlay{}
+.content-scan-modal{--scan-safe-top:var(--mobile-safe-top,var(--ui-safe-top));--scan-safe-bottom:var(--mobile-safe-bottom,var(--ui-safe-bottom));position:fixed;left:calc(var(--mobile-left,0px) + (var(--mobile-width,var(--ui-viewport-width)) + var(--ui-safe-left) - var(--ui-safe-right))/2);top:calc(var(--dialog-top) + (var(--dialog-height) + var(--scan-safe-top) - var(--scan-safe-bottom))/2);translate:-50% -50%;display:flex;flex-direction:column;gap:0;width:min(620px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px - var(--ui-safe-left) - var(--ui-safe-right)));max-width:none;max-height:min(680px,calc(var(--dialog-height) - 24px - var(--scan-safe-top) - var(--scan-safe-bottom)));overflow:hidden;border:1px solid #414b59;border-radius:10px;background:#20252d;color:#cbd4df;box-shadow:0 16px 50px #0007}
 .content-scan-header{display:flex;align-items:center;flex:none;gap:6px;min-height:60px;padding:10px 8px 10px 14px;border-bottom:1px solid #343d49}
 .content-scan-heading{flex:1;min-width:0}
 .content-scan-title{font-size:14px;font-weight:550;line-height:1.4;color:#e0e5ec}
@@ -187,7 +187,7 @@ onBeforeUnmount(() => { cancelRequests() })
 .content-scan-item{display:flex;align-items:center;gap:2px;min-width:0;border-radius:6px}
 .content-scan-item[data-item-kind='file']{display:grid;grid-template-columns:minmax(0,1fr) auto}
 .content-scan-file-label{cursor:default;padding-bottom:3px;min-height:43px}
-.content-scan-file-actions{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:5px;padding:0 5px 6px 29px}.content-scan-file-actions>button,.content-scan-file-actions>span{font-size:10px}.content-scan-destinations{z-index:90;max-width:280px}
+.content-scan-file-actions{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:5px;padding:0 5px 6px 29px}.content-scan-file-actions>button,.content-scan-file-actions>span{font-size:10px}.content-scan-destinations{max-width:280px}
 .content-scan-item:hover{background:#ffffff04}
 .content-scan-open{display:flex;align-items:center;flex:1;min-width:0;gap:9px;min-height:47px;padding:8px 6px;color:#b9c5d4;text-align:left;text-decoration:none;border-radius:5px}
 .content-scan-open>svg,.content-scan-open>.spinner{flex:none;color:#8796aa}

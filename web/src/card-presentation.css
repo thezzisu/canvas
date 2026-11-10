@@ -1,9 +1,6 @@
 :is(.terminal-card,.note-card,.file-card) {
-  --card-accent: var(--program-color,var(--note-color,#93a1b4));
-  --toggle-bg: color-mix(in srgb,var(--card-accent) 55%,#1c1f25);
-  --toggle-hover: color-mix(in srgb,var(--card-accent) 65%,#1c1f25);
-  --toggle-pressed: color-mix(in srgb,var(--card-accent) 70%,#1c1f25);
-  --toggle-fg: color-mix(in srgb,var(--card-accent) 30%,#fff);
+  /* Nuxt UI semantic color: every primary control inside a card follows the card. */
+  --ui-primary: var(--program-color,var(--note-color,#93a1b4));
 }
 
 @media(prefers-reduced-motion:no-preference) {

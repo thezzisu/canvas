@@ -15,7 +15,7 @@ import { useInstanceProbe } from '../instance-probe'
 import { normalizeApiBase, parseInstanceLink, type InstanceLink } from '../instance-url'
 import { usePointerDismiss } from '../pointer-dismiss'
 
-const props = defineProps<{ portal?: HTMLElement; beforeChange?: () => Promise<boolean>; disabled?: boolean; username?: string }>()
+const props = defineProps<{ beforeChange?: () => Promise<boolean>; disabled?: boolean; username?: string }>()
 const emit = defineEmits<{ connect: []; account: []; signOut: [] }>()
 const { t } = useI18n()
 const currentBuild = computed(() => instanceBuild(activeInstance.value))
@@ -97,7 +97,7 @@ const items = computed<DropdownMenuItem[][]>(() => props.username === undefined 
 </script>
 
 <template>
-  <UDropdownMenu v-model:open="menuOpen" :modal="false" :items="items" :portal="portal || false" :content="{ side: 'top', align: 'start', sideOffset: 6, ...menuDismiss }"
+  <UDropdownMenu v-model:open="menuOpen" :modal="false" :items="items" :content="{ side: 'top', align: 'start', sideOffset: 6, ...menuDismiss }"
     :ui="{ content: username === undefined ? 'instance-menu' : 'instance-menu account-menu' }">
     <template #item-label="{ item }">
       <span class="instance-menu-label"><span>{{ item.label }}</span><small v-if="item.server" class="instance-version" :class="{ stale: !item.server.fresh }" :title="`${t('instances.serverVersion')}: ${item.server.build.version}${item.server.build.revision ? ` · ${item.server.build.revision}` : ''}${!item.server.fresh ? ` · ${t('instances.lastSeen')}` : ''}`">{{ buildLabel(item.server.build) }}<span v-if="!item.server.fresh"> · {{ t('instances.lastSeen') }}</span></small></span>
@@ -112,7 +112,7 @@ const items = computed<DropdownMenuItem[][]>(() => props.username === undefined 
       <Icon name="down" :size="12" />
     </button>
   </UDropdownMenu>
-  <UModal v-model:open="open" :portal="portal || false" :title="t(draft.id ? 'instances.edit' : 'instances.add')"
+  <UModal v-model:open="open" :title="t(draft.id ? 'instances.edit' : 'instances.add')"
     :close="{ 'aria-label': t('common.close') }" :ui="{ content: 'instance-dialog', overlay: 'instance-dialog-overlay', body: 'instance-dialog-body' }">
     <template #body>
       <form id="instance-form" @submit.prevent="submit">
@@ -124,7 +124,7 @@ const items = computed<DropdownMenuItem[][]>(() => props.username === undefined 
     </template>
     <template #footer><div class="instance-probe-footer"><UButton type="submit" form="instance-form" :loading="working" :disabled="!canSubmit">{{ t(draft.id ? 'common.save' : 'instances.connect') }}</UButton><span class="instance-probe-status" role="status"><span v-if="probe.pending.value">{{ t('instances.probing') }}</span><button v-else-if="probe.failed.value" type="button" @click="probe.retry">{{ t('instances.probeFailed') }} · {{ t('instances.retry') }}</button><span v-else-if="displayedBuild" :title="`${t('instances.serverVersion')}: ${displayedBuild.version}${displayedBuild.revision ? ` · ${displayedBuild.revision}` : ''}`">{{ buildLabel(displayedBuild) }}</span></span><UButton v-if="!draft.id" type="button" color="neutral" variant="ghost" icon="i-lucide-scan-qr-code" class="instance-add-scan" :disabled="working" :title="t('instances.scanQr')" :aria-label="t('instances.scanQr')" @click="scanned = undefined; scanning = true" /></div></template>
   </UModal>
-  <InstanceQrScanner :open="open && scanning" :accept="scan" :portal="portal" @close="scanning = false" />
+  <InstanceQrScanner :open="open && scanning" :accept="scan" @close="scanning = false" />
 </template>
 
 <style>
@@ -134,13 +134,13 @@ const items = computed<DropdownMenuItem[][]>(() => props.username === undefined 
 .instance-trigger-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .instance-trigger-version{flex:none;max-width:50%;overflow:hidden;text-overflow:ellipsis;color:#7d899a;font-size:9px;line-height:1.4;font-variant-numeric:tabular-nums}
 .instance-trigger>svg{flex:none;color:#7f8da0}.instance-trigger:hover{color:#e1d1c2}
-.instance-menu{min-width:min(200px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px));max-width:min(320px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px));z-index:90}
+.instance-menu{min-width:min(200px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px));max-width:min(320px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px));}
 .instance-menu [data-disabled]{cursor:not-allowed}
 .instance-menu-label{display:flex;align-items:center;gap:10px;min-width:0}.instance-menu-label>span{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .instance-version{flex:0 1 auto;min-width:0;max-width:60%;overflow:hidden;text-overflow:ellipsis;color:#7d899a;font-size:10px;font-weight:400;white-space:nowrap}.instance-version.stale{color:#707b8a}
 .instance-build-detail{display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 12px;margin:0;font-size:11px;color:#8995a6}.instance-build-detail dt{font-weight:400}.instance-build-detail dd{margin:0;color:#bbc5d2;overflow-wrap:anywhere}.instance-build-detail small{margin-left:7px;color:#7d899a}.instance-revision{font-family:monospace;overflow-wrap:anywhere;font-size:10px}
-.instance-dialog{width:min(420px,calc(var(--mobile-width,var(--ui-viewport-width)) - 28px));max-height:calc(var(--dialog-height) - 32px);z-index:92}
-.instance-dialog-overlay{z-index:91}.instance-add-scan{align-self:stretch;min-width:32px;justify-content:center}
+.instance-dialog{width:min(420px,calc(var(--mobile-width,var(--ui-viewport-width)) - 28px));max-height:calc(var(--dialog-height) - 32px);}
+.instance-dialog-overlay{}.instance-add-scan{align-self:stretch;min-width:32px;justify-content:center}
 .instance-dialog-body{padding:16px 20px}.instance-dialog form{display:flex;flex-direction:column;gap:16px}
 .instance-dialog label{margin-top:0}.instance-dialog input{margin-top:0;font-size:13px}
 .instance-error{color:#dfaaa5;font-size:12px}.login-content>.instance-trigger{margin:6px 0 2px}

@@ -226,9 +226,9 @@ const canvasMenuItems = computed<DropdownMenuItem[][]>(() => [
     { label: t('app.background'), icon: 'i-lucide-image', onSelect: openBackground },
   ],
   [
-    { ui: { item: 'aria-checked:before:bg-[var(--toggle-bg)] aria-checked:text-[var(--toggle-fg)]' }, type: 'checkbox', label: t('app.minimap'), icon: 'i-lucide-map', checked: showMinimap.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { showMinimap.value = value } },
-    { ui: { item: 'aria-checked:before:bg-[var(--toggle-bg)] aria-checked:text-[var(--toggle-fg)]' }, type: 'checkbox', label: t('app.navigation'), icon: 'i-lucide-panel-bottom', checked: showNavigation.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { showNavigation.value = value } },
-    { ui: { item: 'aria-checked:before:bg-[var(--toggle-bg)] aria-checked:text-[var(--toggle-fg)]' }, type: 'checkbox', label: t('app.autoYieldControls'), icon: 'i-lucide-mouse-pointer-2', checked: autoYieldControls.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { autoYieldControls.value = value } },
+    { type: 'checkbox', label: t('app.minimap'), icon: 'i-lucide-map', checked: showMinimap.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { showMinimap.value = value } },
+    { type: 'checkbox', label: t('app.navigation'), icon: 'i-lucide-panel-bottom', checked: showNavigation.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { showNavigation.value = value } },
+    { type: 'checkbox', label: t('app.autoYieldControls'), icon: 'i-lucide-mouse-pointer-2', checked: autoYieldControls.value, onSelect: event => event.preventDefault(), onUpdateChecked: value => { autoYieldControls.value = value } },
   ],
   ...(!isOverview.value ? [[
     { label: t('app.renameCanvas'), icon: 'i-lucide-pencil', onSelect: () => openCanvasDialog(currentCanvas.value) },
@@ -262,6 +262,7 @@ const appDialogOpen = computed(() => sourceDialog.value || canvasDialog.value ||
 const appDialogTitle = computed(() => sourceDialog.value ? t(sourceDraft.id ? 'app.editConnection' : 'app.addConnection')
   : canvasDialog.value ? t(canvasDraft.id ? 'app.renameCanvas' : 'app.newCanvas') : actionDialog.value?.title
     || (addDialog.value ? t('app.addWindows') : shareCard.value ? t('app.addToOtherCanvas') : (windowMenuWindow.value ? windowLabel(windowMenuWindow.value) : '')))
+const overlayRoot = ref<HTMLElement>()
 const appDialogFields = ref<HTMLElement>()
 const appDialogDismiss = usePointerDismiss(computed({ get: () => appDialogOpen.value && !busy.value, set: () => closeAppDialog() }),
   appDialogFields, { event: 'click', outside: event => event.target instanceof Element && event.target.classList.contains('app-dialog-backdrop') })
@@ -627,7 +628,7 @@ usePointerDismiss(computed({
   get: () => sourcePanel.value && !modalOpen.value && !directoryRequest.value && !urlRequest.value && !downloadPreview.value,
   set: value => { sourcePanel.value = value },
 }), sourcePanelElement)
-const { surface: graphSurface, app: appElement, fullscreen: canvasFullscreen, resetPagingFeedback, wheel: canvasWheel, touchStart: canvasTouchStart, touchMove: canvasTouchMove, touchEnd: canvasTouchEnd, touchCancel: canvasTouchCancel, click: canvasClick, toggleFullscreen, exitFullscreen } = useCanvasNavigation({
+const { surface: graphSurface, fullscreen: canvasFullscreen, resetPagingFeedback, wheel: canvasWheel, touchStart: canvasTouchStart, touchMove: canvasTouchMove, touchEnd: canvasTouchEnd, touchCancel: canvasTouchCancel, click: canvasClick, toggleFullscreen, exitFullscreen } = useCanvasNavigation({
   getCanvasId: () => `${activeInstance.value.id}/${activeId.value}`, getViewport, setViewport, saveViewport,
   onError: showError,
   blocked: () => workspacePending.value || overviewMenuOpen.value || !!modalOpen.value || !!directoryRequest.value || !!urlRequest.value || !!downloadPreview.value || hasFocus.value || sidebarOpen.value || (mobile.value && sourcePanel.value),
@@ -2235,17 +2236,17 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
 
 <template>
   <UTheme :ui="mobile ? { dropdownMenu: { item: 'min-h-[44px] items-center' }, contextMenu: { item: 'min-h-[44px] items-center' } } : undefined">
-  <UApp :locale="uiLocale" :portal="appElement || false" :toaster="{ portal: notificationPortal || false, position: 'bottom-right', max: 4 + (removalUndo?.count || 0), progress: false, ui: { viewport: 'canvas-notifications' } }">
+  <UApp :locale="uiLocale" :portal="overlayRoot || false" :toaster="{ portal: notificationPortal || false, position: 'bottom-right', max: 4 + (removalUndo?.count || 0), progress: false, ui: { viewport: 'canvas-notifications' } }">
     <CardRemovalFeedback ref="removalUndo" :sync="syncState" :released="removalReleased" :error="showError" />
   <NotificationCenter v-if="authenticated && latestState" :key="`${activeInstance.id}:${latestState.instanceId}`" ref="notificationCenter"
     :instance-id="activeInstance.id" :backend-id="latestState.instanceId" :resources="rawResources" :display-resources="resources" :focus="terminalReadFocus" :refresh="() => refreshResources(true)" :actions-available="notificationActionsAvailable" @open="openNotification" @go="goToNotification" />
-  <NotificationHost :portal="appElement" />
+  <NotificationHost :portal="overlayRoot" />
   <AppFeedback :error="error" :success="success" @dismiss="error = ''; success = ''" />
   <PwaUpdatePrompt />
   <div v-if="!ready" class="boot-screen"><span class="spinner" />{{ t('common.loading') }}</div>
   <div v-else-if="!authenticated || unknownInstance" class="login-screen" :class="{ 'mobile-layout': mobile }" :style="mobileViewportStyle">
     <main class="login-content">
-      <div class="brand login-brand"><span class="brand-symbol"><Icon name="canvas" :size="27" /></span><span class="brand-name">canvas</span><LanguageSelect class="login-language" /></div>
+      <div class="brand login-brand"><span class="brand-symbol"><Icon name="canvas" :size="27" /></span><span class="brand-name">canvas</span><LanguageSelect class="ms-auto" /></div>
       <InstancePicker v-if="instances.length" :disabled="busy" @connect="connectInstance" />
       <InstanceSetup v-if="!hasActiveInstance" :message="instanceSetupMessage ? t(instanceSetupMessage) : ''" @connect="connectInstance" />
       <div v-else-if="unknownInstance" class="login-form"><p class="form-error" role="status">{{ t('canvasUi.unknownInstance') }}</p><button class="button primary login-button" @click="navigation.visit(activeInstance.id, 'overview'); activateInstance()">{{ t('canvasUi.openInstance') }}</button></div>
@@ -2260,21 +2261,21 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
       </form>
     </main>
   </div>
-  <div v-else ref="appElement" class="app-shell" :class="{ 'canvas-fullscreen': canvasFullscreen, 'mobile-layout': mobile, 'sidebar-drawer': sidebarDrawer, 'has-display-cutout': hasSafeTop, 'cutout-preview-active': settingsDialog && mobile && hasSafeTop }" :style="[mobileViewportStyle, contentFontStyle, terminalMaterialStyle]" :data-content-font="appliedContentFont">
+  <div v-else class="app-shell" :class="{ 'canvas-fullscreen': canvasFullscreen, 'mobile-layout': mobile, 'sidebar-drawer': sidebarDrawer, 'has-display-cutout': hasSafeTop, 'cutout-preview-active': settingsDialog && mobile && hasSafeTop }" :style="[mobileViewportStyle, contentFontStyle, terminalMaterialStyle]" :data-content-font="appliedContentFont">
     <header class="workspace-header" :inert="contentFontReady && !!focusedCard || undefined" :aria-hidden="contentFontReady && !!focusedCard || undefined">
       <div v-if="!sidebarDrawer" class="brand header-brand"><span class="brand-symbol"><Icon name="canvas" :size="21" /></span><span class="brand-name">canvas</span></div>
       <div class="header-context"><button v-if="sidebarDrawer" class="icon-button mobile-menu-trigger" :aria-label="t('app.openCanvasList')" aria-controls="canvas-sidebar" :aria-expanded="sidebarOpen" @click="sidebarOpen = !sidebarOpen"><Icon name="menu" :size="21" /></button><div class="header-text"><div class="breadcrumb"><h1 v-if="latestState" :title="currentName">{{ currentName }}</h1></div><span v-if="!workspacePending && !undiscoveredSources.length" class="header-counts">{{ canvasCounts }}</span></div><button class="icon-button refresh-button" :title="refreshedAt ? t('app.refreshUpdated', { time: refreshedTime }) : t('app.refresh')" :aria-label="t('app.refresh')" :disabled="loading || workspacePending" @click="refreshResources()"><Icon name="refresh" :size="14" :class="{ spinning: loading }" /></button></div>
       <div class="header-actions" :inert="workspacePending || layoutEditing || undefined">
-        <UDropdownMenu v-if="isOverview" v-model:open="overviewMenuOpen" :modal="false" :items="overviewMenu" :portal="appElement || false" :content="{ align: 'end', ...overviewDismiss }" :ui="{ content: 'overview-display-menu w-[180px] z-[60]' }">
+        <UDropdownMenu v-if="isOverview" v-model:open="overviewMenuOpen" :modal="false" :items="overviewMenu" :content="{ align: 'end', ...overviewDismiss }" :ui="{ content: 'overview-display-menu w-[180px]' }">
           <button ref="overviewTrigger" class="icon-button overview-display-trigger" :class="{ active: overviewChanged }" :title="t('app.filterSort')" :aria-label="t('app.overviewFilterSort')"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg><i v-if="overviewChanged" /></button>
           <template #item-leading="{ item }"><span class="overview-display-leading" aria-hidden="true"><i v-if="item.status" class="program-dot" :style="{ '--program-color': statusColor(item.status) }" /></span></template>
         </UDropdownMenu>
-        <UDropdownMenu v-if="!isOverview" v-model:open="createMenuOpen" :items="createMenu" :portal="appElement || false" :content="{ align: 'end' }" :ui="{ content: 'canvas-create-menu' }">
+        <UDropdownMenu v-if="!isOverview" v-model:open="createMenuOpen" :items="createMenu" :content="{ align: 'end' }" :ui="{ content: 'canvas-create-menu' }">
           <button class="icon-button canvas-create-trigger" :title="t('app.addContent')" :aria-label="t('app.addContent')" :disabled="busy"><Icon name="plus" :size="17" /></button>
         </UDropdownMenu>
         <span v-if="!isOverview && saveState" class="save-state" :title="t(`app.${saveState}`)" :aria-label="t(`app.${saveState}`)"><span v-if="saveState === 'saving'" class="spinner" /><Icon v-else :name="saveState === 'saved' ? 'check' : 'info'" :size="13" /></span>
-        <UDropdownMenu v-model:open="canvasMenu" :modal="false" :items="canvasMenuItems" :portal="appElement || false"
-          :content="{ align: 'end', ...canvasMenuDismiss }" :ui="{ content: 'canvas-menu z-[60] min-w-[200px] w-max max-w-[calc(var(--ui-viewport-width)-16px)]', group: 'space-y-0.5', itemLabel: 'whitespace-nowrap' }">
+        <UDropdownMenu v-model:open="canvasMenu" :modal="false" :items="canvasMenuItems"
+          :content="{ align: 'end', ...canvasMenuDismiss }" :ui="{ content: 'canvas-menu min-w-[200px] w-max max-w-[calc(var(--ui-viewport-width)-16px)]', group: 'space-y-0.5', itemLabel: 'whitespace-nowrap' }">
           <button ref="canvasMenuTrigger" class="icon-button canvas-menu-trigger" :title="t('app.canvasSettings')" :aria-label="t('app.canvasSettings')"><Icon name="more" :size="17" /></button>
         </UDropdownMenu>
         <button class="button subtle" :title="t('app.connections')" :aria-label="t('app.connections')" @click="sourcePanel = true"><Icon name="server" :size="15" />{{ t('app.connections') }}</button>
@@ -2297,7 +2298,7 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
         <div class="source-nav"><SidebarList :key="activeInstanceId" :items="orderedSources" @reorder="ids => rememberSidebarOrder('sources', ids)"><template #default="{ item: source, hint }"><button :aria-description="hint" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" class="source-nav-item" :title="`${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}${resources.find(item => item.id === source.id)?.serverVersion ? ` · herdr ${resources.find(item => item.id === source.id)!.serverVersion}` : ''}`" @click="sourcePanel = false; navigateCanvas('overview', { fitNodeId: `source:${source.id}` })"><Icon class="source-nav-icon" name="server" :size="16" /><span class="source-nav-name">{{ source.name }}</span><span class="source-nav-status"><span class="connection-dot" :class="resources.find(item => item.id === source.id)?.error ? 'disconnected' : resources.find(item => item.id === source.id)?.status === 'online' ? 'connected' : ''" /></span></button></template></SidebarList><button v-if="latestState && !sources.length" class="source-empty" @click="openSource()"><Icon name="plus" :size="16" /><span class="source-empty-label">{{ t('app.addConnection') }}</span></button></div>
       </div>
       <div class="sidebar-footer">
-        <InstancePicker v-model:menu-open="accountMenuOpen" :username="username" :portal="appElement" :before-change="beforeInstanceChange" :disabled="busy"
+        <InstancePicker v-model:menu-open="accountMenuOpen" :username="username" :before-change="beforeInstanceChange" :disabled="busy"
           @account="accountDialog = true" @sign-out="void logout().catch(showError)" />
         <button class="icon-button sidebar-settings" :title="t('common.settings')" :aria-label="t('common.settings')" :disabled="!settings" @click="openSettings"><Icon name="settings" :size="17" /></button>
       </div>
@@ -2328,17 +2329,15 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
       <NoteNode v-else-if="focusedCard?.type === 'note'" :key="focusedCard.id" :id="focusedCard.id" :selected="false" :data="noteData(focusedCard, true)" />
       <FileNode v-else-if="focusedCard?.type === 'file'" :key="focusedCard.id" :id="focusedCard.id" :selected="false" :data="fileData(focusedCard, true)" />
     </div>
-    <BackgroundDialog v-if="backgroundCanvas" :canvas="backgroundCanvas" :portal="appElement" @close="closeBackgroundDialog" @saved="backgroundSaved" />
-    <ViewportDiagnostics v-if="developerMode" :settings="settings" :portal="appElement" :reload-blocked="!!modalOpen" />
-    <RichPasteDialog :portal="appElement" />
-    <DirectoryDialog :portal="appElement" />
-    <UrlDialog :portal="appElement" />
-    <DownloadPreviewDialog :portal="appElement" />
-    <WindowContentDialog :target="scanTarget" :canvases="canvases" :portal="appElement" @close="scanTarget = null" />
-    <SettingsDialog ref="settingsDialogComponent" v-if="settings" :open="settingsDialog" :settings="settings" :has-display-cutout="hasSafeTop" :portal="appElement" @close="settingsDialog = false" @saved="settingsSaved" @error="showError" />
-    <AccountDialog :open="accountDialog" :username="username" :portal="appElement" @close="accountDialog = false" @saved="value => { username = value }" />
-    <CutoutPreview v-if="settingsDialog && mobile && hasSafeTop" :overview="isOverview" :captured="!!focused && !!capturedApp(focused.sourceId, focused.windowId)?.visible" />
-    <UModal :open="appDialogOpen" :title="appDialogTitle" :portal="appElement || false" :dismissible="!busy" :transition="false" :close="false" :ui="{ content: 'app-dialog-shell', overlay: 'app-dialog-overlay app-dialog-backdrop' }" :content="{ onCloseAutoFocus: restoreDialogFocus }" @update:open="closeAppDialog">
+    <BackgroundDialog v-if="backgroundCanvas" :canvas="backgroundCanvas" @close="closeBackgroundDialog" @saved="backgroundSaved" />
+    <RichPasteDialog />
+    <DirectoryDialog />
+    <UrlDialog />
+    <DownloadPreviewDialog />
+    <WindowContentDialog :target="scanTarget" :canvases="canvases" @close="scanTarget = null" />
+    <SettingsDialog ref="settingsDialogComponent" v-if="settings" :open="settingsDialog" :settings="settings" :has-display-cutout="hasSafeTop" @close="settingsDialog = false" @saved="settingsSaved" @error="showError" />
+    <AccountDialog :open="accountDialog" :username="username" @close="accountDialog = false" @saved="value => { username = value }" />
+    <UModal :open="appDialogOpen" :title="appDialogTitle" :dismissible="!busy" :transition="false" :close="false" :ui="{ content: 'app-dialog-shell', overlay: 'app-dialog-overlay app-dialog-backdrop' }" :content="{ onCloseAutoFocus: restoreDialogFocus }" @update:open="closeAppDialog">
       <template #content><fieldset ref="appDialogFields" class="app-dialog-fields" :disabled="busy" :aria-busy="busy">
       <section v-if="sourceDialog" class="modal source-modal"><header><div><h2 id="source-title">{{ sourceDraft.id ? t('app.editConnection') : t('app.addConnection') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="sourceDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitSource"><label>{{ t('app.connectionName') }}<input v-model="sourceDraft.name" name="sourceName" required :placeholder="t('app.connectionNamePlaceholder')" /></label><label>{{ t('app.runtime') }}<select v-model="sourceDraft.runtime" name="runtime"><option value="tui">Herdr TUI</option><option value="core">Herdr Core / App</option></select></label><div class="segmented-control"><button type="button" :class="{ selected: sourceDraft.transport === 'local' }" @click="sourceDraft.transport = 'local'"><Icon name="server" :size="15" />{{ t('app.local') }}</button><button type="button" :class="{ selected: sourceDraft.transport === 'ssh' }" @click="sourceDraft.transport = 'ssh'"><Icon name="globe" :size="15" />{{ t('app.remoteSsh') }}</button></div><label v-if="sourceDraft.transport === 'ssh'">{{ t('app.sshAddress') }}<input v-model="sourceDraft.target" name="target" placeholder="ssh://user@hostname:22" :required="sourceDraft.transport === 'ssh'" /></label><label>{{ t('app.session') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.herdrSession" name="herdrSession" placeholder="default" /></label><details><summary>{{ t('app.advanced') }}</summary><template v-if="sourceDraft.transport === 'ssh'"><label>{{ t('app.sshIdentity') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.sshIdentityFile" name="sshIdentityFile" placeholder="/path/to/id_ed25519" /></label><label>{{ t('app.sshKnownHosts') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.sshKnownHostsFile" name="sshKnownHostsFile" placeholder="/path/to/known_hosts" /></label></template><label>{{ t('app.socketPath') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.herdrSocket" name="herdrSocket" :placeholder="sourceDraft.runtime === 'core' ? '/path/to/default.sock' : '/path/to/herdr.sock'" /></label></details><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><div class="source-probe-status" :class="{ failed: sourceProbe.error }" role="status"><span v-if="sourceProbe.pending" class="spinner" /><span :title="sourceProbe.error || sourceProbe.version">{{ sourceProbe.pending ? t('app.checkingConnection') : sourceProbe.error ? t('app.connectionProbeFailed') : sourceProbe.version ? `${sourceDraft.runtime === 'core' ? 'herdr-core' : 'herdr'} ${sourceProbe.version}` : '' }}</span><button v-if="sourceProbe.error" type="button" class="icon-button" :aria-label="t('common.retry')" :title="t('common.retry')" @click="sourceProbeRetry++"><Icon name="refresh" :size="14" /></button></div><button class="button subtle" type="button" @click="sourceDialog = false">{{ t('common.cancel') }}</button><button class="button primary" type="submit" :disabled="busy || !sourceProbeReady || !sourceDraft.name.trim()"><span v-if="busy" class="spinner" />{{ busy ? t('app.saving') : t('common.save') }}</button></footer></form></section>
       <section v-else-if="canvasDialog" class="modal"><header><div><h2 id="canvas-title">{{ canvasDraft.id ? t('app.renameCanvas') : t('app.newCanvas') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="canvasDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitCanvas"><label>{{ t('app.canvasName') }}<input v-model="canvasDraft.name" name="canvasName" required autofocus :placeholder="t('app.canvasNamePlaceholder')" maxlength="80" /></label><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="canvasDialog = false">{{ t('common.cancel') }}</button><button class="button primary" :disabled="busy" type="submit">{{ canvasDraft.id ? t('common.save') : t('app.createCanvas') }}</button></footer></form></section>
@@ -2348,12 +2347,19 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
       <section v-else-if="windowMenu" class="modal window-menu"><header><h2 id="window-title"><WindowTitle v-if="windowMenuWindow" :window="windowMenuWindow" /></h2><button class="icon-button" :aria-label="t('app.closeDialog')" @click="windowMenu = null"><Icon name="close" /></button></header><button v-if="mobile && focused?.id === windowMenu.node.id" @pointerdown.prevent @click="showWindowKeyboard"><Icon name="terminal" />{{ t('terminal.action.showKeyboard') }}</button><button v-if="mobile" @click="windowMenu = null; openSettings()"><Icon name="canvas" />{{ t('common.settings') }}</button><button v-if="mobile && !isOverview && windowMenu.node.id" :disabled="!terminalData(windowMenu.node).available" @click="terminalData(windowMenu.node).newTab?.create(); windowMenu = null"><Icon name="tab-plus" />{{ t('app.newTab') }}</button><button :disabled="!hasLiveTerminal(windowMenu.node.sourceId, windowMenu.node.windowId)" @click="scanWindowContent(windowMenu.node, windowMenuWindow ? windowLabel(windowMenuWindow) : windowMenu.name)"><Icon name="search" />{{ t('panels.scan.title') }}</button><button @click="openAdd(windowMenu.node); windowMenu = null"><Icon name="layers" />{{ t('app.addToOtherCanvas') }}</button><button @click="windowAction(windowMenu.node, 'rename')"><Icon name="edit" />{{ t('app.renameWindow') }}</button><button class="danger-text" @click="windowAction(windowMenu.node, 'close')"><Icon name="trash" />{{ t('app.closeWindow') }}</button></section>
       </fieldset></template>
     </UModal>
+    <!-- Single portal root for every overlay: one stacking layer above the shell, nested by open order. -->
+    <div ref="overlayRoot" class="overlay-root" />
+    <!-- Same layer, later in document order: previews and developer tools paint above dialogs. -->
+    <div class="overlay-root">
+      <CutoutPreview v-if="settingsDialog && mobile && hasSafeTop" :overview="isOverview" :captured="!!focused && !!capturedApp(focused.sourceId, focused.windowId)?.visible" />
+      <ViewportDiagnostics v-if="developerMode" :settings="settings" :reload-blocked="!!modalOpen" />
+    </div>
   </div>
-    <UModal :open="layoutExitOpen" :title="t('app.layoutUnsaved')" :portal="appElement || false" :dismissible="!layoutBusy" @update:open="value => { if (!value) chooseLayoutExit('stay') }">
+    <UModal :open="layoutExitOpen" :title="t('app.layoutUnsaved')" :dismissible="!layoutBusy" @update:open="value => { if (!value) chooseLayoutExit('stay') }">
       <template #body><p>{{ t('app.layoutLeave') }}</p><p v-if="layoutError" role="alert">{{ layoutError }}</p></template>
       <template #footer><button class="button subtle" :disabled="layoutBusy" @click="chooseLayoutExit('stay')">{{ t('app.layoutStay') }}</button><button class="button subtle" :disabled="layoutBusy" @click="chooseLayoutExit('discard')">{{ t('app.layoutDiscard') }}</button><button class="button primary" :disabled="layoutBusy" @click="chooseLayoutExit('apply')">{{ t('app.layoutApply') }}</button></template>
     </UModal>
-    <TrustedPreviewDialog :portal="appElement" />
+    <TrustedPreviewDialog />
   </UApp>
   </UTheme>
 </template>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UButton from '@nuxt/ui/components/Button.vue'
 import { useI18n } from 'vue-i18n'
 import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
 import type { NodeProps } from '@vue-flow/core'
@@ -99,7 +100,7 @@ function dragNote(event: DragEvent) {
       <CardHeaderActions class="note-actions" :class="{ 'cutout-actions': data.mobile && data.focus }" :items="menu" :expanded="!!data.focus" removable :mobile="!!data.mobile && !!data.focus" :shortcuts="shortcuts" :priority="['copy', 'zoom']" :add-label="t('app.addToOtherCanvas')" :remove-label="t('panels.note.remove')"
         @add="data.onAction('add', id)" @toggle="data.onAction(data.focus ? 'unfocus' : 'focus', id)" @remove="data.onAction('remove', id)">
         <template #zoom><ContentZoom v-model="zoom" :mobile="data.mobile" :label="t('common.contentZoom')" /></template>
-        <template #copy><button type="button" class="card-header-action note-copy" :disabled="!content" :draggable="!!content" :title="t('panels.note.copyOrDrag')" :aria-label="t('panels.note.copy')" @pointerdown.stop @click="copyNote" @dragstart="dragNote"><Icon name="copy" :size="15" /></button></template>
+        <template #copy><UButton class="note-copy" :disabled="!content" :draggable="!!content" :title="t('panels.note.copyOrDrag')" :aria-label="t('panels.note.copy')" @pointerdown.stop @click="copyNote" @dragstart="dragNote"><Icon name="copy" :size="15" /></UButton></template>
       </CardHeaderActions>
     </header>
     <div ref="noteBody" class="note-content card-content nodrag nowheel" :data-content-active="contentActive" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.stop="contentPointerDown" @wheel.stop @dblclick.stop>
@@ -112,6 +113,6 @@ function dragNote(event: DragEvent) {
 
 <style scoped>
 .note-content{position:relative;padding:0;overflow:hidden;-webkit-tap-highlight-color:transparent}.note-copy[draggable=true]{cursor:grab}.note-copy[draggable=true]:active{cursor:grabbing}
-.note-content:has(.note-file-dropcursor){box-shadow:inset 0 0 0 2px var(--accent)}
+.note-content:has(.note-file-dropcursor){box-shadow:inset 0 0 0 2px var(--ui-primary)}
 .note-copy:disabled{cursor:default}
 </style>

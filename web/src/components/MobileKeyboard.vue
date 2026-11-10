@@ -39,7 +39,6 @@ const emit = defineEmits<{
 }>()
 const keyboard = ref<HTMLElement>()
 const dock = ref<HTMLElement>(), naturalDeck = ref<HTMLElement>(), actions = ref<HTMLElement>(), safeArea = ref<HTMLElement>()
-const portal = computed(() => keyboard.value?.closest<HTMLElement>('.app-shell') || document.body)
 const switchLabel = computed(() => t(props.keyboardMode === 'system' ? 'terminal.keyboard.switchToBuiltin' : 'terminal.keyboard.switchToSystem'))
 const hasDock = computed(() => props.dockHeight > 0)
 const caps = ref(false)
@@ -343,7 +342,7 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
       </div>
     </div>
     <input ref="fileInput" class="mobile-file-input" type="file" multiple tabindex="-1" :aria-label="t('terminal.upload.file')" @change="filesChanged" @cancel="filesCancelled" />
-    <UModal :open="!!sheet" :portal="portal" :transition="false" :title="t('terminal.keyboard.selectText')"
+    <UModal :open="!!sheet" :transition="false" :title="t('terminal.keyboard.selectText')"
       :close="{ 'aria-label': t('common.close') }" :content="{ onCloseAutoFocus: event => event.preventDefault() }"
       :ui="{ content: 'mobile-text-sheet', overlay: 'mobile-text-backdrop', header: 'shrink-0 px-4 py-3', title: 'text-sm font-medium', body: 'flex flex-1 min-h-0 p-0 sm:p-0', footer: 'shrink-0 justify-end gap-2 p-2', close: 'min-w-[44px] min-h-[44px]' }"
       @update:open="value => { if (!value) closeSheet() }">
@@ -362,14 +361,14 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
 </template>
 
 <style scoped>
-.mobile-keyboard{position:relative;flex:0 0 auto;min-width:0;border-top:1px solid #353c47;background:#1a1e25;padding:4px 4px var(--mobile-safe-bottom,0px);color:#cbd2dd;z-index:6;touch-action:manipulation}
+.mobile-keyboard{--key-on:color-mix(in srgb,var(--ui-primary) 55%,#1c1f25);--key-on-fg:color-mix(in srgb,var(--ui-primary) 30%,#fff);position:relative;flex:0 0 auto;min-width:0;border-top:1px solid #353c47;background:#1a1e25;padding:4px 4px var(--mobile-safe-bottom,0px);color:#cbd2dd;z-index:6;touch-action:manipulation}
 .mobile-keyboard.has-dock{padding-bottom:0}
 .mobile-key-row{position:relative;z-index:3;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:3px;overflow:hidden;min-height:40px;margin-bottom:4px;background:#1a1e25}
 .mobile-keyboard button{min-height:44px;min-width:44px;padding:0 6px;border:1px solid #3a4350;border-bottom-color:#48515e;border-radius:5px;background:rgb(43 50 61 / var(--key-fill,1));box-shadow:inset 0 1px 0 #ffffff05,0 1px 1px #0003;color:#cbd2dd;font-size:12px;line-height:1;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;white-space:nowrap;-webkit-tap-highlight-color:transparent}
 .mobile-key-row>button{min-width:0;min-height:40px;padding:0;height:44px}
 .mobile-keyboard button:active{background:#414955;border-color:#637082;box-shadow:inset 0 1px 2px #0003}
-.mobile-keyboard button[aria-pressed=true],.mobile-keyboard button.active{background:var(--toggle-bg);border-color:var(--toggle-pressed);color:var(--toggle-fg);box-shadow:inset 0 1px 0 #ffffff12}
-.mobile-keyboard button:focus-visible{outline:2px solid var(--toggle-fg);outline-offset:-3px}
+.mobile-keyboard button:is([aria-pressed=true],.active){background:var(--key-on);border-color:var(--ui-primary);color:var(--key-on-fg);box-shadow:inset 0 1px 0 #ffffff12}
+.mobile-keyboard button:focus-visible{outline:2px solid var(--key-on-fg);outline-offset:-3px}
 .mobile-keyboard button:disabled{opacity:.4;cursor:default}
 .mobile-keyboard .arrow-key{font-size:21px;font-family:system-ui,sans-serif}
 .mobile-key-safe{position:absolute;width:0;height:var(--ui-safe-bottom,0px);visibility:hidden;pointer-events:none}
@@ -384,28 +383,27 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
 .mobile-key-functions{grid-template-columns:repeat(12,minmax(0,1fr))}
 .mobile-key-bottom button{padding:0;font-size:clamp(8px,2.4cqw,11px);letter-spacing:-.25px}
 .mobile-key-bottom .symbol-key{font-size:clamp(12px,3.6cqw,18px);font-family:system-ui,sans-serif;letter-spacing:0}
-.mobile-key-deck .shift-key,.mobile-key-deck .backspace-key,.mobile-key-deck .enter-key{font-size:clamp(14px,4cqw,20px);background:rgb(37 44 54 / var(--key-fill,1))}
-.mobile-key-deck .shift-key[aria-pressed=true]{background:var(--toggle-bg)}
+.mobile-key-deck :is(.shift-key,.backspace-key,.enter-key){font-size:clamp(14px,4cqw,20px)}
+.mobile-key-deck :is(.shift-key,.backspace-key,.enter-key):not([aria-pressed=true]){background:rgb(37 44 54 / var(--key-fill,1))}
 .mobile-key-actions{position:relative;flex:0 0 auto;display:flex;gap:3px;padding:6px;border-top:1px solid #3c4552}
-.mobile-key-actions button{display:flex;align-items:center;justify-content:center;flex:1 1 0;min-width:0;min-height:44px;padding:0;background:rgb(37 45 55 / var(--key-fill,1));border-color:#35414f;color:#b7c3d2}
+.mobile-key-actions button:not([aria-pressed=true]){background:rgb(37 45 55 / var(--key-fill,1));border-color:#35414f;color:#b7c3d2}
+.mobile-key-actions button{display:flex;align-items:center;justify-content:center;flex:1 1 0;min-width:0;min-height:44px;padding:0}
 .mobile-key-actions .mobile-mouse-button{touch-action:none}
 .mobile-tool-move{transition:transform 160ms ease-out}
 .mobile-tool-enter-active,.mobile-tool-leave-active{transition:opacity 120ms ease-out,transform 160ms ease-out}
 .mobile-tool-enter-from,.mobile-tool-leave-to{opacity:0;transform:translateY(3px)}
 .mobile-tool-leave-active{position:absolute;pointer-events:none}
 .reduced-motion :is(.mobile-tool-move,.mobile-tool-enter-active,.mobile-tool-leave-active){transition:none}
-.mobile-key-actions button[aria-pressed=true]{background:var(--toggle-bg);border-color:var(--toggle-pressed);color:var(--toggle-fg)}
 .mobile-key-actions button:active{background:#3b4654}
-.mobile-keyboard button:is([aria-pressed=true],.active):active:not(:disabled){background:var(--toggle-pressed)}
 .mobile-file-input{display:none}
-@media(hover:hover){.mobile-keyboard button:hover:not(:disabled):not([aria-pressed=true]):not(.active){background:#37414e;border-color:#526071}.mobile-keyboard button:is([aria-pressed=true],.active):hover:not(:active):not(:disabled){background:var(--toggle-hover)}}
+@media(hover:hover){.mobile-keyboard button:hover:not(:disabled):not([aria-pressed=true]):not(.active){background:#37414e;border-color:#526071}}
 @media(prefers-reduced-transparency:reduce){.mobile-key-dock{--key-fill:1;background:#20252d}}
 
 </style>
 
 <style>
-.mobile-text-backdrop{z-index:90;background:#070a10b0}
-.mobile-text-sheet{--text-safe-top:var(--mobile-safe-top,var(--ui-safe-top));--text-safe-bottom:var(--mobile-safe-bottom,var(--ui-safe-bottom));left:calc(var(--mobile-left,0px) + (var(--mobile-width,var(--ui-viewport-width)) + var(--ui-safe-left) - var(--ui-safe-right))/2);top:calc(var(--dialog-top) + (var(--dialog-height) + var(--text-safe-top) - var(--text-safe-bottom))/2);width:min(600px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px - var(--ui-safe-left) - var(--ui-safe-right)));height:min(520px,calc(var(--dialog-height) - 24px - var(--text-safe-top) - var(--text-safe-bottom)));max-width:none;max-height:none;min-height:0;overflow:hidden;overscroll-behavior:contain;z-index:91}
+.mobile-text-backdrop{background:#070a10b0}
+.mobile-text-sheet{--text-safe-top:var(--mobile-safe-top,var(--ui-safe-top));--text-safe-bottom:var(--mobile-safe-bottom,var(--ui-safe-bottom));left:calc(var(--mobile-left,0px) + (var(--mobile-width,var(--ui-viewport-width)) + var(--ui-safe-left) - var(--ui-safe-right))/2);top:calc(var(--dialog-top) + (var(--dialog-height) + var(--text-safe-top) - var(--text-safe-bottom))/2);width:min(600px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px - var(--ui-safe-left) - var(--ui-safe-right)));height:min(520px,calc(var(--dialog-height) - 24px - var(--text-safe-top) - var(--text-safe-bottom)));max-width:none;max-height:none;min-height:0;overflow:hidden;overscroll-behavior:contain;}
 .mobile-text-status{display:flex;flex:1;align-items:center;justify-content:center;gap:8px;padding:12px;color:#a0adbf;font-size:13px}
 .mobile-text-sheet textarea{display:block;flex:1;min-height:0;resize:none;width:100%;padding:12px;margin:0;color:#d7dce5;border:0;border-radius:0;outline:none;box-shadow:none;background:#15191f;font-family:var(--content-font-family,monospace);font-feature-settings:var(--content-font-features,normal);font-size:16px;line-height:1.5;white-space:pre-wrap;overflow:auto;user-select:text;-webkit-user-select:text;touch-action:pan-y;-webkit-touch-callout:default}
 </style>

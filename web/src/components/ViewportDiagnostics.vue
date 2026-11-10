@@ -9,7 +9,7 @@ import { collectViewportDiagnostics } from '../viewport-diagnostics'
 import { viewportFit, interactiveWidget, viewportReloadRequired } from '../developer-mode'
 import Icon from './Icon.vue'
 
-const props = defineProps<{ settings?: GlobalSettings | null; portal?: HTMLElement; reloadBlocked?: boolean }>()
+const props = defineProps<{ settings?: GlobalSettings | null; reloadBlocked?: boolean }>()
 const { t } = useI18n()
 const open = ref(false)
 const toolbar = ref<HTMLElement>()
@@ -68,7 +68,7 @@ onBeforeUnmount(() => {
 <template>
   <div ref="toolbar" class="debug-toolbar" @pointerdown.stop @click.stop>
     <button class="viewport-diagnostics" type="button" :aria-label="t('terminal.copyDiagnostics')" @pointerdown.prevent @click="copy">{{ t('terminal.copyDiagnostics') }}</button>
-    <UPopover v-model:open="open" :modal="false" :portal="portal || false"
+    <UPopover v-model:open="open" :modal="false"
       :content="popoverContent"
       :ui="{ content: 'debug-settings-popover' }">
       <UButton type="button" color="neutral" variant="ghost" class="debug-settings-trigger" :aria-label="t('settings.adjustAdvanced')" :title="t('settings.adjustAdvanced')" @pointerdown.prevent><Icon name="settings" :size="15" /></UButton>
@@ -95,7 +95,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.debug-toolbar{position:fixed;top:calc(max(8px,var(--mobile-safe-top,var(--ui-safe-top))) + 44px);left:50%;transform:translateX(-50%);z-index:120;display:flex;max-width:calc(var(--mobile-width,var(--ui-viewport-width)) - 16px);border:1px solid #46505b;border-radius:6px;background:#23272ef2;color:#c6ced8;font-size:11px;box-shadow:0 3px 12px #0003}
+.debug-toolbar{position:fixed;top:calc(max(8px,var(--mobile-safe-top,var(--ui-safe-top))) + 44px);left:50%;transform:translateX(-50%);display:flex;max-width:calc(var(--mobile-width,var(--ui-viewport-width)) - 16px);border:1px solid #46505b;border-radius:6px;background:#23272ef2;color:#c6ced8;font-size:11px;box-shadow:0 3px 12px #0003}
 .viewport-diagnostics{position:relative;min-height:32px;padding:4px 10px;white-space:nowrap}
 .debug-settings-trigger{display:flex;align-items:center;justify-content:center;flex:0 0 32px;width:32px;min-height:32px;padding:0;border:0;border-left:1px solid #46505b;border-radius:0 5px 5px 0;color:#9ba8b9;background:transparent}
 .viewport-diagnostics:hover,.debug-settings-trigger:hover,.debug-settings-trigger[data-state=open]{background:#ffffff08;color:#e1e7ef}
@@ -105,14 +105,14 @@ onBeforeUnmount(() => {
 .debug-setting-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
 .debug-widget-options{grid-template-columns:minmax(0,1fr)}
 .debug-setting-options button{justify-content:center;min-height:36px;padding:6px 4px;border:1px solid #414b59;border-radius:5px;background:#1c222a;color:#aeb9c9;font-size:11px;white-space:nowrap}
-.debug-setting-options button[aria-pressed=true]{border-color:#a78770;background:#e9b18812;color:#e9c9b0}
+.debug-setting-options button[aria-pressed=true]{border-color:#a78770;background:color-mix(in srgb,var(--ui-primary) 7%,transparent);color:#e9c9b0}
 .debug-setting-options button:hover{background:#ffffff08}
 .debug-reload-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
 .debug-reload-row>span{color:#ac9988;font-size:11px}
 .debug-reload{justify-content:center;min-height:36px;padding:0 10px;border:1px solid #414b59;border-radius:5px;background:#1c222a;color:#aeb9c9;font-size:11px}
 .debug-reload:hover{background:#ffffff08;color:#e1e7ef}
 .debug-bounds-toggle{justify-self:start}
-.debug-bounds-toggle[aria-pressed=true]{border-color:#a78770;background:#e9b18812;color:#e9c9b0}
+.debug-bounds-toggle[aria-pressed=true]{border-color:#a78770;background:color-mix(in srgb,var(--ui-primary) 7%,transparent);color:#e9c9b0}
 /* Native top layer escapes ancestor clipping. Eight pixels inside the CSS
    viewport are the positive control; the remaining stripe tests its boundary. */
 .viewport-bounds-probe{zoom:calc(1 / var(--ui-zoom));position:fixed;inset:calc(100dvh - 8px) auto auto 0;width:100dvw;height:72px;max-width:none;max-height:none;margin:0;padding:0;border:0;pointer-events:none;background:repeating-linear-gradient(135deg,#00e5ff 0 8px,#ff2da4 8px 16px);box-shadow:none;overflow:clip}

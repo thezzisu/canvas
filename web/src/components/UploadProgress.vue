@@ -16,7 +16,7 @@ const percentage = computed(() => props.total ? Math.min(100, Math.floor((props.
       <span class="file-transfer-name" :title="name">{{ name }}<slot /></span>
       <small v-if="queued">+{{ queued }}</small>
       <span class="file-transfer-status" :class="{ 'file-transfer-message': !name }" :role="failed ? 'alert' : 'status'">{{ status }}</span>
-      <UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-x" :aria-label="active ? t('terminal.upload.cancel') : t('terminal.upload.close')" :disabled="cancelling" @pointerdown.prevent @click.stop="emit('cancel')" />
+      <UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-x" :aria-label="active ? t('terminal.upload.cancel') : t('terminal.upload.close')" :title="active ? t('terminal.upload.cancel') : t('terminal.upload.close')" :disabled="cancelling" @pointerdown.prevent @click.stop="emit('cancel')" />
     </div>
     <UProgress v-if="active" :model-value="percentage" size="2xs" :aria-label="t('terminal.upload.progress')" />
   </div>

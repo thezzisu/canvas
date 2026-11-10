@@ -10,7 +10,7 @@ export function validateInboxFile(value: InboxFile): void {
       value.name === "." || value.name === ".." ||
       Buffer.from(value.name).toString() !== value.name ||
       !Number.isSafeInteger(value.size) || value.size < 0)
-    throw new Error("文件名或大小无效");
+    throw new Error("invalidFile");
 }
 
 // The same bounded streaming writer runs locally and over the source's SSH
@@ -96,17 +96,17 @@ export async function writeInboxFile(source: Source, file: InboxFile, bytes: Asy
     if (settled) return;
     settled = true; clearTimeout(timer); stop(); reject(error);
   };
-  const renew = () => { clearTimeout(timer); timer = setTimeout(() => fail(new Error("上传超时")), 60_000); timer.unref(); };
-  const abort = () => fail(new Error("上传已取消"));
+  const renew = () => { clearTimeout(timer); timer = setTimeout(() => fail(new Error("timeout")), 60_000); timer.unref(); };
+  const abort = () => fail(new Error("cancelled"));
   signal.addEventListener("abort", abort, { once: true });
-  child.stdin.on("error", () => fail(new Error("上传连接中断")));
-  child.on("error", () => fail(new Error("无法连接目标机器")));
+  child.stdin.on("error", () => fail(new Error("interrupted")));
+  child.on("error", () => fail(new Error("unreachable")));
   child.stderr.on("data", () => {});
   child.stdout.on("data", (chunk: Buffer) => {
     output += chunk.toString("utf8");
     while (output.includes("\n")) {
       const end = output.indexOf("\n"), line = output.slice(0, end); output = output.slice(end + 1);
-      if (line.length > 32768) { fail(new Error("无效的上传响应")); return; }
+      if (line.length > 32768) { fail(new Error("invalidResponse")); return; }
       try {
         const message = JSON.parse(line);
         if (message.ready === true) { if (!settled) renew(); }
@@ -116,9 +116,9 @@ export async function writeInboxFile(source: Source, file: InboxFile, bytes: Asy
         } else if (typeof message.path === "string" && message.path.startsWith("/") &&
             !/[\x00-\x1f\x7f]/u.test(message.path) && message.path.endsWith("_" + file.name)) path = message.path;
         else throw new Error();
-      } catch { fail(new Error("无效的上传响应")); }
+      } catch { fail(new Error("invalidResponse")); }
     }
-    if (output.length > 32768) fail(new Error("无效的上传响应"));
+    if (output.length > 32768) fail(new Error("invalidResponse"));
   });
   child.once("close", code => {
     clearTimeout(timer); clearTimeout(killing); signal.removeEventListener("abort", abort);
@@ -132,7 +132,7 @@ export async function writeInboxFile(source: Source, file: InboxFile, bytes: Asy
     if (code === 0 && path && received === file.size) resolve(path);
     else {
       if (path) void removeInboxFiles(source, [path]).catch(() => {});
-      reject(new Error("文件上传失败"));
+      reject(new Error("failed"));
     }
   });
   renew();
@@ -143,16 +143,16 @@ export async function writeInboxFile(source: Source, file: InboxFile, bytes: Asy
         signal.throwIfAborted();
         if (settled) return await result;
         sent += chunk.byteLength;
-        if (sent > file.size) throw new Error("上传大小不符");
+        if (sent > file.size) throw new Error("sizeMismatch");
         await new Promise<void>((ok, fail) => child.stdin.write(chunk, error => error ? fail(error) : ok()));
       }
-      if (sent !== file.size) throw new Error("上传不完整");
+      if (sent !== file.size) throw new Error("incomplete");
       child.stdin.end();
       return await result;
     })();
     return await Promise.race([result, sending]);
   } catch (error) {
-    fail(error instanceof Error ? error : new Error("文件上传失败"));
+    fail(error instanceof Error ? error : new Error("failed"));
     return await result;
   }
 }
@@ -162,8 +162,8 @@ export async function removeInboxFiles(source: Source, paths: string[]): Promise
   const command = sourcePythonCommand(source, inboxPython, ["remove", JSON.stringify(paths)]);
   await new Promise<void>((resolve, reject) => {
     const child = spawn(command.file, command.args, { env: command.env, stdio: "ignore" });
-    const timer = setTimeout(() => { child.kill(); reject(new Error("无法清理取消的上传")); }, 15_000); timer.unref();
+    const timer = setTimeout(() => { child.kill(); reject(new Error("cleanupFailed")); }, 15_000); timer.unref();
     child.once("error", error => { clearTimeout(timer); reject(error); });
-    child.once("close", code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error("无法清理取消的上传")); });
+    child.once("close", code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error("cleanupFailed")); });
   });
 }

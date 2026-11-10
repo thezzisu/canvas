@@ -4,4 +4,7 @@
 @import "@nuxt/ui";
 @source "../../vite.config.ts";
 
-:root { --ui-primary: #e9b188; }
+:root {
+  /* Canvas brand: one primary token; cards override it with their own color. */
+  --ui-primary: #e9b188;
+}

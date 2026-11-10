@@ -10,7 +10,7 @@ import { activeInstance } from '../instances'
 import { formatInstanceLink } from '../instance-url'
 import InstanceQrShare from './InstanceQrShare.vue'
 
-const props = defineProps<{ open: boolean; username: string; portal?: HTMLElement }>()
+const props = defineProps<{ open: boolean; username: string }>()
 const emit = defineEmits<{ close: []; saved: [username: string] }>()
 const { t } = useI18n()
 const formId = useId()
@@ -56,7 +56,7 @@ async function save() {
 </script>
 
 <template>
-  <UModal :open="open" :portal="portal || false" :title="t(sharing ? 'account.shareQr' : 'account.title')" :dismissible="!saving"
+  <UModal :open="open" :title="t(sharing ? 'account.shareQr' : 'account.title')" :dismissible="!saving"
     :close="{ 'aria-label': t('common.close'), disabled: saving }" :ui="{ content: 'account-dialog', overlay: 'app-dialog-overlay' }" @update:open="value => { if (!value) close() }">
     <template #body>
       <InstanceQrShare v-if="sharing" :link="shareLink" :name="activeInstance.name" :base="activeInstance.base" :username="username" />
@@ -83,7 +83,7 @@ async function save() {
 </template>
 
 <style>
-.account-dialog{z-index:50;width:min(420px,calc(var(--mobile-width,var(--ui-viewport-width)) - 28px));max-height:calc(var(--dialog-height) - 32px)}
+.account-dialog{width:min(420px,calc(var(--mobile-width,var(--ui-viewport-width)) - 28px));max-height:calc(var(--dialog-height) - 32px)}
 .account-form{display:flex;flex-direction:column;gap:16px}.account-form label,.account-form input{margin-top:0}.account-form input{font-size:13px}
 .account-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;width:100%}.account-share-button{margin-right:auto;align-self:stretch;min-width:32px;justify-content:center}.account-session-hint{font-size:11px;color:#96a0af;line-height:1.5}.account-error{font-size:12px;color:#e0aaa5}
 </style>

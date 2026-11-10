@@ -49,3 +49,23 @@ test('one language preference drives application messages, status labels and Nux
   assert.equal(statusLabel('working'), 'Running')
   assert.equal(t('settings.developerAdvanced'), 'Advanced developer settings')
 })
+
+test('server transfer codes are localized and every code the server sends has a message', async context => {
+  const { transferError } = await import('./transfer-error.ts')
+  const { readFileSync } = await import('node:fs')
+  const previous = locale.value
+  context.after(() => { locale.value = previous })
+  const server = ['uploads.ts', 'composer-send.ts', 'inbox.ts', 'terminals.ts'].map(name => readFileSync(new URL(`../../server/${name}`, import.meta.url), 'utf8')).join('\n')
+  const codes = new Set([...server.matchAll(/(?:new Error\(|fail\(|this\.fail\(batch, )"([a-zA-Z]+)"/g)].map(match => match[1]!))
+  assert(codes.size > 10)
+  for (const locale of ['en', 'zh-CN'] as const) {
+    const messages = flatten(i18n.global.getLocaleMessage(locale))
+    for (const code of codes) assert(messages[`terminal.upload.errors.${code}`], `${locale} translates ${code}`)
+  }
+  locale.value = 'en'
+  assert.equal(transferError('draftChanged'), 'The draft changed on another device')
+  assert.equal(transferError(undefined), 'Transfer failed')
+  assert.equal(transferError('plain native message'), 'plain native message')
+  locale.value = 'zh-CN'
+  assert.equal(transferError('windowClosed'), '目标窗口已关闭')
+})

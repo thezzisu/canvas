@@ -22,7 +22,6 @@ const panel = ref<HTMLElement>()
 const open = ref(false)
 const pinned = ref(false)
 const panelId = useId()
-const portal = computed(() => trigger.value?.closest<HTMLElement>('.app-shell') || document.body)
 let leaveTimer: ReturnType<typeof setTimeout> | undefined
 const summary = computed(() => props.connection === 'closed' ? t('terminal.closed') : !props.available ? t('terminal.unavailable') : props.connection === 'connecting' ? t('terminal.connection.connecting') : props.connection === 'disconnected' ? t('terminal.connection.disconnected') : statusLabel(props.status))
 const color = computed(() => props.connection === 'closed' ? statusColor('unknown') : !props.available || props.connection === 'disconnected' ? statusColor('error') : props.connection === 'connecting' ? statusColor('working') : statusColor(props.status))
@@ -63,7 +62,7 @@ onBeforeUnmount(() => clearTimeout(leaveTimer))
 
 <template>
   <button ref="trigger" class="terminal-status-trigger nodrag cutout-status" :style="{ '--status-color': color }" :data-connection-status="available ? connection : 'unavailable'" :aria-label="t('terminal.statusSummary', { status: summary })" :aria-expanded="open" :aria-controls="panelId" @pointerdown.stop @mouseenter="enter" @mouseleave="leave" @focus="enter" @blur="blur" @click.stop="toggle" @keydown.esc.stop.prevent="close"><i :data-status-pulse="live && needsAttention(status)" /></button>
-  <UPopover :open="open" :reference="trigger" :portal="portal" :content="content" :ui="{ content: 'terminal-status-popover' }" @update:open="value => { if (!value) close() }">
+  <UPopover :open="open" :reference="trigger" :content="content" :ui="{ content: 'terminal-status-popover' }" @update:open="value => { if (!value) close() }">
     <template #content><div :id="panelId" ref="panel" role="region" :aria-label="t('terminal.windowStatus')" @pointerdown.stop @wheel.stop @keydown.esc.stop.prevent="close">
       <div class="terminal-status-summary"><i class="program-dot" :data-status-pulse="live && needsAttention(status)" :style="{ '--program-color': color }" /><span>{{ summary }}</span><small v-if="readOnly && connection === 'connected'">{{ t('terminal.readOnly') }}</small></div>
       <p v-if="error" class="terminal-status-error">{{ error }}</p>

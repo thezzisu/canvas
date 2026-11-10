@@ -21,7 +21,6 @@ const open = ref(false), loading = ref(false), failed = ref(false), busy = ref(f
 const pane = shallowRef<PaneContext>(), menu = shallowRef<HTMLElement>()
 const point = ref({ x: 0, y: 0 }), name = ref(''), error = ref('')
 const dialog = shallowRef<{ kind: 'rename' | 'close'; pane: PaneContext }>()
-const portal = computed(() => props.host?.closest<HTMLElement>('.app-shell') || document.body)
 const dismiss = usePointerDismiss(open, menu)
 let request: AbortController | undefined
 let mounted = true
@@ -90,8 +89,8 @@ const content = computed(() => ({ reference: { getBoundingClientRect: () => new 
 </script>
 
 <template>
-  <UContextMenu v-model:open="open" :items="items" :modal="false" :portal="portal" :content="content" :ui="{ content: 'pane-context-menu' }" />
-  <UModal :open="!!dialog" :portal="portal" :title="t(dialog?.kind === 'rename' ? 'terminal.paneMenu.rename' : 'terminal.paneMenu.close')" :dismissible="!busy"
+  <UContextMenu v-model:open="open" :items="items" :modal="false" :content="content" :ui="{ content: 'pane-context-menu' }" />
+  <UModal :open="!!dialog" :title="t(dialog?.kind === 'rename' ? 'terminal.paneMenu.rename' : 'terminal.paneMenu.close')" :dismissible="!busy"
     :close="{ 'aria-label': t('common.close'), disabled: busy }" :ui="{ content: 'pane-dialog', overlay: 'app-dialog-overlay' }" @update:open="value => { if (!value && !busy) dialog = undefined }">
     <template #body>
       <form :id="form" @submit.prevent="submit">
@@ -108,7 +107,7 @@ const content = computed(() => ({ reference: { getBoundingClientRect: () => new 
 </template>
 
 <style>
-.pane-context-menu{z-index:45;width:192px;max-width:calc(var(--ui-viewport-width) - 16px)}.pane-dialog{z-index:50;width:min(380px,calc(var(--ui-viewport-width) - 28px));max-height:calc(var(--mobile-height,var(--ui-viewport-height)) - 32px)}
+.pane-context-menu{width:192px;max-width:calc(var(--ui-viewport-width) - 16px)}.pane-dialog{width:min(380px,calc(var(--ui-viewport-width) - 28px));max-height:calc(var(--mobile-height,var(--ui-viewport-height)) - 32px)}
 .pane-dialog label,.pane-dialog input{margin-top:0}.pane-dialog p{font-size:13px}.pane-action-error{color:#e0aaa5;margin-top:12px}
 .pane-dialog-actions{display:flex;justify-content:flex-end;gap:8px;width:100%}
 </style>

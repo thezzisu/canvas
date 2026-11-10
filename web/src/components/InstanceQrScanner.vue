@@ -7,7 +7,7 @@ import UButton from '@nuxt/ui/components/Button.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import type QrScanner from 'qr-scanner'
 
-const props = defineProps<{ open: boolean; accept: (text: string) => boolean; portal?: HTMLElement }>()
+const props = defineProps<{ open: boolean; accept: (text: string) => boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const { t } = useI18n()
 const visibility = useDocumentVisibility()
@@ -70,7 +70,7 @@ onBeforeUnmount(() => { fileAttempt++ })
 </script>
 
 <template>
-  <UModal :open="open" :portal="portal || false" :title="t('instances.scanQr')" :close="{ 'aria-label': t('common.close') }"
+  <UModal :open="open" :title="t('instances.scanQr')" :close="{ 'aria-label': t('common.close') }"
     :ui="{ content: 'instance-qr-dialog', overlay: 'instance-qr-overlay' }" @update:open="value => { if (!value) emit('close') }">
     <template #body>
       <div class="instance-qr-body">
@@ -96,7 +96,7 @@ onBeforeUnmount(() => { fileAttempt++ })
 </template>
 
 <style>
-.instance-qr-overlay{z-index:95}.instance-qr-dialog{z-index:96;--qr-safe-top:max(16px,var(--ui-safe-top));--qr-safe-bottom:max(16px,var(--ui-safe-bottom));top:calc(var(--dialog-top) + (var(--dialog-height) + var(--qr-safe-top) - var(--qr-safe-bottom))/2);width:min(420px,calc(var(--mobile-width,var(--ui-viewport-width)) - 28px));max-height:calc(var(--dialog-height) - var(--qr-safe-top) - var(--qr-safe-bottom))}
+.instance-qr-overlay{}.instance-qr-dialog{--qr-safe-top:max(16px,var(--ui-safe-top));--qr-safe-bottom:max(16px,var(--ui-safe-bottom));top:calc(var(--dialog-top) + (var(--dialog-height) + var(--qr-safe-top) - var(--qr-safe-bottom))/2);width:min(420px,calc(var(--mobile-width,var(--ui-viewport-width)) - 28px));max-height:calc(var(--dialog-height) - var(--qr-safe-top) - var(--qr-safe-bottom))}
 .instance-qr-body{display:flex;flex-direction:column;gap:12px}.instance-qr-camera{position:relative;overflow:hidden;aspect-ratio:1;border:1px solid var(--border);border-radius:8px;background:#101216}
 .instance-qr-camera video{display:block;width:100%;height:100%;object-fit:cover}.instance-qr-camera-status{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#96a0af;font-size:12px;background:#101216}
 .instance-qr-camera-status>span:first-child{width:30px;height:30px}.instance-qr-hint,.instance-qr-error{margin:0;font-size:12px;line-height:1.5}.instance-qr-hint{color:#96a0af}.instance-qr-error{color:#e0aaa5}.instance-qr-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%}

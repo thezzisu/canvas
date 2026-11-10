@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UButton from '@nuxt/ui/components/Button.vue'
 import { useI18n } from 'vue-i18n'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { NodeProps } from '@vue-flow/core'
@@ -129,7 +130,7 @@ const size = computed(() => {
         @add="data.onAction?.('add', id)" @toggle="data.onAction?.(data.focus ? 'unfocus' : 'focus', id)" @remove="data.onRemove(id)">
         <template v-for="key in textShortcuts" :key="key" #[key]><TextPreviewActions :only="key" :filename="data.asset.filename" v-model:rendered="rendered" v-model:wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :source-preview="data.asset.sourcePreview" :preview-busy="previewBusy" @preview="previewSite" /></template>
         <template #zoom><ContentZoom v-model="zoom" :mobile="data.mobile" :label="t('common.contentZoom')" /></template>
-        <template #copy><button type="button" class="card-header-action file-copy" draggable="true" :title="t('fileTransfer.copyOrDrag')" :aria-label="t('fileTransfer.copy')" @pointerdown.stop @click="copyFile" @dragstart="dragFile"><Icon name="copy" :size="15" /></button></template>
+        <template #copy><UButton class="file-copy" draggable="true" :title="t('fileTransfer.copyOrDrag')" :aria-label="t('fileTransfer.copy')" @pointerdown.stop @click="copyFile" @dragstart="dragFile"><Icon name="copy" :size="15" /></UButton></template>
       </CardHeaderActions>
     </header>
     <div ref="fileBody" class="file-body card-content nodrag nopan" :style="{ '--content-zoom': data.focus ? zoom / 100 : 1 }" :data-content-active="contentActive" :tabindex="mobilePreview ? -1 : 0" :aria-label="data.asset.filename" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.capture="contentPointerDown" @pointerdown.stop @dblclick.stop>

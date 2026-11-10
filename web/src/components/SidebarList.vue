@@ -61,5 +61,5 @@ function keydown(event: KeyboardEvent) {
 <style scoped>
 .sidebar-sortable-ghost :deep(button),.sidebar-sortable-drag :deep(button){cursor:grabbing}
 .sidebar-sortable-ghost{opacity:.3}
-.sidebar-sortable-chosen{background:#e9b1880a;border-radius:5px}
+.sidebar-sortable-chosen{background:color-mix(in srgb,var(--ui-primary) 4%,transparent);border-radius:5px}
 </style>

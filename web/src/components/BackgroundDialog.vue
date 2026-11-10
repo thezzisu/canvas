@@ -9,7 +9,7 @@ import { useBackgroundUrl } from '../backgrounds'
 
 const { t, n } = useI18n()
 
-const props = defineProps<{ canvas: Canvas; portal?: HTMLElement }>()
+const props = defineProps<{ canvas: Canvas }>()
 const emit = defineEmits<{ close: []; saved: [canvas: Canvas] }>()
 const picker = ref<HTMLInputElement>()
 const chooseButton = ref<HTMLButtonElement>()
@@ -72,7 +72,7 @@ onBeforeUnmount(() => { disposed = true; selection++; clearObjectUrl() })
 </script>
 
 <template>
-  <UModal :open="true" :title="t('panels.background.title')" :portal="portal || false" :dismissible="!saving" :transition="false" :close="false" :ui="{ content: 'app-dialog-shell', overlay: 'app-dialog-overlay' }" :content="{ onOpenAutoFocus: (event: Event) => { event.preventDefault(); chooseButton?.focus() } }" @update:open="value => { if (!value) close() }">
+  <UModal :open="true" :title="t('panels.background.title')" :dismissible="!saving" :transition="false" :close="false" :ui="{ content: 'app-dialog-shell', overlay: 'app-dialog-overlay' }" :content="{ onOpenAutoFocus: (event: Event) => { event.preventDefault(); chooseButton?.focus() } }" @update:open="value => { if (!value) close() }">
     <template #content><section class="modal background-modal" :aria-busy="saving">
       <header><h2 id="background-title">{{ t('panels.background.title') }}</h2><button class="icon-button" :aria-label="t('common.close')" :disabled="saving" @click="close"><Icon name="close" /></button></header>
       <div class="background-preview" :class="{ 'has-image': preview }">

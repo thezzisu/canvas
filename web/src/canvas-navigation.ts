@@ -22,7 +22,6 @@ export function useCanvasNavigation(options: {
   paging?: { enabled(): boolean; canMove(direction: PageDirection): boolean; move(direction: PageDirection): void; recenter(animate?: boolean): Promise<unknown> }
 }) {
   const surface = ref<HTMLElement>()
-  const app = ref<HTMLElement>()
   const fullscreen = ref(false)
   let layoutTouch: { id: number; x: number; y: number; moved: boolean; ended?: boolean } | undefined
   let previous: { canvasId: string; viewport: Viewport; width: number; height: number; frame?: CanvasFrame } | undefined
@@ -200,14 +199,25 @@ export function useCanvasNavigation(options: {
     }
   }
 
+  /**
+   * Card content scrolls natively once its card holds focus: the active body itself,
+   * or another content region of the same card such as a terminal's composer.
+   * Unfocused cards never capture the canvas wheel.
+   */
+  function contentOwnsWheel(body: HTMLElement) {
+    const focus = document.activeElement
+    if (!document.hasFocus() || !focus || body.closest('[inert]')) return false
+    if (body.dataset.contentActive === 'true' && body.contains(focus)) return true
+    const card = body.closest('.terminal-card, .note-card, .file-card')
+    return !!card?.contains(focus) && !body.querySelector('.card-content-activate')
+  }
   function wheel(event: WheelEvent) {
     if (options.blocked() || !surface.value) { cancelFeedback(false); return }
     const target = event.target instanceof Element ? event.target : undefined
     if (target?.closest('.vue-flow__minimap, .canvas-toolbar')) return
     const body = target?.closest<HTMLElement>('.card-content')
     const active = !event.ctrlKey && body && (body.classList.contains('terminal-host')
-      ? terminalConsumesWheel(event)
-      : body.dataset.contentActive === 'true' && body.contains(document.activeElement) && document.hasFocus())
+      ? terminalConsumesWheel(event) : contentOwnsWheel(body))
     const owner = wheelOwner.resolve(active ? body : null, performance.now(), event.ctrlKey)
     if (owner) {
       cancelFeedback()
@@ -288,7 +298,7 @@ export function useCanvasNavigation(options: {
     changing = true
     try {
       if (fullscreen.value) { await exitFullscreen(); return }
-      if (!surface.value || !app.value) return
+      if (!surface.value) return
       cancelFeedback(false)
       options.beforeFullscreen()
       previous = { canvasId: options.getCanvasId(), viewport: { ...options.getViewport() }, width: surface.value.clientWidth, height: surface.value.clientHeight,
@@ -301,7 +311,7 @@ export function useCanvasNavigation(options: {
         await document.documentElement.requestFullscreen?.({ navigationUI: 'hide' })
         if (document.fullscreenElement !== document.documentElement) throw new Error('Fullscreen unavailable')
       } catch { options.onError(t('app.fullscreenDenied')) }
-      if (!fullscreen.value || !app.value) { await exitFullscreen(); return }
+      if (!fullscreen.value) { await exitFullscreen(); return }
       await settle()
       if (fullscreen.value && options.paging?.enabled()) await options.paging.recenter()
       else if (previous && fullscreen.value) await options.setViewport({ ...previous.viewport,
@@ -347,5 +357,5 @@ export function useCanvasNavigation(options: {
     window.removeEventListener('keydown', escape, true)
     window.removeEventListener('blur', blurPaging)
   })
-  return { surface, app, fullscreen, resetPagingFeedback, wheel, touchStart, touchMove, touchEnd, touchCancel, click, toggleFullscreen, exitFullscreen }
+  return { surface, fullscreen, resetPagingFeedback, wheel, touchStart, touchMove, touchEnd, touchCancel, click, toggleFullscreen, exitFullscreen }
 }

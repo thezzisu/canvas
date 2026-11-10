@@ -4,7 +4,6 @@ import { useI18n } from 'vue-i18n'
 import USelect from '@nuxt/ui/components/Select.vue'
 import { languagePreference } from '../i18n'
 
-defineProps<{ portal?: HTMLElement }>()
 const { t } = useI18n()
 const items = computed(() => [
   { value: 'system', label: t('common.systemLanguage') },
@@ -14,7 +13,6 @@ const items = computed(() => [
 </script>
 
 <template>
-  <USelect v-model="languagePreference" :items="items" :portal="portal || false" color="neutral" size="sm"
-    class="settings-select language-select" :aria-label="t('common.language')"
-    :ui="{ content: 'settings-select-menu', item: 'settings-select-item' }" />
+  <USelect v-model="languagePreference" :items="items" color="neutral" size="sm"
+    class="w-36" :aria-label="t('common.language')" />
 </template>

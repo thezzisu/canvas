@@ -49,12 +49,12 @@ function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; b
     for await (const chunk of bytes) {
       signal.throwIfAborted();
       size += chunk.byteLength;
-      if (size > file.size) throw new Error("上传大小不符");
+      if (size > file.size) throw new Error("sizeMismatch");
       chunks.push(Buffer.from(chunk));
       progress(size);
     }
     signal.throwIfAborted();
-    if (size !== file.size) throw new Error("上传不完整");
+    if (size !== file.size) throw new Error("incomplete");
     const path = `${options.inbox ?? "/fixture/.local/share/canvas/inbox"}/${(++serial).toString(16).padStart(8, "0")}_${file.name}`;
     files.set(path, Buffer.concat(chunks));
     return path;
@@ -66,7 +66,7 @@ function fixture(t: TestContext, options: { beforeWrite?: () => Promise<void>; b
       if (!canCapture) return undefined;
       return async (segments: readonly PasteSegment[]) => {
         await options.beforePaste?.();
-        if (pasteFails) throw new Error("目标窗口已关闭");
+        if (pasteFails) throw new Error("windowClosed");
         pasteCalls.push(segments.map(segment => segment.text));
         pasted.push(...segments.map(({ text }) => ({ sourceId, windowId, text })));
       };
@@ -207,7 +207,7 @@ test("expanded rich paths cannot exceed the native input limit or report a disca
   assert.deepEqual(f.pasted, []);
   assert.equal(f.files.size, 1);
   assert.equal(f.socket.messages.at(-1)?.state, "failed");
-  assert.equal(f.socket.messages.at(-1)?.error, "粘贴内容过长");
+  assert.equal(f.socket.messages.at(-1)?.error, "tooLarge");
 });
 
 test("upload tokens reject other sessions, out-of-order writes and replays", async t => {
@@ -296,7 +296,7 @@ test("closed native windows and failed paste callbacks retain complete files wit
     assert.deepEqual([...f.files.values()], [Buffer.from('one')]);
     assert.deepEqual(f.removed, []);
     assert.deepEqual(f.pasted, []);
-    assert.match(f.socket.messages.at(-1)?.error, /目标窗口已关闭/u);
+    assert.match(f.socket.messages.at(-1)?.error, /windowClosed/u);
   }
 });
 

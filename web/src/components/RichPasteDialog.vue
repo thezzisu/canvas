@@ -9,7 +9,6 @@ import { buildRichPaste, type RichPasteOptions } from '../rich-paste'
 import { richPasteRequest } from '../rich-paste-dialog'
 import { MAX_PASTE_PARTS, MAX_UPLOAD_BEGIN_BYTES } from '../../../shared/paste'
 
-defineProps<{ portal?: HTMLElement }>()
 const { t } = useI18n()
 const text = ref<RichPasteOptions['text']>('markdown')
 const attachments = ref<RichPasteOptions['attachments']>('markdown')
@@ -43,8 +42,8 @@ const content = { onCloseAutoFocus: (event: Event) => event.preventDefault(), on
 </script>
 
 <template>
-  <UModal v-if="richPasteRequest" :open="true" :transition="false" :title="t('terminal.richPaste.title')" :description="undefined" :portal="portal || false" :content="content"
-    :close="{ 'aria-label': t('common.close') }" :ui="{ content: 'rich-paste-modal', overlay: 'z-[74]', body: 'rich-paste-body', footer: 'justify-end gap-2' }" @update:open="close">
+  <UModal v-if="richPasteRequest" :open="true" :transition="false" :title="t('terminal.richPaste.title')" :description="undefined" :content="content"
+    :close="{ 'aria-label': t('common.close') }" :ui="{ content: 'rich-paste-modal', body: 'rich-paste-body', footer: 'justify-end gap-2' }" @update:open="close">
     <template #body>
       <div class="rich-paste-options">
         <UFormField :label="t('terminal.richPaste.body')"><UTabs v-model="text" :items="bodyItems" :content="false" size="sm" :aria-label="t('terminal.richPaste.body')" /></UFormField>
@@ -61,7 +60,7 @@ const content = { onCloseAutoFocus: (event: Event) => event.preventDefault(), on
 </template>
 
 <style>
-.rich-paste-modal{--paste-safe-top:var(--mobile-safe-top,var(--ui-safe-top));--paste-safe-bottom:var(--mobile-safe-bottom,var(--ui-safe-bottom));position:fixed;z-index:75;left:calc(var(--mobile-left,0px) + (var(--mobile-width,var(--ui-viewport-width)) + var(--ui-safe-left) - var(--ui-safe-right))/2);top:calc(var(--dialog-top) + (var(--dialog-height) + var(--paste-safe-top) - var(--paste-safe-bottom))/2);translate:-50% -50%;width:min(640px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px - var(--ui-safe-left) - var(--ui-safe-right)));max-width:none;max-height:calc(var(--dialog-height) - 24px - var(--paste-safe-top) - var(--paste-safe-bottom));overflow:hidden}
+.rich-paste-modal{--paste-safe-top:var(--mobile-safe-top,var(--ui-safe-top));--paste-safe-bottom:var(--mobile-safe-bottom,var(--ui-safe-bottom));position:fixed;left:calc(var(--mobile-left,0px) + (var(--mobile-width,var(--ui-viewport-width)) + var(--ui-safe-left) - var(--ui-safe-right))/2);top:calc(var(--dialog-top) + (var(--dialog-height) + var(--paste-safe-top) - var(--paste-safe-bottom))/2);translate:-50% -50%;width:min(640px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px - var(--ui-safe-left) - var(--ui-safe-right)));max-width:none;max-height:calc(var(--dialog-height) - 24px - var(--paste-safe-top) - var(--paste-safe-bottom));overflow:hidden}
 .rich-paste-body{min-height:0;overflow:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:16px}
 .rich-paste-options{display:flex;flex-wrap:wrap;gap:12px 20px}.rich-paste-options>div{min-width:0;flex:1 1 auto}
 .rich-paste-preview{margin:0;min-height:120px;max-height:45dvh;flex-shrink:0;overflow:auto;overscroll-behavior:contain;white-space:pre-wrap;overflow-wrap:anywhere;tab-size:4;border:1px solid var(--border);border-radius:8px;padding:14px;background:#15171b;font-family:var(--content-font-family);font-feature-settings:var(--content-font-features);font-size:13px;line-height:1.7;color:#d5d7dd;user-select:text}

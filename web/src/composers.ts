@@ -3,6 +3,7 @@ import { api, apiContext, apiRevision, isCurrentApi, segment } from './api'
 import { insertNoteContent } from './note-document'
 import type { NoteInsertion, NoteOwner } from './note-uploads'
 import type { ComposerView } from './types'
+export { composerHasContent, sentFiles } from './composer-content'
 
 export interface ComposerTarget { sourceId: string; windowId: string }
 const key = (target: ComposerTarget) => `${target.sourceId}/${target.windowId}`
@@ -23,8 +24,6 @@ watch(apiRevision, resetComposers)
 
 export function applyComposers(value: Record<string, ComposerView>) { remote.value = value }
 
-/** Text or at least one attachment capsule; whitespace alone is empty. */
-export const composerHasContent = (content: string) => !!content.trim() || content.includes('\uFFFC')
 
 /** A closed window's unsaved text has nowhere to go. */
 export function discardComposerDraft(target: ComposerTarget) {

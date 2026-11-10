@@ -107,7 +107,7 @@ test('a draft changed on another device or emptied is never sent', async t => {
   assert.equal(socket.messages.at(-1)?.state, 'failed'); assert.deepEqual(f.pasted, [])
   assert.equal(f.store.composer(f.target)?.content, 'second')
   await f.edit('  ')
-  assert.equal((await f.send('blank')).at(-1)?.error, '草稿为空')
+  assert.equal((await f.send('blank')).at(-1)?.error, 'draftEmpty')
 })
 
 test('attachment-only drafts paste as separate paths like a native drop', async t => {

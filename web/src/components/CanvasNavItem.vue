@@ -18,7 +18,7 @@ const { t, n } = useI18n()
 const label = computed(() => props.indicator?.status ? t('canvasUi.canvasStatus', { name: props.name, status: statusLabel(props.indicator.status) }) : props.name)
 const trigger = ref<HTMLButtonElement>(), panel = ref<HTMLElement>(), pinned = ref(false)
 const open = computed({ get: () => !!props.open, set: value => emit('update:open', value) })
-const panelId = useId(), portal = computed(() => trigger.value?.closest<HTMLElement>('.app-shell') || document.body)
+const panelId = useId()
 const currentAgents = computed(() => props.agents()), openedKeys = shallowRef<string[]>([])
 // Live labels/status remain reactive, but a row cannot move under an active
 // pointer or keyboard focus. Reopening adopts the latest requested sort order.
@@ -74,8 +74,8 @@ const content = computed(() => ({ 'aria-label': t('canvasUi.agentsInCanvas', { n
     <button v-if="indicator?.status" ref="trigger" type="button" class="canvas-nav-status canvas-agent-trigger" aria-haspopup="dialog" data-no-reorder :aria-label="t('canvasUi.agentsInCanvas', { name })" :aria-expanded="open" :aria-controls="panelId" @pointerenter="enter" @pointerleave="leave()" @click.stop="toggle" @keydown.esc.stop.prevent="close">
       <i class="program-dot" :data-status-pulse="fresh && needsAttention(indicator.status)" :style="{ '--program-color': statusColor(indicator.status) }" />
     </button>
-    <UPopover v-model:open="open" :modal="false" :reference="trigger" :portal="portal" :content="content"
-      :ui="{ content: 'canvas-agent-popover z-[80] w-[320px] max-w-[calc(var(--ui-viewport-width)-16px)] max-h-[min(420px,var(--reka-popover-content-available-height))] overflow-y-auto' }">
+    <UPopover v-model:open="open" :modal="false" :reference="trigger" :content="content"
+      :ui="{ content: 'canvas-agent-popover w-[320px] max-w-[calc(var(--ui-viewport-width)-16px)] max-h-[min(420px,var(--reka-popover-content-available-height))] overflow-y-auto' }">
       <template #content>
         <div :id="panelId" ref="panel" class="canvas-agents-panel" tabindex="-1">
           <div class="canvas-agents-heading"><span>{{ t('canvasUi.agents') }}</span><small>{{ n(agents.length) }}</small></div>

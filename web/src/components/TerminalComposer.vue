@@ -2,17 +2,21 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from './Icon.vue'
+import UButton from '@nuxt/ui/components/Button.vue'
 import NoteEditor from './NoteEditor.vue'
-import { composerHasContent, composerOwner, editComposer, flushComposer, insertComposerAttachment, useComposer, type ComposerTarget } from '../composers'
+import { composerHasContent, sentFiles, composerOwner, editComposer, flushComposer, insertComposerAttachment, useComposer, type ComposerTarget } from '../composers'
 import { readStoredHeight, storeHeight, composerHeightBounds } from '../composer-height'
+import { useCardContentFocus } from '../card-content-focus'
 
-const props = defineProps<{ target: ComposerTarget; canSend: boolean; mobile?: boolean }>()
-const emit = defineEmits<{ close: []; send: [composer: string, version: number] }>()
+const props = defineProps<{ target: ComposerTarget; canSend: boolean; mobile?: boolean; error?: string }>()
+const emit = defineEmits<{ close: []; send: [composer: string, version: number, files: string[]]; edited: [] }>()
 const { t } = useI18n()
 const composer = useComposer(() => props.target)
 const owner = computed(() => composerOwner(props.target))
 const root = ref<HTMLElement>(), editor = ref<InstanceType<typeof NoteEditor>>()
 const fraction = ref(readStoredHeight())
+// The composer is card content: while focused it owns wheel and keyboard input like a note body.
+const { active: contentActive } = useCardContentFocus(root, () => false)
 const hasText = computed(() => composerHasContent(composer.value.content))
 const sending = ref(false)
 
@@ -22,7 +26,7 @@ async function send() {
   sending.value = true
   try {
     const view = await flushComposer(props.target)
-    if (view?.id) emit('send', view.id, view.version)
+    if (view?.id) emit('send', view.id, view.version, sentFiles(view.content, view.attachments))
   } catch (error) { window.dispatchEvent(new CustomEvent('canvas:error', { detail: error })) }
   finally { sending.value = false }
 }
@@ -66,15 +70,16 @@ defineExpose({ send })
 </script>
 
 <template>
-  <section ref="root" class="terminal-composer nodrag nopan nowheel" :class="{ full: fraction >= 1, mobile }" :style="{ height: `${fraction * 100}%` }" role="region" :aria-label="t('terminal.composer.title')"
-    @pointerdown.stop @mousedown.stop @wheel.stop @keydown.capture="keydown">
+  <section ref="root" class="terminal-composer card-content nodrag nopan nowheel" :data-content-active="contentActive" :class="{ full: fraction >= 1, mobile }" :style="{ height: `${fraction * 100}%` }" role="region" :aria-label="t('terminal.composer.title')"
+    @pointerdown.stop @mousedown.stop @keydown.capture="keydown">
     <div class="terminal-composer-editor">
       <NoteEditor ref="editor" :content="composer.content" :attachments="composer.attachments" :owner="owner" :scroll-key="owner.key" :can-persist="() => false" :read-only="sending" placeholder=""
-        :insert-attachment="value => insertComposerAttachment(target, value)" @change="value => editComposer(target, value)" @flush="flushComposer(target)" />
+        :insert-attachment="value => insertComposerAttachment(target, value)" @change="value => { editComposer(target, value); emit('edited') }" @flush="flushComposer(target)" />
     </div>
+    <p v-if="error" class="terminal-composer-error" role="alert">{{ error }}</p>
     <div class="terminal-composer-actions">
-      <button type="button" class="terminal-composer-action" :title="t('terminal.composer.attach')" :aria-label="t('terminal.composer.attach')" :disabled="editor?.pending" @click="editor?.chooseFiles()"><Icon name="paperclip" :size="16" /></button>
-      <button type="button" class="terminal-composer-action terminal-composer-send" :title="t('terminal.composer.send')" :aria-label="t('terminal.composer.send')" :disabled="!canSend || !hasText || sending || editor?.pending" @click="send"><Icon name="send" :size="16" /></button>
+      <UButton color="neutral" variant="ghost" :size="mobile ? 'lg' : 'sm'" square :title="t('terminal.composer.attach')" :aria-label="t('terminal.composer.attach')" :disabled="editor?.pending" @click="editor?.chooseFiles()"><Icon name="paperclip" :size="16" /></UButton>
+      <UButton color="primary" variant="ghost" :size="mobile ? 'lg' : 'sm'" square class="terminal-composer-send" :title="t('terminal.composer.send')" :aria-label="t('terminal.composer.send')" :disabled="!canSend || !hasText || editor?.pending" :loading="sending" @click="send"><Icon name="send" :size="16" /></UButton>
     </div>
     <div class="terminal-composer-handle" role="separator" aria-orientation="horizontal" tabindex="0" :aria-label="t('terminal.composer.resize')" :aria-valuenow="Math.round(fraction * 100)" :aria-valuetext="`${Math.round(fraction * 100)}%`" aria-valuemin="0" aria-valuemax="100"
       @pointerdown="resizeStart" @pointermove="resizeMove" @pointerup="resizeEnd" @pointercancel="resizeEnd" @keydown="resizeKey"><span /></div>
@@ -86,13 +91,10 @@ defineExpose({ send })
 .terminal-composer.full{border-bottom:0;box-shadow:none}
 .terminal-composer-editor{flex:1;min-height:0}
 .terminal-composer-actions{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:0 6px 2px}
-.terminal-composer-action{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:5px;background:transparent;color:#9aa6b6;cursor:pointer}
-.terminal-composer-action:hover:not(:disabled){background:#ffffff0d;color:#e0e5ec}
-.terminal-composer-action:disabled{opacity:.4;cursor:default}
-.terminal-composer-action:focus-visible,.terminal-composer-handle:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
-.terminal-composer-send:not(:disabled){color:var(--accent)}
+.terminal-composer-error{margin:0;padding:0 12px 4px;color:var(--ui-error);font-size:12px}
+.terminal-composer-handle:focus-visible{outline:2px solid var(--ui-primary);outline-offset:-2px}
 .terminal-composer-handle{flex:0 0 12px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;touch-action:none}
 .terminal-composer-handle span{width:36px;height:4px;border-radius:2px;background:#4a5363}
-.mobile .terminal-composer-action{width:44px;height:44px}
+.mobile .terminal-composer-actions :deep(button){min-width:44px;min-height:44px;justify-content:center}
 .mobile .terminal-composer-handle{flex-basis:20px}
 </style>

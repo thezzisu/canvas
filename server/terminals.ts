@@ -225,7 +225,7 @@ class LiveTerminal {
     const deadline = Date.now() + PASTE_TOTAL_LIMIT_MS;
     for (const [index, segment] of segments.entries()) {
       await this.queue;
-      if (this.closed) throw new Error("目标窗口已关闭");
+      if (this.closed) throw new Error("windowClosed");
       const pace = segment.file && index < segments.length - 1 ? Math.min(PASTE_SETTLE_LIMIT_MS, deadline - Date.now()) : 0;
       const settled = pace > 0 ? this.outputSettled(pace) : undefined;
       this.proc.write(this.emulator.modes.bracketedPasteMode ? `\x1b[200~${segment.text}\x1b[201~` : segment.text);

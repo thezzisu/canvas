@@ -26,7 +26,6 @@ import { usePointerDismiss } from '../pointer-dismiss'
 
 const { t, n } = useI18n()
 
-defineProps<{ portal?: HTMLElement }>()
 const pdfPreview = navigator.pdfViewerEnabled
 const { url: previewUrl, error: ticketError, retry: retryTicket } = useMediaUrl(() => downloadPreview.value?.preview === 'text' ? undefined : downloadPreview.value?.url)
 const text = ref('')
@@ -133,7 +132,7 @@ onBeforeUnmount(() => request?.abort())
 </script>
 
 <template>
-  <UModal v-if="downloadPreview" :key="downloadPreview.id" :open="true" :title="downloadPreview.filename" :portal="portal || false" :fullscreen="expanded" :transition="false"
+  <UModal v-if="downloadPreview" :key="downloadPreview.id" :open="true" :title="downloadPreview.filename" :fullscreen="expanded" :transition="false"
     :close="false" :content="modalContent"
     :ui="{ content: `download-preview-modal${preparing ? ' download-preview-preparing' : ''}${expanded ? ' download-preview-fullscreen' : ''}${mobileHeader ? ' download-preview-mobile' : ''}`, overlay: 'download-preview-overlay', header: 'download-preview-header-slot', body: 'download-preview-body' }"
     @update:open="openChanged">
@@ -144,7 +143,7 @@ onBeforeUnmount(() => request?.abort())
         <div ref="actions" class="download-preview-actions" :class="{ 'cutout-actions': mobileHeader && expanded }" :style="{ '--header-actions-width': `${(textShortcuts.length + 3) * 44}px` }">
           <template v-for="key in textShortcuts" :key="key"><TextPreviewActions v-if="showShortcut(key)" :only="key" :filename="downloadPreview.filename" v-model:rendered="rendered" v-model:wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :source-preview="downloadPreview.sourcePreview" :preview-busy="previewBusy" @preview="previewSite" /></template>
           <UButton v-if="!preparing && showShortcut('download')" type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-download" :aria-label="t('panels.file.download')" :title="t('panels.file.download')" @click="download"><Icon name="download" :size="16" /></UButton>
-          <UDropdownMenu v-if="mobileHeader && !preparing" v-model:open="menuOpen" :modal="false" :items="menu" :portal="portal || false" :content="{ align: 'end', ...menuDismiss }" :ui="{ content: 'card-action-menu download-preview-menu z-[90] min-w-[160px]' }">
+          <UDropdownMenu v-if="mobileHeader && !preparing" v-model:open="menuOpen" :modal="false" :items="menu" :content="{ align: 'end', ...menuDismiss }" :ui="{ content: 'card-action-menu download-preview-menu min-w-[160px]' }">
             <UButton ref="menuTrigger" type="button" color="neutral" variant="ghost" class="download-preview-button" :aria-label="t('common.more')" :title="t('common.more')"><Icon name="more" :size="17" /></UButton>
           </UDropdownMenu>
           <UButton v-else-if="!preparing" type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-expand" :aria-label="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :title="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')" :aria-pressed="expanded" @click="expanded = !expanded"><Icon :name="expanded ? 'collapse' : 'expand'" :size="16" /></UButton>
@@ -173,8 +172,8 @@ onBeforeUnmount(() => request?.abort())
 </template>
 
 <style>
-.download-preview-overlay{z-index:84}
-.download-preview-modal{--preview-safe-top:var(--mobile-safe-top,var(--ui-safe-top));--preview-safe-bottom:var(--mobile-safe-bottom,var(--ui-safe-bottom));--preview-frame-width:var(--mobile-width,var(--preview-viewport-width));--preview-frame-height:var(--dialog-height);z-index:85;display:grid;grid-template-rows:auto minmax(0,1fr);gap:0;position:fixed;left:calc(var(--mobile-left,var(--preview-left)) + (var(--preview-frame-width) + var(--ui-safe-left) - var(--ui-safe-right))/2);top:calc(var(--dialog-top) + (var(--preview-frame-height) + var(--preview-safe-top) - var(--preview-safe-bottom))/2);translate:-50% -50%;width:min(var(--preview-width),calc(var(--preview-frame-width) - 12px - var(--ui-safe-left) - var(--ui-safe-right)));max-width:none;height:min(var(--preview-height),calc(var(--preview-frame-height) - 24px - var(--preview-safe-top) - var(--preview-safe-bottom)));max-height:none;overflow:auto;overscroll-behavior:contain;background:#191d23;border:1px solid #3b424c;box-shadow:0 16px 60px #0005}
+.download-preview-overlay{}
+.download-preview-modal{--preview-safe-top:var(--mobile-safe-top,var(--ui-safe-top));--preview-safe-bottom:var(--mobile-safe-bottom,var(--ui-safe-bottom));--preview-frame-width:var(--mobile-width,var(--preview-viewport-width));--preview-frame-height:var(--dialog-height);display:grid;grid-template-rows:auto minmax(0,1fr);gap:0;position:fixed;left:calc(var(--mobile-left,var(--preview-left)) + (var(--preview-frame-width) + var(--ui-safe-left) - var(--ui-safe-right))/2);top:calc(var(--dialog-top) + (var(--preview-frame-height) + var(--preview-safe-top) - var(--preview-safe-bottom))/2);translate:-50% -50%;width:min(var(--preview-width),calc(var(--preview-frame-width) - 12px - var(--ui-safe-left) - var(--ui-safe-right)));max-width:none;height:min(var(--preview-height),calc(var(--preview-frame-height) - 24px - var(--preview-safe-top) - var(--preview-safe-bottom)));max-height:none;overflow:auto;overscroll-behavior:contain;background:#191d23;border:1px solid #3b424c;box-shadow:0 16px 60px #0005}
 /* Media stays mounted while the transparent loading row waits for intrinsic size. */
 .download-preview-modal.download-preview-preparing{width:auto;height:auto;min-width:160px;overflow:visible;background:transparent;border-color:transparent;box-shadow:none}
 .download-preview-preparing .download-preview-header{border:0;gap:8px}

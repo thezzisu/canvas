@@ -41,7 +41,7 @@ const preferredLocale = computed<AppLocale>(() => {
 const zh = { common: zhCommon, settings: zhSettings, app: zhApp, panels: zhPanels, terminal: zhTerminal, instances: zhInstances, canvasUi: zhCanvasUi, urls: zhUrls, windowPicker: zhWindowPicker, fileTransfer: zhFileTransfer, account: zhAccount, notifications: zhNotifications }
 const en: typeof zh = { common: enCommon, settings: enSettings, app: enApp, panels: enPanels, terminal: enTerminal, instances: enInstances, canvasUi: enCanvasUi, urls: enUrls, windowPicker: enWindowPicker, fileTransfer: enFileTransfer, account: enAccount, notifications: enNotifications }
 export const i18n = createI18n({ legacy: false, locale: preferredLocale.value, fallbackLocale: 'en', messages: { 'zh-CN': zh, en } })
-export const { t, locale } = i18n.global
+export const { t, te, locale } = i18n.global
 export const uiLocale = computed(() => locale.value === 'zh-CN' ? zhUi : enUi)
 watch(preferredLocale, value => { locale.value = value }, { flush: 'sync' })
 

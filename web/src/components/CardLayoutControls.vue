@@ -38,11 +38,11 @@ const icons = { terminal: 'i-lucide-square-terminal', note: 'i-lucide-sticky-not
 
 <style scoped>
 .card-layout-mask{position:absolute;inset:0;z-index:30;display:grid;place-items:center;background:var(--terminal-transition-background,#1b1f26);border-radius:7px;touch-action:none;color:#b8c3d0;cursor:grab;outline:none;pointer-events:auto}
-.card-layout-mask.layout-selected{box-shadow:inset 0 0 0 calc(2 * var(--layout-pixel)) var(--accent)}
+.card-layout-mask.layout-selected{box-shadow:inset 0 0 0 calc(2 * var(--layout-pixel)) var(--ui-primary)}
 .card-layout-mask.layout-waiting{pointer-events:none;cursor:default}
 .layout-title{position:absolute;top:0;left:0;right:0;height:30px;line-height:30px;display:block;padding:0 10px;background:#252a32;color:#d3d8e1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-bottom:1px solid #343a43;pointer-events:none}
 .layout-kind{width:calc(32 * var(--layout-pixel));height:calc(32 * var(--layout-pixel));opacity:.6;pointer-events:none}
 .vue-flow__resize-control.layout-resize-control{z-index:32;display:flex;align-items:center;justify-content:center;opacity:1;border:0;background:transparent;pointer-events:auto;touch-action:none}
-.layout-resize-glyph{display:flex;align-items:center;justify-content:center;width:var(--layout-icon-size);height:var(--layout-icon-size);padding:calc(var(--layout-icon-size) / 3);box-sizing:content-box;background:var(--accent);color:#17191d;border-radius:50%;pointer-events:none}
+.layout-resize-glyph{display:flex;align-items:center;justify-content:center;width:var(--layout-icon-size);height:var(--layout-icon-size);padding:calc(var(--layout-icon-size) / 3);box-sizing:content-box;background:var(--ui-primary);color:#17191d;border-radius:50%;pointer-events:none}
 .layout-resize-glyph>span,.layout-resize-glyph>svg{width:100%;height:100%}
 </style>

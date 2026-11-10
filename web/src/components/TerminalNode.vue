@@ -92,7 +92,6 @@ async function stopCapturedApp() {
 const shortcuts = computed(() => [...(showCanvasJumps.value ? ['previous', 'next'] : []), ...(mobileFocus.value && !showApp.value ? ['keyboard'] : []), ...(props.data.focus && !showApp.value ? ['zoom'] : []), ...(canCompose.value ? ['composer'] : [])])
 const { effective: settings, overrides, zoom, resetZoom } = useTerminalSettings(() => props.data.preferenceKey)
 const settingsOpen = ref(false)
-const portal = computed(() => host.value?.closest<HTMLElement>('.app-shell') || undefined)
 const status = ref<TerminalStatus>({ status: 'connecting' })
 const noteDrag = ref(false)
 const fileDrag = ref(false)
@@ -129,7 +128,7 @@ const uploadLabel = computed(() => {
   if (upload.cancelling) return t('terminal.upload.cancelling')
   if (upload.state === 'failed') return upload.error || t('terminal.upload.failed')
   if (upload.state === 'cancelled') return t('terminal.upload.cancelled')
-  if (upload.state === 'completed') return t('terminal.upload.pathInserted')
+  if (upload.state === 'completed') return t(upload.kind === 'send' ? 'terminal.upload.sent' : (upload.fileCount || 0) > 1 ? 'terminal.upload.pathsInserted' : 'terminal.upload.pathInserted')
   return upload.state === 'waiting' ? t('terminal.upload.waiting') : upload.state === 'preparing' ? t('terminal.upload.preparing') : `${uploadPercent.value}%`
 })
 const label = computed(() => windowLabel(props.data, status.value.focusedPaneId))
@@ -184,7 +183,7 @@ const composer = useComposer(composerTarget)
 const composerOpen = ref(false)
 const canCompose = computed(() => !showApp.value && keepTerminal.value && !closed.value && !mobilePreview.value && !maximizedElsewhere.value && (!props.data.mobile || props.data.focus))
 const canSendComposer = computed(() => status.value.status === 'connected' && !status.value.readOnly && !!props.data.available)
-const composerDraft = computed(() => !composerOpen.value && composerHasContent(composer.value.content))
+const composerDraft = computed(() => !composerOpen.value && !composerSending.value && composerHasContent(composer.value.content))
 const composerLabel = computed(() => composerDraft.value ? t('terminal.composer.draft') : t('terminal.composer.title'))
 // The composer and the text-selection sheet each borrow the IME; recovery resumes after both.
 const selecting = ref(false)
@@ -200,8 +199,16 @@ function closeComposer(focusTerminal = false) {
   if (!props.data.mobile && focusTerminal) terminal?.focus()
 }
 function toggleComposer() { if (composerOpen.value) closeComposer(true); else openComposer() }
-function sendComposer(id: string, version: number) {
-  terminal?.sendComposer(id, version)
+// Sending collapses at once and counts the draft as clean; a failure reopens it with the error.
+const composerSending = ref(false), composerError = ref('')
+function sendComposer(id: string, version: number, files: string[]) {
+  composerSending.value = true; composerError.value = ''
+  terminal?.sendComposer(id, version, files, error => {
+    composerSending.value = false
+    if (!error) return
+    composerError.value = error
+    openComposer()
+  })
   closeComposer(true)
 }
 watch(canCompose, value => { if (!value) closeComposer() })
@@ -310,9 +317,9 @@ async function resized(event: { params: { width: number; height: number; x: numb
       <CardHeaderActions class="terminal-actions" :class="{ 'cutout-actions': mobileFocus }" :items="menu" :expanded="data.focus" :removable="!data.overview" :mobile="mobileFocus" :shortcuts="shortcuts" :priority="['previous', 'next', 'keyboard', 'composer', 'zoom']" :trailing="['composer']" :disabled="closed && !data.focus"
         :add-label="t('terminal.action.addToCanvas')" :remove-label="t('terminal.action.removeFromCanvas')" :maximize-label="t('terminal.action.focus')" :restore-label="t('terminal.action.restore')" :more-label="t('terminal.action.windowActions')"
         @add="action('add')" @toggle="action(data.focus ? 'unfocus' : 'focus')" @remove="action('remove')">
-        <template v-for="jump in canvasJumps" :key="jump.direction" #[jump.direction]><button type="button" class="card-header-action" :class="`card-${jump.direction}-canvas`" data-preserve-content-focus :disabled="!jump.target" :title="jump.label" :aria-label="jump.label" @pointerdown.prevent @click="jumpCanvas(jump.direction, $event)"><Icon name="down" :size="15" :style="{ transform: jump.direction === 'next' ? '' : 'rotate(180deg)' }" /></button></template>
-        <template #keyboard><button type="button" class="card-header-action terminal-keyboard" :title="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-label="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-pressed="status.keyboardRequested" @pointerdown.prevent @click="toggleKeyboard"><Icon name="keyboard" :size="18" /></button></template>
-        <template #composer><button type="button" class="card-header-action terminal-composer-toggle" :class="{ 'has-draft': composerDraft }" :title="composerLabel" :aria-label="composerLabel" :aria-pressed="composerOpen" @pointerdown.prevent @click="toggleComposer"><Icon name="compose" :size="15" /></button></template>
+        <template v-for="jump in canvasJumps" :key="jump.direction" #[jump.direction]><UButton :class="`card-${jump.direction}-canvas`" data-preserve-content-focus :disabled="!jump.target" :title="jump.label" :aria-label="jump.label" @pointerdown.prevent @click="jumpCanvas(jump.direction, $event)"><Icon name="down" :size="15" :style="{ transform: jump.direction === 'next' ? '' : 'rotate(180deg)' }" /></UButton></template>
+        <template #keyboard><UButton class="terminal-keyboard" :title="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-label="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :active="!!status.keyboardRequested" :aria-pressed="!!status.keyboardRequested" @pointerdown.prevent @click="toggleKeyboard"><Icon name="keyboard" :size="18" /></UButton></template>
+        <template #composer><UButton class="terminal-composer-toggle" :class="{ 'has-draft': composerDraft }" :title="composerLabel" :aria-label="composerLabel" :active="composerOpen" :aria-pressed="composerOpen" @pointerdown.prevent @click="toggleComposer"><Icon name="compose" :size="15" /></UButton></template>
         <template #zoom><ContentZoom v-model="zoom" :mobile="data.mobile" :disabled="!data.available" :label="t('terminal.zoom.title')" :reset="resetZoom" :reset-label="t('terminal.settings.restoreDefault')" /></template>
       </CardHeaderActions>
     </header>
@@ -329,16 +336,16 @@ async function resized(event: { params: { width: number; height: number; x: numb
     </div>
     <div v-if="showApp && !trustedApp" class="capture-trust-prompt card-content" :inert="mobilePreview || editing || undefined"><Icon name="globe" :size="32" /><span>{{ app?.title }}</span><UButton v-if="!mobilePreview" color="neutral" variant="outline" @click="activateApp">{{ t('terminal.capture.app') }}</UButton></div>
     <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || closed || showApp || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop><div class="terminal-transition-surface" aria-hidden="true" /></div>
-    <Transition name="terminal-composer"><TerminalComposer v-if="composerOpen && canCompose" :target="composerTarget()" :can-send="canSendComposer" :mobile="data.mobile" @close="closeComposer(true)" @send="sendComposer" /></Transition>
+    <Transition name="terminal-composer"><TerminalComposer v-if="composerOpen && canCompose" :target="composerTarget()" :can-send="canSendComposer" :mobile="data.mobile" :error="composerError" @close="closeComposer(true)" @send="sendComposer" @edited="composerError = ''" /></Transition>
     <PaneContextMenu :host="host" :enabled="!showApp && keepTerminal && !mobilePreview && !closed && !maximizedElsewhere && status.status === 'connected'" :allows-menu="allowsContextMenu" :lookup="paneContext" :action="paneAction" />
-    <TerminalSettingsDialog v-model="overrides" :open="settingsOpen" :portal="portal" @close="settingsOpen = false" />
+    <TerminalSettingsDialog v-model="overrides" :open="settingsOpen" @close="settingsOpen = false" />
 
     <div v-if="status.draggingFile" class="terminal-file-drop" aria-hidden="true">{{ t('terminal.upload.drop') }}</div>
     <div v-if="noteDrag || fileDrag" class="terminal-file-drop terminal-note-drop" :class="{ 'note-drop-unavailable': !noteDropAvailable }" aria-hidden="true">{{ !noteDropAvailable ? noteDropLabel : fileDrag ? t(status.fileReading ? 'fileTransfer.preparing' : 'fileTransfer.drop') : noteDropLabel }}</div>
     <span v-if="status.upload?.rejected" class="terminal-copy-notice copy-failed" role="alert">{{ status.upload.rejected }}</span>
     <span v-if="status.fileReading && !fileDrag" class="terminal-copy-notice" role="status">{{ t('fileTransfer.preparing') }}</span>
     <span v-if="status.clipboardError" class="terminal-copy-notice" role="status">{{ t(`terminal.clipboard.${status.clipboardError}`) }}</span>
-    <UploadProgress v-if="status.upload" class="terminal-upload" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :data-upload-id="status.upload.id" :data-upload-state="status.upload.state"
+    <UploadProgress v-if="status.upload && !status.upload.hidden" class="terminal-upload" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :data-upload-id="status.upload.id" :data-upload-state="status.upload.state"
       :name="uploadName" :status="uploadLabel" :transferred="status.upload.transferred" :total="status.upload.total" :active="!!uploadActive" :queued="status.upload.queued" :cancelling="status.upload.cancelling" :failed="status.upload.state === 'failed'" @cancel="terminal?.cancelUpload()" />
     <div v-if="data.available && maximizedElsewhere" class="terminal-maximized nodrag nopan" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.stop @mousedown.stop @click.stop>
       <span>{{ t('terminal.maximized') }}</span>
@@ -365,7 +372,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-composer-enter-from,.terminal-composer-leave-to{transform:translateY(-100%);opacity:0}
 @media (prefers-reduced-motion:reduce){.terminal-composer-enter-active,.terminal-composer-leave-active{transition:none}}
 .terminal-composer-toggle{position:relative}
-.terminal-composer-toggle.has-draft::after{content:'';position:absolute;top:3px;right:3px;width:5px;height:5px;border-radius:50%;background:var(--accent)}
+.terminal-composer-toggle.has-draft::after{content:'';position:absolute;top:3px;right:3px;width:5px;height:5px;border-radius:50%;background:var(--ui-primary)}
 .terminal-transition-surface{position:absolute;inset:0;z-index:3;pointer-events:none;display:none;background:var(--terminal-transition-background,#1b1f26)}
 .terminal-transition .terminal-transition-surface{display:block}
 .terminal-transition :deep(.xterm-rows),.terminal-transition :deep(.xterm-selection),.terminal-transition :deep(.xterm-viewport),.terminal-transition :deep(.xterm-decoration-container),.terminal-transition :deep(.xterm-overview-ruler){opacity:0}
@@ -378,14 +385,14 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-loading-initial{z-index:12;background:#111317}
 .terminal-maximized{inset:0;z-index:5;flex-direction:column;gap:10px}
 .terminal-maximized>button{padding:5px 9px;gap:5px;min-height:28px}
-.terminal-drop-target{outline:1px solid var(--accent);outline-offset:-3px;background:#e9b18808}
-.terminal-copy-notice{position:absolute;bottom:8px;right:9px;padding:4px 7px;border:1px solid #424a56;border-radius:4px;background:#242930f2;color:#b6c0ce;font-size:10px;pointer-events:none}
+.terminal-drop-target{outline:1px solid var(--ui-primary);outline-offset:-3px;background:color-mix(in srgb,var(--ui-primary) 3%,transparent)}
+.terminal-copy-notice{position:absolute;z-index:8;top:8px;right:9px;padding:4px 7px;border:1px solid #424a56;border-radius:4px;background:#242930f2;color:#b6c0ce;font-size:10px;pointer-events:none}
 .terminal-copy-notice.copy-failed{border-color:#79545470;background:#33262bf2;color:#d6aaaa}
 .terminal-note-drop{z-index:5}.terminal-note-drop.note-drop-unavailable{color:#9aa4b3;background:#171b21df}
-.terminal-file-drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;background:#12151aca;color:var(--accent);font-size:12px}
-.terminal-upload{position:absolute;bottom:6px;left:8px;right:8px}
+.terminal-file-drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;background:#12151aca;color:var(--ui-primary);font-size:12px}
+.terminal-upload{position:absolute;z-index:8;top:6px;left:8px;right:8px}
 .terminal-preview-button{position:absolute;inset:0;z-index:4;pointer-events:auto;cursor:pointer;outline:none;touch-action:none;-webkit-tap-highlight-color:transparent}
-.terminal-preview-button:focus-visible{box-shadow:inset 0 0 0 2px var(--accent)}
+.terminal-preview-button:focus-visible{box-shadow:inset 0 0 0 2px var(--ui-primary)}
 .terminal-mobile-preview .terminal-host{pointer-events:none}
 .terminal-mobile-preview .terminal-actions{visibility:hidden}
 .terminal-mobile.focused{--terminal-header-height:calc(44px + var(--mobile-safe-top,0px));min-height:0;border-radius:0;box-shadow:none}

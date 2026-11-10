@@ -16,9 +16,16 @@ export default {
   upload: {
     file: 'Upload files', drop: 'Drop to upload and insert paths', failed: 'Upload failed', disconnected: 'Terminal is not connected', invalidSize: 'Invalid file size', files: '{count} files',
     waiting: 'Waiting for terminal…', targetChanged: 'The upload target is no longer available', preparing: 'Preparing upload…', prepareTimeout: 'Upload preparation timed out', invalidUrl: 'Invalid upload URL', cancelling: 'Cancelling…',
-    cancelled: 'Cancelled', pathInserted: 'Path inserted', cancel: 'Cancel upload', close: 'Dismiss upload status', progress: 'File upload progress',
+    cancelled: 'Cancelled', pathInserted: 'Path inserted', pathsInserted: 'Paths inserted', sent: 'Sent', cancel: 'Cancel', close: 'Dismiss', progress: 'File upload progress',
     foldersUnsupported: 'Folders are not supported', unreadable: 'Could not read the selected files',
     fileFailed: '{name}: {error}',
+    errors: { invalidFile: 'Invalid file name or size', timeout: 'Transfer timed out', cancelled: 'Cancelled', interrupted: 'Connection interrupted',
+      unreachable: 'Cannot reach the target machine', invalidResponse: 'Invalid response from the target machine', failed: 'Transfer failed',
+      sizeMismatch: 'File size changed during transfer', incomplete: 'Transfer incomplete', cleanupFailed: 'Could not clean up the cancelled transfer',
+      windowClosed: 'The target window is closed', tooLarge: 'Content is too large', invalidReference: 'Invalid file reference', invalidSize: 'Invalid file size',
+      busy: 'This window already has a transfer in progress', closed: 'Connection closed', notConnected: 'Connect to the window first',
+      invalidRequest: 'Invalid request', startFailed: 'Could not start the transfer', pasteFailed: 'Paste failed', requestFailed: 'Transfer request failed',
+      connectionRemoved: 'Connection removed', draftChanged: 'The draft changed on another device', draftEmpty: 'The draft is empty', fileMissing: 'An attachment no longer exists' },
   },
   action: {
     cancelMaximized: 'Cancel maximization',

@@ -16,16 +16,16 @@ export async function sendComposer(store: Store, assets: AssetStore, uploads: Up
   const fail = (error: string) => {
     if (socket.readyState === 1) socket.send(JSON.stringify({ type: "upload-progress", id, state: "failed", transferred: 0, total: 0, error }));
   };
-  if (!parsed.success) { fail("发送参数无效"); return; }
+  if (!parsed.success) { fail("invalidRequest"); return; }
   const target = { sourceId: source.id, windowId }, composer = store.composer(target);
-  if (!composer || composer.id !== parsed.data.composer || composer.version !== parsed.data.version) { fail("草稿已在其他设备更新"); return; }
+  if (!composer || composer.id !== parsed.data.composer || composer.version !== parsed.data.version) { fail("draftChanged"); return; }
   const { files, parts } = noteContentPaste(composer.content);
-  if (!parts.some(part => typeof part !== "string" || part.trim())) { fail("草稿为空"); return; }
+  if (!parts.some(part => typeof part !== "string" || part.trim())) { fail("draftEmpty"); return; }
   const owned = new Map(store.noteAttachments(composer.id).map(asset => [asset.id, asset]));
   const stored = [];
   for (const assetId of files) {
     const asset = owned.get(assetId);
-    if (!asset) { fail("附件已不存在"); return; }
+    if (!asset) { fail("fileMissing"); return; }
     stored.push({ name: asset.filename, size: asset.size, open: async () => (await assets.read(asset.id))?.body });
   }
   await uploads.sendStored(source, windowId, socket, session, { id, files: stored, parts,

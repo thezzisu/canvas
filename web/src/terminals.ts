@@ -1198,8 +1198,9 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     close() { if (current.host === host && isCurrentApi(mountingContext)) windowRemoved(current) },
     cancelUpload() { current.uploads.cancel() },
     /** Deliver the stored draft version the user saw; Canvas streams its files to the native inbox. */
-    sendComposer(composer: string, version: number) {
-      current.uploads.enqueueStored({ type: 'composer-send', composer, version }, t('terminal.composer.title'), mountingContext)
+    sendComposer(composer: string, version: number, files: string[], done: (error?: string) => void) {
+      const name = files.length === 1 ? files[0]! : files.length ? t('terminal.upload.files', { count: files.length }) : ''
+      current.uploads.enqueueStored({ type: 'composer-send', composer, version }, { name, fileCount: files.length, done }, mountingContext)
     },
     reconnect() {
       disconnect(current)

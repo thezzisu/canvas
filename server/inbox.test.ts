@@ -128,7 +128,7 @@ test("real inbox cancellation interrupts a blocked upload and removes its partia
   await runIsolated(t, `
 const controller = new AbortController();
 async function* blocked() { yield Buffer.alloc(65536, 7); await new Promise(() => {}); }
-await assert.rejects(writeInboxFile(source, { name: 'cancel.bin', size: 131072 }, blocked(), controller.signal, () => controller.abort()), /取消/);
+await assert.rejects(writeInboxFile(source, { name: 'cancel.bin', size: 131072 }, blocked(), controller.signal, () => controller.abort()), /cancelled/);
 await waitFor(async () => (await readdir(inbox)).length === 0);
 assert.deepEqual(await readdir(inbox), []);
 const already = new AbortController(); already.abort();
@@ -159,7 +159,7 @@ test("cancellation reaps a durably written file whose path arrives before or aft
       await runIsolated(t, `
 const controller = new AbortController(), progress = [];
 const operation = writeInboxFile(source, { name: 'committed.bin', size: 4 }, chunks(Buffer.from('done')), controller.signal, bytes => progress.push(bytes));
-const rejected = assert.rejects(operation, /取消/);
+const rejected = assert.rejects(operation, /cancelled/);
 await waitFor(async () => !!(await stat(join(root, 'completed-race-ready')).catch(() => undefined)));
 const committed = (await readdir(inbox)).filter(name => !name.endsWith('.part'));
 assert.equal(committed.length, 1, 'fixture reached durable commit before abort');

@@ -1,4 +1,5 @@
 import { t } from './i18n'
+import { transferError } from './transfer-error'
 import { MAX_PASTE_PARTS, MAX_UPLOAD_BEGIN_BYTES, type PastePart } from '../../shared/paste'
 import { apiContext, apiFetch, apiUrl, isCurrentApi, uuid, type ApiContext } from './api'
 import { hasFileTransfer, readFileTransfer } from './browser-file-input'
@@ -10,6 +11,9 @@ export interface TerminalUploadState {
   transferred: number
   total: number
   state: 'waiting' | 'preparing' | 'uploading' | 'completed' | 'cancelled' | 'failed'
+  /** Composer sends report as "sent"; text-only ones show no progress at all. */
+  kind?: 'upload' | 'send'
+  hidden?: boolean
   error?: string
   queued?: number
   cancelling?: boolean
@@ -17,7 +21,7 @@ export interface TerminalUploadState {
 }
 interface Batch { context: ApiContext; id: string; files: File[]; parts?: PastePart[]; total: number; request?: AbortController; running: boolean; cancelling?: boolean
   /** Files already held by Canvas: the server streams them and reports progress. */
-  stored?: { message: Record<string, unknown>; name: string } }
+  stored?: { message: Record<string, unknown>; name: string; fileCount: number; done(error?: string): void } }
 interface UploadOptions {
   readiness(): 'ready' | 'waiting' | 'unavailable'
   unavailableReason(): string
@@ -66,12 +70,13 @@ export class TerminalUploads {
     else this.next()
   }
 
-  /** Queue a server-held delivery behind browser uploads to the same window. */
-  enqueueStored(message: Record<string, unknown>, name: string, context = apiContext()) {
-    if (!isCurrentApi(context)) { this.reject(t('terminal.upload.targetChanged')); return }
-    if (this.options.readiness() === 'unavailable') { this.reject(this.options.unavailableReason()); return }
-    if (this.current?.cancelling) { this.reject(t('terminal.upload.cancelling')); return }
-    this.pending.push({ context, id: uuid(), files: [], total: 0, running: false, stored: { message, name } })
+  /** Queue a server-held delivery behind browser uploads; `done` reports its outcome to the sender. */
+  enqueueStored(message: Record<string, unknown>, stored: { name: string; fileCount: number; done(error?: string): void }, context = apiContext()) {
+    const refuse = (error: string) => stored.done(error)
+    if (!isCurrentApi(context)) { refuse(t('terminal.upload.targetChanged')); return }
+    if (this.options.readiness() === 'unavailable') { refuse(this.options.unavailableReason()); return }
+    if (this.current?.cancelling) { refuse(t('terminal.upload.cancelling')); return }
+    this.pending.push({ context, id: uuid(), files: [], total: 0, running: false, stored: { message, ...stored } })
     if (this.current) this.update({ rejected: undefined })
     else this.next()
   }
@@ -89,16 +94,14 @@ export class TerminalUploads {
     if (!isCurrentApi(batch.context)) { this.invalidate(t('terminal.upload.targetChanged')); return }
     if (readiness === 'waiting') {
       if (this.state?.state === 'waiting' && this.state.id === batch.id && this.state.queued === this.pending.length - 1) return
-      this.state = { id: batch.id, name: batchName(batch), fileCount: batch.files.length,
-        transferred: 0, total: batch.total, state: 'waiting', queued: this.pending.length - 1 }
+      this.state = { ...batchView(batch), transferred: 0, total: batch.total, state: 'waiting', queued: this.pending.length - 1 }
       this.options.changed(this.state)
       return
     }
     if (readiness === 'unavailable') { this.invalidate(this.options.unavailableReason()); return }
     this.pending.shift()
     this.current = batch
-    this.state = { id: batch.id, name: batchName(batch), fileCount: batch.files.length,
-      transferred: 0, total: batch.total, state: 'preparing', queued: this.pending.length }
+    this.state = { ...batchView(batch), transferred: 0, total: batch.total, state: 'preparing', queued: this.pending.length }
     this.options.changed(this.state)
     this.options.focus()
     if (!this.options.send(this.beginMessage(batch))) {
@@ -166,7 +169,7 @@ export class TerminalUploads {
     if (message.state === 'completed') this.finish('completed')
     else if (message.state === 'cancelled') this.finish('cancelled')
     else if (message.state === 'failed') {
-      const error = typeof message.error === 'string' ? message.error : t('terminal.upload.failed')
+      const error = transferError(message.error)
       this.finish('failed', typeof message.failedFile === 'string' ? t('terminal.upload.fileFailed', { name: message.failedFile, error }) : error)
     }
     else if (message.state === 'uploading') this.update({ state: 'uploading' })
@@ -202,6 +205,7 @@ export class TerminalUploads {
     clearTimeout(this.timer)
     this.current = undefined
     if (state !== 'completed') { batch.request?.abort(); this.pending = [] }
+    if (batch.stored) batch.stored.done(state === 'completed' ? undefined : error || t('terminal.upload.cancelled'))
     this.update({ state, error, cancelling: false, rejected: undefined, ...(state === 'completed' ? { transferred: batch.total } : {}) })
     if (this.current) return
     if (this.pending.length) { this.next(); return }
@@ -243,7 +247,11 @@ export class TerminalUploads {
   }
 }
 
-const batchName = (batch: Batch) => batch.stored?.name ?? (batch.files.length === 1 ? batch.files[0]!.name : '')
+/** How a batch presents itself; a text-only send has no progress to show. */
+function batchView(batch: Batch): Pick<TerminalUploadState, 'id' | 'name' | 'fileCount' | 'kind' | 'hidden'> {
+  if (batch.stored) return { id: batch.id, name: batch.stored.name, fileCount: batch.stored.fileCount, kind: 'send', hidden: !batch.stored.fileCount }
+  return { id: batch.id, name: batch.files.length === 1 ? batch.files[0]!.name : '', fileCount: batch.files.length, kind: 'upload' }
+}
 
 export function preventFileNavigation(event: DragEvent) {
   if (!hasFileTransfer(event.dataTransfer)) return

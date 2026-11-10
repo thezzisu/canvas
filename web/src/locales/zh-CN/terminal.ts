@@ -16,8 +16,15 @@ export default {
   upload: {
     file: '上传文件', drop: '松开以上传并插入路径', failed: '上传失败', disconnected: '终端未连接', invalidSize: '文件大小无效', files: '{count} 个文件',
     waiting: '等待终端恢复…', targetChanged: '原上传目标已不可用', preparing: '准备上传…', prepareTimeout: '上传准备超时', invalidUrl: '上传地址无效', cancelling: '取消中…',
-    cancelled: '已取消', pathInserted: '已插入路径', cancel: '取消上传', close: '关闭上传状态', progress: '文件上传进度',
+    cancelled: '已取消', pathInserted: '已插入路径', pathsInserted: '已插入路径', sent: '已发送', cancel: '取消', close: '关闭', progress: '文件上传进度',
     foldersUnsupported: '不支持文件夹', unreadable: '无法读取所选文件', fileFailed: '{name}：{error}',
+    errors: { invalidFile: '文件名或大小无效', timeout: '传输超时', cancelled: '已取消', interrupted: '连接中断',
+      unreachable: '无法连接目标机器', invalidResponse: '目标机器响应无效', failed: '传输失败',
+      sizeMismatch: '传输中文件大小发生变化', incomplete: '传输不完整', cleanupFailed: '无法清理已取消的传输',
+      windowClosed: '目标窗口已关闭', tooLarge: '内容过长', invalidReference: '文件引用无效', invalidSize: '文件大小无效',
+      busy: '该窗口已有传输任务', closed: '连接已关闭', notConnected: '请先连接目标窗口',
+      invalidRequest: '请求无效', startFailed: '无法开始传输', pasteFailed: '粘贴失败', requestFailed: '传输请求失败',
+      connectionRemoved: '连接已移除', draftChanged: '草稿已在其他设备更新', draftEmpty: '草稿为空', fileMissing: '附件已不存在' },
   },
   action: {
     cancelMaximized: '取消最大化',
