@@ -17,7 +17,11 @@ export default defineConfig({
     entryFileNames: 'assets/code-preview/[name]-[hash].js', chunkFileNames: 'assets/code-preview/[name]-[hash].js',
   } } },
   define: { __CANVAS_FRONTEND_BUILD__: JSON.stringify(buildInfo) },
-  plugins: [{ name: 'canvas-build-info', generateBundle() {
+  plugins: [{
+    // Every supported browser reads woff2; drop KaTeX's woff/ttf fallbacks so they are not emitted.
+    name: 'canvas-katex-woff2', enforce: 'pre',
+    transform(code, id) { if (/katex[\\/]dist[\\/]katex(\.min)?\.css$/.test(id)) return code.replace(/,url\([^)]+\.(?:woff|ttf)\) format\("(?:woff|truetype)"\)/g, '') },
+  }, { name: 'canvas-build-info', generateBundle() {
     this.emitFile({ type: 'asset', fileName: 'build-info.json', source: JSON.stringify(buildInfo) + '\n' })
     this.emitFile({ type: 'asset', ...notificationWorker })
   } }, contentFontsPlugin(), VitePWA(pwaOptions), vue(), VueI18nPlugin({ include: fileURLToPath(new URL('./web/src/locales/**', import.meta.url)) }), ui({ prose: true, router: false, colorMode: false, autoImport: false, components: false, dts: false,
