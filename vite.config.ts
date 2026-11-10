@@ -23,7 +23,7 @@ export default defineConfig({
   } }, contentFontsPlugin(), VitePWA(pwaOptions), vue(), VueI18nPlugin({ include: fileURLToPath(new URL('./web/src/locales/**', import.meta.url)) }), ui({ prose: true, router: false, colorMode: false, autoImport: false, components: false, dts: false,
     icon: { clientBundle: { scan: { globInclude: ['src/**/*.{vue,ts}'] } } },
     ui: {
-      colors: { primary: 'amber', neutral: 'zinc' },
+      colors: { primary: 'peach', neutral: 'canvas' },
       modal: {
         slots: { overlay: 'canvas-modal-overlay', content: 'canvas-modal-content' },
         compoundVariants: [{ scrollable: false, fullscreen: false, class: {

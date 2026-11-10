@@ -1,10 +1,78 @@
-@layer theme, base, components, utilities;
-@import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/utilities.css" layer(utilities);
+@import "tailwindcss";
 @import "@nuxt/ui";
 @source "../../vite.config.ts";
 
+/* Canvas palette as Nuxt UI color scales: `neutral: 'canvas'`, `primary: 'peach'`. */
+@theme static {
+  --font-sans: "DM Sans", "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --color-canvas-50: oklch(97.6% 0.004 258);
+  --color-canvas-100: oklch(94.8% 0.007 258);
+  --color-canvas-200: oklch(88.6% 0.012 258);
+  --color-canvas-300: oklch(80.4% 0.02 258);
+  --color-canvas-400: oklch(70.3% 0.024 258);
+  --color-canvas-500: oklch(58.5% 0.028 258);
+  --color-canvas-600: oklch(46% 0.026 258);
+  --color-canvas-700: oklch(36.5% 0.023 258);
+  --color-canvas-800: oklch(27% 0.0165 258);
+  --color-canvas-900: oklch(21% 0.011 258);
+  --color-canvas-950: oklch(17.2% 0.009 258);
+  --color-peach-50: oklch(97.5% 0.015 57);
+  --color-peach-100: oklch(94.5% 0.03 57);
+  --color-peach-200: oklch(88.5% 0.058 57);
+  --color-peach-300: oklch(80.2% 0.0853 57);
+  --color-peach-400: oklch(72% 0.105 57);
+  --color-peach-500: oklch(63.5% 0.112 57);
+  --color-peach-600: oklch(54.5% 0.105 57);
+  --color-peach-700: oklch(46% 0.09 57);
+  --color-peach-800: oklch(38% 0.072 57);
+  --color-peach-900: oklch(31.5% 0.058 57);
+  --color-peach-950: oklch(22% 0.04 57);
+}
+
 :root {
-  /* Canvas brand: one primary token; cards override it with their own color. */
-  --ui-primary: #e9b188;
+  /* Canvas is a dense dark tool: rem-based component sizes follow a 13px root. */
+  font-size: 13px;
+}
+/* Canvas surfaces are darker than Nuxt UI's defaults; the brand primary is peach 300.
+   Cards override --ui-primary with their own color. */
+.dark {
+  --ui-primary: var(--ui-color-primary-300);
+  --ui-bg: var(--ui-color-neutral-950);
+  --ui-bg-muted: var(--ui-color-neutral-900);
+  --ui-bg-elevated: var(--ui-color-neutral-900);
+  --ui-bg-accented: var(--ui-color-neutral-800);
+  --ui-border: var(--ui-color-neutral-800);
+  --ui-border-muted: var(--ui-color-neutral-800);
+  --ui-border-accented: var(--ui-color-neutral-700);
+}
+/* Native buttons not yet migrated to UButton keep their old base; Nuxt UI controls carry data-slot. */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  button:not([data-slot]) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    outline: none;
+  }
+  button:not([data-slot]):disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+  button:not([data-slot])[aria-busy="true"] {
+    cursor: progress;
+  }
+  button:not([data-slot]):focus-visible {
+    outline: 2px solid var(--ui-primary);
+    outline-offset: 3px;
+  }
+  button:not([data-slot]) svg {
+    flex-shrink: 0;
+  }
+  small {
+    font-size: 11px;
+  }
 }

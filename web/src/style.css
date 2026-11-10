@@ -1,24 +1,9 @@
 :root {
-  font-family:
-    "DM Sans",
-    "Noto Sans SC",
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
-  color: #d9dbe1;
-  background: #15171b;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  font-size: 13px;
-  --surface: #1c1f25;
-  --surface-high: #252930;
-  --border: #2c3038;
-  --muted: #777f8d;
-  --faint: #555d6b;
-  --green: #97bb9f;
-  --danger: #e39797;
+  --muted: var(--ui-text-muted);
+  --green: var(--ui-success);
+  --danger: var(--ui-error);
   --window-controls-height: 0px;
   --window-controls-color: #17191d;
   --ui-viewport-width: calc(100dvw / var(--ui-zoom));
@@ -30,34 +15,6 @@
   --canvas-viewport-height: 100dvh;
   --content-font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --content-font-features: "liga" 0, "calt" 0;
-}
-@layer base {
-  button {
-    border: 0;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    cursor: pointer;
-    outline: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-  }
-  button:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-  button[aria-busy="true"] {
-    cursor: progress;
-  }
-  button:focus-visible:not(:where([role^="menuitem"])) {
-    outline: 2px solid var(--ui-primary);
-    outline-offset: 3px;
-  }
-  button svg {
-    flex-shrink: 0;
-  }
 }
 :root[data-interactive-widget="overlays-content"] {
   --canvas-viewport-height: max(0px, calc(100dvh - env(keyboard-inset-height, 0px)));
@@ -443,9 +400,6 @@
     grid-column: 5;
   }
 }
-* {
-  box-sizing: border-box;
-}
 html,
 body,
 #app {
@@ -484,11 +438,6 @@ body,
 :where(.login-content, .modal) label :is(input, select) {
   margin-top: 8px;
 }
-h1,
-h2,
-p {
-  margin: 0;
-}
 :where(.login-content, .modal) h2 {
   font-size: 21px;
   font-weight: 600;
@@ -496,9 +445,6 @@ p {
 }
 :where(.login-content, .modal) p {
   line-height: 1.8;
-}
-small {
-  font-size: 11px;
 }
 .button {
   min-height: 35px;
