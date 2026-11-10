@@ -1,5 +1,5 @@
 import { computed, shallowRef } from 'vue'
-import { apiUrl } from './api'
+import { api, apiUrl, requireCurrentApi, uuid, type ApiContext } from './api'
 
 interface UrlRequest { id: string; url: string; forwarded: boolean }
 const requests = shallowRef<UrlRequest[]>([])
@@ -32,3 +32,11 @@ export function receiveUrl(socket: WebSocket, message: Record<string, unknown>):
   return true
 }
 export function clearUrls() { requests.value = []; received = new WeakMap() }
+/** Source-local web services go through the scoped forward and its confirmation dialog. */
+export function forwardSourceUrl(sourceId: string, url: string, context: ApiContext, signal?: AbortSignal) {
+  return api<{ url: string; forwarded: boolean }>('/api/urls', { method: 'POST', body: JSON.stringify({ sourceId, url }), signal }, context)
+}
+export async function presentSourceUrl(sourceId: string, url: string, context: ApiContext) {
+  const opened = await forwardSourceUrl(sourceId, url, context)
+  requireCurrentApi(context); presentUrl({ id: uuid(), ...opened })
+}

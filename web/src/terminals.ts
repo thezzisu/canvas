@@ -7,9 +7,11 @@ import { locale, t } from './i18n'
 import { Terminal } from '@xterm/xterm'
 import { terminalUnicodeAddon } from '../../shared/terminal-unicode'
 import { api, apiContext, apiFetch, apiUrl, isCurrentApi, segment, uuid } from './api'
-import { clearDownloads, disconnectDownloads, receiveDownload } from './downloads'
+import { clearDownloads, disconnectDownloads, receiveDownload, reportDownloadError } from './downloads'
 import { clearDirectories, receiveDirectory } from './directories'
-import { clearUrls, receiveUrl } from './urls'
+import { clearUrls, presentSourceUrl, receiveUrl } from './urls'
+import { terminalLinkHandler } from './terminal-links'
+import { previewWindowFile } from './content-scan'
 import { clearCaptures, receiveCapture, removeCaptures } from './capture'
 import { captureRichPaste } from './rich-paste'
 import { previewRichPaste } from './rich-paste-dialog'
@@ -121,6 +123,7 @@ interface Session {
   uploads: TerminalUploads
   pastePreview?: () => void
   fileRead?: AbortController
+  fileLink?: Promise<void>
   clipboard?: TerminalClipboard
   settings: TerminalSettings
   // Browsers without a paste event for Ctrl+Shift+V fall back to the async clipboard.
@@ -781,6 +784,12 @@ function sendTerminalData(session: Session, data: string) {
   session.term.input(data, true)
   return true
 }
+function openTerminalFile(session: Session, path: string) {
+  if (session.fileLink) return
+  const { sourceId, spaceId, windowId } = session.resource
+  const opening = session.fileLink = previewWindowFile(`/api/sources/${segment(sourceId)}/spaces/${segment(spaceId)}/windows/${segment(windowId)}`, path, apiContext())
+    .catch(reportDownloadError).finally(() => { if (session.fileLink === opening) session.fileLink = undefined })
+}
 export function mountTerminal(host: HTMLElement, resource: Session['resource'], listener: (state: TerminalStatus) => void, options: { magnified?: boolean; mobile?: boolean; zoom?: number; closed?: boolean; settings?: TerminalSettings } = {}) {
   installTerminalEvents()
   const mountingContext = apiContext()
@@ -795,6 +804,12 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       scrollback: 5000,
       overviewRuler: { width: scrollbarWidth },
       allowProposedApi: true,
+      linkHandler: terminalLinkHandler({
+        openWeb: url => { window.open(url, '_blank', 'noopener,noreferrer') },
+        forwardWeb: url => { void presentSourceUrl(session!.resource.sourceId, url, apiContext()).catch(reportDownloadError) },
+        openFile: path => { openTerminalFile(session!, path) },
+      // A selection gesture ending on a link selects; synthetic touchpad taps never select.
+      }, event => !!session?.host?.isConnected && (!event.isTrusted || !session.term.hasSelection())),
       theme: { overviewRulerBorder: 'transparent', background: '#111317', foreground: '#d5d7dd', cursor: '#e8b183', selectionBackground: '#415168', black: '#20242b', red: '#f08080', green: '#9ecb8f', yellow: '#e5c285', blue: '#8daed7', magenta: '#c7a0df', cyan: '#8fc5c4', white: '#d5d7dd', brightBlack: '#66707f', brightWhite: '#f6f6f7' },
     })
     term.loadAddon(terminalUnicodeAddon())

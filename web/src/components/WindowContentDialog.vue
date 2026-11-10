@@ -5,13 +5,15 @@ import UModal from './CanvasModal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import type { Canvas } from '../types'
-import type { WindowContentItem, WindowContentOpen, WindowContentScan } from '../../../shared/window-content'
-import { api, apiContext, apiUrl, requireCurrentApi, segment, uuid } from '../api'
+import type { WindowContentItem, WindowContentScan } from '../../../shared/window-content'
+import { api, apiContext, requireCurrentApi, segment, uuid } from '../api'
+import { openScanFile } from '../content-scan'
+import { publicWebUrl } from '../terminal-links'
 import { copyText } from '../clipboard'
 import { presentDownload } from '../downloads'
 import { filePreview } from '../file-preview'
 import Icon from './Icon.vue'
-import { presentUrl } from '../urls'
+import { forwardSourceUrl, presentUrl } from '../urls'
 
 type Target = { sourceId: string; spaceId: string; windowId: string; name: string }
 type FileItem = Extract<WindowContentItem, { kind: 'file' }>
@@ -29,22 +31,12 @@ const panes = computed(() => result.value?.scan.panes.filter(pane => pane.items.
   items: pane.items.map(item => ({ ...item,
     previewable: item.kind === 'file' && !!item.path && filePreview({ filename: item.path }) !== 'file',
     displayLabel: item.kind === 'file' ? item.label.split('/').filter(Boolean).at(-1) || item.label : item.label,
-    href: item.kind === 'link' ? externalLink(item.url) : undefined })),
+    href: item.kind === 'link' ? publicWebUrl(item.url) : undefined })),
 })) || [])
 let scanRequest: AbortController | undefined
 let fileRequest: AbortController | undefined
 let retryItem: { item: FileItem; action: FileAction } | undefined
 
-function externalLink(value: string) {
-  try {
-    const url = new URL(value)
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return
-    const host = url.hostname.toLowerCase()
-    if (host === 'localhost' || host.endsWith('.localhost') || /^127(?:\.\d{1,3}){3}$/.test(host) ||
-        host === '[::1]' || host === '0.0.0.0' || host === '[::]') return
-    return url.href
-  } catch { return }
-}
 function cancelRequests() {
   scanRequest?.abort(); scanRequest = undefined
   fileRequest?.abort(); fileRequest = undefined
@@ -84,12 +76,8 @@ async function openFile(item: FileItem, action: FileAction = 'download') {
   const destination = !canvas ? {} : anchor ? { canvasId: canvas.id, anchorId: anchor.id } : { canvasId: canvas.id,
     position: { x: Math.min(1e7, canvas.nodes.length ? Math.max(...canvas.nodes.map(node => node.x + node.width)) + 24 : 80), y: 80 } }
   try {
-    const file = await api<WindowContentOpen>(`/api/content-scans/${segment(snapshot.scan.id)}/items/${segment(item.id)}/open`,
-      { method: 'POST', body: JSON.stringify(destination), signal: current.signal }, context)
+    const file = await openScanFile(snapshot.scan.id, item.id, destination, context, current.signal)
     if (fileRequest !== current || current.signal.aborted || result.value !== snapshot || props.target !== snapshot.target) return
-    const url = apiUrl(file.url, context)
-    if (!/^api\/(?:files|downloads)\/[^/]+$/.test(url.pathname.slice(new URL(context.base).pathname.length)) || url.search) throw new Error(t('panels.scan.openFailed'))
-    requireCurrentApi(context)
     if (canvas) added.value = item.id
     else await presentDownload(file, action === 'download')
   } catch (reason) {
@@ -111,8 +99,7 @@ async function openLink(item: Extract<WindowContentItem, { kind: 'link' }>) {
   const current = fileRequest = new AbortController()
   opening.value = item.id; error.value = ''
   try {
-    const opened = await api<{ url: string; forwarded: boolean }>('/api/urls', { method: 'POST',
-      body: JSON.stringify({ sourceId: snapshot.target.sourceId, url: item.url }), signal: current.signal }, context)
+    const opened = await forwardSourceUrl(snapshot.target.sourceId, item.url, context, current.signal)
     if (current.signal.aborted || result.value !== snapshot || props.target !== snapshot.target) return
     fileRequest = undefined; opening.value = ''; emit('close'); await nextTick()
     requireCurrentApi(context); presentUrl({ id: uuid(), ...opened })

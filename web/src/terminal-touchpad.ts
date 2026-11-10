@@ -23,7 +23,7 @@ export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, optio
   screen.appendChild(cursor)
   Object.assign(cursor.style, { position: 'absolute', pointerEvents: 'none', zIndex: '8', transformOrigin: 'top left' })
   const position = { x: .5, y: .5 }
-  let left = false, dragged = false, remainderX = 0, remainderY = 0
+  let left = false, dragged = false, pointing = false, remainderX = 0, remainderY = 0
   const active = () => options.enabled() && options.active() && screen.isConnected
   function point() {
     const rect = screen.getBoundingClientRect()
@@ -45,6 +45,21 @@ export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, optio
     // The existing client protocol accepts movement and horizontal wheel even
     // when the outer xterm reports only button drags / vertical WheelEvents.
     term.input(`\x1b[<${code};${Math.min(term.cols - 1, Math.floor(position.x * term.cols)) + 1};${Math.min(term.rows - 1, Math.floor(position.y * term.rows)) + 1}${up ? 'm' : 'M'}`, (code & ~28) !== 35)
+  }
+  /**
+   * xterm's own link detection hit-tests the virtual pointer's cell. The
+   * events target `.xterm-screen` without bubbling, so its Linkifier sees them
+   * but `.xterm` mouse reporting and selection do not; the terminal receives
+   * only the reports `send` writes. Coordinates are on-screen like real mouse
+   * events; Canvas's document capture normalizer unscales them for xterm.
+   */
+  function pointLink(type: 'mousemove' | 'mousedown' | 'mouseup' | 'mouseleave') {
+    const rect = screen.getBoundingClientRect()
+    if (!rect.width || !rect.height) return
+    pointing = type !== 'mouseleave'
+    screen.dispatchEvent(new MouseEvent(type, { bubbles: false, cancelable: true, button: 0, buttons: type === 'mousedown' ? 1 : 0,
+      clientX: rect.left + (Math.min(term.cols - 1, Math.floor(position.x * term.cols)) + .5) / term.cols * rect.width,
+      clientY: rect.top + (Math.min(term.rows - 1, Math.floor(position.y * term.rows)) + .5) / term.rows * rect.height }))
   }
   function release() {
     if (left) send(0, true)
@@ -71,7 +86,12 @@ export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, optio
         bubbles: true, cancelable: true, button: 2, buttons: type === 'mousedown' ? 2 : 0, clientX, clientY,
         shiftKey: modifiers.shift, ctrlKey: modifiers.ctrl, altKey: modifiers.alt, metaKey: modifiers.meta,
       }))
-    } else { const code = button === 'left' ? 0 : 1; send(code); send(code, true) }
+    } else {
+      const code = button === 'left' ? 0 : 1
+      if (button === 'left') { pointLink('mousemove'); pointLink('mousedown') }
+      send(code); send(code, true)
+      if (button === 'left') pointLink('mouseup')
+    }
   }
   function move(x: number, y: number) {
     if (!active()) return
@@ -80,6 +100,7 @@ export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, optio
     position.x = Math.max(0, Math.min(1 - 1 / rect.width, position.x + x / rect.width))
     position.y = Math.max(0, Math.min(1 - 1 / rect.height, position.y + y / rect.height))
     render(); dragged ||= left
+    if (!left) pointLink('mousemove')
     if (left || options.hover() && !term.hasSelection()) send(left ? 32 : 35)
   }
   function scroll(x: number, y: number) {
@@ -105,7 +126,7 @@ export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, optio
     if (!active()) { gesture.cancel(); return }
     stopEvent(event); gesture.end(fingers(event).length, performance.now())
   }
-  function cancel() { gesture.cancel(); release(); remainderX = remainderY = 0 }
+  function cancel() { gesture.cancel(); release(); remainderX = remainderY = 0; if (pointing) pointLink('mouseleave') }
   // Terminal sessions outlive their card component when maximization moves hosts.
   const scope = effectScope(true)
   scope.run(() => {
