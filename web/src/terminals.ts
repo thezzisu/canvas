@@ -29,7 +29,6 @@ import { applyTerminalFontFeatures, type FontPresentation } from './fonts'
 import { bindMobileKeyboard, type MobileKeyboardState } from './mobile-keyboard'
 import { bindMobileInput } from './mobile-input'
 import { uiZoom } from './ui-scale'
-import { copiedFile } from './file-clipboard'
 import { loadCanvasFile } from './file-transfer'
 import { readNoteClipboard, loadNoteClipboard, terminalNoteClipboard, NOTE_CLIPBOARD_TYPE, type NoteClipboard } from './note-clipboard'
 import type { CanvasFileReference } from './file-reference'
@@ -301,11 +300,6 @@ async function pasteNote(session: Session, note: NoteClipboard) {
   } finally {
     if (session.fileRead === controller) { session.fileRead = undefined; setState(session, { ...session.state, fileReading: false }) }
   }
-}
-export function pasteFileIntoWindow(sourceId: string, windowId: string) {
-  const reference = copiedFile.value?.reference
-  const session = [...sessions.values()].find(value => value.resource.sourceId === sourceId && value.resource.windowId === windowId && value.host?.isConnected)
-  if (reference && session) return uploadReference(session, reference)
 }
 watch(locale, () => {
   Terminal.strings.promptLabel = t('terminal.keyboard.input')
@@ -1203,6 +1197,10 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     setResizing(value: boolean) { current.resizing = value; present(current) },
     close() { if (current.host === host && isCurrentApi(mountingContext)) windowRemoved(current) },
     cancelUpload() { current.uploads.cancel() },
+    /** Deliver the stored draft version the user saw; Canvas streams its files to the native inbox. */
+    sendComposer(composer: string, version: number) {
+      current.uploads.enqueueStored({ type: 'composer-send', composer, version }, t('terminal.composer.title'), mountingContext)
+    },
     reconnect() {
       disconnect(current)
       current.reconnect?.restart()

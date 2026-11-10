@@ -31,6 +31,7 @@ import { CaptureError, CaptureService, type CaptureLease } from './capture.ts';
 import { captureAddress } from './capture-address.ts';
 import { SourcePreviewService } from './source-preview.ts';
 import { captureToolbarHeight } from '../shared/capture.ts';
+import { sendComposer } from "./composer-send.ts";
 const dataDir =
   process.env.CANVAS_DATA_DIR ?? join(homedir(), ".local/share/canvas");
 const accounts = new AccountStore(dataDir);
@@ -222,6 +223,10 @@ const upgrade = (request: import("node:http").IncomingMessage, socket: import("n
           const current = store.get<Source>("source", sourceId);
           if (current && sourceConnectionKey(current) === sourceConnectionKey(source))
             void uploads.begin(source, windowId, ws, session, { id: message.id, files: message.files, parts: message.parts });
+        } else if (message.type === "composer-send") {
+          const current = store.get<Source>("source", sourceId);
+          if (current && sourceConnectionKey(current) === sourceConnectionKey(source))
+            void sendComposer(store, assets, uploads, source, windowId, ws, session, { id: message.id, composer: message.composer, version: message.version });
         } else if (message.type === "upload-cancel" && typeof message.id === "string") uploads.cancel(ws, message.id);
         else if (message.type === "upload-failed" && typeof message.id === "string") uploads.failed(ws, message.id);
         else if (message.type === "directory-received" && typeof message.id === "string") downloads.directoryReceived(message.id, ws, session);

@@ -8,7 +8,7 @@ import { z } from "zod";
 import { verifyPassword, bearerToken, allowedOrigin } from "./auth.ts";
 import { accountUsername, accountPassword, type Account } from "./account.ts";
 import { MediaTickets, mediaPath } from "./media.ts";
-import { receiveCanvasFile } from "./canvas-files.ts";
+import { receiveCanvasFile, receiveFile } from "./canvas-files.ts";
 import { buildInfo } from "./build-info.ts";
 import { settingsPatchSchema } from "./settings.ts";
 import {
@@ -85,7 +85,8 @@ const isBackgroundUpload = (method: string, path: string) =>
 const isInboxUpload = (method: string, path: string) =>
   method === "PUT" && /^\/api\/uploads\/[A-Za-z0-9_-]+$/.test(path);
 const isCanvasFileUpload = (method: string, path: string) =>
-  method === 'POST' && /^\/api\/canvases\/[^/]+\/(?:notes\/[^/]+\/)?files$/.test(path);
+  method === 'POST' && (/^\/api\/canvases\/[^/]+\/(?:notes\/[^/]+\/)?files$/.test(path) || /^\/api\/sources\/[^/]+\/windows\/[^/]+\/composer\/files$/.test(path));
+const composerSchema = z.object({ content: z.string().max(200_000) }).strict();
 export type { Account } from "./account.ts";
 export interface DownloadResponse {
   body: Readable;
@@ -229,6 +230,25 @@ export function createApp(
     const input = z.object({ assetIds: z.array(z.string().uuid()).min(1).max(64) }).strict().parse(await c.req.json());
     const assets = store.referenceNoteFiles(c.req.param('id'), c.req.param('note'), input.assetIds);
     return assets ? c.json(assets) : c.json({ error: 'Note or file not found' }, 404);
+  });
+  const composerTarget = (c: { req: { param(name: string): string } }) => ({ sourceId: c.req.param('id'), windowId: c.req.param('window') });
+  app.patch('/api/sources/:id/windows/:window/composer', async c => {
+    const target = composerTarget(c);
+    if (!store.acceptsComposer(target)) return c.json({ error: 'Window not found' }, 404);
+    return c.json(store.updateComposer(target, composerSchema.parse(await c.req.json()).content));
+  });
+  app.post('/api/sources/:id/windows/:window/composer/files', async c => {
+    const target = composerTarget(c);
+    if (!store.acceptsComposer(target) || !options.assets) return c.json({ error: 'Window not found' }, 404);
+    const input = z.object({ filename: z.string().min(1).max(255),
+      size: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).strict().parse(c.req.query());
+    return c.json(await receiveFile(store, options.assets, input, { composer: target }, () => store.acceptsComposer(target),
+      c.req.raw, bearerToken(c.req.header('authorization'))), 201);
+  });
+  app.post('/api/sources/:id/windows/:window/composer/file-references', async c => {
+    const input = z.object({ assetIds: z.array(z.string().uuid()).min(1).max(64) }).strict().parse(await c.req.json());
+    const assets = store.referenceComposerFiles(composerTarget(c), input.assetIds);
+    return assets ? c.json(assets) : c.json({ error: 'Window or file not found' }, 404);
   });
   app.get("/api/downloads/:ticket", async (c) => {
     if (c.req.method !== "GET") return c.body(null, 405);

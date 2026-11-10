@@ -99,7 +99,13 @@ export type FileAssetContext = { canvasId?: string; origin?: FileOrigin } & (
   | { anchorId?: string; sourceId: string; windowId: string }
   | { position: { x: number; y: number } }
   | { noteId: string }
+  | { composer: ComposerTarget }
 );
+export interface ComposerTarget { sourceId: string; windowId: string }
+/** A terminal's draft: a note owned by its native window instead of a canvas. */
+export interface Composer extends ComposerTarget { id: string; content: string; version: number }
+export type ComposerView = Composer & { attachments: FileAsset[] };
+export const composerKey = (target: ComposerTarget) => `${target.sourceId}/${target.windowId}`;
 export const isTerminalNode = (node: CanvasNode): node is TerminalNode =>
   node.type === "terminal";
 export const canvasSchema = z
@@ -130,6 +136,7 @@ export type SharedState = {
   canvases: CanvasView[];
   overviewBackground: CanvasBackground | null;
   windowSizes: Record<string, WindowSize>;
+  composers: Record<string, ComposerView>;
 };
 export class LayoutConflict extends Error {}
 
@@ -138,6 +145,8 @@ export class Store extends EventEmitter {
   readonly instanceId = randomUUID();
   revision = 0;
   private removals = new Map<string, RemovedCard>();
+  /** Windows recently closed through Canvas; late draft writes must not recreate their composers. */
+  private closedWindows = new Map<string, number>();
   constructor(path: string) {
     super();
     this.setMaxListeners(0);
@@ -186,9 +195,12 @@ export class Store extends EventEmitter {
     return result;
   }
   remove(kind: string, id: string) {
-    if (kind === "source")
+    if (kind === "source") {
       this.db.prepare("DELETE FROM documents WHERE kind='window-size' AND substr(id,1,?)=?")
         .run(id.length + 1, `${id}/`);
+      this.removeComposers(composer => composer.sourceId === id);
+      for (const key of this.closedWindows.keys()) if (key.startsWith(`${id}/`)) this.closedWindows.delete(key);
+    }
     this.db
       .prepare("DELETE FROM documents WHERE kind=? AND id=?")
       .run(kind, id);
@@ -213,6 +225,10 @@ export class Store extends EventEmitter {
       }
       const removeSize = this.db.prepare("DELETE FROM documents WHERE kind='window-size' AND id=?");
       for (const windowId of closed) changed = !!removeSize.run(`${source.id}/${windowId}`).changes || changed;
+      changed = this.removeComposers(composer => composer.sourceId === source.id && closed.has(composer.windowId)) || changed;
+      // Native IDs may be reused later; the guard only outlives in-flight browser writes.
+      const until = Date.now() + 120_000;
+      for (const windowId of closed) this.closedWindows.set(composerKey({ sourceId: source.id, windowId }), until);
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     this.cancelRemovals(item => item.node.type === 'terminal' && item.node.sourceId === source.id && closed.has(item.node.windowId));
@@ -297,6 +313,7 @@ export class Store extends EventEmitter {
       ).background,
       windowSizes: Object.fromEntries(this.list<WindowSize & { id: string }>("window-size")
         .map(({ id, width, height }) => [id, { width, height }])),
+      composers: Object.fromEntries(this.list<Composer>("composer").map(composer => [composerKey(composer), this.composerView(composer)])),
     };
   }
   settings(): GlobalSettings {
@@ -482,6 +499,19 @@ export class Store extends EventEmitter {
   }
 
   commitFileAsset(asset: FileAsset, context: FileAssetContext): boolean {
+    if ('composer' in context) {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        if (!this.acceptsComposer(context.composer)) { this.db.exec("ROLLBACK"); return false; }
+        const composer = this.ensureComposer(context.composer);
+        this.db.prepare("INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)")
+          .run(asset.id, '', asset.filename, asset.size, asset.mime, asset.createdAt);
+        this.db.prepare("INSERT INTO note_files(note_id,asset_id) VALUES(?,?)").run(composer.id, asset.id);
+        this.db.exec("COMMIT");
+      } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+      this.changed();
+      return true;
+    }
     const canvasId = context.canvasId;
     if (!canvasId || canvasId === "overview") return false;
     this.db.exec("BEGIN IMMEDIATE");
@@ -548,6 +578,97 @@ export class Store extends EventEmitter {
     return assets;
   }
 
+  /** A composer needs its connection and a window that Canvas has not closed. */
+  acceptsComposer(target: ComposerTarget): boolean {
+    const key = composerKey(target), closedUntil = this.closedWindows.get(key);
+    if (closedUntil !== undefined && closedUntil <= Date.now()) this.closedWindows.delete(key);
+    return !!this.get<Source>('source', target.sourceId) && !(closedUntil! > Date.now());
+  }
+  composer(target: ComposerTarget): Composer | undefined {
+    return this.get<Composer>('composer', composerKey(target));
+  }
+  composerView(composer: Composer): ComposerView {
+    return { ...composer, attachments: this.noteAttachments(composer.id) };
+  }
+  /** Callers own the transaction; the document is created only when content or files need an owner. */
+  private ensureComposer(target: ComposerTarget): Composer {
+    const existing = this.composer(target);
+    if (existing) return existing;
+    const composer: Composer = { id: randomUUID(), sourceId: target.sourceId, windowId: target.windowId, content: '', version: 0 };
+    this.writeComposer(composer);
+    return composer;
+  }
+  private writeComposer(composer: Composer) {
+    this.db.prepare("INSERT INTO documents(kind,id,body) VALUES('composer',?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body")
+      .run(composerKey(composer), JSON.stringify(composer));
+  }
+  /** An empty draft without retained files has nothing left to own. */
+  private releaseEmptyComposer(composer: Composer): boolean {
+    if (composer.content || this.db.prepare("SELECT 1 FROM note_files WHERE note_id=?").get(composer.id)) return false;
+    this.db.prepare("DELETE FROM documents WHERE kind='composer' AND id=?").run(composerKey(composer));
+    return true;
+  }
+  private removeComposers(matches: (composer: Composer) => boolean): boolean {
+    let removed = false;
+    for (const composer of this.list<Composer>('composer')) {
+      if (!matches(composer)) continue;
+      this.db.prepare("DELETE FROM note_files WHERE note_id=?").run(composer.id);
+      this.db.prepare("DELETE FROM documents WHERE kind='composer' AND id=?").run(composerKey(composer));
+      removed = true;
+    }
+    return removed;
+  }
+  updateComposer(target: ComposerTarget, content: string): ComposerView {
+    this.db.exec("BEGIN IMMEDIATE");
+    let composer: Composer;
+    try {
+      if (!this.acceptsComposer(target)) throw new Error('Window not found');
+      const current = this.composer(target);
+      if (current?.content === content || !current && !content) {
+        this.db.exec("ROLLBACK");
+        return this.composerView(current ?? { id: '', ...target, content: '', version: 0 });
+      }
+      composer = { ...(current ?? { id: randomUUID(), ...target, version: 0 }), content, version: (current?.version ?? 0) + 1 };
+      this.writeComposer(composer);
+      if (this.releaseEmptyComposer(composer)) composer = { ...composer, id: '' };
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    this.changed();
+    return this.composerView(composer);
+  }
+  referenceComposerFiles(target: ComposerTarget, assetIds: readonly string[]): FileAsset[] | undefined {
+    this.db.exec("BEGIN IMMEDIATE");
+    let assets: FileAsset[];
+    let changed = false;
+    try {
+      const existing = [...new Set(assetIds)].map(id => this.fileAsset(id));
+      if (!this.acceptsComposer(target) || existing.some(asset => !asset)) { this.db.exec("ROLLBACK"); return; }
+      assets = existing as FileAsset[];
+      const composer = this.ensureComposer(target);
+      const link = this.db.prepare("INSERT OR IGNORE INTO note_files(note_id,asset_id) VALUES(?,?)");
+      for (const asset of assets) changed = link.run(composer.id, asset.id).changes > 0 || changed;
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    if (changed) this.changed();
+    return assets;
+  }
+  /** Sending clears exactly the delivered version and releases the files it delivered. */
+  completeComposerSend(target: ComposerTarget, version: number, assetIds: readonly string[]): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.composer(target);
+      if (!current || current.version !== version) { this.db.exec("ROLLBACK"); return false; }
+      const composer = { ...current, content: '', version: version + 1 };
+      this.writeComposer(composer);
+      const unlink = this.db.prepare("DELETE FROM note_files WHERE note_id=? AND asset_id=?");
+      for (const id of assetIds) unlink.run(composer.id, id);
+      this.releaseEmptyComposer(composer);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    this.changed();
+    return true;
+  }
+
   noteAttachments(noteId: string): FileAsset[] {
     return this.db.prepare("SELECT f.*, o.id IS NOT NULL AS source_preview FROM canvas_files f JOIN note_files n ON n.asset_id=f.id LEFT JOIN documents o ON o.kind='file-origin' AND o.id=f.id WHERE n.note_id=? ORDER BY f.rowid")
       .all(noteId).map(row => this.fileAssetFromRow(row));
@@ -587,6 +708,7 @@ export class Store extends EventEmitter {
 
   fileAssetReferenced(id: string): boolean {
     const owners = this.assetNoteIds(id);
+    if (this.db.prepare("SELECT 1 FROM note_files n JOIN documents d ON d.kind='composer' AND json_extract(d.body,'$.id')=n.note_id WHERE n.asset_id=?").get(id)) return true;
     if ([...this.removals.values()].some(item => !item.restored && item.expiresAt > Date.now() && this.nodeReferencesAsset(item.node, id, owners))) return true;
     const canvases = this.db.prepare("SELECT body FROM documents WHERE kind='canvas'").all()
       .map(row => JSON.parse(String(row.body)) as Canvas);

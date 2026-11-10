@@ -43,3 +43,26 @@ export function filePasteParts(count: number): PastePart[] {
 export function renderPasteParts(parts: readonly PastePart[], paths: readonly string[]): string {
   return renderPasteSegments(parts, paths).map(segment => segment.text).join("");
 }
+
+const attachmentTokens = /￼([\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12})￼/giu;
+/**
+ * Note content becomes terminal paste parts: repeated files are delivered once,
+ * and attachments without surrounding text are separated like a native drop.
+ */
+export function noteContentPaste(content: string): { files: string[]; parts: PastePart[] } {
+  const files: string[] = [], parts: PastePart[] = [];
+  let offset = 0;
+  const text = (value: string) => { if (value) parts.push(value); };
+  for (const match of content.matchAll(attachmentTokens)) {
+    text(content.slice(offset, match.index));
+    const id = match[1]!.toLowerCase();
+    let file = files.indexOf(id);
+    if (file < 0) file = files.push(id) - 1;
+    parts.push({ file, format: "path" });
+    offset = match.index + match[0].length;
+  }
+  text(content.slice(offset));
+  if (files.length && parts.every(part => typeof part !== "string" || !part.trim()))
+    return { files, parts: parts.filter(part => typeof part !== "string").flatMap((part, index): PastePart[] => index ? [" ", part] : [part]) };
+  return { files, parts };
+}

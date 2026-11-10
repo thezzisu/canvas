@@ -80,7 +80,9 @@ export const isTerminalNode = (node: CanvasNode): node is TerminalCanvasNode => 
 export type NotePatch = Partial<Pick<NoteCanvasNode, 'title' | 'content' | 'color'>>
 export interface Canvas { id: string; name: string; nodes: CanvasNode[]; snapToGrid?: boolean; background?: { url: string; opacity: number } | null }
 export interface WindowSize { width: number; height: number }
-export interface SharedState { instanceId: string; revision: number; navigationOrder: NavigationOrder; sources: Source[]; canvases: Canvas[]; overviewBackground: Canvas['background']; windowSizes: Record<string, WindowSize>; settings: GlobalSettings }
+/** A terminal window's draft: a note owned by the native window. */
+export interface ComposerView { id: string; sourceId: string; windowId: string; content: string; version: number; attachments: FileAsset[] }
+export interface SharedState { instanceId: string; revision: number; navigationOrder: NavigationOrder; sources: Source[]; canvases: Canvas[]; overviewBackground: Canvas['background']; windowSizes: Record<string, WindowSize>; composers: Record<string, ComposerView>; settings: GlobalSettings }
 export interface TerminalData {
   preferenceKey: string
   sourceId: string

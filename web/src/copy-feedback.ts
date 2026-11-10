@@ -1,6 +1,6 @@
 import { shallowRef } from 'vue'
 
-export type CopyFeedbackKind = 'copied' | 'cut' | 'failed' | 'canvas'
+export type CopyFeedbackKind = 'copied' | 'cut' | 'failed'
 export const copyFeedback = shallowRef<{ kind: CopyFeedbackKind; revision: number }>()
 let revision = 0
 

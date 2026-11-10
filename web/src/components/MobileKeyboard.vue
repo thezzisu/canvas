@@ -8,7 +8,6 @@ import type { TouchpadControl } from '../touchpad-gesture'
 import Icon from './Icon.vue'
 import UModal from './CanvasModal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
-import { copiedFile } from '../file-clipboard'
 import { useReducedMotion } from '../reduced-motion'
 
 const { t } = useI18n()
@@ -32,9 +31,7 @@ const emit = defineEmits<{
   key: [key: string, modifiers?: Partial<TerminalModifiers>]
   modifiers: [value: TerminalModifiers]
   mode: [value: TouchMode]
-  files: [files: File[]]
-  paste: [text: string]
-  pasteFile: []
+  composer: []
   reading: [active: boolean]
   pointer: [action: TouchpadControl]
   switchKeyboard: []
@@ -46,12 +43,11 @@ const portal = computed(() => keyboard.value?.closest<HTMLElement>('.app-shell')
 const switchLabel = computed(() => t(props.keyboardMode === 'system' ? 'terminal.keyboard.switchToBuiltin' : 'terminal.keyboard.switchToSystem'))
 const hasDock = computed(() => props.dockHeight > 0)
 const caps = ref(false)
-const sheet = ref<'select' | 'paste'>()
+const sheet = ref<'select'>()
 const snapshot = ref('')
 const loadingText = ref(false), textFailed = ref(false)
 let textRequest: AbortController | undefined
 let pendingFiles: ReturnType<typeof props.prepareFiles>
-const draft = ref('')
 const selected = ref(false)
 const textArea = ref<HTMLTextAreaElement>()
 const fileInput = ref<HTMLInputElement>()
@@ -252,17 +248,16 @@ async function loadText() {
     }
   }
 }
-function openSheet(kind: 'select' | 'paste') {
+function openSelection() {
   stopRepeat()
   previousMode = props.touchMode
   emit('reading', true)
   emit('mode', 'select')
   textRequest?.abort(); textRequest = undefined
   snapshot.value = ''; loadingText.value = false; textFailed.value = false
-  draft.value = ''
   selected.value = false
-  sheet.value = kind
-  if (kind === 'select') void loadText()
+  sheet.value = 'select'
+  void loadText()
 }
 function updateSelection() {
   const area = textArea.value
@@ -273,20 +268,6 @@ async function copy(all: boolean) {
   const text = all ? snapshot.value : area?.value.slice(area.selectionStart, area.selectionEnd) || ''
   if (!text) return
   await props.copyText(text)
-}
-function pasteText() {
-  if (!draft.value || props.disabled) return
-  emit('paste', draft.value)
-  closeSheet()
-}
-function pasteFiles(event: ClipboardEvent) {
-  const data = event.clipboardData
-  const files = data?.files.length ? [...data.files] : [...data?.items || []].map(item => item.kind === 'file' ? item.getAsFile() : null).filter((file): file is File => !!file)
-  if (!files.length) return
-  event.preventDefault()
-  event.stopPropagation()
-  emit('files', files)
-  closeSheet()
 }
 function pickFiles() {
   pendingFiles?.dispose()
@@ -350,9 +331,8 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
       <div ref="actions" class="mobile-key-actions" role="toolbar" :aria-label="t('terminal.keyboard.actions')" @contextmenu.prevent>
         <TransitionGroup name="mobile-tool" @before-leave="pinLeavingTool" @leave-cancelled="unpinTool">
           <button key="file" type="button" :disabled="disabled" :aria-label="t('terminal.upload.file')" :title="t('terminal.upload.file')" @pointerdown.prevent @click="pickFiles"><Icon name="file" :size="18" /></button>
-          <button key="paste" type="button" :disabled="disabled" :aria-label="t('terminal.keyboard.pasteText')" :title="t('terminal.keyboard.pasteText')" @pointerdown.prevent @click="openSheet('paste')"><Icon name="clipboard" :size="18" /></button>
-          <button v-if="copiedFile" key="paste-file" type="button" :disabled="disabled" :aria-label="t('fileTransfer.paste')" :title="t('fileTransfer.pasteNamed', { name: copiedFile.filename })" @pointerdown.prevent @click="emit('pasteFile')"><Icon name="file-paste" :size="18" /></button>
-          <button key="copy" type="button" :aria-label="t('terminal.keyboard.selectText')" :title="t('terminal.keyboard.selectText')" @pointerdown.prevent @click="openSheet('select')"><Icon name="copy" :size="18" /></button>
+          <button key="composer" type="button" :disabled="disabled" :aria-label="t('terminal.composer.title')" :title="t('terminal.composer.title')" @pointerdown.prevent @click="emit('composer')"><Icon name="compose" :size="18" /></button>
+          <button key="copy" type="button" :aria-label="t('terminal.keyboard.selectText')" :title="t('terminal.keyboard.selectText')" @pointerdown.prevent @click="openSelection"><Icon name="copy" :size="18" /></button>
           <button v-if="touchMode === 'touchpad'" key="left" type="button" class="mobile-mouse-button" :disabled="disabled" :aria-label="t('terminal.keyboard.mouseLeft')" :title="t('terminal.keyboard.mouseLeft')" :aria-pressed="pointerPress?.button === 'left'" @pointerdown="pointerDown($event, 'left')" @pointerup="pointerUp($event)" @pointercancel="pointerUp($event, true)" @lostpointercapture="pointerUp($event, true)" @click="event => { if (event.detail === 0) emit('pointer', { type: 'click', button: 'left' }) }"><Icon name="mouse-left" :size="18" /></button>
           <button v-if="touchMode === 'touchpad'" key="middle" type="button" class="mobile-mouse-button" :disabled="disabled" :aria-label="t('terminal.keyboard.mouseMiddle')" :title="t('terminal.keyboard.mouseMiddle')" :aria-pressed="pointerPress?.button === 'middle'" @pointerdown="pointerDown($event, 'middle')" @pointermove="pointerMove" @pointerup="pointerUp($event)" @pointercancel="pointerUp($event, true)" @lostpointercapture="pointerUp($event, true)" @click="event => { if (event.detail === 0) emit('pointer', { type: 'click', button: 'middle' }) }"><Icon name="mouse-middle" :size="18" /></button>
           <button v-if="touchMode === 'touchpad'" key="right" type="button" :disabled="disabled" :aria-label="t('terminal.keyboard.mouseRight')" :title="t('terminal.keyboard.mouseRight')" @pointerdown.prevent @click="emit('pointer', { type: 'click', button: 'right' })"><Icon name="mouse-right" :size="18" /></button>
@@ -363,21 +343,19 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
       </div>
     </div>
     <input ref="fileInput" class="mobile-file-input" type="file" multiple tabindex="-1" :aria-label="t('terminal.upload.file')" @change="filesChanged" @cancel="filesCancelled" />
-    <UModal :open="!!sheet" :portal="portal" :transition="false" :title="sheet === 'select' ? t('terminal.keyboard.selectText') : t('terminal.keyboard.pasteText')"
+    <UModal :open="!!sheet" :portal="portal" :transition="false" :title="t('terminal.keyboard.selectText')"
       :close="{ 'aria-label': t('common.close') }" :content="{ onCloseAutoFocus: event => event.preventDefault() }"
       :ui="{ content: 'mobile-text-sheet', overlay: 'mobile-text-backdrop', header: 'shrink-0 px-4 py-3', title: 'text-sm font-medium', body: 'flex flex-1 min-h-0 p-0 sm:p-0', footer: 'shrink-0 justify-end gap-2 p-2', close: 'min-w-[44px] min-h-[44px]' }"
       @update:open="value => { if (!value) closeSheet() }">
       <template #body>
-        <div v-if="sheet === 'select' && (loadingText || textFailed)" class="mobile-text-status" :role="textFailed ? 'alert' : 'status'">
+        <div v-if="loadingText || textFailed" class="mobile-text-status" :role="textFailed ? 'alert' : 'status'">
           <template v-if="loadingText"><span class="spinner" />{{ t('common.loading') }}</template>
           <template v-else><span>{{ t('panels.scan.incomplete') }}</span><UButton type="button" color="neutral" variant="ghost" class="min-h-[44px]" @click="loadText">{{ t('common.retry') }}</UButton></template>
         </div>
-        <textarea v-else-if="sheet === 'select'" ref="textArea" :value="snapshot" readonly inputmode="none" :aria-label="t('terminal.keyboard.terminalText')" spellcheck="false" @select="updateSelection" @pointerup="updateSelection" @keyup="updateSelection" />
-        <textarea v-else ref="textArea" v-model="draft" :aria-label="t('terminal.keyboard.textToPaste')" :placeholder="t('terminal.keyboard.longPressPaste')" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" @paste="pasteFiles" />
+        <textarea v-else ref="textArea" :value="snapshot" readonly inputmode="none" :aria-label="t('terminal.keyboard.terminalText')" spellcheck="false" @select="updateSelection" @pointerup="updateSelection" @keyup="updateSelection" />
       </template>
       <template #footer>
-        <template v-if="sheet === 'select'"><UButton type="button" color="neutral" variant="outline" class="min-h-[44px]" :disabled="!selected" @pointerdown.prevent @click="copy(false)">{{ t('terminal.keyboard.copySelection') }}</UButton><UButton type="button" color="neutral" variant="outline" class="min-h-[44px]" :disabled="!snapshot" @pointerdown.prevent @click="copy(true)">{{ t('terminal.keyboard.copyAll') }}</UButton></template>
-        <UButton v-else type="button" color="neutral" variant="outline" class="min-h-[44px]" :disabled="!draft || disabled" @pointerdown.prevent @click="pasteText">{{ t('terminal.keyboard.pasteIntoTerminal') }}</UButton>
+        <UButton type="button" color="neutral" variant="outline" class="min-h-[44px]" :disabled="!selected" @pointerdown.prevent @click="copy(false)">{{ t('terminal.keyboard.copySelection') }}</UButton><UButton type="button" color="neutral" variant="outline" class="min-h-[44px]" :disabled="!snapshot" @pointerdown.prevent @click="copy(true)">{{ t('terminal.keyboard.copyAll') }}</UButton>
       </template>
     </UModal>
   </section>

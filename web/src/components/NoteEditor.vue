@@ -15,16 +15,15 @@ import { hasFileTransfer, readFileTransfer } from '../browser-file-input'
 import { presentDownload, reportDownloadError } from '../downloads'
 import { attachmentToken, noteDocument, noteOffset, notePosition, serializeNote } from '../note-document'
 import { NoteSelectionEnter, noteRange, replaceNoteRange, type NoteRange } from '../note-editing'
-import { noteUpload, uploadNoteAttachment, pasteNoteAttachments, type NoteInsertion } from '../note-uploads'
+import { noteUpload, uploadNoteAttachment, pasteNoteAttachments, type NoteInsertion, type NoteOwner } from '../note-uploads'
 import { clipboardText, noteClipboard, readNoteClipboard, NOTE_CLIPBOARD_TYPE } from '../note-clipboard'
-import { clearCopiedFile } from '../file-clipboard'
 import { beginCopyFeedback } from '../copy-feedback'
 import type { FileAsset } from '../types'
 import NoteAttachment from './NoteAttachment.vue'
 import UploadProgress from './UploadProgress.vue'
 import { useNoteScroll } from '../note-scroll'
 
-const props = defineProps<{ content: string; attachments: FileAsset[]; canvasId: string; noteId: string; scrollKey: string; canPersist?: () => boolean; readOnly: boolean; insertAttachment: (value: NoteInsertion) => void }>()
+const props = defineProps<{ content: string; attachments: FileAsset[]; owner: NoteOwner; scrollKey: string; placeholder?: string; canPersist?: () => boolean; readOnly: boolean; insertAttachment: (value: NoteInsertion) => void }>()
 const emit = defineEmits<{ change: [content: string]; flush: [] }>()
 const { t } = useI18n()
 const input = ref<{ editor?: Editor }>()
@@ -35,7 +34,7 @@ const scrollTarget = computed(() => input.value?.editor?.view.dom)
 useNoteScroll(scrollTarget, () => props.scrollKey, () => props.canPersist?.() !== false)
 const uploaded = shallowRef<FileAsset[]>([])
 const assets = computed(() => [...props.attachments, ...uploaded.value.filter(asset => !props.attachments.some(item => item.id === asset.id))])
-const task = computed(() => noteUpload(props.noteId))
+const task = computed(() => noteUpload(props.owner))
 const pending = computed(() => !!task.value)
 const uploadName = computed(() => task.value && task.value.fileCount > 1 ? t('terminal.upload.files', { count: task.value.fileCount }) : task.value?.name || '')
 const uploadLabel = computed(() => task.value?.total && task.value.transferred < task.value.total
@@ -135,12 +134,11 @@ function upload(files: File[], range?: NoteRange) {
   const file = files[0]!, current = editor()
   if (file.webkitRelativePath) { fail('terminal.upload.foldersUnsupported'); return }
   if (!current) return
-  void uploadNoteAttachment(props.canvasId, props.noteId, file, range ?? noteRange(current.state), props.insertAttachment)
+  void uploadNoteAttachment(props.owner, file, range ?? noteRange(current.state), props.insertAttachment)
 }
 function copy(event: ClipboardEvent, cut = false) {
   const current = editor(), data = event.clipboardData
   if (!current || !data || current.state.selection.empty || props.readOnly) return false
-  clearCopiedFile()
   const { from, to } = current.state.selection
   const content = current.state.doc.textBetween(from, to, '\n', node => node.type.name === 'noteAttachment' ? attachmentToken(node.attrs.id) : '\n')
   try {
@@ -164,7 +162,7 @@ function paste(event: ClipboardEvent) {
     const { offset, end, replaced } = noteRange(current.state)
     const length = note.parts.reduce((size, part) => size + (typeof part === 'string' ? part.length : 38), 0)
     if (serializeNote(current.state.doc.toJSON()).length - (end - offset) + length > 200_000) { fail('panels.note.tooLong'); return true }
-    void pasteNoteAttachments(props.canvasId, props.noteId, note, offset, end, replaced,
+    void pasteNoteAttachments(props.owner, note, offset, end, replaced,
       value => { if (!insert(value)) props.insertAttachment(value) }, assets.value)
     return true
   }
@@ -188,17 +186,17 @@ function paste(event: ClipboardEvent) {
   return true
 }
 const fileDialog = useFileDialog({ multiple: false, reset: true })
-let selection: { context: ReturnType<typeof apiContext>; canvasId: string; noteId: string; range: NoteRange } | undefined
+let selection: { context: ReturnType<typeof apiContext>; owner: string; range: NoteRange } | undefined
 function chooseFiles() {
   const current = editor()
   if (props.readOnly || !current) return
-  selection = { context: apiContext(), canvasId: props.canvasId, noteId: props.noteId, range: noteRange(current.state) }
+  selection = { context: apiContext(), owner: props.owner.key, range: noteRange(current.state) }
   fileDialog.open()
 }
 fileDialog.onChange(files => {
   if (!files?.length) return
   const target = selection; selection = undefined
-  if (target && !target.context.signal.aborted && target.canvasId === props.canvasId && target.noteId === props.noteId)
+  if (target && !target.context.signal.aborted && target.owner === props.owner.key)
     void upload([...files], target.range)
 })
 fileDialog.onCancel(() => { selection = undefined })
@@ -222,14 +220,14 @@ function drop(event: DragEvent) {
   }
   return true
 }
-watch(() => [props.canvasId, props.noteId], () => { selection = undefined; uploaded.value = [] })
+watch(() => props.owner.key, () => { selection = undefined; uploaded.value = [] })
 onBeforeUnmount(() => { if (task.value?.insert === insert) task.value.insert = undefined })
-defineExpose({ chooseFiles, pending })
+defineExpose({ chooseFiles, pending, focus: () => editor()?.commands.focus('end') })
 </script>
 
 <template>
   <div class="note-editor-shell" @dragenter="dragOver" @dragover="dragOver">
-  <UEditor ref="input" :model-value="initial" content-type="json" :starter-kit="false" :image="false" :mention="false" :extensions="[extension, sizeLimit, NoteSelectionEnter, fileDropCursor]" :editable="!readOnly" :enable-input-rules="false" :enable-paste-rules="false" :placeholder="t('panels.note.placeholder')" class="note-editor"
+  <UEditor ref="input" :model-value="initial" content-type="json" :starter-kit="false" :image="false" :mention="false" :extensions="[extension, sizeLimit, NoteSelectionEnter, fileDropCursor]" :editable="!readOnly" :enable-input-rules="false" :enable-paste-rules="false" :placeholder="placeholder ?? t('panels.note.placeholder')" class="note-editor"
     :ui="{ root: 'h-full min-h-0', content: 'h-full min-h-0', base: 'note-editor-content h-full min-h-0 outline-none' }"
     :editor-props="{ attributes: { 'aria-label': t('panels.note.content'), role: 'textbox', 'aria-multiline': 'true' },
       handleDOMEvents: { copy: (_view, event) => copy(event), cut: (_view, event) => copy(event, true), compositionend: compositionEnded },

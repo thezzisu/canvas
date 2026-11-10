@@ -80,7 +80,7 @@ export class AssetStore {
         if (!active) throw new Error("Upload is closed");
         if (written !== input.size) throw new Error("File transfer ended before declared length");
         const id = randomUUID();
-        const temporary = !context.canvasId || context.canvasId === "overview";
+        const temporary = !("composer" in context) && (!context.canvasId || context.canvasId === "overview");
         const directoryPath = temporary ? this.staged : this.directory;
         const path = join(directoryPath, id);
         try {

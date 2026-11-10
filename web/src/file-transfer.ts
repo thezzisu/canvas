@@ -2,7 +2,8 @@ import { apiContext } from './api'
 import { instances } from './instances'
 import { sessionToken } from './instance-session'
 import { readReferencedFile, type CanvasFileReference } from './file-reference'
-import { rememberCopiedFile } from './file-clipboard'
+import { copyText } from './clipboard'
+import { NOTE_CLIPBOARD_TYPE, type NoteClipboard } from './note-clipboard'
 import { beginCopyFeedback } from './copy-feedback'
 import type { FileAsset } from './types'
 
@@ -15,21 +16,21 @@ export function loadCanvasFile(reference: CanvasFileReference, signal: AbortSign
   return readReferencedFile(reference, sourceAccess, signal)
 }
 
-/** Internal copy is always explicit. PNG additionally uses the browser's native clipboard. */
+/** A file card copies like a note holding only that file; PNG also offers its image to other apps. */
 export function copyCanvasFile(asset: FileAsset, instance: { id: string; base: string }): void {
-  const feedback = beginCopyFeedback()
   const reference = fileReference(asset.id, instance), source = sourceAccess(reference.instance)
-  if (!source || source.base !== reference.base || !source.token) { feedback('failed'); return }
-  rememberCopiedFile({ reference, filename: asset.filename, mime: asset.mime })
-  feedback('canvas')
+  if (!source || source.base !== reference.base || !source.token) { beginCopyFeedback()('failed'); return }
+  const note: NoteClipboard = { parts: [{ reference, filename: asset.filename }] }
+  void copyText(asset.filename, { [NOTE_CLIPBOARD_TYPE]: JSON.stringify(note) })
   if (asset.mime !== 'image/png' || typeof ClipboardItem !== 'function' || !navigator.clipboard?.write) return
   const context = apiContext()
   try {
-    // Construct the item during the click gesture. A denied system write never
-    // invalidates the already successful Canvas copy.
+    // Construct the item during the click gesture. A granted image write replaces
+    // the Canvas copy, so other apps receive the image and Canvas pastes it as a
+    // new file; a denied write keeps the linked Canvas copy.
     const blob = loadCanvasFile(reference, context.signal)
     void blob.catch(() => {})
-    const item = new ClipboardItem({ 'image/png': blob })
+    const item = new ClipboardItem({ 'image/png': blob, 'text/plain': new Blob([asset.filename], { type: 'text/plain' }) })
     void navigator.clipboard.write([item]).catch(() => {})
-  } catch { /* This browser can still use the explicit Paste file action. */ }
+  } catch { /* The Canvas copy remains available. */ }
 }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { NodeProps } from '@vue-flow/core'
 import UButton from '@nuxt/ui/components/Button.vue'
 import { useToast } from '@nuxt/ui/composables/useToast'
@@ -21,7 +21,7 @@ import MobileKeyboard from './MobileKeyboard.vue'
 import { statusColor } from '../status'
 import { claimNoteDrop, readNoteTransfer } from '../note-transfer'
 import { isFileReference, readFileReference } from '../file-reference'
-import { copiedFile } from '../file-clipboard'
+import { useComposer, composerHasContent, discardComposerDraft } from '../composers'
 import { capturedApp, setCaptureVisible } from '../capture'
 import { useRetainedFrame } from '../retained-frame'
 import { useCardContentFocus } from '../card-content-focus'
@@ -42,6 +42,8 @@ import PaneContextMenu from './PaneContextMenu.vue'
 import type { PaneAction, PaneContext } from '../../../shared/pane-context'
 import { contentZoomMenu } from '../content-zoom-menu'
 import type { TerminalData } from '../types'
+// The editor stays out of the terminal bundle until a composer opens.
+const TerminalComposer = defineAsyncComponent(() => import('./TerminalComposer.vue'))
 const { t } = useI18n()
 const toast = useToast()
 const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>>()
@@ -87,7 +89,7 @@ async function stopCapturedApp() {
     if (app.value?.id === current.id) captureError.value = error instanceof Error ? error.message : String(error)
   } finally { if (stoppingAppId.value === current.id) stoppingAppId.value = '' }
 }
-const shortcuts = computed(() => [...(showCanvasJumps.value ? ['previous', 'next'] : []), ...(mobileFocus.value && !showApp.value ? ['keyboard'] : []), ...(props.data.focus && !showApp.value ? ['zoom'] : [])])
+const shortcuts = computed(() => [...(showCanvasJumps.value ? ['previous', 'next'] : []), ...(mobileFocus.value && !showApp.value ? ['keyboard'] : []), ...(props.data.focus && !showApp.value ? ['zoom'] : []), ...(canCompose.value ? ['composer'] : [])])
 const { effective: settings, overrides, zoom, resetZoom } = useTerminalSettings(() => props.data.preferenceKey)
 const settingsOpen = ref(false)
 const portal = computed(() => host.value?.closest<HTMLElement>('.app-shell') || undefined)
@@ -171,10 +173,39 @@ function previewClick(event: MouseEvent) {
 function contentPointerDown(event: PointerEvent) {
   if (mobilePreview.value || closed.value) return
   event.stopPropagation()
+  closeComposer()
   if (event.button === 2) return
   if (!props.data.mobile) terminal?.focus()
   else if (event.pointerType !== 'touch') terminal?.focus()
 }
+// The composer is a window-owned note shown over the terminal; it never resizes the grid.
+const composerTarget = () => ({ sourceId: props.data.sourceId, windowId: props.data.windowId })
+const composer = useComposer(composerTarget)
+const composerOpen = ref(false)
+const canCompose = computed(() => !showApp.value && keepTerminal.value && !closed.value && !mobilePreview.value && !maximizedElsewhere.value && (!props.data.mobile || props.data.focus))
+const canSendComposer = computed(() => status.value.status === 'connected' && !status.value.readOnly && !!props.data.available)
+const composerDraft = computed(() => !composerOpen.value && composerHasContent(composer.value.content))
+const composerLabel = computed(() => composerDraft.value ? t('terminal.composer.draft') : t('terminal.composer.title'))
+// The composer and the text-selection sheet each borrow the IME; recovery resumes after both.
+const selecting = ref(false)
+const keyboardBorrowed = computed(() => !!props.data.mobile && composerOpen.value || selecting.value)
+watch(keyboardBorrowed, value => terminal?.suspendKeyboard(value))
+function openComposer() {
+  if (composerOpen.value || !canCompose.value) return
+  composerOpen.value = true
+}
+function closeComposer(focusTerminal = false) {
+  if (!composerOpen.value) return
+  composerOpen.value = false
+  if (!props.data.mobile && focusTerminal) terminal?.focus()
+}
+function toggleComposer() { if (composerOpen.value) closeComposer(true); else openComposer() }
+function sendComposer(id: string, version: number) {
+  terminal?.sendComposer(id, version)
+  closeComposer(true)
+}
+watch(canCompose, value => { if (!value) closeComposer() })
+watch(closed, value => { if (value) discardComposerDraft(composerTarget()) }, { flush: 'sync' })
 function toggleKeyboard() {
   if (status.value.keyboardRequested) terminal?.blur()
   else terminal?.focus({ keyboard: true })
@@ -187,14 +218,12 @@ function paneContext(x: number, y: number, signal: AbortSignal) { return termina
 function paneAction(pane: PaneContext, command: PaneAction) { return terminal?.paneAction(pane, command) ?? Promise.reject(new Error(t('terminal.unavailable'))) }
 function allowsContextMenu() { return terminal?.allowsContextMenu() ?? true }
 function copyText(text?: string) { return terminal?.copySelection(text) ?? Promise.resolve(false) }
-function reading(active: boolean) { terminal?.suspendKeyboard(active) }
+function reading(active: boolean) { selecting.value = active }
 function mobileKey(key: string, modifiers?: Partial<TerminalModifiers>) { terminal?.sendKey(key, modifiers) }
 function mobileModifiers(value: TerminalModifiers) { terminal?.setModifiers(value) }
 function mobileMode(mode: TerminalTouchMode) { terminal?.setTouchMode(mode) }
 function mobilePointer(action: TouchpadControl) { terminal?.touchpadControl(action) }
-function mobileFiles(files: File[]) { terminal?.uploadFiles(files) }
 function prepareFiles() { return terminal?.prepareFiles() }
-function mobilePaste(text: string) { terminal?.pasteText(text) }
 function noteDragOver(event: DragEvent) {
   if (isFileReference(event.dataTransfer)) {
     event.preventDefault(); event.stopPropagation()
@@ -221,7 +250,6 @@ function dropNote(event: DragEvent) {
   terminal.focus({ keyboard: false })
   terminal.pasteText(text)
 }
-function pasteFile() { if (copiedFile.value && noteDropAvailable.value && !status.value.fileReading) void terminal?.uploadReference(copiedFile.value.reference) }
 function mount() {
   if (host.value && keepTerminal.value) terminal = mountTerminal(host.value, props.data, state => {
     const superseded = ownedPresentation && state.presentation && !state.presentation.owned
@@ -256,7 +284,7 @@ const menu = computed<DropdownMenuItem[]>(() => [
   ...(props.data.focus && !showApp.value ? contentZoomMenu(zoom, !props.data.available, { reset: resetZoom, resetLabel: t('terminal.settings.restoreDefault') }) : []),
   ...(props.data.newTab ? [{ label: t('app.newTab'), icon: 'i-lucide-square-plus', disabled: !props.data.available || closed.value || props.data.newTab.pending(), onSelect: () => props.data.newTab?.create() }] : []),
   { label: t('panels.scan.title'), icon: 'i-lucide-scan-text', disabled: !keepTerminal.value || closed.value, onSelect: () => action('scan') },
-  ...(copiedFile.value && !showApp.value ? [{ label: t('fileTransfer.paste'), icon: 'i-lucide-clipboard', disabled: !noteDropAvailable.value || !!status.value.fileReading, onSelect: pasteFile }] : []),
+  ...(canCompose.value ? [{ slot: 'composer', label: t('terminal.composer.title'), icon: 'i-lucide-square-pen', onSelect: toggleComposer }] : []),
   { label: t('app.renameWindow'), icon: 'i-lucide-pencil', disabled: !props.data.available || closed.value, onSelect: () => action('rename') },
   { label: t('terminal.settings.title'), icon: 'i-lucide-settings', onSelect: () => { settingsOpen.value = true } },
   { label: t('app.closeWindow'), icon: 'i-lucide-trash', color: 'error', disabled: !props.data.available || closed.value, onSelect: () => action('close') },
@@ -279,11 +307,12 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <header class="terminal-header drag-handle" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" :class="{ 'cutout-header': mobileFocus }" :data-cutout-position="mobileFocus && cutoutWidth > 0 ? cutoutPosition : undefined" :style="mobileFocus ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` } : undefined">
       <PaneIndicators :panes="data.panes" :status="data.status" :available="keepTerminal" :connection="closed ? 'closed' : status.status" :error="status.error" :read-only="status.readOnly" :fresh="data.statusFresh && !data.sourceOffline" />
       <WindowTitle class="terminal-name" :class="{ 'cutout-title': mobileFocus }" :window="data" :pane-id="status.focusedPaneId" :description="data.subtitle" />
-      <CardHeaderActions class="terminal-actions" :class="{ 'cutout-actions': mobileFocus }" :items="menu" :expanded="data.focus" :removable="!data.overview" :mobile="mobileFocus" :shortcuts="shortcuts" :disabled="closed && !data.focus"
+      <CardHeaderActions class="terminal-actions" :class="{ 'cutout-actions': mobileFocus }" :items="menu" :expanded="data.focus" :removable="!data.overview" :mobile="mobileFocus" :shortcuts="shortcuts" :priority="['previous', 'next', 'keyboard', 'composer', 'zoom']" :trailing="['composer']" :disabled="closed && !data.focus"
         :add-label="t('terminal.action.addToCanvas')" :remove-label="t('terminal.action.removeFromCanvas')" :maximize-label="t('terminal.action.focus')" :restore-label="t('terminal.action.restore')" :more-label="t('terminal.action.windowActions')"
         @add="action('add')" @toggle="action(data.focus ? 'unfocus' : 'focus')" @remove="action('remove')">
         <template v-for="jump in canvasJumps" :key="jump.direction" #[jump.direction]><button type="button" class="card-header-action" :class="`card-${jump.direction}-canvas`" data-preserve-content-focus :disabled="!jump.target" :title="jump.label" :aria-label="jump.label" @pointerdown.prevent @click="jumpCanvas(jump.direction, $event)"><Icon name="down" :size="15" :style="{ transform: jump.direction === 'next' ? '' : 'rotate(180deg)' }" /></button></template>
         <template #keyboard><button type="button" class="card-header-action terminal-keyboard" :title="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-label="status.keyboardRequested ? t('terminal.action.hideKeyboard') : t('terminal.action.showKeyboard')" :aria-pressed="status.keyboardRequested" @pointerdown.prevent @click="toggleKeyboard"><Icon name="keyboard" :size="18" /></button></template>
+        <template #composer><button type="button" class="card-header-action terminal-composer-toggle" :class="{ 'has-draft': composerDraft }" :title="composerLabel" :aria-label="composerLabel" :aria-pressed="composerOpen" @pointerdown.prevent @click="toggleComposer"><Icon name="compose" :size="15" /></button></template>
         <template #zoom><ContentZoom v-model="zoom" :mobile="data.mobile" :disabled="!data.available" :label="t('terminal.zoom.title')" :reset="resetZoom" :reset-label="t('terminal.settings.restoreDefault')" /></template>
       </CardHeaderActions>
     </header>
@@ -300,6 +329,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     </div>
     <div v-if="showApp && !trustedApp" class="capture-trust-prompt card-content" :inert="mobilePreview || editing || undefined"><Icon name="globe" :size="32" /><span>{{ app?.title }}</span><UButton v-if="!mobilePreview" color="neutral" variant="outline" @click="activateApp">{{ t('terminal.capture.app') }}</UButton></div>
     <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || closed || showApp || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop><div class="terminal-transition-surface" aria-hidden="true" /></div>
+    <Transition name="terminal-composer"><TerminalComposer v-if="composerOpen && canCompose" :target="composerTarget()" :can-send="canSendComposer" :mobile="data.mobile" @close="closeComposer(true)" @send="sendComposer" /></Transition>
     <PaneContextMenu :host="host" :enabled="!showApp && keepTerminal && !mobilePreview && !closed && !maximizedElsewhere && status.status === 'connected'" :allows-menu="allowsContextMenu" :lookup="paneContext" :action="paneAction" />
     <TerminalSettingsDialog v-model="overrides" :open="settingsOpen" :portal="portal" @close="settingsOpen = false" />
 
@@ -320,7 +350,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <div v-if="!showApp && !closed && keepTerminal && !maximizedElsewhere && (status.status === 'connecting' || status.status === 'connected' && !status.screenReady)" class="terminal-loading nodrag" :class="{ 'terminal-loading-initial': !status.screenReady }" role="status"><span class="spinner" />{{ status.retryAttempt ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt }) : t('common.loading') }}</div>
     </div>
     <div v-if="mobilePreview && !closed && !editing" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: label })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
-    <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :keyboard-mode="status.keyboardMode || 'system'" :keyboard-open="!!status.keyboardRequested" :dock-height="(status.keyboardDockHeight || 0) / uiZoom" :read-text="readText" :copy-text="copyText" :prepare-files="prepareFiles" @switch-keyboard="switchKeyboard" @bounds="keyboardBounds" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @pointer="mobilePointer" @files="mobileFiles" @paste="mobilePaste" @paste-file="pasteFile" @reading="reading" />
+    <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :keyboard-mode="status.keyboardMode || 'system'" :keyboard-open="!!status.keyboardRequested" :dock-height="(status.keyboardDockHeight || 0) / uiZoom" :read-text="readText" :copy-text="copyText" :prepare-files="prepareFiles" @switch-keyboard="switchKeyboard" @bounds="keyboardBounds" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @pointer="mobilePointer" @composer="openComposer" @reading="reading" />
   </article>
   <CardLayoutControls :id="id" :label="label" :kind="app ? 'app' : 'terminal'" :width="data.width" :height="data.height" />
 </template>
@@ -331,6 +361,11 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .closed .terminal-host{opacity:.45}.closed .terminal-actions{opacity:1;pointer-events:auto}
 
 .terminal-host{position:relative}
+.terminal-composer-enter-active,.terminal-composer-leave-active{transition:transform 160ms ease-out,opacity 120ms ease-out}
+.terminal-composer-enter-from,.terminal-composer-leave-to{transform:translateY(-100%);opacity:0}
+@media (prefers-reduced-motion:reduce){.terminal-composer-enter-active,.terminal-composer-leave-active{transition:none}}
+.terminal-composer-toggle{position:relative}
+.terminal-composer-toggle.has-draft::after{content:'';position:absolute;top:3px;right:3px;width:5px;height:5px;border-radius:50%;background:var(--accent)}
 .terminal-transition-surface{position:absolute;inset:0;z-index:3;pointer-events:none;display:none;background:var(--terminal-transition-background,#1b1f26)}
 .terminal-transition .terminal-transition-surface{display:block}
 .terminal-transition :deep(.xterm-rows),.terminal-transition :deep(.xterm-selection),.terminal-transition :deep(.xterm-viewport),.terminal-transition :deep(.xterm-decoration-container),.terminal-transition :deep(.xterm-overview-ruler){opacity:0}

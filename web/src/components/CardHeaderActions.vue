@@ -8,7 +8,7 @@ import Icon from './Icon.vue'
 import { usePointerDismiss } from '../pointer-dismiss'
 import { useCardMenu } from '../card-menu'
 
-const props = defineProps<{ items: DropdownMenuItem[]; expanded: boolean; removable?: boolean; mobile?: boolean; shortcuts?: string[]; priority?: string[];
+const props = defineProps<{ items: DropdownMenuItem[]; expanded: boolean; removable?: boolean; mobile?: boolean; shortcuts?: string[]; priority?: string[]; trailing?: string[];
   addLabel: string; removeLabel?: string; maximizeLabel?: string; restoreLabel?: string; moreLabel?: string; disabled?: boolean }>()
 const emit = defineEmits<{ add: []; toggle: []; remove: [] }>()
 const { t } = useI18n()
@@ -60,8 +60,9 @@ useEventListener(computed(() => open.value ? document : undefined), 'keydown', (
 
 <template>
   <div ref="root" class="card-header-actions nodrag nopan" :class="{ 'card-header-mobile': mobile }" :style="{ '--header-actions-width': `${((shortcuts?.length || 0) + 3 + (removable ? 1 : 0)) * 44}px` }" @pointerdown.stop @click.stop @dblclick.stop>
-    <template v-for="key in shortcuts" :key="key"><slot v-if="visible(key)" :name="key" /></template>
+    <template v-for="key in shortcuts" :key="key"><slot v-if="visible(key) && !trailing?.includes(key)" :name="key" /></template>
     <button v-if="visible('add')" type="button" class="card-header-action card-add" :title="addLabel" :aria-label="addLabel" @click="emit('add')"><Icon name="layers" :size="15" /></button>
+    <template v-for="key in trailing" :key="key"><slot v-if="shortcuts?.includes(key) && visible(key)" :name="key" /></template>
     <UDropdownMenu v-model:open="open" :modal="false" :items="menu" :portal="portal" :content="content" :ui="{ content: 'card-action-menu z-[60] min-w-[160px]' }">
       <button ref="trigger" type="button" class="card-header-action card-more" :aria-label="moreLabel || t('common.more')" :title="moreLabel || t('common.more')" @pointerdown="pointerOpen" @keydown="preserveInput = false"><Icon name="more" :size="15" /></button>
     </UDropdownMenu>

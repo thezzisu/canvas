@@ -44,3 +44,12 @@ test("plain file lists keep shell spacing between separate path segments", () =>
   assert.equal(renderPasteParts(filePasteParts(3), ["/a b", "/c", "/O'd"]), "'/a b' '/c' '/O'\\''d'");
   assert.deepEqual(renderPasteSegments(filePasteParts(2), ["/a", "/b"]).map(segment => segment.file), [true, false, true]);
 });
+
+test("note content becomes paste parts with each attachment delivered once", async () => {
+  const { noteContentPaste } = await import("./paste.ts");
+  const a = "0f8fad5b-d9cb-469f-a165-70867728950e", b = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+  const token = (id: string) => `￼${id}￼`;
+  assert.deepEqual(noteContentPaste(`see ${token(a.toUpperCase())} and ${token(a)}\n`), { files: [a], parts: ["see ", { file: 0, format: "path" }, " and ", { file: 0, format: "path" }, "\n"] });
+  assert.deepEqual(noteContentPaste(`${token(a)} \n ${token(b)}`), { files: [a, b], parts: [{ file: 0, format: "path" }, " ", { file: 1, format: "path" }] });
+  assert.deepEqual(noteContentPaste("plain"), { files: [], parts: ["plain"] });
+});

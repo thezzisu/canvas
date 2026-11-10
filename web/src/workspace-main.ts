@@ -4,7 +4,6 @@ import App from './App.vue'
 import { initializeViewportPolicy } from './developer-mode'
 import { initializePwa } from './pwa'
 import { i18n, watchDocumentLocale } from './i18n'
-import { clearCopiedFile } from './file-clipboard'
 import { initializeStatusPulse } from './status-pulse'
 import { initializeUiScale } from './ui-scale'
 import './ui.css'
@@ -24,5 +23,4 @@ initializeUiScale()
 initializePwa()
 initializeStatusPulse()
 watchDocumentLocale()
-document.addEventListener('copy', clearCopiedFile)
 createApp(App).use(i18n).use(ui).mount('#app')

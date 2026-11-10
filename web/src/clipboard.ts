@@ -1,6 +1,5 @@
 import type { Terminal } from '@xterm/xterm'
 import { isPasteShortcut } from './clipboard-shortcuts'
-import { clearCopiedFile } from './file-clipboard'
 import { beginCopyFeedback } from './copy-feedback'
 
 const MAX_COPY_BYTES = 1024 * 1024
@@ -15,7 +14,6 @@ export async function copyText(text: string, formats: Record<string, string> = {
     feedback('failed')
     return false
   }
-  clearCopiedFile()
   const documentSelection = document.getSelection()
   const ranges = documentSelection ? Array.from({ length: documentSelection.rangeCount }, (_, index) => documentSelection.getRangeAt(index).cloneRange()) : []
   const previous = document.activeElement instanceof HTMLElement ? document.activeElement : undefined

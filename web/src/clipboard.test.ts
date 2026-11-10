@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { copyText, TerminalClipboard } from './clipboard'
 import type { Terminal } from '@xterm/xterm'
-import { beginCopyFeedback, copyFeedback } from './copy-feedback'
+import { copyFeedback } from './copy-feedback'
 
 function clipboardEnvironment(t: TestContext, writeText?: (text: string) => Promise<void>, legacy = false) {
   const element = class {}
@@ -53,18 +53,6 @@ test('an older failed write cannot replace feedback from a newer successful copy
   const latest = copyFeedback.value
   pending.reject(new Error('Late rejection'))
   assert.equal(await older, false)
-  assert.equal(copyFeedback.value, latest)
-})
-
-test('Canvas file copies replace text copy feedback without claiming system clipboard support', async t => {
-  const pending = Promise.withResolvers<void>()
-  clipboardEnvironment(t, () => pending.promise)
-  const older = copyText('older text')
-  beginCopyFeedback()('canvas')
-  const latest = copyFeedback.value
-  assert.equal(latest?.kind, 'canvas')
-  pending.resolve()
-  await older
   assert.equal(copyFeedback.value, latest)
 })
 

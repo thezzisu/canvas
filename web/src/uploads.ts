@@ -15,7 +15,9 @@ export interface TerminalUploadState {
   cancelling?: boolean
   rejected?: string
 }
-interface Batch { context: ApiContext; id: string; files: File[]; parts?: PastePart[]; total: number; request?: AbortController; running: boolean; cancelling?: boolean }
+interface Batch { context: ApiContext; id: string; files: File[]; parts?: PastePart[]; total: number; request?: AbortController; running: boolean; cancelling?: boolean
+  /** Files already held by Canvas: the server streams them and reports progress. */
+  stored?: { message: Record<string, unknown>; name: string } }
 interface UploadOptions {
   readiness(): 'ready' | 'waiting' | 'unavailable'
   unavailableReason(): string
@@ -64,7 +66,18 @@ export class TerminalUploads {
     else this.next()
   }
 
+  /** Queue a server-held delivery behind browser uploads to the same window. */
+  enqueueStored(message: Record<string, unknown>, name: string, context = apiContext()) {
+    if (!isCurrentApi(context)) { this.reject(t('terminal.upload.targetChanged')); return }
+    if (this.options.readiness() === 'unavailable') { this.reject(this.options.unavailableReason()); return }
+    if (this.current?.cancelling) { this.reject(t('terminal.upload.cancelling')); return }
+    this.pending.push({ context, id: uuid(), files: [], total: 0, running: false, stored: { message, name } })
+    if (this.current) this.update({ rejected: undefined })
+    else this.next()
+  }
+
   private beginMessage(batch: Batch) {
+    if (batch.stored) return { ...batch.stored.message, id: batch.id }
     return { type: 'upload-begin', id: batch.id, files: batch.files.map(file => ({ name: file.name, size: file.size })), ...(batch.parts ? { parts: batch.parts } : {}) }
   }
 
@@ -76,7 +89,7 @@ export class TerminalUploads {
     if (!isCurrentApi(batch.context)) { this.invalidate(t('terminal.upload.targetChanged')); return }
     if (readiness === 'waiting') {
       if (this.state?.state === 'waiting' && this.state.id === batch.id && this.state.queued === this.pending.length - 1) return
-      this.state = { id: batch.id, name: batch.files.length === 1 ? batch.files[0]!.name : '', fileCount: batch.files.length,
+      this.state = { id: batch.id, name: batchName(batch), fileCount: batch.files.length,
         transferred: 0, total: batch.total, state: 'waiting', queued: this.pending.length - 1 }
       this.options.changed(this.state)
       return
@@ -84,7 +97,7 @@ export class TerminalUploads {
     if (readiness === 'unavailable') { this.invalidate(this.options.unavailableReason()); return }
     this.pending.shift()
     this.current = batch
-    this.state = { id: batch.id, name: batch.files.length === 1 ? batch.files[0]!.name : '', fileCount: batch.files.length,
+    this.state = { id: batch.id, name: batchName(batch), fileCount: batch.files.length,
       transferred: 0, total: batch.total, state: 'preparing', queued: this.pending.length }
     this.options.changed(this.state)
     this.options.focus()
@@ -139,6 +152,13 @@ export class TerminalUploads {
       this.update({ state: 'uploading' })
       void this.put(batch, urls)
       return true
+    }
+    if (batch.stored) {
+      // The first report replaces the prepare timeout; a cancellation keeps its own fallback.
+      if (!batch.cancelling) clearTimeout(this.timer)
+      if (typeof message.total === 'number' && Number.isSafeInteger(message.total) && message.total >= 0 && message.total !== batch.total) {
+        batch.total = message.total; this.update({ total: batch.total })
+      }
     }
     if (typeof message.transferred === 'number' && Number.isSafeInteger(message.transferred)) {
       this.update({ transferred: Math.max(this.state?.transferred || 0, Math.min(batch.total, message.transferred)) })
@@ -222,6 +242,8 @@ export class TerminalUploads {
     this.options.changed(undefined)
   }
 }
+
+const batchName = (batch: Batch) => batch.stored?.name ?? (batch.files.length === 1 ? batch.files[0]!.name : '')
 
 export function preventFileNavigation(event: DragEvent) {
   if (!hasFileTransfer(event.dataTransfer)) return
