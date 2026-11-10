@@ -61,12 +61,17 @@ function fixture(split = false, subscriptionSeq = 0) {
   return { rpc, stream, streams, attached, controls, layout, terminal, terminals, document, sent, failures, event, notification }
 }
 
+/** Opens the fixture tab and paints `paint`, which must include the first-paint marker. */
+async function open(f: ReturnType<typeof fixture>, paint = '\x1b[?9001l', cols = 20) {
+  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols, rows: 6 })
+  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from(paint) })
+  return opening
+}
+
 test('subscription sequence waterline rejects stale Core events after the initial snapshot', async () => {
   const f = fixture(false, 103)
   f.terminal.turn = 0; f.terminal.status = { state: 'working' }
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f)
   try {
     const notifications: unknown[] = []
     client.onNotification(value => notifications.push(value))
@@ -90,9 +95,7 @@ test('subscription sequence waterline rejects stale Core events after the initia
 test('an initial completed snapshot is state, not a new completion notification', async () => {
   const f = fixture(false, 20)
   f.terminal.turn = 3; f.terminal.status.state = 'idle'
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from(report('idle') + '\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f, report('idle') + '\x1b[?9001l')
   try {
     const notifications: unknown[] = []
     client.onNotification(value => notifications.push(value))
@@ -104,9 +107,7 @@ test('an initial completed snapshot is state, not a new completion notification'
 
 test('heartbeat sequence rejects earlier events without changing native state', async () => {
   const f = fixture(false, 20)
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f)
   try {
     const notifications: unknown[] = []
     client.onNotification(value => notifications.push(value))
@@ -123,9 +124,7 @@ test('heartbeat sequence rejects earlier events without changing native state', 
 
 test('missed-event recovery uses its own snapshot and does not replay old completion events', async () => {
   const f = fixture(false, 20)
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f)
   try {
     const notifications: unknown[] = []
     client.onNotification(value => notifications.push(value))
@@ -150,9 +149,7 @@ test('missed-event recovery uses its own snapshot and does not replay old comple
 
 test('document refresh and pane-action results cannot replace the ordered terminal mirror with a future list', async () => {
   const f = fixture(false, 20)
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f)
   try {
     f.terminal.turn = 5
     await f.event('doc', {}, 21)
@@ -206,9 +203,7 @@ test('native lifecycle events preserve unrelated terminals, replace restarted st
 
 test('confirmed Core EOF closes an explicit tab once and preserves the retained terminal record', async () => {
   const f = fixture()
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('FINAL\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f, 'FINAL\x1b[?9001l')
   const exits: unknown[] = []; client.onExit(exit => exits.push(exit))
   try {
     await f.event('finished', { reason: 'exited', exit_code: 0, finished_ms: 100 })
@@ -249,9 +244,7 @@ test('a split pane finishing leaves its live sibling connected and the last exit
 
 test('recoverable lost terminals and transport-only stream endings do not remove their document panes', async () => {
   const f = fixture(), before = structuredClone(f.document)
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('READY\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f, 'READY\x1b[?9001l')
   const exits: unknown[] = []; client.onExit(exit => exits.push(exit))
   try {
     f.stream.receive({ kind: 'close', reason: { reason: 'signaled', signal: 9 } })
@@ -273,9 +266,7 @@ test('initial and missed snapshots reconcile already finished panes without atta
   await assert.rejects(createCoreClient({ rpc: initial.rpc, layout: initial.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 }), /closed|paint/u)
   assert.deepEqual(initial.document.spaces, []); assert.deepEqual(initial.attached, [])
   const f = fixture()
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('READY\x1b[?9001l') })
-  const client = await opening, notices: unknown[] = [], exits: unknown[] = []
+  const client = await open(f, 'READY\x1b[?9001l'), notices: unknown[] = [], exits: unknown[] = []
   client.onNotification(event => notices.push(event)); client.onExit(exit => exits.push(exit))
   try {
     await f.notification('missed', { terminals: [{ ...f.terminal, state: 'finished', reason: 'exited' }] }, 40)
@@ -336,9 +327,7 @@ test('native snapshots and events clean up unopened tabs without attaching their
     f.terminals.push(hidden)
     for (const id of ['hidden-one', 'hidden-two']) f.document.spaces[0]!.tabs.push({ id, name: id,
       root: { id: `${id}-pane`, type: 'block', content: { terminal: 't2' } } })
-    const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-    await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('VISIBLE\x1b[?9001l') })
-    const client = await opening
+    const client = await open(f, 'VISIBLE\x1b[?9001l')
     try {
       Object.assign(hidden, { state: 'finished', reason: 'exited' })
       if (missed) await f.notification('missed', { terminals: structuredClone(f.terminals) }, 50)
@@ -369,9 +358,7 @@ test('non-exit finished records retain their layout while Core owns recovery', a
 
 test('a missing-record lookup cannot commit an old layout after a newer pane action', async () => {
   const f = fixture()
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('READY\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f, 'READY\x1b[?9001l')
   let release!: () => void, started!: () => void
   const gate = new Promise<void>(resolve => { release = resolve }), entered = new Promise<void>(resolve => { started = resolve })
   const call = f.rpc.call.bind(f.rpc)
@@ -398,9 +385,7 @@ test('a missing-record lookup cannot commit an old layout after a newer pane act
 
 test('an unsequenced action result cannot close panes using different terminal facts', async () => {
   const f = fixture(), before = structuredClone(f.document)
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('READY\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f, 'READY\x1b[?9001l')
   try {
     f.layout.paneAction = async () => f.layout.snapshot()
     Object.assign(f.terminal, { state: 'finished', reason: 'exited' })
@@ -416,9 +401,7 @@ test('an unsequenced action result cannot close panes using different terminal f
 test('a delayed seen-label write cannot replace newer event state with its response-time snapshot', async () => {
   const f = fixture(false, 20)
   f.terminal.turn = 1; f.terminal.status.state = 'idle'
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from(report('idle') + '\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f, report('idle') + '\x1b[?9001l')
   try {
     client.onData(() => {}); await tick(); await client.completionFence()
     let release!: () => void
@@ -441,9 +424,7 @@ test('a delayed seen-label write cannot replace newer event state with its respo
 
 test('widening a narrow core view attaches newly exposed panes before publishing the expanded frame', async () => {
   const f = fixture(true)
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 2, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('LEFT\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f, 'LEFT\x1b[?9001l', 2)
   try {
     const frames: WindowMetadata[] = []; let output = ''
     client.onData(data => { output += data }); client.onFrame(frame => frames.push(frame)); await tick()
@@ -463,9 +444,7 @@ test('widening a narrow core view attaches newly exposed panes before publishing
 
 test('clearing a native core title emits an explicit empty title instead of missing metadata', async () => {
   const f = fixture()
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f)
   try {
     const metadata: WindowMetadata[] = []; client.onData(() => {}); client.onMetadata(value => metadata.push(value))
     await f.event('title', { title: 'Task title' }); assert.equal(metadata.at(-1)?.panes[0]?.terminalTitle, 'Task title')
@@ -475,9 +454,7 @@ test('clearing a native core title emits an explicit empty title instead of miss
 
 test('rapid core resize retires a late pane attachment and can reveal it again', async () => {
   const f = fixture(true)
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 2, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('LEFT\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f, 'LEFT\x1b[?9001l', 2)
   try {
     client.onData(() => {})
     let release!: () => void
@@ -497,9 +474,7 @@ test('rapid core resize retires a late pane attachment and can reveal it again',
 
 test('failed resize attachments close the view without an unhandled asynchronous rejection', async () => {
   const f = fixture(true)
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 2, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('LEFT\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f, 'LEFT\x1b[?9001l', 2)
   const closed = new Promise<number>(resolve => client.onExit(exit => resolve(exit.exitCode)))
   f.controls.failAttach = true
   client.resize(40, 6)
@@ -510,9 +485,7 @@ test('failed resize attachments close the view without an unhandled asynchronous
 
 test('unrecognized OSC status words cannot shift native turn accounting', async () => {
   const f = fixture()
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('Working\x1b[?9001l' + report('working')) })
-  const client = await opening
+  const client = await open(f, 'Working\x1b[?9001l' + report('working'))
   try {
     client.onData(() => {})
     f.terminal.status.state = 'idle'; f.terminal.turn = 1
@@ -630,9 +603,7 @@ test('wide characters crossing an overlay edge never cover or copy through the t
 
 test('a delayed older document cannot remove a window already restored by a newer pane action', async () => {
   const f = fixture(), spaces = structuredClone(f.document.spaces)
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('READY\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f, 'READY\x1b[?9001l')
   try {
     client.onData(() => {})
     const exits: unknown[] = []; client.onExit(value => exits.push(value))
@@ -707,9 +678,7 @@ test('completion events cannot acknowledge result bytes which have not reached t
 
 test('core live OSC 8 retains Unicode file paths and concealed cells remain masked', async () => {
   const f = fixture()
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 40, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?9001l') })
-  const client = await opening
+  const client = await open(f, '\x1b[?9001l', 40)
   try {
     client.onData(() => {})
     f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[H\x1b]8;;file:///tmp/扫描 文件.txt\x1b\\report\x1b]8;;\x1b\\\r\n\x1b[8mCONCEALED\x1b[0m') })
@@ -725,9 +694,7 @@ test('core live OSC 8 retains Unicode file paths and concealed cells remain mask
 
 test('coalesced native repaint never marks an unverified turn read and a fresh attach restores read continuity', async () => {
   const f = fixture()
-  const opening = createCoreClient({ rpc: f.rpc, layout: f.layout, spaceId: 'space', tabId: 'tab', cols: 20, rows: 6 })
-  await tick(); f.stream.receive({ kind: 'data', data: Buffer.from('Working\x1b[?9001l' + report('working')) })
-  const client = await opening
+  const client = await open(f, 'Working\x1b[?9001l' + report('working'))
   try {
     client.onData(() => {})
     // A slow native viewer can receive every semantic event while its byte

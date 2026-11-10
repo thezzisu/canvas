@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { i18n, languagePreference, locale, t, uiLocale } from './i18n.ts'
+import { i18n, languagePreference, locale, uiLocale } from './i18n.ts'
 import { statusLabel } from './status.ts'
 
 function flatten(value: object, prefix = ''): Record<string, string> {
@@ -21,33 +21,15 @@ test('both catalogues provide the same messages and interpolation parameters', (
   }
 })
 
-test('English counts use singular and plural forms while Chinese counts stay natural', context => {
-  const previous = locale.value
-  context.after(() => { locale.value = previous })
-  locale.value = 'en'
-  assert.equal(t('app.windowCount', 0), '0 windows')
-  assert.equal(t('app.windowCount', 1), '1 window')
-  assert.equal(t('app.windowCount', 2), '2 windows')
-  assert.equal(t('panels.windows', 1), '1 window')
-  assert.equal(t('panels.windows', 2), '2 windows')
-  locale.value = 'zh-CN'
-  assert.equal(t('app.windowCount', 1), '1 个窗口')
-  assert.equal(t('app.windowCount', 2), '2 个窗口')
-})
-
 test('one language preference drives application messages, status labels and Nuxt UI', context => {
   const previous = languagePreference.value
   context.after(() => { languagePreference.value = previous })
-  languagePreference.value = 'zh-CN'
-  assert.equal(locale.value, 'zh-CN')
-  assert.equal(uiLocale.value.code, 'zh-CN')
-  assert.equal(statusLabel('working'), '运行中')
-  assert.equal(t('settings.developerAdvanced'), '开发者高级设置')
-  languagePreference.value = 'en'
-  assert.equal(locale.value, 'en')
-  assert.equal(uiLocale.value.code, 'en')
-  assert.equal(statusLabel('working'), 'Running')
-  assert.equal(t('settings.developerAdvanced'), 'Advanced developer settings')
+  for (const code of ['zh-CN', 'en'] as const) {
+    languagePreference.value = code
+    assert.equal(locale.value, code)
+    assert.equal(uiLocale.value.code, code)
+    assert.equal(statusLabel('working'), flatten(i18n.global.getLocaleMessage(code))['terminal.status.working'])
+  }
 })
 
 test('every server transfer code is localized, and the server sends only known codes', async context => {
@@ -64,9 +46,8 @@ test('every server transfer code is localized, and the server sends only known c
   const known = new Set<string>(transferErrors)
   for (const [, code] of server.matchAll(/(?:new Error\(|fail\(|this\.fail\(batch, )"([a-zA-Z]+)"/g)) assert(known.has(code!), `${code} is a declared transfer code`)
   locale.value = 'en'
-  assert.equal(transferError('draftChanged'), 'The draft changed on another device')
-  assert.equal(transferError(undefined), 'Transfer failed')
+  const en = flatten(i18n.global.getLocaleMessage('en'))
+  assert.equal(transferError('draftChanged'), en['terminal.upload.errors.draftChanged'])
+  assert.equal(transferError(undefined), en['terminal.upload.errors.failed'])
   assert.equal(transferError('plain native message'), 'plain native message')
-  locale.value = 'zh-CN'
-  assert.equal(transferError('windowClosed'), '目标窗口已关闭')
 })

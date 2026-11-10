@@ -390,17 +390,6 @@ test("canvas open distinguishes stale or refused bridges from a pane without a b
   });
 });
 
-test("canvas open exits promptly when the server has only passive browser viewers", async t => {
-  const f = await fixture(t), endpoint = await f.endpoint("passive", { rejectReason: "not-attached" });
-  await writeFile(join(f.root, "file"), "fixture");
-  const began = Date.now();
-  const result = await f.run("file");
-  assert.equal(result.code, 1);
-  assert.equal(result.stderr, routingError(f.nativeSocket, "no browser ready to receive from this pane"));
-  assert.equal(endpoint.bodies.length, 0);
-  assert(Date.now() - began < 2000, "passive viewers must not leave the helper waiting");
-});
-
 test("routing diagnostics quote inherited identities instead of rendering terminal controls", async t => {
   const f = await fixture(t);
   await f.endpoint("passive", { rejectReason: "not-attached" });

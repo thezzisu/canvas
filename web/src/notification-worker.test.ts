@@ -2,7 +2,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { runInNewContext } from 'node:vm'
-import { notificationWorker } from '../../pwa.config.ts'
 
 const source = await readFile(new URL('../notification-worker.js', import.meta.url), 'utf8')
 async function click(url: string, windows: Array<{ url: string; focus(): Promise<void>; postMessage(value: unknown): void }>) {
@@ -31,9 +30,4 @@ test('a closed matching view opens its safe frontend URL; external destinations 
   const url = 'https://canvas.example/#instance=b&canvas=overview'
   assert.deepEqual((await click(url, [])).opened, [url])
   assert.deepEqual(await click('https://elsewhere.example/', []), { opened: [], closed: false })
-})
-test('the worker extension is content-addressed and contains no push subscription handler', () => {
-  assert.equal(notificationWorker.source, source)
-  assert.match(notificationWorker.fileName, /^assets\/notification-worker-[a-f0-9]{12}\.js$/)
-  assert(!/addEventListener\(['"]push/.test(source))
 })

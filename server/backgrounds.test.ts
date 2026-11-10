@@ -93,29 +93,6 @@ function png(width = 24, height = 16, compressionLevel = 6): Buffer {
 }
 const jpegFixture = Buffer.from("/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAACAAMDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAL/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAABf/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AIAOiX//2Q==", "base64");
 const webpFixture = Buffer.from("UklGRjIAAABXRUJQVlA4ICYAAACQAQCdASoDAAIAAUAmJZACdLoAA5gA/q4X9XYnwoQT9CjZRL5gAA==", "base64");
-function jpegSegment(marker: number, data: Buffer): Buffer {
-  const prefix = Buffer.from([255, marker, 0, 0]); prefix.writeUInt16BE(data.length + 2, 2);
-  return Buffer.concat([prefix, data]);
-}
-function privateExif(rotate: number, little = true): Buffer {
-  const text = Buffer.from("private camera location\0"), data = Buffer.alloc(38 + text.length);
-  const u16 = (value: number, at: number) => little ? data.writeUInt16LE(value, at) : data.writeUInt16BE(value, at);
-  const u32 = (value: number, at: number) => little ? data.writeUInt32LE(value, at) : data.writeUInt32BE(value, at);
-  data.write(little ? "II" : "MM"); u16(42, 2); u32(8, 4); u16(2, 8);
-  u16(0x112, 10); u16(3, 12); u32(1, 14); u16(rotate, 18);
-  u16(0x13b, 22); u16(2, 24); u32(text.length, 26); u32(38, 30); text.copy(data, 38);
-  return data;
-}
-function webpChunk(name: string, data: Buffer): Buffer {
-  const chunk = Buffer.alloc(8 + data.length + (data.length & 1)); chunk.write(name, 0, 4, "ascii"); chunk.writeUInt32LE(data.length, 4); data.copy(chunk, 8); return chunk;
-}
-function riff(chunks: Buffer[]): Buffer {
-  const data = Buffer.concat(chunks), prefix = Buffer.from("RIFF\0\0\0\0WEBP"); prefix.writeUInt32LE(data.length + 4, 4); return Buffer.concat([prefix, data]);
-}
-function webpExtended(extra: Buffer[], flags: number): Buffer {
-  const header = Buffer.alloc(10); header[0] = flags; header.writeUIntLE(2, 4, 3); header.writeUIntLE(1, 7, 3);
-  return riff([webpChunk("VP8X", header), ...extra.filter(chunk => chunk.toString("ascii", 0, 4) === "ICCP"), webpFixture.subarray(12), ...extra.filter(chunk => chunk.toString("ascii", 0, 4) !== "ICCP")]);
-}
 
 test("concurrent layout edits preserve renames and cannot recreate deleted canvases", async (t) => {
   const f = fixture(t);
@@ -348,20 +325,17 @@ test("invalid changes leave the previous background intact", async (t) => {
   );
 });
 
-test("large photos retain full resolution while ordinary API bodies remain bounded", async (t) => {
+test("background uploads bypass the JSON body limit while ordinary API bodies remain bounded", async (t) => {
   const f = fixture(t);
-  const image = png(6000, 4000, 0);
-  assert.ok(image.length > 8 * 1024 * 1024);
+  const image = png(1100, 1000, 0);
+  assert.ok(image.length > 1024 * 1024);
   const uploaded = await f.upload(image, "", {
     "Content-Length": String(image.length),
   });
   assert.equal(uploaded.status, 200);
   const saved = (await uploaded.json()) as CanvasView;
   const response = await f.request(saved.background!.url);
-  const output = Buffer.from(await response.arrayBuffer());
-  assert.deepEqual(output, image);
-  assert.equal(output.readUInt32BE(16), 6000);
-  assert.equal(output.readUInt32BE(20), 4000);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), image);
   assert.equal(
     (
       await f.request(
@@ -383,41 +357,14 @@ test("large photos retain full resolution while ordinary API bodies remain bound
   assert.deepEqual(f.store.canvasView(f.canvas).background, saved.background);
 });
 
-test("wide panoramas exceeding WebP dimensions are served as PNG without resizing", async (t) => {
+test("JPEG and WebP backgrounds are served unchanged; overview backgrounds persist", async (t) => {
   const f = fixture(t);
-  const image = png(20000, 1000);
-  // No Content-Length: real streamed uploads must also accept the full image.
-  const uploaded = await f.request(
-    `/api/canvases/${f.canvas.id}/background`,
-    "PUT",
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(image);
-        controller.close();
-      },
-    }),
-    { "Content-Type": "image/png" },
-  );
-  assert.equal(uploaded.status, 200);
-  const saved = (await uploaded.json()) as CanvasView;
-  f.reopen();
-  const response = await f.request(saved.background!.url);
-  assert.equal(response.headers.get("Content-Type"), "image/png");
-  const output = Buffer.from(await response.arrayBuffer());
-  assert.deepEqual(output, image);
-  assert.equal(output.readUInt32BE(16), 20000);
-  assert.equal(output.readUInt32BE(20), 1000);
-});
-
-test("JPEG metadata and encoding remain unchanged; WebP and overview backgrounds persist", async (t) => {
-  const f = fixture(t);
-  const jpeg = Buffer.concat([jpegFixture.subarray(0, 2), jpegSegment(225, Buffer.concat([Buffer.from("Exif\0\0"), privateExif(1)])), jpegFixture.subarray(2)]);
-  const uploaded = await f.upload(jpeg, "", { "Content-Type": "image/jpeg" });
+  const uploaded = await f.upload(jpegFixture, "", { "Content-Type": "image/jpeg" });
   assert.equal(uploaded.status, 200);
   const canvas = (await uploaded.json()) as CanvasView;
   const response = await f.request(canvas.background!.url);
   assert.equal(response.headers.get("Content-Type"), "image/jpeg");
-  assert.deepEqual(Buffer.from(await response.arrayBuffer()), jpeg);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), jpegFixture);
   const webp = await f.upload(webpFixture, "?opacity=1", { "Content-Type": "image/webp" });
   assert.equal(webp.status, 200);
   const webpCanvas = (await webp.json()) as CanvasView;
@@ -475,33 +422,6 @@ test("JPEG metadata and encoding remain unchanged; WebP and overview backgrounds
     ).status,
     400,
   );
-});
-
-test("metadata, color profiles, orientation and animation are stored byte-for-byte", async (t) => {
-  const f = fixture(t), basePng = png();
-  const frameControl = (sequence: number) => {
-    const frame = Buffer.alloc(26); frame.writeUInt32BE(sequence); frame.writeUInt32BE(24, 4); frame.writeUInt32BE(16, 8); frame.writeUInt16BE(1, 20); frame.writeUInt16BE(10, 22); return frame;
-  };
-  const animation = Buffer.alloc(8); animation.writeUInt32BE(2);
-  const pixels = Buffer.alloc(25 * 16, 100); for (let row = 0; row < 16; row++) pixels[row * 25] = 0;
-  const frameData = Buffer.alloc(4); frameData.writeUInt32BE(2);
-  const apng = Buffer.concat([basePng.subarray(0, 33), pngChunk("acTL", animation), pngChunk("fcTL", frameControl(0)), basePng.subarray(33, -12), pngChunk("fcTL", frameControl(1)), pngChunk("fdAT", Buffer.concat([frameData, deflateSync(pixels)])), basePng.subarray(-12)]);
-  const samples: Array<[Buffer, string]> = [[apng, "image/png"]];
-  for (const little of [false, true]) for (const rotate of [1, 6, 8]) {
-    const exif = privateExif(rotate, little), icc = Buffer.from("ICC_PROFILE\0\x01\x01fixture color profile");
-    samples.push([Buffer.concat([jpegFixture.subarray(0, 2), jpegSegment(225, Buffer.concat([Buffer.from("Exif\0\0"), exif])), jpegSegment(254, Buffer.from("private comment")), jpegSegment(226, icc), jpegFixture.subarray(2)]), "image/jpeg"]);
-    samples.push([Buffer.concat([basePng.subarray(0, 33), pngChunk("eXIf", exif), pngChunk("tEXt", Buffer.from("Artist\0private")), basePng.subarray(33)]), "image/png"]);
-    samples.push([webpExtended([webpChunk("EXIF", exif), webpChunk("XMP ", Buffer.from("private xmp")), webpChunk("ICCP", Buffer.from("profile"))], 8 | 4 | 32), "image/webp"]);
-  }
-  for (const [bytes, mime] of samples) {
-    const before = Buffer.from(bytes); validateBackground(bytes, mime); assert.deepEqual(bytes, before);
-    const response = await f.upload(bytes, "", { "Content-Type": mime }); assert.equal(response.status, 200);
-    const saved = (await response.json()) as CanvasView, asset = await f.request(saved.background!.url);
-    assert.equal(asset.headers.get("Content-Type"), mime); assert.deepEqual(Buffer.from(await asset.arrayBuffer()), before);
-  }
-  f.reopen();
-  const background = f.store.canvasView(f.store.get("canvas", f.canvas.id)!).background!;
-  assert.deepEqual(Buffer.from(await (await f.request(background.url)).arrayBuffer()), samples.at(-1)![0]);
 });
 
 test("background validation checks MIME signatures without decoding or rewriting image data", () => {

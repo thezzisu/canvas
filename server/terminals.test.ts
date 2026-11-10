@@ -926,20 +926,22 @@ test('shared completion reads follow native frame fences and persist without con
   assert.equal(messages(peer).filter(message => message.type === 'status').at(-1).readOnly, true, 'viewing does not take input control');
 });
 
-test('passive hover leaves the already-painted completion frame available for acknowledgement', async t => {
-  const f = await fixture(t, false, false, true); if (!f) return;
-  const client = new Client(); await f.manager.connect(f.source, f.target, client.socket); await f.ready();
-  const resource = await listResources(f.source), paneId = resource.spaces.find(space => space.id === f.target.spaceId)!.windows[0]!.panes[0]!.id;
-  f.reportAgent(paneId, 'working');
-  await waitFor(() => messages(client).some(message => message.type === 'metadata' && message.window.panes.some((pane: { id: string; status: string }) => pane.id === paneId && pane.status === 'working')), 'working state arrives');
-  f.reportAgent(paneId, 'idle');
-  await waitFor(() => messages(client).some(message => message.type === 'completion-frame' && message.panes.some((pane: { id: string; completion?: unknown }) => pane.id === paneId && pane.completion)), 'native completion frame arrives');
-  const frame = messages(client).filter(message => message.type === 'completion-frame').at(-1);
-  const token = frame.panes.find((pane: { id: string }) => pane.id === paneId).completion;
-  client.command({ type: 'input', data: '\x1b[<35;3;3M\x1b[<63;4;3M' });
-  assert.deepEqual(f.store!.get<{ read: unknown }>('completion-read', f.source.id)!.read, {}, 'hover itself does not mark work read');
-  client.command({ type: 'completion-read', generation: frame.generation, paneId, ...token });
-  await waitFor(() => f.store!.get<{ read: Record<string, number> }>('completion-read', f.source.id)?.read[paneId] === token.sequence, 'hover did not invalidate the painted read evidence');
+test('passive hover and browser focus reports leave the already-painted completion frame available for acknowledgement', async t => {
+  for (const [name, input] of [['hover', '\x1b[<35;3;3M\x1b[<63;4;3M'], ['focus', '\x1b[O']] as const) await t.test(name, async t => {
+    const f = await fixture(t, false, false, true); if (!f) return;
+    const client = new Client(); await f.manager.connect(f.source, f.target, client.socket); await f.ready();
+    const resource = await listResources(f.source), paneId = resource.spaces.find(space => space.id === f.target.spaceId)!.windows[0]!.panes[0]!.id;
+    f.reportAgent(paneId, 'working');
+    await waitFor(() => messages(client).some(message => message.type === 'metadata' && message.window.panes.some((pane: { id: string; status: string }) => pane.id === paneId && pane.status === 'working')), 'working state arrives');
+    f.reportAgent(paneId, 'idle');
+    await waitFor(() => messages(client).some(message => message.type === 'completion-frame' && message.panes.some((pane: { id: string; completion?: unknown }) => pane.id === paneId && pane.completion)), 'native completion frame arrives');
+    const frame = messages(client).filter(message => message.type === 'completion-frame').at(-1);
+    const token = frame.panes.find((pane: { id: string }) => pane.id === paneId).completion;
+    client.command({ type: 'input', data: input });
+    assert.deepEqual(f.store!.get<{ read: unknown }>('completion-read', f.source.id)!.read, {}, `${name} itself does not mark work read`);
+    client.command({ type: 'completion-read', generation: frame.generation, paneId, ...token });
+    await waitFor(() => f.store!.get<{ read: Record<string, number> }>('completion-read', f.source.id)?.read[paneId] === token.sequence, `${name} did not invalidate the painted read evidence`);
+  });
 });
 
 test('initial completed panes remain unread without replaying notifications, then a new completion notifies once', async t => {
@@ -957,18 +959,4 @@ test('initial completed panes remain unread without replaying notifications, the
   f.reportAgent(paneId, 'idle');
   await waitFor(() => events.some(event => event.kind === 'done' && event.completion && event.completion.sequence > initial), 'new completion has its own notification evidence');
   assert.equal(events.filter(event => event.kind === 'done').length, 1);
-});
-
-
-test('passive browser focus reports preserve an already painted completion fence for header selection', async t => {
-  const f = await fixture(t, false, false, true); if (!f) return;
-  const client = new Client(); await f.manager.connect(f.source, f.target, client.socket); await f.ready();
-  const window = (await listResources(f.source)).spaces.find(space => space.id === f.target.spaceId)!.windows[0]!;
-  const paneId = window.panes[0]!.id;
-  f.reportAgent(paneId, 'working'); f.reportAgent(paneId, 'idle');
-  await waitFor(() => messages(client).some(message => message.type === 'completion-frame' && message.panes.some((pane: { completion?: unknown }) => !!pane.completion)), 'completed frame is painted');
-  const frame = messages(client).filter(message => message.type === 'completion-frame').at(-1);
-  client.command({ type: 'input', data: '\x1b[O' });
-  client.command({ type: 'completion-read', generation: frame.generation, paneId, ...frame.panes[0].completion });
-  await waitFor(() => f.store!.get<{ read: Record<string, number> }>('completion-read', f.source.id)?.read[paneId] === frame.panes[0].completion.sequence, 'header selection after browser blur can acknowledge the same frame');
 });

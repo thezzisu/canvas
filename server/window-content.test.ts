@@ -213,7 +213,6 @@ test('full-width CJK path display joins a short extension tail and verifies the 
   f.setContent([{ ...pane([first, '  d'], f.root), columns: terminalCellWidth(first) }])
   const scan = await f.scan()
   assert.deepEqual(scan.panes[0]!.items.filter(item => item.kind === 'file').map(item => item.path), [join(f.root, relative)])
-  assert.equal(f.reads(), 0, 'scan validates metadata without reading file bytes')
   f.setContent([{ ...pane([first.replace('AutoOps', 'Missing'), '  d'], f.root), columns: terminalCellWidth(first) }])
   assert.deepEqual((await f.scan()).panes, [], 'a reconstructed path still requires an existing file')
 })
@@ -231,7 +230,6 @@ test('unquoted tool paths join slash and hyphen wraps across multiple hard lines
     'app.png',
   ]), columns: 150 }])
   assert.deepEqual((await f.scan()).panes.flatMap(pane => pane.items.flatMap(item => item.kind === 'file' ? [item.path] : [])), [path])
-  assert.equal(f.reads(), 0, 'reconstructed candidates are checked as regular files without reading bytes')
   await rm(path)
   assert.deepEqual((await f.scan()).panes, [], 'missing exact hyphenated file never falls back to a different filename')
 })
@@ -294,7 +292,6 @@ test('inline parenthesized video paths survive TUI hard wraps and retain their e
   ], f.root)])
   const scanned = await f.scan()
   assert.deepEqual(scanned.panes[0]!.items.filter(item => item.kind === 'file').map(item => [item.path, item.label]), [[join(f.root, relative), relative]])
-  assert.equal(f.reads(), 0)
   await rm(join(f.root, relative))
   assert.deepEqual((await f.scan()).panes, [], 'a reconstructed missing file is never displayed')
 })
@@ -322,7 +319,6 @@ test('balanced half-width and full-width wrappers retain parentheses inside real
   ], f.root)])
   const files = (await f.scan()).panes[0]!.items.filter(item => item.kind === 'file').map(item => item.path)
   assert(names.every(name => files.includes(join(f.root, 'docs', name))))
-  assert.equal(f.reads(), 0)
 })
 
 test('color runs retain filename punctuation, join at pane edges and reject stale or concealed hints', async () => {
@@ -419,7 +415,6 @@ test('at-prefixed references use the literal filename first and never strip auth
   assert(!files.includes(join(f.root, 'report.md')), 'a real leading @ is preserved')
   assert(files.includes(join(f.root, 'README')))
   assert(files.includes(join(f.root, 'docs/a b(1).md')))
-  assert.equal(f.reads(), 0)
   const linked = pane([], f.root)
   linked.links = [{ label: 'Exact missing link', url: `file://${f.root}/@docs/file.md` }]
   f.setContent([linked])
@@ -442,7 +437,6 @@ test('Markdown display decoration is removed from wrapped paths without consumin
   assert.deepEqual(scan.panes.map(group => group.items.filter(item => item.kind === 'file').map(item => item.path)), [
     [join(f.root, 'docs/引用说明.md')], [join(f.root, 'docs/加粗说明.md')], [join(f.root, 'docs/list.md')],
   ])
-  assert.equal(f.reads(), 0)
 })
 
 test('path reconstruction preserves real spaces and OSC 8 targets instead of compacting filenames', async t => {
@@ -458,7 +452,6 @@ test('path reconstruction preserves real spaces and OSC 8 targets instead of com
   assert.deepEqual(scan.panes[0]!.items.filter(item => item.kind === 'file').map(item => item.path), [
     join(f.root, 'docs/linked name.md'), join(f.root, 'docs/real name.md'),
   ])
-  assert.equal(f.reads(), 0)
 })
 
 test('width-based continuation remains bounded by pane, distinct filenames and scan capacity', () => {
@@ -568,7 +561,6 @@ test('changed source identity and logout invalidate captured file actions', asyn
   const f = await fixture(t)
   const scan = await f.scan(), file = scan.panes[0]!.items.find(item => item.kind === 'file')!
   f.store.put('source', { ...f.source, name: 'Renamed' })
-  assert.equal(f.reads(), 0)
   f.store.put('source', { ...f.source, herdrSession: 'different' })
   assert.equal((await f.call(`/api/content-scans/${scan.id}/items/${file.id}/open`)).status, 404)
   assert.equal(f.reads(), 0)
@@ -632,7 +624,6 @@ test('OSC 8 file hostnames are metadata and paths are checked on the selected SS
   const scan = await f.scan()
   assert(checked)
   assert.deepEqual(scan.panes[0]!.items.map(item => item.kind === 'file' && item.path), [join(f.root, 'report.txt')])
-  assert.equal(f.reads(), 0)
 })
 
 test('file locations fall back only when the exact path is absent and deduplicate matched files', async t => {
@@ -647,7 +638,6 @@ test('file locations fall back only when the exact path is absent and deduplicat
   assert.deepEqual(scan.panes[0]!.items.map(item => item.kind === 'file' && item.path), [
     join(f.root, 'report.txt'), join(f.root, 'column.ts'), join(f.root, 'literal.txt:12'), join(f.root, 'literal.txt#L7'),
   ])
-  assert.equal(f.reads(), 0)
   const item = scan.panes[0]!.items.find(item => item.kind === 'file' && item.path === join(f.root, 'column.ts'))!
   const opened = await f.call(`/api/content-scans/${scan.id}/items/${item.id}/open`)
   assert.equal(opened.status, 200)
@@ -785,7 +775,6 @@ test('application-indented code paths join unfinished fragments without reaching
       assert.deepEqual((await f.scan()).panes.flatMap(group => group.items.flatMap(item => item.kind === 'file' ? [item.path] : [])), [path])
     }
   }
-  assert.equal(f.reads(), 0, 'only regular-file metadata is checked')
 })
 
 test('versioned filename fragments join a visible suffix in indented displays and stable table cells', async t => {

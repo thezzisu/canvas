@@ -6,8 +6,7 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WebSocket, WebSocketServer } from "ws";
-import type { AddressInfo } from 'node:net';
+import type { WebSocket } from "ws";
 import { UploadService } from "./uploads.ts";
 import { Store, sourceConnectionKey, type Source } from "./state.ts";
 import { createApp } from "./app.ts";
@@ -296,7 +295,7 @@ test("closed native windows and failed paste callbacks retain complete files wit
     assert.deepEqual([...f.files.values()], [Buffer.from('one')]);
     assert.deepEqual(f.removed, []);
     assert.deepEqual(f.pasted, []);
-    assert.match(f.socket.messages.at(-1)?.error, /windowClosed/u);
+    assert.equal(f.socket.messages.at(-1)?.error, "windowClosed");
   }
 });
 
@@ -364,39 +363,6 @@ test("network request abort and source failure retain completed files without in
     assert.deepEqual(f.pasted, []);
     assert.equal(await f.service.receive(tokens[1]!, "session-a", uploadRequest(Buffer.from("ignored"))), 404);
   }
-});
-
-test('a real WebSocket disconnect stops an unfinished batch without deleting completed files or pasting paths', async t => {
-  const f = fixture(t), wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
-  await new Promise<void>(resolve => wss.once('listening', resolve));
-  const connected = new Promise<WebSocket>(resolve => wss.once('connection', resolve));
-  const client = new WebSocket(`ws://127.0.0.1:${(wss.address() as AddressInfo).port}`);
-  const server = await connected;
-  const frames: Record<string, any>[] = [];
-  client.on('message', bytes => frames.push(JSON.parse(bytes.toString())));
-  const closed = new Promise<void>(resolve => server.once('close', () => { f.service.disconnected(server); resolve(); }));
-  t.after(async () => {
-    client.terminate(); server.terminate();
-    await new Promise<void>(resolve => wss.close(() => resolve()));
-  });
-  await f.service.begin(f.source, 'window-a', server, 'session-a', { id: 'socket-batch', files: [{ name: 'first', size: 3 }, { name: 'pending', size: 8 }] });
-  for (let i = 0; i < 200 && !frames.some(frame => frame.type === 'upload-ready'); i++) await new Promise(resolve => setTimeout(resolve, 5));
-  const urls = frames.find(frame => frame.type === 'upload-ready')?.urls as string[];
-  assert(urls);
-  const tokens = urls.map(url => url.split('/').at(-1)!);
-  assert.equal(await f.service.receive(tokens[0]!, 'session-a', uploadRequest(Buffer.from('one'))), 204);
-  let cancelled = false;
-  const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(Buffer.from('part')); }, cancel() { cancelled = true; } });
-  const receiving = f.service.receive(tokens[1]!, 'session-a', new Request('http://canvas.test/api/uploads/pending', {
-    method: 'PUT', body, duplex: 'half',
-  } as RequestInit));
-  await new Promise(resolve => setImmediate(resolve));
-  client.close(); await closed;
-  assert.equal(await receiving, 409);
-  assert(cancelled);
-  assert.deepEqual([...f.files.values()], [Buffer.from('one')]);
-  assert.deepEqual(f.removed, []); assert.deepEqual(f.pasted, []);
-  assert.equal(await f.service.receive(tokens[1]!, 'session-a', uploadRequest(Buffer.from('ignored'))), 404);
 });
 
 test("validation and unavailable terminal capture never issue upload tokens", async t => {

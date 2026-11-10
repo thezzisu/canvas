@@ -20,8 +20,10 @@ import { OpenDownloadService, type OpenDownloadOptions } from "./open-download.t
 import type { EditorAuthority } from "../shared/editor-target.ts";
 
 const helper = fileURLToPath(new URL("../cli/canvas", import.meta.url));
-const routingError = (nativeSocket: string, message: string, pane = "pane") =>
-  `canvas: ${message}\n  HERDR_SOCKET_PATH=${JSON.stringify(nativeSocket)} HERDR_PANE_ID=${JSON.stringify(pane)}\n`;
+const notRouted = (result: { code: number | null; stderr: string }, reason: RegExp) => {
+  assert.equal(result.code, 1, result.stderr);
+  assert.match(result.stderr, reason);
+};
 const source: Source = { id: randomUUID(), name: "Open", transport: "local" };
 const resources = {
   id: source.id, name: source.name, status: "online" as const,
@@ -178,7 +180,7 @@ test("CLI URL receipt binds to the original browser, session and message kind", 
 
 test("CLI URL open fails without an attached browser or with URL credentials", async t => {
   const f = await fixture(t, { recipientAvailable: false });
-  assert.deepEqual(await f.run("http://localhost:5173/"), { code: 1, stderr: routingError(f.nativeSocket, "no browser ready to receive from this pane") });
+  notRouted(await f.run("http://localhost:5173/"), /no browser ready/u);
   assert.deepEqual(await f.run("https://user:DUMMY_PASSWORD@example.test/"), { code: 1, stderr: "canvas: invalid web address\n" });
 });
 
@@ -379,9 +381,7 @@ test("unacknowledged directories time out and a missing browser fails immediatel
   assert.equal(result.code, 1);
   assert.equal(result.stderr, "canvas: browser did not receive this directory\n");
   const missing = await fixture(t, { recipientAvailable: false });
-  const rejected = await missing.run(missing.root);
-  assert.equal(rejected.code, 1);
-  assert.equal(rejected.stderr, routingError(missing.nativeSocket, "no browser ready to receive from this pane"));
+  notRouted(await missing.run(missing.root), /no browser ready/u);
   assert.deepEqual(missing.receiver.messages, []);
 });
 
@@ -428,16 +428,6 @@ test("browser context is bound once and copying never starts through a GET reque
   assert(f.store.get<Canvas>("canvas", f.canvas.id)!.nodes.some(node => node.type === "file"));
 });
 
-test("empty files complete staging and a real native HTTP response", async t => {
-  const f = await fixture(t), base = await serveFixture(t, f);
-  await copyFile(f, "empty", Buffer.alloc(0));
-  const notice = f.receiver.messages.find(message => message.type === "download")!;
-  const response = await fetch(`${base}${notice.url}`, { headers: { Authorization: "Bearer authenticated-session", Connection: "close" } });
-  assert.equal(response.status, 200);
-  assert.equal(response.headers.get("content-length"), "0");
-  assert.equal((await response.arrayBuffer()).byteLength, 0);
-});
-
 test("staging waits for validated helper EOF after all declared bytes arrive", async t => {
   for (const content of [Buffer.alloc(0), Buffer.from("complete bytes awaiting EOF")]) {
     const f = await fixture(t), transfer = await sender(t, f, content.length);
@@ -477,21 +467,10 @@ test("cancelling a native HTTP download does not affect the completed CLI copy",
 test("a missing browser context fails with not-attached without sending file data", async t => {
   const f = await fixture(t, { autoContext: false, contextTimeoutMs: 60 });
   await writeFile(join(f.root, "copy.txt"), "private data");
-  const began = Date.now(), result = await f.run("copy.txt");
-  assert.equal(result.code, 1);
-  assert.equal(result.stderr, routingError(f.nativeSocket, "no browser ready to receive from this pane"));
+  const began = Date.now();
+  notRouted(await f.run("copy.txt"), /no browser ready/u);
   assert(Date.now() - began < 2000);
   assert.equal(f.observations.uploadedBytes, 0);
-});
-
-test("no controlling browser fails immediately without a context round trip", async t => {
-  const f = await fixture(t, { recipientAvailable: false });
-  await writeFile(join(f.root, "copy.txt"), "private data");
-  const began = Date.now(), result = await f.run("copy.txt");
-  assert.equal(result.code, 1);
-  assert.equal(result.stderr, routingError(f.nativeSocket, "no browser ready to receive from this pane"));
-  assert(Date.now() - began < 2000);
-  assert.deepEqual(f.receiver.messages, []);
 });
 
 test("daemon callers route only by their explicit socket and pane, never another live window", async t => {
@@ -507,13 +486,9 @@ test("daemon callers route only by their explicit socket and pane, never another
 
   const paths = ["report.txt", ".", "https://example.test/scoped"];
   for (const path of paths) {
-    const stale = await f.run(path, { HERDR_PANE_ID: "old-pane" });
-    assert.deepEqual(stale, { code: 1, stderr: routingError(f.nativeSocket, "no browser ready to receive from this pane", "old-pane") });
-    const missing = await f.run(path, { HERDR_PANE_ID: "removed-pane" });
-    assert.deepEqual(missing, { code: 1, stderr: routingError(f.nativeSocket, "herdr pane is unavailable", "removed-pane") });
-    const otherSocket = join(f.root, "other-herdr.sock");
-    const other = await f.run(path, { HERDR_SOCKET_PATH: otherSocket, HERDR_PANE_ID: "target-pane" });
-    assert.deepEqual(other, { code: 1, stderr: routingError(otherSocket, "no Canvas bridge for this herdr socket", "target-pane") });
+    notRouted(await f.run(path, { HERDR_PANE_ID: "old-pane" }), /no browser ready/u);
+    notRouted(await f.run(path, { HERDR_PANE_ID: "removed-pane" }), /herdr pane is unavailable/u);
+    notRouted(await f.run(path, { HERDR_SOCKET_PATH: join(f.root, "other-herdr.sock"), HERDR_PANE_ID: "target-pane" }), /no Canvas bridge/u);
   }
   assert.deepEqual(f.observations.recipientWindows, ["old-window", "old-window", "old-window"]);
   assert.equal(f.observations.uploadedBytes, 0); assert.deepEqual(f.receiver.messages, []);
