@@ -29,15 +29,17 @@ export type OverviewCard = { width: number; height: number }
 export type OverviewCardPlacement = OverviewCard & { x: number; y: number }
 
 /** Lay out one space's cards from `origin`, starting a continuation line every
- * `perRow` windows (0 keeps one line). A create card ends the last line with the
- * last window's width and that line's tallest height. */
+ * `perRow` cards (0 keeps one line). A create card takes the next slot, sized
+ * like the last window but as tall as its line's tallest card. */
 export function overviewSpaceLayout(windows: readonly OverviewCard[], perRow: number, create: boolean, fallback: OverviewCard, origin = { x: 0, y: 0 }) {
   const gap = 16
-  const lines: OverviewCard[][] = []
-  for (let index = 0; index < windows.length; index += perRow > 0 ? perRow : windows.length) lines.push(windows.slice(index, perRow > 0 ? index + perRow : undefined))
-  if (!lines.length) lines.push([])
-  const last = lines.at(-1)!
-  if (create) last.push({ width: windows.at(-1)?.width ?? fallback.width, height: last.length ? Math.max(...last.map(card => card.height)) : fallback.height })
+  const lines: OverviewCard[][] = [[]]
+  const openLine = () => { if (perRow > 0 && lines.at(-1)!.length === perRow) lines.push([]); return lines.at(-1)! }
+  for (const window of windows) openLine().push(window)
+  if (create) {
+    const last = windows.at(-1) ?? fallback, row = openLine()
+    row.push({ width: last.width, height: Math.max(last.height, ...row.map(card => card.height)) })
+  }
   const cards: OverviewCardPlacement[] = []
   let y = origin.y, width = 0
   for (const line of lines) {

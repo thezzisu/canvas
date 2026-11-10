@@ -1,9 +1,19 @@
-import { createMarkdownParser, type ComarkPlugin } from 'comark'
+import { createMarkdownParser, type ComarkPlugin, type MarkdownExitPlugin } from 'comark'
 import math from 'comark/plugins/math'
 import security from 'comark/plugins/security'
 import { visit } from 'comark/utils'
 
 export interface MarkdownResources { document: string; root: string }
+/** Pandoc tex_math_dollars: `$` opens before a non-space and closes after one, never before a digit. */
+const dollarMath = /^\$(?![\s$])((?:\\.|[^\\$\n])*(?:\\.|[^\s\\$]))\$(?!\d)/u
+const pandocInlineMath: MarkdownExitPlugin = md => md.inline.ruler.at('math_inline', (state, silent) => {
+  const match = dollarMath.exec(state.src.slice(state.pos, state.posMax))
+  if (!match) return false
+  if (!silent) Object.assign(state.push('math_inline', 'math', 0), { content: match[1], markup: '$' })
+  state.pos += match[0].length
+  return true
+})
+
 function links(resources?: MarkdownResources): ComarkPlugin { return {
   name: 'canvas-file-links',
   post({ tree }) {
@@ -41,7 +51,7 @@ function links(resources?: MarkdownResources): ComarkPlugin { return {
 /** Plain Markdown and KaTeX math only: no HTML, MDC components, attributes, bindings or frontmatter. */
 function parser(resources?: MarkdownResources) { return createMarkdownParser({
   registerDefaultPlugins: false, autoClose: false, headingIds: !!resources,
-  plugins: [math(), security({ allowedTags: ['p', 'a', 'blockquote', 'code', 'pre', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr',
+  plugins: [math(), { name: 'pandoc-inline-math', markdownItPlugins: [pandocInlineMath] }, security({ allowedTags: ['p', 'a', 'blockquote', 'code', 'pre', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr',
     'img', 'ul', 'ol', 'li', 'strong', 'table', 'thead', 'tbody', 'td', 'th', 'tr', 'del', 'br', 'math'],
     allowedProtocols: ['http', 'https'], allowDataImages: false }), links(resources)],
 }) }

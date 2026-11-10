@@ -234,4 +234,12 @@ test('wrapped space rows page continuously: left/right stop at row ends, up/down
   assert.equal(adjacentPage(wrapped, 'b+', 'up')?.id, 'a+')
   assert.equal(adjacentPage(wrapped, 'a0', 'up'), undefined)
   assert.equal(adjacentPage(wrapped, 'b0', 'down'), undefined)
+  const full = [...space('a', 0, 4), ...space('b', 3000, 2)]
+  assert.deepEqual([...new Set(full.map(value => value.row))], ['a/0', 'a/466', 'a/932', 'b/3000', 'b/3466'])
+  assert.equal(adjacentPage(full, 'a3', 'right'), undefined)
+  assert.equal(adjacentPage(full, 'a+', 'left'), undefined)
+  assert.equal(adjacentPage(full, 'a3', 'down')?.id, 'a+')
+  assert.equal(adjacentPage(full, 'a+', 'up')?.id, 'a2')
+  assert.equal(adjacentPage(full, 'a+', 'down')?.id, 'b0')
+  assert.equal(adjacentPage(full, 'b1', 'down')?.id, 'b+')
 })

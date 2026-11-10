@@ -69,6 +69,16 @@ test('KaTeX renders dollar math while backslash brackets stay Markdown escapes',
   assert(html.includes('[not math]'))
 })
 
+test('inline dollar math follows Pandoc delimiter rules while display math is unchanged', async () => {
+  const inline = async (markdown: string) => (await render(markdown)).html.match(/<span class="math inline">/gu)?.length ?? 0
+  for (const plain of ['$HOME and $PATH', '$ x$', '$x $', '$5 and $6', '$x$5', '\\$x$']) assert.equal(await inline(plain), 0, plain)
+  assert.equal(await inline('$x^2$'), 1)
+  assert.match((await render('$HOME and $PATH')).html, /\$HOME and \$PATH/u)
+  const { html } = await render('Inline $$E = mc^2$$ and display\n\n$$\nx + 1\n$$')
+  assert.match(html, /<span class="math inline"><span class="katex">.*E = mc\^2<\/annotation>/su)
+  assert.match(html, /<div class="math block"><span class="katex-display">.*x \+ 1<\/annotation>/su)
+})
+
 test('formulas in code spans and blocks stay literal text', async () => {
   const { html } = await render('`$x^2$` and `\\(y\\)`\n\n```\n$$\nz\n$$\n\\[w\\]\n```')
   assert.doesNotMatch(html, /katex/u)

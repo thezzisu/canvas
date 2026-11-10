@@ -82,11 +82,11 @@ test('an unwrapped space keeps one row whose create card takes the last width an
   assert.deepEqual(overviewSpaceLayout([], 0, true, fallback), { cards: [{ x: 0, y: 0, ...fallback }], width: 800, height: 450 })
   assert.deepEqual(overviewSpaceLayout([card(400, 300)], 3, false, fallback), overviewSpaceLayout([card(400, 300)], 0, false, fallback))
   const offset = overviewSpaceLayout([card(400, 300), card(600, 500)], 1, true, fallback, { x: 24, y: 34 })
-  assert.deepEqual(placed(offset), [[24, 34, 400, 300], [24, 350, 600, 500], [640, 350, 600, 500]])
-  assert.deepEqual([offset.width, offset.height], [1216, 816])
+  assert.deepEqual(placed(offset), [[24, 34, 400, 300], [24, 350, 600, 500], [24, 866, 600, 500]])
+  assert.deepEqual([offset.width, offset.height], [600, 1332])
 })
 
-test('wrapping starts continuation rows sized by their tallest card and ends the short last row with the create card', () => {
+test('wrapping counts the create card as a slot: it ends a short last row or starts the next row', () => {
   const windows = [card(400, 300), card(600, 500), card(200, 100), card(300, 200), card(500, 250)]
   const layout = overviewSpaceLayout(windows, 2, true, fallback)
   assert.deepEqual(placed(layout), [
@@ -96,7 +96,9 @@ test('wrapping starts continuation rows sized by their tallest card and ends the
   ])
   assert.deepEqual([layout.width, layout.height], [1016, 982])
   const exact = overviewSpaceLayout(windows.slice(0, 4), 2, true, fallback)
-  assert.deepEqual(exact.cards.at(-1), { x: 532, y: 516, width: 300, height: 200 }, 'a full last row still receives the create card')
+  assert.deepEqual(placed(exact).slice(2), [[0, 516, 200, 100], [216, 516, 300, 200], [0, 732, 300, 200]])
+  assert.deepEqual([exact.width, exact.height], [1016, 932])
+  assert.deepEqual(placed(overviewSpaceLayout(windows.slice(0, 4), 0, true, fallback)).at(-1), [1564, 0, 300, 500])
   assert.deepEqual(placed(overviewSpaceLayout(windows, 2, false, fallback)).map(value => value[1]), [0, 0, 516, 516, 732])
   assert.equal(overviewSpaceLayout(windows, 2, false, fallback).width, 1016)
 })
