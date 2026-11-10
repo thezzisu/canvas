@@ -8,7 +8,13 @@ export interface CanvasLocation {
   camera?: CanvasCamera
   view?: 'paged'
   page?: string
+  feature?: never
 }
+export const features = ['working-set'] as const
+export type Feature = typeof features[number]
+/** A feature page replaces the canvas; it has no canvas or camera of its own. */
+export interface FeatureLocation { instance: string; feature: Feature; canvas?: never; camera?: never; view?: never; page?: never }
+export type WorkspaceLocation = CanvasLocation | FeatureLocation
 export interface CameraFrame { width: number; height: number }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const coordinate = (value: number) => Number.isFinite(value) && Math.abs(value) <= 1e8
@@ -16,11 +22,13 @@ const validFrame = (frame: CameraFrame) => Number.isFinite(frame.width) && Numbe
 const validCamera = (camera: CanvasCamera) => coordinate(camera.x) && coordinate(camera.y) && Number.isFinite(camera.zoom) && camera.zoom >= .08 && camera.zoom <= 2
 
 /** Fragment values identify saved instances; endpoints and credentials never belong here. */
-export function parseCanvasLocation(hash: string): CanvasLocation | undefined {
+export function parseCanvasLocation(hash: string): WorkspaceLocation | undefined {
   if (!hash.startsWith('#') || hash.length > 4096) return
   const params = new URLSearchParams(hash.slice(1))
-  const instance = params.get('instance') || '', canvas = params.get('canvas') || ''
-  if (!uuid.test(instance) || !(canvas === 'overview' || uuid.test(canvas))) return
+  const instance = params.get('instance') || '', canvas = params.get('canvas') || '', feature = features.find(value => value === params.get('feature'))
+  if (!uuid.test(instance)) return
+  if (feature) return { instance: instance.toLowerCase(), feature }
+  if (!(canvas === 'overview' || uuid.test(canvas))) return
   const location: CanvasLocation = { instance: instance.toLowerCase(), canvas: canvas.toLowerCase() }
   const center = params.get('center')?.split(','), zoom = params.get('zoom')
   if (center?.length === 2 && center.every(value => value.trim()) && zoom?.trim()) {
@@ -35,7 +43,8 @@ export function parseCanvasLocation(hash: string): CanvasLocation | undefined {
   return location
 }
 
-export function formatCanvasLocation(location: CanvasLocation): string {
+export function formatCanvasLocation(location: WorkspaceLocation): string {
+  if (location.feature) return `#${new URLSearchParams({ instance: location.instance, feature: location.feature })}`
   const params = new URLSearchParams({ instance: location.instance, canvas: location.canvas })
   if (location.camera && validCamera(location.camera)) {
     const { x, y, zoom } = location.camera
@@ -60,8 +69,9 @@ export function viewportFromCamera(camera: CanvasCamera, frame: CameraFrame): Ca
   return { x: frame.width / 2 - camera.x * camera.zoom, y: frame.height / 2 - camera.y * camera.zoom, zoom: camera.zoom }
 }
 
-export function resolveCanvasLocation(location: CanvasLocation, canvasIds: readonly string[]): CanvasLocation {
-  return location.canvas === 'overview' || canvasIds.includes(location.canvas) ? location : { instance: location.instance, canvas: 'overview' }
+/** Features name no canvas; a missing canvas falls back to Overview. */
+export function resolveCanvasLocation(location: WorkspaceLocation, canvasIds: readonly string[]): CanvasLocation {
+  return location.feature || location.canvas !== 'overview' && !canvasIds.includes(location.canvas) ? { instance: location.instance, canvas: 'overview' } : location
 }
 
 /** A filtered or removed page falls back near its saved center without changing filters. */
@@ -75,7 +85,8 @@ export function restoreCanvasPage(location: CanvasLocation, pages: readonly Over
 
 const storageKey = (instance: string, canvas: string) => `canvas:view:${instance}:${canvas}`
 const lastCanvasKey = (instance: string) => `canvas:last-canvas:${instance}`
-export function rememberCanvasLocation(storage: Pick<Storage, 'setItem'>, location: CanvasLocation) {
+export function rememberCanvasLocation(storage: Pick<Storage, 'setItem'>, location: WorkspaceLocation) {
+  if (location.feature) return
   try {
     const hash = formatCanvasLocation(location), key = storageKey(location.instance, location.canvas)
     storage.setItem(key, hash)
@@ -92,13 +103,13 @@ export function recallLastCanvasLocation(storage: Pick<Storage, 'getItem'>, inst
 export function recallCanvasLocation(storage: Pick<Storage, 'getItem'>, instance: string, canvas: string): CanvasLocation | undefined {
   try {
     const location = parseCanvasLocation(storage.getItem(storageKey(instance, canvas)) || '')
-    return location?.instance === instance && location.canvas === canvas ? location : undefined
+    return location && !location.feature && location.instance === instance && location.canvas === canvas ? location : undefined
   } catch { return undefined }
 }
 export function recallFreeCanvasLocation(storage: Pick<Storage, 'getItem'>, instance: string, canvas: string): CanvasLocation | undefined {
   try {
     const location = parseCanvasLocation(storage.getItem(`${storageKey(instance, canvas)}:free`) || '')
-    return location?.instance === instance && location.canvas === canvas && !location.view ? location : undefined
+    return location && !location.feature && location.instance === instance && location.canvas === canvas && !location.view ? location : undefined
   } catch { return undefined }
 }
 
@@ -109,7 +120,7 @@ export interface CanvasHistoryBrowser {
   removeEventListener(type: 'popstate' | 'hashchange', listener: () => void): void
 }
 /** A camera move replaces its entry; deliberate navigation creates one history step. */
-export function bindCanvasHistory(browser: CanvasHistoryBrowser, changed: (location: CanvasLocation | undefined) => void) {
+export function bindCanvasHistory(browser: CanvasHistoryBrowser, changed: (location: WorkspaceLocation | undefined) => void) {
   let observed: string | undefined
   const read = () => {
     const hash = browser.location.hash
@@ -121,7 +132,7 @@ export function bindCanvasHistory(browser: CanvasHistoryBrowser, changed: (locat
   browser.addEventListener('hashchange', read)
   return {
     read,
-    write(location: CanvasLocation, mode: 'push' | 'replace') {
+    write(location: WorkspaceLocation, mode: 'push' | 'replace') {
       const hash = formatCanvasLocation(location)
       if (hash === browser.location.hash) { observed = hash; return }
       browser.history[mode === 'push' ? 'pushState' : 'replaceState'](browser.history.state, '', hash)

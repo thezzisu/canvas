@@ -137,6 +137,7 @@ export type SharedState = {
   overviewBackground: CanvasBackground | null;
   windowSizes: Record<string, WindowSize>;
   composers: Record<string, ComposerView>;
+  windowReads: Record<string, number>;
 };
 export class LayoutConflict extends Error {}
 
@@ -145,8 +146,9 @@ export class Store extends EventEmitter {
   readonly instanceId = randomUUID();
   revision = 0;
   private removals = new Map<string, RemovedCard>();
-  /** Windows recently closed through Canvas; late draft writes must not recreate their composers. */
+  /** Windows recently closed through Canvas; late draft or read writes must not recreate their records. */
   private closedWindows = new Map<string, number>();
+  private lastRead = 0;
   constructor(path: string) {
     super();
     this.setMaxListeners(0);
@@ -162,6 +164,7 @@ export class Store extends EventEmitter {
         "INSERT OR IGNORE INTO documents(kind,id,body) VALUES('canvas','overview',?)",
       )
       .run(JSON.stringify({ id: "overview", name: "overview", nodes: [] }));
+    this.lastRead = Number(this.db.prepare("SELECT max(json_extract(body,'$.at')) AS at FROM documents WHERE kind='window-read'").get()?.at) || 0;
   }
   list<T>(kind: string): T[] {
     return this.db
@@ -196,7 +199,7 @@ export class Store extends EventEmitter {
   }
   remove(kind: string, id: string) {
     if (kind === "source") {
-      this.db.prepare("DELETE FROM documents WHERE kind='window-size' AND substr(id,1,?)=?")
+      this.db.prepare("DELETE FROM documents WHERE kind IN ('window-size','window-read') AND substr(id,1,?)=?")
         .run(id.length + 1, `${id}/`);
       this.removeComposers(composer => composer.sourceId === id);
       for (const key of this.closedWindows.keys()) if (key.startsWith(`${id}/`)) this.closedWindows.delete(key);
@@ -223,8 +226,8 @@ export class Store extends EventEmitter {
         update.run(JSON.stringify({ ...canvas, nodes }), canvas.id);
         changed = true;
       }
-      const removeSize = this.db.prepare("DELETE FROM documents WHERE kind='window-size' AND id=?");
-      for (const windowId of closed) changed = !!removeSize.run(`${source.id}/${windowId}`).changes || changed;
+      const removeWindow = this.db.prepare("DELETE FROM documents WHERE kind IN ('window-size','window-read') AND id=?");
+      for (const windowId of closed) changed = !!removeWindow.run(`${source.id}/${windowId}`).changes || changed;
       changed = this.removeComposers(composer => composer.sourceId === source.id && closed.has(composer.windowId)) || changed;
       // Native IDs may be reused later; the guard only outlives in-flight browser writes.
       const until = Date.now() + 120_000;
@@ -314,6 +317,7 @@ export class Store extends EventEmitter {
       windowSizes: Object.fromEntries(this.list<WindowSize & { id: string }>("window-size")
         .map(({ id, width, height }) => [id, { width, height }])),
       composers: Object.fromEntries(this.list<Composer>("composer").map(composer => [composerKey(composer), this.composerView(composer)])),
+      windowReads: Object.fromEntries(this.list<{ id: string; at: number }>("window-read").map(({ id, at }) => [id, at])),
     };
   }
   settings(): GlobalSettings {
@@ -502,7 +506,7 @@ export class Store extends EventEmitter {
     if ('composer' in context) {
       this.db.exec("BEGIN IMMEDIATE");
       try {
-        if (!this.acceptsComposer(context.composer)) { this.db.exec("ROLLBACK"); return false; }
+        if (!this.acceptsWindow(context.composer)) { this.db.exec("ROLLBACK"); return false; }
         const composer = this.ensureComposer(context.composer);
         this.db.prepare("INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)")
           .run(asset.id, '', asset.filename, asset.size, asset.mime, asset.createdAt);
@@ -578,11 +582,20 @@ export class Store extends EventEmitter {
     return assets;
   }
 
-  /** A composer needs its connection and a window that Canvas has not closed. */
-  acceptsComposer(target: ComposerTarget): boolean {
+  /** Window-owned records need their connection and a window that Canvas has not closed. */
+  acceptsWindow(target: ComposerTarget): boolean {
     const key = composerKey(target), closedUntil = this.closedWindows.get(key);
     if (closedUntil !== undefined && closedUntil <= Date.now()) this.closedWindows.delete(key);
     return !!this.get<Source>('source', target.sourceId) && !(closedUntil! > Date.now());
+  }
+  /** Records when a window's read focus starts; strictly increasing, so order survives equal or rewound clocks. */
+  markWindowRead(source: Source, windowId: string) {
+    const current = this.get<Source>("source", source.id);
+    if (!current || sourceConnectionKey(current) !== sourceConnectionKey(source) || !this.acceptsWindow({ sourceId: source.id, windowId })) return;
+    const id = `${source.id}/${windowId}`, at = this.lastRead = Math.max(Date.now(), this.lastRead + 1);
+    this.db.prepare("INSERT INTO documents(kind,id,body) VALUES('window-read',?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body")
+      .run(id, JSON.stringify({ id, at }));
+    this.changed();
   }
   composer(target: ComposerTarget): Composer | undefined {
     return this.get<Composer>('composer', composerKey(target));
@@ -622,7 +635,7 @@ export class Store extends EventEmitter {
     this.db.exec("BEGIN IMMEDIATE");
     let composer: Composer;
     try {
-      if (!this.acceptsComposer(target)) throw new Error('Window not found');
+      if (!this.acceptsWindow(target)) throw new Error('Window not found');
       const current = this.composer(target);
       if (current?.content === content || !current && !content) {
         this.db.exec("ROLLBACK");
@@ -642,7 +655,7 @@ export class Store extends EventEmitter {
     let changed = false;
     try {
       const existing = [...new Set(assetIds)].map(id => this.fileAsset(id));
-      if (!this.acceptsComposer(target) || existing.some(asset => !asset)) { this.db.exec("ROLLBACK"); return; }
+      if (!this.acceptsWindow(target) || existing.some(asset => !asset)) { this.db.exec("ROLLBACK"); return; }
       assets = existing as FileAsset[];
       const composer = this.ensureComposer(target);
       const link = this.db.prepare("INSERT OR IGNORE INTO note_files(note_id,asset_id) VALUES(?,?)");

@@ -33,6 +33,8 @@ export default {
   "overview": "总览",
   "canvas": "画布",
   "canvases": "画布",
+  "features": "功能",
+  "workingSet": "工作集",
   "connections": "连接",
   "emptyCanvas": "空画布",
   "closedWindow": "已关闭的窗口",

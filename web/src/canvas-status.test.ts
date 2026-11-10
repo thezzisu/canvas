@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canvasIndicators, windowVisualState } from './canvas-status.ts'
+import { agentIndicator, canvasIndicators, connectionIndicator, windowVisualState } from './canvas-status.ts'
 import type { Canvas, CanvasNode, SourceResource } from './types.ts'
 
 const resources: SourceResource[] = [{ id: 'a', name: 'A', status: 'online', spaces: [
@@ -54,4 +54,19 @@ test('an offline source cannot override live work in another source or leak stat
   const result = canvasIndicators([canvas('both', [terminal('attention'), terminal('attention', 'b')])], mixed)
   assert.deepEqual(result.both, { count: 2, status: 'working' })
   assert.equal(result.overview!.status, 'working')
+})
+
+test('online connections count every window across spaces; unavailable ones keep only their reason', () => {
+  const source: SourceResource = { ...resources[0]!, spaces: [...resources[0]!.spaces, { id: 'other', name: 'Other', windows: [{ id: 'idle', name: 'Idle', status: 'idle' }] }] }
+  assert.deepEqual(connectionIndicator(source, 'Connecting'), { indicator: { count: 4, status: 'attention' } })
+  assert.deepEqual(connectionIndicator({ ...source, spaces: [{ id: 'empty', name: 'Empty', windows: [] }] }, 'Connecting'), { indicator: { count: 0, status: null } })
+  assert.deepEqual(connectionIndicator({ ...source, status: 'offline', error: 'Socket missing' }, 'Connecting'), { unavailable: 'Socket missing' })
+  assert.deepEqual(connectionIndicator({ ...source, error: 'Discovery failed' }, 'Connecting'), { unavailable: 'Discovery failed' }, 'retained live windows of a failing connection are not counted')
+  assert.deepEqual(connectionIndicator({ ...source, status: 'offline' }, 'Connecting'), { unavailable: 'Connecting' })
+  assert.deepEqual(connectionIndicator(undefined, 'Connecting'), { unavailable: 'Connecting' }, 'an undiscovered connection is still connecting')
+})
+
+test('agent indicators count agents and report their highest priority; no agents show nothing', () => {
+  assert.equal(agentIndicator([]), undefined)
+  assert.deepEqual(agentIndicator([{ status: 'idle' }, { status: 'done' }, { status: 'working' }]), { count: 3, status: 'done' })
 })

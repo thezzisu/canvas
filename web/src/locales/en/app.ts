@@ -33,6 +33,8 @@ export default {
   "overview": "Overview",
   "canvas": "Canvas",
   "canvases": "Canvases",
+  "features": "Features",
+  "workingSet": "Working set",
   "connections": "Connections",
   "emptyCanvas": "Empty canvas",
   "closedWindow": "Closed window",

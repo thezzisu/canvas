@@ -1,7 +1,7 @@
 import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { effectScope, ref } from 'vue'
-import { bindCanvasHistory, cameraFromViewport, formatCanvasLocation, parseCanvasLocation, recallCanvasLocation, recallFreeCanvasLocation, recallLastCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type CanvasLocation } from './canvas-location.ts'
+import { bindCanvasHistory, cameraFromViewport, formatCanvasLocation, parseCanvasLocation, recallCanvasLocation, recallFreeCanvasLocation, recallLastCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type CanvasLocation, type WorkspaceLocation } from './canvas-location.ts'
 import { useCanvasLocation } from './use-canvas-location.ts'
 
 const instance = '11111111-1111-4111-8111-111111111111'
@@ -56,6 +56,35 @@ test('canvas fragments preserve center, zoom and native page identities without 
   assert.equal(parseCanvasLocation('#instance=https://example.com&canvas=overview'), undefined)
   assert.equal(parseCanvasLocation(`#canvas=${canvas}`), undefined)
   assert.equal(parseCanvasLocation(`#instance=${instance}&canvas=../../other`), undefined)
+})
+
+test('feature fragments replace the canvas key and are never remembered as a canvas view', () => {
+  const feature: WorkspaceLocation = { instance, feature: 'working-set' }
+  assert.equal(formatCanvasLocation(feature), `#instance=${instance}&feature=working-set`)
+  assert.deepEqual(parseCanvasLocation(formatCanvasLocation(feature)), feature)
+  assert.deepEqual(parseCanvasLocation(`#instance=${instance.toUpperCase()}&canvas=${canvas}&center=1,2&zoom=1&feature=working-set`), feature)
+  assert.deepEqual(parseCanvasLocation(`#instance=${instance}&canvas=${canvas}&feature=unknown`), { instance, canvas })
+  assert.equal(parseCanvasLocation(`#instance=${instance}&feature=unknown`), undefined)
+  assert.equal(parseCanvasLocation('#instance=invalid&feature=working-set'), undefined)
+  assert.deepEqual(resolveCanvasLocation(feature, [canvas]), { instance, canvas: 'overview' }, 'a feature names no canvas to show')
+  const store = storage()
+  rememberCanvasLocation(store, location)
+  rememberCanvasLocation(store, feature)
+  assert.deepEqual(recallLastCanvasLocation(store, instance), location)
+})
+
+test('opening a feature pushes one history step and back returns to the canvas view', t => {
+  const f = navigationFixture(t, formatCanvasLocation(location))
+  f.navigation.read()
+  assert(f.navigation.restored(f.navigation.requested.value, location))
+  assert(f.navigation.openFeature(instance, 'working-set'))
+  assert.deepEqual(f.navigation.requested.value?.location, { instance, feature: 'working-set' })
+  assert.equal(f.port.location.hash, `#instance=${instance}&feature=working-set`)
+  assert(f.navigation.restored(f.navigation.requested.value, { instance, feature: 'working-set' }))
+  assert.equal(f.navigation.openFeature('33333333-3333-4333-8333-333333333333', 'working-set'), false)
+  f.port.go(-1)
+  assert.deepEqual(f.navigation.requested.value?.location, location)
+  assert.deepEqual(f.port.entries, [formatCanvasLocation(location), `#instance=${instance}&feature=working-set`])
 })
 
 test('malformed camera values never reach VueFlow while valid route identity remains usable', () => {
@@ -181,7 +210,7 @@ test('paged restoration follows native identity or the nearest surviving window 
 })
 
 test('camera moves replace history and back/forward restores one canvas step without duplicate events', () => {
-  const port = browser(), seen: (CanvasLocation | undefined)[] = []
+  const port = browser(), seen: (WorkspaceLocation | undefined)[] = []
   const history = bindCanvasHistory(port, value => seen.push(value))
   history.read(); history.read()
   assert.equal(seen.length, 1)

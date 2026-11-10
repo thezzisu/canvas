@@ -43,7 +43,7 @@ const assets = new AssetStore(dataDir, store);
 const completionReads = new CompletionReads(store);
 const terminals = new TerminalManager(completionReads, (source, windowId) => store.removeWindowReferences(source, [windowId]),
   (sourceId, windowId) => store.normalTerminalSize(sourceId, windowId, captures.current(sourceId, windowId) ? captureToolbarHeight : 0),
-  (sourceId, windowId) => captures.current(sourceId, windowId));
+  (sourceId, windowId) => captures.current(sourceId, windowId), (source, windowId) => store.markWindowRead(source, windowId));
 store.on('change', (normalGeometryChanged: boolean) => { if (normalGeometryChanged) terminals.refreshNormalSizes(); });
 const uploads = new UploadService(terminals);
 const helperBytes = readFileSync(new URL("../cli/canvas", import.meta.url));

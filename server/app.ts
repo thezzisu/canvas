@@ -234,15 +234,15 @@ export function createApp(
   const composerTarget = (c: { req: { param(name: string): string } }) => ({ sourceId: c.req.param('id'), windowId: c.req.param('window') });
   app.patch('/api/sources/:id/windows/:window/composer', async c => {
     const target = composerTarget(c);
-    if (!store.acceptsComposer(target)) return c.json({ error: 'Window not found' }, 404);
+    if (!store.acceptsWindow(target)) return c.json({ error: 'Window not found' }, 404);
     return c.json(store.updateComposer(target, composerSchema.parse(await c.req.json()).content));
   });
   app.post('/api/sources/:id/windows/:window/composer/files', async c => {
     const target = composerTarget(c);
-    if (!store.acceptsComposer(target) || !options.assets) return c.json({ error: 'Window not found' }, 404);
+    if (!store.acceptsWindow(target) || !options.assets) return c.json({ error: 'Window not found' }, 404);
     const input = z.object({ filename: z.string().min(1).max(255),
       size: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).strict().parse(c.req.query());
-    return c.json(await receiveFile(store, options.assets, input, { composer: target }, () => store.acceptsComposer(target),
+    return c.json(await receiveFile(store, options.assets, input, { composer: target }, () => store.acceptsWindow(target),
       c.req.raw, bearerToken(c.req.header('authorization'))), 201);
   });
   app.post('/api/sources/:id/windows/:window/composer/file-references', async c => {

@@ -12,10 +12,13 @@ import { needsAttention, type CanvasIndicator } from '../canvas-status'
 import type { CanvasAgent } from '../canvas-agents'
 
 defineOptions({ inheritAttrs: false })
-const props = defineProps<{ name: string; overview?: boolean; active?: boolean; indicator?: CanvasIndicator; fresh?: boolean; agents(): CanvasAgent[]; actionsAvailable?: boolean; open?: boolean }>()
+// One sidebar row: a counted item whose status dot lists its agents, or an
+// unavailable item whose dashed indicator explains why.
+const props = defineProps<{ name: string; icon: string; active?: boolean; indicator?: CanvasIndicator; unavailable?: string; fresh?: boolean; agents(): CanvasAgent[]; actionsAvailable?: boolean; open?: boolean }>()
 const emit = defineEmits<{ select: []; 'update:open': [open: boolean]; go: [target: Pick<CanvasAgent, 'sourceId' | 'windowId'>] }>()
 const { t, n } = useI18n()
-const label = computed(() => props.indicator?.status ? t('canvasUi.canvasStatus', { name: props.name, status: statusLabel(props.indicator.status) }) : props.name)
+const detail = computed(() => props.indicator?.status ? statusLabel(props.indicator.status) : props.unavailable)
+const label = computed(() => detail.value ? t('canvasUi.canvasStatus', { name: props.name, status: detail.value }) : props.name)
 const trigger = ref<HTMLButtonElement>(), panel = ref<HTMLElement>(), pinned = ref(false)
 const open = computed({ get: () => !!props.open, set: value => emit('update:open', value) })
 const panelId = useId()
@@ -67,9 +70,10 @@ const content = computed(() => ({ 'aria-label': t('canvasUi.agentsInCanvas', { n
 
 <template>
   <div class="canvas-nav-row">
-    <button v-bind="$attrs" class="nav-item canvas-nav-item" :class="{ active }" :aria-current="active ? 'page' : undefined" :aria-label="label" :title="label" @click="emit('select')">
-      <Icon :name="overview ? 'grid' : 'canvas'" :size="16" />
+    <button class="nav-item" :class="{ active }" :aria-current="active ? 'page' : undefined" :aria-label="label" :title="label" v-bind="$attrs" @click="emit('select')">
+      <Icon :name="icon" :size="16" />
       <span class="canvas-nav-name"><span>{{ name }}</span><small v-if="indicator" class="canvas-nav-count">{{ n(indicator.count) }}</small></span>
+      <span v-if="unavailable !== undefined" class="canvas-nav-status canvas-nav-unavailable" :title="unavailable"><svg width="6" height="6" viewBox="0 0 6 6" aria-hidden="true"><circle cx="3" cy="3" r="2.5" fill="none" stroke="currentColor" stroke-dasharray="1.5 1.12" /></svg></span>
     </button>
     <button v-if="indicator?.status" ref="trigger" type="button" class="canvas-nav-status canvas-agent-trigger" aria-haspopup="dialog" data-no-reorder :aria-label="t('canvasUi.agentsInCanvas', { name })" :aria-expanded="open" :aria-controls="panelId" @pointerenter="enter" @pointerleave="leave()" @click.stop="toggle" @keydown.esc.stop.prevent="close">
       <i class="program-dot" :data-status-pulse="fresh && needsAttention(indicator.status)" :style="{ '--program-color': statusColor(indicator.status) }" />
@@ -93,7 +97,8 @@ const content = computed(() => ({ 'aria-label': t('canvasUi.agentsInCanvas', { n
 
 <style scoped>
 .canvas-nav-row{position:relative}
-.canvas-agent-trigger{position:absolute;right:0;top:2px;bottom:0;width:var(--sidebar-rail);padding:0;border-radius:5px;-webkit-tap-highlight-color:transparent}
+.canvas-agent-trigger{position:absolute;right:0;inset-block:0;width:var(--sidebar-rail);padding:0;border-radius:5px;-webkit-tap-highlight-color:transparent}
+.canvas-nav-unavailable{grid-column:3;color:var(--ui-text-dimmed)}
 .canvas-agent-trigger:hover,.canvas-agent-trigger[aria-expanded=true]{background:#ffffff0b}
 .canvas-agent-trigger:focus-visible{outline-offset:-2px}
 .canvas-agents-panel{outline:none;padding:5px}

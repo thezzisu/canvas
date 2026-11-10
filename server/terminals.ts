@@ -86,6 +86,7 @@ class LiveTerminal {
     readonly reads?: CompletionReads,
     readonly onFocusedRemove?: () => void,
     readonly capture: () => CaptureDescriptor | null = () => null,
+    readonly onReadFocus?: () => void,
   ) {
     this.cols = cols;
     this.rows = rows;
@@ -335,7 +336,8 @@ class LiveTerminal {
           return;
         }
         if (msg.type === "view-visible" && typeof msg.visible === "boolean") {
-          if (msg.visible && msg.focused === true) this.focused.add(ws);
+          // A browser reports focused exactly while this window holds its read focus.
+          if (msg.visible && msg.focused === true && !this.focused.has(ws)) { this.focused.add(ws); this.onReadFocus?.(); }
           else if (!msg.visible || msg.focused === false) this.focused.delete(ws);
           if (msg.visible === !this.hidden.has(ws)) return;
           if (msg.visible) { this.hidden.delete(ws); this.resume(); }
@@ -517,7 +519,8 @@ export class TerminalManager {
   private completionBoots = new Map<string, string>();
   constructor(private readonly reads?: CompletionReads, private readonly onFocusedWindowRemoved?: (source: Source, windowId: string) => void,
     private readonly normalSize: (sourceId: string, windowId: string) => Size = () => normalTerminalGrid(defaultWindowSize, defaultTerminalCell()),
-    private readonly capture: (sourceId: string, windowId: string) => CaptureDescriptor | null = () => null) {}
+    private readonly capture: (sourceId: string, windowId: string) => CaptureDescriptor | null = () => null,
+    private readonly onWindowRead?: (source: Source, windowId: string) => void) {}
   refreshNormalSizes() {
     if (this.stopped) return;
     for (const terminal of this.live) terminal.setNormalSize(this.normalSize(terminal.sourceId, terminal.windowId));
@@ -585,6 +588,7 @@ export class TerminalManager {
             transport,
             source, this.reads, () => this.onFocusedWindowRemoved?.(source, target.windowId),
             () => this.capture(source.id, target.windowId),
+            () => this.onWindowRead?.(source, target.windowId),
           );
           this.live.add(terminal);
           // A card/font edit may have committed while the native socket opened.

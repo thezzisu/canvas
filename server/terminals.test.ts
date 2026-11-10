@@ -69,7 +69,7 @@ async function fixture(t: TestContext, probe = false, quietProbe = false, comple
   }) : undefined;
   let normalSize = { cols: 100, rows: 30 };
   const manager = new TerminalManager(reads, (source, windowId) => store?.removeWindowReferences(source, [windowId]), () => normalSize,
-    (sourceId, windowId) => captures?.current(sourceId, windowId) ?? null);
+    (sourceId, windowId) => captures?.current(sourceId, windowId) ?? null, (source, windowId) => store?.markWindowRead(source, windowId));
   const setNormalSize = (cols: number, rows: number) => { normalSize = { cols, rows }; manager.refreshNormalSizes(); };
   t.after(async () => {
     await captures?.close();
@@ -349,12 +349,33 @@ test('a confirmed exit during logical Canvas focus removes every reference for E
     await f.ready();
     focusedPeer.command({ type: 'view-visible', visible: true, focused: true });
     assert.equal((await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!.controller, controller.socket, 'logical focus must not take input ownership');
+    assert(f.store!.snapshot().windowReads[`${f.source.id}/${f.target.windowId}`], 'starting read focus records the window');
     if (method === 'external') await herdrApiRequest(f.source.herdrSocket!, 'tab.close', { tab_id: f.target.windowId });
     else controller.command({ type: 'input', data: method === 'eof' ? '\x04' : 'exit\r' });
     await waitFor(() => controller.readyState === 3 && focusedPeer.readyState === 3, 'native exit did not reach both clients');
     assert(f.store!.list<Canvas>('canvas').every(canvas => canvas.nodes.length === 0));
     assert.equal(f.store!.snapshot().windowSizes[`${f.source.id}/${f.target.windowId}`], undefined);
+    assert.equal(f.store!.snapshot().windowReads[`${f.source.id}/${f.target.windowId}`], undefined);
   });
+});
+
+test('each start of a viewer read focus records the window once in the shared store', async t => {
+  const f = await fixture(t, false, false, true); if (!f) return;
+  const key = `${f.source.id}/${f.target.windowId}`, client = new Client(), peer = new Client();
+  await f.manager.connect(f.source, f.target, client.socket);
+  await f.manager.connect(f.source, f.target, peer.socket);
+  await f.ready();
+  client.command({ type: 'view-visible', visible: true });
+  client.command({ type: 'view-visible', visible: true, focused: 'true' });
+  assert.equal(f.store!.snapshot().windowReads[key], undefined, 'visibility alone or a malformed report is not a read');
+  client.command({ type: 'view-visible', visible: true, focused: true });
+  const first = f.store!.snapshot().windowReads[key]!;
+  assert(first);
+  client.command({ type: 'view-visible', visible: true, focused: true });
+  assert.equal(f.store!.snapshot().windowReads[key], first, 'a repeated report does not restart read focus');
+  client.command({ type: 'view-visible', visible: true, focused: false });
+  peer.command({ type: 'view-visible', visible: true, focused: true });
+  assert(f.store!.snapshot().windowReads[key]! > first, 'another viewer starting read focus advances the shared time');
 });
 
 test('unfocused, hidden, covered and disconnected viewers preserve confirmed closed-window references', async t => {

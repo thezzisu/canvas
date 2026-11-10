@@ -82,7 +82,7 @@ export interface Canvas { id: string; name: string; nodes: CanvasNode[]; snapToG
 export interface WindowSize { width: number; height: number }
 /** A terminal window's draft: a note owned by the native window. */
 export interface ComposerView { id: string; sourceId: string; windowId: string; content: string; version: number; attachments: FileAsset[] }
-export interface SharedState { instanceId: string; revision: number; navigationOrder: NavigationOrder; sources: Source[]; canvases: Canvas[]; overviewBackground: Canvas['background']; windowSizes: Record<string, WindowSize>; composers: Record<string, ComposerView>; settings: GlobalSettings }
+export interface SharedState { instanceId: string; revision: number; navigationOrder: NavigationOrder; sources: Source[]; canvases: Canvas[]; overviewBackground: Canvas['background']; windowSizes: Record<string, WindowSize>; composers: Record<string, ComposerView>; windowReads: Record<string, number>; settings: GlobalSettings }
 export interface TerminalData {
   preferenceKey: string
   sourceId: string
