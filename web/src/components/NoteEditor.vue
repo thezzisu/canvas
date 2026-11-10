@@ -242,7 +242,7 @@ defineExpose({ chooseFiles, pending })
 
 <style scoped>
 .note-editor-shell{position:relative;height:100%;min-height:0}
-.note-editor :deep(.note-editor-content){padding:11px 12px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;overscroll-behavior:contain;font-family:var(--content-font-family);font-feature-settings:var(--content-font-features);font-size:inherit;line-height:inherit;-webkit-tap-highlight-color:transparent}
+.note-editor :deep(.note-editor-content){padding:11px 12px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;overscroll-behavior:contain;font-family:var(--content-font-family);font-feature-settings:var(--content-font-features);font-size:inherit;line-height:inherit}
 .note-editor :deep(p){margin:0;min-height:1lh}
 .note-editor :deep(.is-editor-empty:first-child::before){content:attr(data-placeholder);float:left;height:0;pointer-events:none;color:#75808d}
 .note-editor :deep(.ProseMirror-selectednode .note-attachment-button){outline:1px solid var(--accent)}
