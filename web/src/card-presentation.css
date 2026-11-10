@@ -1,32 +1,87 @@
-:is(.terminal-card,.note-card,.file-card) {
+:is(.terminal-card, .note-card, .file-card) {
   /* Nuxt UI semantic color: every primary control inside a card follows the card. */
-  --ui-primary: var(--program-color,var(--note-color,#93a1b4));
+  --ui-primary: var(--program-color, var(--note-color, #93a1b4));
 }
 
-@media(prefers-reduced-motion:no-preference) {
-  .minimap-pulse,[data-status-pulse=true] {
-    --attention-low-opacity: .25;
+@media (prefers-reduced-motion: no-preference) {
+  .minimap-pulse,
+  [data-status-pulse="true"] {
+    --attention-low-opacity: 0.25;
     animation: status-breathe 2.4s ease-in-out infinite;
   }
-  .minimap-pulse { animation-name: minimap-breathe; }
+  .minimap-pulse {
+    animation-name: minimap-breathe;
+  }
 }
 /* One rhythm/amplitude, native paint properties: SVG fill avoids a composited
    layer per minimap window; HTML changes only the small indicator's opacity. */
-@keyframes minimap-breathe { 0%,100% { fill-opacity: var(--attention-low-opacity); } 50% { fill-opacity: 1; } }
-@keyframes status-breathe { 0%,100% { opacity: var(--attention-low-opacity); } 50% { opacity: 1; } }
+@keyframes minimap-breathe {
+  0%,
+  100% {
+    fill-opacity: var(--attention-low-opacity);
+  }
+  50% {
+    fill-opacity: 1;
+  }
+}
+@keyframes status-breathe {
+  0%,
+  100% {
+    opacity: var(--attention-low-opacity);
+  }
+  50% {
+    opacity: 1;
+  }
+}
 
-.vue-flow__node-note:is(.selected,:focus-visible,:focus-within)>.note-card { border-color: color-mix(in srgb,var(--note-color) 78%,#e7edf5); }
-.vue-flow__node-file:is(.selected,:focus-visible,:focus-within)>.file-card { border-color: #8793a3; }
-.vue-flow__node-file { padding: 0; border: 0; background: transparent; box-shadow: none; }
-.terminal-card,.note-card,.file-card { cursor: auto; }
-.card-content[data-content-active=false] { cursor: pointer; }
+.vue-flow__node-note:is(.selected, :focus-visible, :focus-within) > .note-card {
+  border-color: color-mix(in srgb, var(--note-color) 78%, #e7edf5);
+}
+.vue-flow__node-file:is(.selected, :focus-visible, :focus-within) > .file-card {
+  border-color: #8793a3;
+}
+.vue-flow__node-file {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.terminal-card,
+.note-card,
+.file-card {
+  cursor: auto;
+}
+.card-content[data-content-active="false"] {
+  cursor: pointer;
+}
 
-@media(prefers-reduced-motion:reduce) {
-  .terminal-card { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .terminal-card {
+    transition: none;
+  }
 }
 
 /* Invisible resize grips sit above card content; corners keep diagonal priority. */
-.vue-flow__resize-control.line { z-index: 21; border: 0; background: transparent; }
-.vue-flow__resize-control.line:is(.left,.right) { width: var(--card-resize-hit,8px); top: 8px; height: calc(100% - 16px); }
-.vue-flow__resize-control.line:is(.top,.bottom) { height: var(--card-resize-hit,8px); left: 8px; width: calc(100% - 16px); }
-.vue-flow__resize-control.handle { z-index: 22; width: 12px; height: 12px; border: 0; background: transparent; opacity: 0; }
+.vue-flow__resize-control.line {
+  z-index: 21;
+  border: 0;
+  background: transparent;
+}
+.vue-flow__resize-control.line:is(.left, .right) {
+  width: var(--card-resize-hit, 8px);
+  top: 8px;
+  height: calc(100% - 16px);
+}
+.vue-flow__resize-control.line:is(.top, .bottom) {
+  height: var(--card-resize-hit, 8px);
+  left: 8px;
+  width: calc(100% - 16px);
+}
+.vue-flow__resize-control.handle {
+  z-index: 22;
+  width: 12px;
+  height: 12px;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+}
