@@ -16,6 +16,7 @@ import { clearCaptures, receiveCapture, removeCaptures } from './capture'
 import { captureRichPaste } from './rich-paste'
 import { previewRichPaste } from './rich-paste-dialog'
 import { bindFileInput, preventFileNavigation, TerminalUploads, type TerminalUploadState } from './uploads'
+import { pendingWrites } from './pending-writes'
 import { clipboardRestoringFocus, TerminalClipboard, type ClipboardNotice } from './clipboard'
 import { emptyModifiers, hasModifiers, modifiedText, terminalKey, terminalShortcut, type TerminalModifiers } from './terminal-input'
 import { terminalInputChunks } from './terminal-input-chunks'
@@ -817,6 +818,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     const surface = document.createElement('div')
     surface.className = 'terminal-surface'
     Object.assign(surface.style, { transformOrigin: 'top left', width: '100%', height: '100%' })
+    // Browser uploads and composer deliveries stop if the page closes.
+    const transfer = `terminal-upload:${uuid()}`
     const uploads = new TerminalUploads({
       readiness: () => {
         const value = session!
@@ -836,7 +839,11 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
         if (session!.socket?.readyState !== WebSocket.OPEN) return false
         session!.socket.send(JSON.stringify(message)); return true
       },
-      changed: upload => setState(session!, { ...session!.state, upload }),
+      changed: upload => {
+        setState(session!, { ...session!.state, upload })
+        if (upload && ['waiting', 'preparing', 'uploading'].includes(upload.state)) pendingWrites.start(transfer, 'upload')
+        else pendingWrites.stop(transfer, 'upload')
+      },
     })
     session = { term, surface, uploads, opened: false, magnified: false, mobile: !!options.mobile, connectionRevision: 0,
       modifiers: emptyModifiers(), touchMode: 'scroll', keyboardRequested: false, settings: options.settings || defaultTerminalSettings,

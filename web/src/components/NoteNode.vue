@@ -15,6 +15,7 @@ import CardHeaderActions from './CardHeaderActions.vue'
 import { contentZoomMenu } from '../content-zoom-menu'
 import { useContentZoom } from '../content-zoom'
 import CardPreview from './CardPreview.vue'
+import SaveStatus from './SaveStatus.vue'
 import { noteColor } from '../status'
 import { copyText } from '../clipboard'
 import { clipboardText, noteClipboard, NOTE_CLIPBOARD_TYPE } from '../note-clipboard'
@@ -36,6 +37,7 @@ const zoom = useContentZoom(() => props.data.zoomKey)
 const mobilePreview = computed(() => !!props.data.mobile && !props.data.focus)
 const noteBody = ref<HTMLElement>()
 const noteEditor = ref<InstanceType<typeof NoteEditor>>()
+const owner = computed(() => canvasNoteOwner(props.data.canvasId, props.id))
 const copyContent = computed(() => noteText(content.value, props.data.attachments))
 const { active: contentActive, pointerDown: contentPointerDown } = useCardContentFocus(noteBody, () => mobilePreview.value)
 const shortcuts = computed(() => [...(props.data.focus ? ['zoom'] : []), 'copy'])
@@ -97,6 +99,7 @@ function dragNote(event: DragEvent) {
       </div>
       <input v-if="editingTitle" ref="titleInput" v-model="title" class="note-title nodrag" :class="{ 'cutout-title': data.focus }" :aria-label="t('panels.note.title')" maxlength="200" @input="emitChange({ title })" @blur="finishTitle" @keydown.enter.stop.prevent="titleInput?.blur()" @keydown.esc="escapeTitle" />
       <span v-else class="note-title" :class="{ 'cutout-title': data.focus }" :title="title || t('panels.note.name')" @dblclick.stop="rename">{{ title || t('panels.note.name') }}</span>
+      <SaveStatus :owner="owner.key" :size="data.mobile && data.focus ? 'lg' : 'xs'" />
       <CardHeaderActions class="note-actions" :class="{ 'cutout-actions': data.mobile && data.focus }" :items="menu" :expanded="!!data.focus" removable :mobile="!!data.mobile && !!data.focus" :shortcuts="shortcuts" :priority="['copy', 'zoom']" :add-label="t('app.addToOtherCanvas')" :remove-label="t('panels.note.remove')"
         @add="data.onAction('add', id)" @toggle="data.onAction(data.focus ? 'unfocus' : 'focus', id)" @remove="data.onAction('remove', id)">
         <template #zoom><ContentZoom v-model="zoom" :mobile="data.mobile" :label="t('common.contentZoom')" /></template>
@@ -104,7 +107,7 @@ function dragNote(event: DragEvent) {
       </CardHeaderActions>
     </header>
     <div ref="noteBody" class="note-content card-content nodrag nowheel" :data-content-active="contentActive" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.stop="contentPointerDown" @wheel.stop @dblclick.stop>
-      <NoteEditor ref="noteEditor" :content="content" :attachments="data.attachments || []" :owner="canvasNoteOwner(data.canvasId, id)" :scroll-key="data.scrollKey" :can-persist="data.canPersistView" :read-only="mobilePreview" :insert-attachment="data.onAttachment" @change="value => { content = value; emitChange({ content: value }) }" @flush="flush" />
+      <NoteEditor ref="noteEditor" :content="content" :attachments="data.attachments || []" :owner="owner" :scroll-key="data.scrollKey" :can-persist="data.canPersistView" :read-only="mobilePreview" :insert-attachment="data.onAttachment" @change="value => { content = value; emitChange({ content: value }) }" @flush="flush" />
     </div>
     <CardPreview v-if="mobilePreview && !editing" :label="t('common.openCard', { name: title || t('panels.note.name') })" @open="data.onAction('focus', id)" />
   </article>

@@ -5,6 +5,7 @@ import { loadCanvasFile } from './file-transfer'
 import { attachmentToken } from './note-document'
 import type { NoteRange } from './note-editing'
 import { loadNoteClipboard, reusedNoteClipboard, type NoteClipboard } from './note-clipboard'
+import { pendingWrites } from './pending-writes'
 import type { PastePart } from '../../shared/paste'
 import type { FileAsset } from './types'
 
@@ -35,7 +36,7 @@ async function upload(owner: NoteOwner, offset: number, end: number, replaced: s
   if (pending.has(owner.key)) return
   const context = apiContext(), task = shallowReactive<NoteUpload>({ offset, end, replaced, controller: new AbortController(), uploading,
     name: '', fileCount: 0, transferred: 0 })
-  pending.set(owner.key, task)
+  pending.set(owner.key, task); pendingWrites.start(owner.key, 'upload')
   try {
     const signal = AbortSignal.any([context.signal, task.controller.signal])
     const { files, parts } = await prepare(signal), assets: FileAsset[] = []
@@ -57,7 +58,7 @@ async function upload(owner: NoteOwner, offset: number, end: number, replaced: s
       assets, offset: task.offset, end: task.end, replaced: task.replaced }
     if (!task.insert?.(value)) insert(value)
   } catch (error) { if (!task.controller.signal.aborted && !context.signal.aborted) reportDownloadError(error) }
-  finally { if (pending.get(owner.key) === task) pending.delete(owner.key) }
+  finally { if (pending.get(owner.key) === task) { pending.delete(owner.key); pendingWrites.stop(owner.key, 'upload') } }
 }
 export function uploadNoteAttachment(owner: NoteOwner, file: File, range: NoteRange, insert: (value: NoteInsertion) => void) {
   return upload(owner, range.offset, range.end, range.replaced, async () => ({ files: [file], parts: [{ file: 0, format: 'path' }] }), insert)

@@ -4,7 +4,8 @@ import { useI18n } from 'vue-i18n'
 import Icon from './Icon.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import NoteEditor from './NoteEditor.vue'
-import { composerHasContent, sentFiles, composerOwner, editComposer, flushComposer, insertComposerAttachment, useComposer, type ComposerTarget } from '../composers'
+import SaveStatus from './SaveStatus.vue'
+import { composerHasContent, sentFiles, composerOwner, editComposer, flushComposer, insertComposerAttachment, saveComposer, useComposer, type ComposerTarget } from '../composers'
 import { readStoredHeight, storeHeight, composerHeightBounds } from '../composer-height'
 import { useCardContentFocus } from '../card-content-focus'
 
@@ -65,7 +66,7 @@ function resizeKey(event: KeyboardEvent) {
   fraction.value = composerHeightBounds(fraction.value + step, height).value; storeHeight(fraction.value)
 }
 onMounted(() => { void nextTick(() => editor.value?.focus()) })
-onBeforeUnmount(() => { void flushComposer(props.target).catch(error => window.dispatchEvent(new CustomEvent('canvas:error', { detail: error }))) })
+onBeforeUnmount(() => saveComposer(props.target))
 defineExpose({ send })
 </script>
 
@@ -74,11 +75,12 @@ defineExpose({ send })
     @pointerdown.stop @mousedown.stop @keydown.capture="keydown">
     <div class="terminal-composer-editor">
       <NoteEditor ref="editor" :content="composer.content" :attachments="composer.attachments" :owner="owner" :scroll-key="owner.key" :can-persist="() => false" :read-only="sending" placeholder=""
-        :insert-attachment="value => insertComposerAttachment(target, value)" @change="value => { editComposer(target, value); emit('edited') }" @flush="flushComposer(target)" />
+        :insert-attachment="value => insertComposerAttachment(target, value)" @change="value => { editComposer(target, value); emit('edited') }" @flush="saveComposer(target)" />
     </div>
     <p v-if="error" class="terminal-composer-error" role="alert">{{ error }}</p>
     <div class="terminal-composer-actions">
-      <UButton color="neutral" variant="ghost" :size="mobile ? 'lg' : 'sm'" square :title="t('terminal.composer.attach')" :aria-label="t('terminal.composer.attach')" :disabled="editor?.pending" @click="editor?.chooseFiles()"><Icon name="paperclip" :size="16" /></UButton>
+      <UButton color="neutral" variant="ghost" :size="mobile ? 'lg' : 'sm'" square class="me-auto" :title="t('terminal.composer.attach')" :aria-label="t('terminal.composer.attach')" :disabled="editor?.pending" @click="editor?.chooseFiles()"><Icon name="paperclip" :size="16" /></UButton>
+      <SaveStatus :owner="owner.key" :size="mobile ? 'lg' : 'sm'" />
       <UButton color="primary" variant="ghost" :size="mobile ? 'lg' : 'sm'" square class="terminal-composer-send" :title="t('terminal.composer.send')" :aria-label="t('terminal.composer.send')" :disabled="!canSend || !hasText || editor?.pending" :loading="sending" @click="send"><Icon name="send" :size="16" /></UButton>
     </div>
     <div class="terminal-composer-handle" role="separator" aria-orientation="horizontal" tabindex="0" :aria-label="t('terminal.composer.resize')" :aria-valuenow="Math.round(fraction * 100)" :aria-valuetext="`${Math.round(fraction * 100)}%`" aria-valuemin="0" aria-valuemax="100"
@@ -90,7 +92,7 @@ defineExpose({ send })
 .terminal-composer{position:absolute;z-index:7;top:0;left:0;right:0;display:flex;flex-direction:column;min-height:0;background:#1d2128;border-bottom:1px solid #3a4250;box-shadow:0 6px 18px #0007;color:#d7dce5;font-size:13px;line-height:1.5}
 .terminal-composer.full{border-bottom:0;box-shadow:none}
 .terminal-composer-editor{flex:1;min-height:0}
-.terminal-composer-actions{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:0 6px 2px}
+.terminal-composer-actions{display:flex;align-items:center;gap:6px;padding:0 6px 2px}
 .terminal-composer-error{margin:0;padding:0 12px 4px;color:var(--ui-error);font-size:12px}
 .terminal-composer-handle:focus-visible{outline:2px solid var(--ui-primary);outline-offset:-2px}
 .terminal-composer-handle{flex:0 0 12px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;touch-action:none}

@@ -1,6 +1,7 @@
 import { computed, shallowReactive, shallowRef, watch } from 'vue'
 import { api, apiContext, apiRevision, isCurrentApi, segment } from './api'
 import { insertNoteContent } from './note-document'
+import { pendingWrites } from './pending-writes'
 import type { NoteInsertion, NoteOwner } from './note-uploads'
 import type { ComposerView } from './types'
 export { composerHasContent, sentFiles } from './composer-content'
@@ -12,7 +13,7 @@ export const composerOwner = (target: ComposerTarget): NoteOwner =>
 
 const remote = shallowRef<Record<string, ComposerView>>({})
 // Unsaved local text wins over peer snapshots until its own write settles.
-const drafts = shallowReactive(new Map<string, string>())
+const drafts = shallowReactive(new Map<string, { target: ComposerTarget; content: string }>())
 const timers = new Map<string, ReturnType<typeof setTimeout>>()
 const saving = new Map<string, Promise<ComposerView | undefined>>()
 
@@ -21,6 +22,7 @@ export function resetComposers() {
   timers.clear(); saving.clear(); drafts.clear(); remote.value = {}
 }
 watch(apiRevision, resetComposers)
+pendingWrites.onFlush(keepalive => { for (const { target } of drafts.values()) saveComposer(target, keepalive) })
 
 export function applyComposers(value: Record<string, ComposerView>) { remote.value = value }
 
@@ -29,49 +31,57 @@ export function applyComposers(value: Record<string, ComposerView>) { remote.val
 export function discardComposerDraft(target: ComposerTarget) {
   const current = key(target)
   clearTimeout(timers.get(current)); timers.delete(current); drafts.delete(current)
+  pendingWrites.discard(composerOwner(target).key)
 }
 function reportSaveFailure(error: unknown) { window.dispatchEvent(new CustomEvent('canvas:error', { detail: error })) }
+/** Store the draft without waiting; failures stay visible on the composer until a retry stores it. */
+export function saveComposer(target: ComposerTarget, keepalive = false) { void flushComposer(target, keepalive).catch(reportSaveFailure) }
 
 export function useComposer(target: () => ComposerTarget) {
   return computed(() => {
     const current = key(target()), view = remote.value[current]
-    return { content: drafts.get(current) ?? view?.content ?? '', attachments: view?.attachments ?? [] }
+    return { content: drafts.get(current)?.content ?? view?.content ?? '', attachments: view?.attachments ?? [] }
   })
 }
 
 export function editComposer(target: ComposerTarget, content: string) {
   const current = key(target)
-  drafts.set(current, content)
+  drafts.set(current, { target, content })
+  pendingWrites.start(composerOwner(target).key)
   clearTimeout(timers.get(current))
-  timers.set(current, setTimeout(() => { timers.delete(current); void flushComposer(target).catch(reportSaveFailure) }, 400))
+  timers.set(current, setTimeout(() => { timers.delete(current); saveComposer(target) }, 400))
 }
 
 /** A file finishing after its editor closed still lands at its recorded position. */
 export function insertComposerAttachment(target: ComposerTarget, value: NoteInsertion) {
   const current = key(target)
-  editComposer(target, insertNoteContent(drafts.get(current) ?? remote.value[current]?.content ?? '', value))
+  editComposer(target, insertNoteContent(drafts.get(current)?.content ?? remote.value[current]?.content ?? '', value))
 }
 
 /** Save pending text and return the exact stored version it produced. */
-export async function flushComposer(target: ComposerTarget): Promise<ComposerView | undefined> {
-  const current = key(target), context = apiContext()
+export async function flushComposer(target: ComposerTarget, keepalive = false): Promise<ComposerView | undefined> {
+  const current = key(target), owner = composerOwner(target), context = apiContext()
   clearTimeout(timers.get(current)); timers.delete(current)
   const previous = saving.get(current)
   if (previous) await previous.catch(() => undefined)
   if (!isCurrentApi(context)) return
-  const content = drafts.get(current)
+  const content = drafts.get(current)?.content
   if (content === undefined) return remote.value[current]
-  const request = api<ComposerView>(`${composerOwner(target).path}`, { method: 'PATCH', body: JSON.stringify({ content }) }, context)
+  pendingWrites.start(owner.key)
+  const request = api<ComposerView>(owner.path, { method: 'PATCH', body: JSON.stringify({ content }), keepalive }, context)
   saving.set(current, request)
   try {
     const view = await request
     if (!isCurrentApi(context)) return
-    if (drafts.get(current) === content) drafts.delete(current)
+    if (drafts.get(current)?.content === content) { drafts.delete(current); pendingWrites.saved(owner.key) }
     const known = remote.value[current]
     if (!view.id) {
       const { [current]: _released, ...rest } = remote.value
       remote.value = rest
     } else if (!known || known.id !== view.id || known.version < view.version) remote.value = { ...remote.value, [current]: view }
     return view
+  } catch (error) {
+    if (isCurrentApi(context) && drafts.get(current)?.content === content) pendingWrites.failed(owner.key, () => saveComposer(target))
+    throw error
   } finally { if (saving.get(current) === request) saving.delete(current) }
 }

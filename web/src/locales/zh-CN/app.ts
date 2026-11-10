@@ -45,7 +45,7 @@ export default {
   "myCanvas": "我的画布",
   "saving": "正在保存…",
   "saved": "已保存",
-  "saveFailed": "保存失败",
+  "saveFailed": "保存失败，重试",
   "newTab": "新建 Tab",
   "name": "名称",
   "windowName": "窗口名称",

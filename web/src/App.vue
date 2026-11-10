@@ -38,6 +38,7 @@ import { useReducedMotion } from './reduced-motion'
 import { createLayoutSaves, type LayoutPatch } from './layout-saves'
 import { resizeFromDelta, snapCardPosition, snapCardResize, type CardBounds } from './card-alignment'
 import { createPendingEdits, retargetNoteEdit, type NoteEdit } from './pending-edits'
+import { guardPageExit, pendingWrites } from './pending-writes'
 import { cameraFromViewport, parseCanvasLocation, recallFreeCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type CanvasLocation } from './canvas-location'
 import { useCanvasLocation, type CanvasAnchor, type CanvasTarget, type CanvasNavigation } from './use-canvas-location'
 import { adjacentCanvas, anchoredViewport, canvasAnchor, type CanvasDirection } from './canvas-jump'
@@ -54,6 +55,7 @@ import CardRemovalFeedback from './components/CardRemovalFeedback.vue'
 import type { CardRemovalResponse } from '../../shared/card-removal'
 import { pruneTerminalPreferences, terminalIdentityKey } from './terminal-identity'
 import Icon from './components/Icon.vue'
+import SaveStatus from './components/SaveStatus.vue'
 import TerminalNode from './components/TerminalNode.vue'
 import NoteNode from './components/NoteNode.vue'
 import FileNode from './components/FileNode.vue'
@@ -318,10 +320,11 @@ function creationNavigation(event: Event) {
   const target = notificationReveal.value?.target
   if (!target || card?.dataset.sourceId !== target.sourceId || card?.dataset.windowId !== target.windowId) cancelNotificationReveal()
 }
-const saveState = ref<'' | 'saving' | 'saved' | 'saveFailed'>('')
 let refreshTimer: ReturnType<typeof setInterval>
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const layoutSaves = createLayoutSaves()
+const layoutOwner = (canvasId: string) => `layout:${canvasId}`
+let stopPageGuard = () => {}, stopEditFlush = () => {}
 const pendingLayouts = layoutSaves.pending
 const pendingNotes = new Map<string, NoteEdit>()
 const savingNotes = new Map<string, NoteEdit>()
@@ -922,11 +925,10 @@ function applySharedState(state: SharedState) {
     return { ...node, ...pendingLayouts.get(canvas.id)?.get(node.id), ...(node.type === 'note'
       ? sharedNoteDrafts.get(node.id) : {}) }
   }) }))
-  for (const [id, timer] of saveTimers) if (!canvases.value.some(canvas => canvas.id === id)) { clearTimeout(timer); saveTimers.delete(id); pendingLayouts.delete(id) }
-  for (const id of pendingLayouts.keys()) if (!canvases.value.some(canvas => canvas.id === id)) pendingLayouts.delete(id)
+  for (const id of new Set([...saveTimers.keys(), ...pendingLayouts.keys()])) if (!canvases.value.some(canvas => canvas.id === id)) dropLayout(id)
   for (const edit of [...pendingNotes.values(), ...savingNotes.values()]) if (!canvases.value.find(canvas => canvas.id === edit.canvasId)?.nodes.some(node => node.id === edit.id)) clearNoteEdits(edit.canvasId, edit.id)
   checkpointEdits()
-  if (restoring && (pendingLayouts.size || pendingNotes.size)) queueMicrotask(() => { void flushInstanceEdits() })
+  if (restoring && (pendingLayouts.size || pendingNotes.size)) queueMicrotask(() => saveEdits())
   if (!isOverview.value && !currentCanvas.value) navigation.fallback(activeInstance.value.id)
   else {
     if (!isOverview.value && focusedReference && focused.value && !currentCanvas.value?.nodes.some(node => node.id === focused.value?.id)) void closeFocus()
@@ -1263,7 +1265,7 @@ function clearInstanceRuntime() {
   overviewBackground.value = null; resourceSignature = ''; resourceLayoutSignature = ''; resourceRequest = undefined
   currentPage.value = undefined; overviewPaged.value = false; preferredPageX.value = undefined
   pendingViewport = ''; viewportRequest++; cancelCreatedReveal(); cancelNotificationReveal(); lastOverviewInteraction = undefined
-  layoutGesture = ''; saveState.value = ''; activeId.value = 'overview'; graphKey.value++
+  layoutGesture = ''; activeId.value = 'overview'; graphKey.value++
   refreshedAt.value = 0; loading.value = false; error.value = ''; success.value = ''; busy.value = false
   username.value = activeInstance.value.username || ''; password.value = ''; loginFailure.value = undefined
 }
@@ -1358,7 +1360,7 @@ watch(freshStatuses, () => {
 
 watch(overviewInteraction, value => { if (value) lastOverviewInteraction = value; if (isOverview.value) rebuildNodes() })
 watch([overviewSelected, overviewOrder, overviewPerRow], () => { if (isOverview.value) rebuildNodes('manual') })
-watch(activeId, async () => { if (!authenticated.value) return; scanTarget.value = null; preferredPageX.value = undefined; cancelCreatedReveal(); lastOverviewInteraction = undefined; overviewMenuOpen.value = false; layoutGesture = ''; resizingCard = undefined; focused.value = null; focusedCardId.value = ''; canvasMenu.value = false; saveState.value = ''; rebuildNodes(); await restoreViewport() })
+watch(activeId, async () => { if (!authenticated.value) return; scanTarget.value = null; preferredPageX.value = undefined; cancelCreatedReveal(); lastOverviewInteraction = undefined; overviewMenuOpen.value = false; layoutGesture = ''; resizingCard = undefined; focused.value = null; focusedCardId.value = ''; canvasMenu.value = false; rebuildNodes(); await restoreViewport() })
 function switchCanvas(id: string, target?: CanvasTarget) {
   if (notificationReveal.value?.canvasId !== id) cancelNotificationReveal()
   clearContentFocus(); cancelCreatedReveal()
@@ -1409,7 +1411,7 @@ function deleteCanvas() {
     if (!await flushNotes(canvas.id) || !isCurrentApi(context) || !canvases.value.some(item => item.id === canvas.id)) return
     await api(`/api/canvases/${segment(canvas.id)}`, { method: 'DELETE' }, context)
     if (!isCurrentApi(context)) return
-    clearTimeout(saveTimers.get(canvas.id)); saveTimers.delete(canvas.id); pendingLayouts.delete(canvas.id); clearNoteEdits(canvas.id)
+    dropLayout(canvas.id); clearNoteEdits(canvas.id)
     await syncState(); if (isCurrentApi(context) && activeId.value === canvas.id) switchCanvas('overview')
   } }
 }
@@ -1847,15 +1849,19 @@ function reconcileNoteEdits(next: Canvas[]) {
     if (!target) continue
     const nextKey = noteKey(target.canvasId, target.id)
     pendingNotes.set(nextKey, { ...target, patch: { ...target.patch, ...pendingNotes.get(nextKey)?.patch } })
+    pendingWrites.start(target.id)
     moved = true
   }
   if (moved) queueMicrotask(() => { void flushNotes() })
 }
+function noteEdited(id: string) { return [...savingNotes.values(), ...pendingNotes.values()].some(edit => edit.id === id) }
 function clearNoteEdits(canvasId?: string, id?: string) {
+  const cleared = new Set<string>()
   for (const [key, edit] of pendingNotes) if ((!canvasId || edit.canvasId === canvasId) && (!id || edit.id === id)) {
-    clearTimeout(noteTimers.get(key)); noteTimers.delete(key); pendingNotes.delete(key)
+    clearTimeout(noteTimers.get(key)); noteTimers.delete(key); pendingNotes.delete(key); cleared.add(edit.id)
   }
-  for (const [key, edit] of savingNotes) if ((!canvasId || edit.canvasId === canvasId) && (!id || edit.id === id)) savingNotes.delete(key)
+  for (const [key, edit] of savingNotes) if ((!canvasId || edit.canvasId === canvasId) && (!id || edit.id === id)) { savingNotes.delete(key); cleared.add(edit.id) }
+  for (const note of cleared) if (!noteEdited(note)) pendingWrites.discard(note)
 }
 function editNote(canvasId: string, id: string, patch: NotePatch) {
   const node = canvases.value.find(canvas => canvas.id === canvasId)?.nodes.find(node => node.id === id)
@@ -1871,67 +1877,80 @@ function editNote(canvasId: string, id: string, patch: NotePatch) {
   const key = noteKey(canvasId, id)
   pendingNotes.set(key, { canvasId, id, patch: { ...pendingNotes.get(key)?.patch, ...changed } })
   checkpointEdits()
+  pendingWrites.start(id)
   clearTimeout(noteTimers.get(key))
-  noteTimers.set(key, setTimeout(() => { noteTimers.delete(key); void flushNotes(canvasId, false) }, 400))
-  if (activeId.value === canvasId) saveState.value = 'saving'
+  noteTimers.set(key, setTimeout(() => { noteTimers.delete(key); void flushNotes(canvasId, { force: false }) }, 400))
   const visible = currentCanvas.value?.nodes.find((item): item is NoteCanvasNode => item.id === id && item.type === 'note')
   if (visible) setNodes(nodes.value.map(flow => flow.id === id ? { ...flow, data: { ...flow.data, ...visible },
     style: { ...flow.style, height: `${visible.height}px` } } : flow))
 }
-async function flushNotes(canvasId?: string, force = true): Promise<boolean> {
-  const context = apiContext()
-  if (noteSave) { if (!await noteSave || !isCurrentApi(context)) return false; return flushNotes(canvasId, force) }
+function retryNotes() { void flushNotes() }
+async function flushNotes(canvasId?: string, options: { force?: boolean; keepalive?: boolean } = {}): Promise<boolean> {
+  const context = apiContext(), { force = true, keepalive = false } = options
+  // A failed earlier batch leaves its edits pending; this flush sends them again with its own.
+  if (noteSave) { await noteSave; return isCurrentApi(context) && flushNotes(canvasId, options) }
   const batch = [...pendingNotes.entries()].filter(([key, edit]) => (!canvasId || edit.canvasId === canvasId) && (force || !noteTimers.has(key)))
   if (!batch.length) return true
   for (const [key, edit] of batch) {
-    clearTimeout(noteTimers.get(key)); noteTimers.delete(key); pendingNotes.delete(key); savingNotes.set(key, edit)
+    clearTimeout(noteTimers.get(key)); noteTimers.delete(key); pendingNotes.delete(key); savingNotes.set(key, edit); pendingWrites.start(edit.id)
   }
+  // Notes are independent, so a page being discarded sends all of them at once.
   noteSave = (async () => {
-    let failed = false
-    for (const [key, edit] of batch) {
+    const stored = await Promise.all(batch.map(async ([key, edit]) => {
       try {
-        await api(`/api/canvases/${segment(edit.canvasId)}/notes/${segment(edit.id)}`, { method: 'PATCH', body: JSON.stringify(edit.patch) }, context)
-        if (savingNotes.get(key) === edit) savingNotes.delete(key)
+        await api(`/api/canvases/${segment(edit.canvasId)}/notes/${segment(edit.id)}`, { method: 'PATCH', body: JSON.stringify(edit.patch), keepalive }, context)
+        if (savingNotes.get(key) !== edit) return true
+        savingNotes.delete(key)
+        if (!noteEdited(edit.id)) pendingWrites.saved(edit.id)
+        return true
       } catch (reason) {
-        if (!isCurrentApi(context)) return false
-        if (savingNotes.get(key) !== edit) continue
-        failed = true
-        if (savingNotes.get(key) === edit) {
-          savingNotes.delete(key)
-          if (canvases.value.find(canvas => canvas.id === edit.canvasId)?.nodes.some(node => node.id === edit.id)) pendingNotes.set(key, { ...edit, patch: { ...edit.patch, ...pendingNotes.get(key)?.patch } })
-        }
+        if (!isCurrentApi(context) || savingNotes.get(key) !== edit) return true
+        savingNotes.delete(key)
+        if (canvases.value.find(canvas => canvas.id === edit.canvasId)?.nodes.some(node => node.id === edit.id)) {
+          pendingNotes.set(key, { ...edit, patch: { ...edit.patch, ...pendingNotes.get(key)?.patch } })
+          pendingWrites.failed(edit.id, retryNotes)
+        } else if (!noteEdited(edit.id)) pendingWrites.discard(edit.id)
         showError(reason)
+        return false
       }
-    }
+    }))
     if (!isCurrentApi(context)) return false
     checkpointEdits()
     await syncState().catch(showError)
-    if (!isCurrentApi(context)) return false
-    if (!canvasId || activeId.value === canvasId) saveState.value = failed ? 'saveFailed' : [...pendingNotes.values()].some(edit => edit.canvasId === activeId.value) ? 'saving' : 'saved'
-    return !failed
+    return isCurrentApi(context) && stored.every(Boolean)
   })()
   let saved = false
   try { saved = await noteSave } finally { if (isCurrentApi(context)) noteSave = undefined }
   if (!saved || !isCurrentApi(context)) return false
-  return force ? flushNotes(canvasId) : true
+  return force ? flushNotes(canvasId, options) : true
 }
-async function flushLayout(canvasId: string) {
-  const context = apiContext()
+function dropLayout(canvasId: string) {
+  clearTimeout(saveTimers.get(canvasId)); saveTimers.delete(canvasId); pendingLayouts.delete(canvasId)
+  pendingWrites.discard(layoutOwner(canvasId))
+}
+async function flushLayout(canvasId: string, keepalive = false) {
+  const context = apiContext(), owner = layoutOwner(canvasId), tracked = pendingLayouts.has(canvasId)
   clearTimeout(saveTimers.get(canvasId)); saveTimers.delete(canvasId)
+  if (tracked) pendingWrites.start(owner)
   try {
-    await layoutSaves.flush(canvasId, batch => api(`/api/canvases/${segment(canvasId)}/layout`, { method: 'PATCH', body: JSON.stringify({ nodes: [...batch].map(([id, patch]) => ({ id, ...patch })) }) }, context), checkpointEdits)
-    requireCurrentApi(context)
-    await syncState()
-    if (activeId.value === canvasId) saveState.value = 'saved'
+    await layoutSaves.flush(canvasId, batch => api(`/api/canvases/${segment(canvasId)}/layout`, { method: 'PATCH', body: JSON.stringify({ nodes: [...batch].map(([id, patch]) => ({ id, ...patch })) }), keepalive }, context), checkpointEdits)
   } catch (reason) {
-    if (isCurrentApi(context)) { checkpointEdits(); if (activeId.value === canvasId) saveState.value = 'saveFailed' }
+    if (isCurrentApi(context)) { checkpointEdits(); pendingWrites.failed(owner, () => { void flushLayout(canvasId).catch(showError) }) }
     throw reason
   }
+  requireCurrentApi(context)
+  if (tracked && !pendingLayouts.has(canvasId)) pendingWrites.saved(owner)
+  await syncState()
+}
+/** Send every pending note and layout without waiting on one another. */
+function saveEdits(keepalive = false) {
+  void flushNotes(undefined, { keepalive })
+  for (const id of pendingLayouts.keys()) void flushLayout(id, keepalive).catch(showError)
 }
 function scheduleSave() {
   const canvas = currentCanvas.value
   if (!canvas) return
-  clearTimeout(saveTimers.get(canvas.id)); saveState.value = 'saving'
+  clearTimeout(saveTimers.get(canvas.id)); pendingWrites.start(layoutOwner(canvas.id))
   saveTimers.set(canvas.id, setTimeout(() => {
     void flushLayout(canvas.id).catch(showError)
   }, 450))
@@ -2166,14 +2185,6 @@ function keydown(event: KeyboardEvent) {
     else sourcePanel.value = false
   }
 }
-function beforeUnload(event: BeforeUnloadEvent) {
-  saveViewport()
-  if (!layoutDraft.value?.changes.size && !pendingNotes.size && !savingNotes.size && !pendingLayouts.size && !layoutSaves.saving) return
-  checkpointEdits()
-  void flushInstanceEdits()
-  event.preventDefault()
-  event.returnValue = ''
-}
 function windowResize() {
   queueCameraResize()
 }
@@ -2227,15 +2238,17 @@ onMounted(async () => {
   window.addEventListener('canvas:error', requestError)
   window.addEventListener('keydown', keydown)
   window.addEventListener('resize', windowResize)
-  window.addEventListener('beforeunload', beforeUnload)
+  window.addEventListener('beforeunload', saveViewport)
   document.addEventListener('visibilitychange', visibilityChanged)
+  stopPageGuard = guardPageExit(pendingWrites, () => !!layoutDraft.value?.changes.size)
+  stopEditFlush = pendingWrites.onFlush(saveEdits)
   navigation.read()
   instanceBooted = true
   if (unknownInstance.value || invalidInstanceLink) ready.value = true
   else await activateInstance()
   refreshTimer = setInterval(() => { if (!document.hidden) void refreshResources(true) }, 2000)
 })
-onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.removeEventListener('pointerdown', selectLogicalTerminal, true); window.removeEventListener('keydown', selectLogicalTerminal, true); document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', beforeUnload) })
+onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.removeEventListener('pointerdown', selectLogicalTerminal, true); window.removeEventListener('keydown', selectLogicalTerminal, true); document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', saveViewport); stopPageGuard(); stopEditFlush() })
 </script>
 
 <template>
@@ -2277,7 +2290,7 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
         <UDropdownMenu v-if="!isOverview" v-model:open="createMenuOpen" :items="createMenu" :content="{ align: 'end' }" :ui="{ }">
           <button class="icon-button canvas-create-trigger" :title="t('app.addContent')" :aria-label="t('app.addContent')" :disabled="busy"><Icon name="plus" :size="17" /></button>
         </UDropdownMenu>
-        <span v-if="!isOverview && saveState" class="save-state" :title="t(`app.${saveState}`)" :aria-label="t(`app.${saveState}`)"><span v-if="saveState === 'saving'" class="spinner" /><Icon v-else :name="saveState === 'saved' ? 'check' : 'info'" :size="13" /></span>
+        <SaveStatus v-if="!isOverview" :owner="layoutOwner(activeId)" size="xs" />
         <UDropdownMenu v-model:open="canvasMenu" :modal="false" :items="canvasMenuItems"
           :content="{ align: 'end', ...canvasMenuDismiss }" :ui="{ content: 'canvas-menu min-w-[200px] w-max max-w-[calc(var(--ui-viewport-width)-16px)]', group: 'space-y-0.5', itemLabel: 'whitespace-nowrap' }">
           <button ref="canvasMenuTrigger" class="icon-button canvas-menu-trigger" :title="t('app.canvasSettings')" :aria-label="t('app.canvasSettings')"><Icon name="more" :size="17" /></button>

@@ -3,6 +3,7 @@ import { t } from './i18n'
 import { activeInstance } from './instances'
 import { resolveApiUrl } from './instance-url'
 import { sessionToken, storeSessionToken, tokenKey } from './instance-session'
+import { keepaliveFetch, pendingWrites } from './pending-writes'
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) { super(message) }
@@ -13,6 +14,7 @@ export const apiRevision = ref(0)
 let lifetime = new AbortController()
 export function resetApiRequests() {
   lifetime.abort(); lifetime = new AbortController(); apiRevision.value++
+  pendingWrites.reset()
 }
 watch(() => `${activeInstance.value.id}:${activeInstance.value.base}`, resetApiRequests, { flush: 'sync' })
 window.addEventListener('storage', event => {
@@ -33,12 +35,13 @@ export function setSessionToken(token: string) {
   resetApiRequests()
 }
 export function apiUrl(path: string, context = apiContext()) { return resolveApiUrl(context.base, path) }
+const send = keepaliveFetch((input, init) => fetch(input, init))
 export async function apiFetch(path: string, init?: RequestInit, context = apiContext()): Promise<Response> {
   requireCurrentApi(context)
   const headers = new Headers(init?.headers)
   if (context.token) headers.set('Authorization', `Bearer ${context.token}`)
   const signal = init?.signal ? AbortSignal.any([context.signal, init.signal]) : context.signal
-  const response = await fetch(apiUrl(path, context), { ...init, headers, credentials: 'omit', signal })
+  const response = await send(apiUrl(path, context), { ...init, headers, credentials: 'omit', signal })
   requireCurrentApi(context)
   if (response.status === 401 && context.token) window.dispatchEvent(new Event('canvas:unauthorized'))
   return response

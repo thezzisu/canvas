@@ -45,7 +45,7 @@ export default {
   "myCanvas": "My canvas",
   "saving": "Saving…",
   "saved": "Saved",
-  "saveFailed": "Save failed",
+  "saveFailed": "Save failed – retry",
   "newTab": "New tab",
   "name": "Name",
   "windowName": "Window name",
