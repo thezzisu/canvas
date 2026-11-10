@@ -142,7 +142,7 @@ const items = computed<DropdownMenuItem[][]>(() => props.username === undefined 
 .instance-dialog{width:min(420px,calc(var(--mobile-width,var(--ui-viewport-width)) - 28px));max-height:calc(var(--dialog-height) - 32px);}
 .instance-add-scan{align-self:stretch;min-width:32px;justify-content:center}
 .instance-dialog-body{padding:16px 20px}.instance-dialog form{display:flex;flex-direction:column;gap:16px}
-.instance-dialog label{margin-top:0}.instance-dialog input{margin-top:0;font-size:13px}
+.instance-dialog input{font-size:13px}
 .instance-error{color:#dfaaa5;font-size:12px}.login-content>.instance-trigger{margin:6px 0 2px}
 .instance-probe-footer{display:flex;align-items:center;gap:12px;min-width:0;width:100%}.instance-probe-footer>button{flex:none}.instance-probe-status{display:block;flex:1;min-width:0;margin-left:auto;text-align:right;color:#8391a4;font-size:11px}.instance-probe-status>span,.instance-probe-status>button{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.instance-probe-status>button{margin-left:auto;padding:0;font-size:inherit;color:inherit}
 </style>

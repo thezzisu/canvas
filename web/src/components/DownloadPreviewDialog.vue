@@ -198,7 +198,7 @@ onBeforeUnmount(() => request?.abort())
 .download-preview-status{display:flex;align-items:center;justify-content:center;gap:8px;position:absolute;inset:0;padding:16px;color:#8d9aaa;font-size:12px;text-align:center;z-index:1}
 .download-preview-status button{color:#d4ac8e}
 .download-preview-pdf{display:block;flex:1;width:100%;height:100%;border:0;background:#fff;color-scheme:light}
-.download-preview-text:focus-visible{box-shadow:inset 0 0 0 1px #b18a6d}
+
 .download-preview-truncated{padding:7px 12px;border-top:1px solid #303947;flex:none;font-size:10px;color:#8190a3}
 
 </style>

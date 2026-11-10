@@ -57,7 +57,7 @@ onBeforeUnmount(() => {
 .media-preview{display:flex;align-items:center;justify-content:center;width:100%;height:100%;min-width:0;min-height:0}
 .media-preview video{display:block;width:100%;height:100%;object-fit:contain;background:#111}
 .media-preview audio{width:min(100%,560px);max-width:100%}
-.media-preview-audio{padding:20px}
+
 .media-preview-error{display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px;text-align:center;font-size:12px;color:#96a0af}
 .media-preview-error button{color:#d4ac8e}
 </style>

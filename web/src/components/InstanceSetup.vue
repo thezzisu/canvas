@@ -42,12 +42,12 @@ function connect() {
       <UInput :model-value="address" type="url" placeholder="https://canvas.example/" autocomplete="url" autofocus class="w-full" @update:model-value="editAddress" />
     </UFormField>
     <p v-if="props.message && !invalid && !probe.base.value" class="instance-setup-message" role="status">{{ props.message }}</p>
-    <div class="instance-probe-footer"><UButton type="submit" class="button primary" size="lg" :disabled="!probe.ready.value">{{ t('instances.connect') }}</UButton><span class="instance-probe-status" role="status"><span v-if="probe.pending.value">{{ t('instances.probing') }}</span><button v-else-if="probe.failed.value" type="button" @click="probe.retry">{{ t('instances.probeFailed') }} · {{ t('instances.retry') }}</button><span v-else-if="probe.result.value" :title="`${t('instances.serverVersion')}: ${probe.result.value.build.version}${probe.result.value.build.revision ? ` · ${probe.result.value.build.revision}` : ''}`">{{ buildLabel(probe.result.value.build) }}</span></span><UButton type="button" color="neutral" variant="ghost" icon="i-lucide-scan-qr-code" class="instance-scan-button" :title="t('instances.scanQr')" :aria-label="t('instances.scanQr')" @click="scanning = true" /></div>
+    <div class="instance-probe-footer"><UButton type="submit" size="lg" class="instance-connect" :disabled="!probe.ready.value">{{ t('instances.connect') }}</UButton><span class="instance-probe-status" role="status"><span v-if="probe.pending.value">{{ t('instances.probing') }}</span><button v-else-if="probe.failed.value" type="button" @click="probe.retry">{{ t('instances.probeFailed') }} · {{ t('instances.retry') }}</button><span v-else-if="probe.result.value" :title="`${t('instances.serverVersion')}: ${probe.result.value.build.version}${probe.result.value.build.revision ? ` · ${probe.result.value.build.revision}` : ''}`">{{ buildLabel(probe.result.value.build) }}</span></span><UButton type="button" color="neutral" variant="ghost" icon="i-lucide-scan-qr-code" class="instance-scan-button" :title="t('instances.scanQr')" :aria-label="t('instances.scanQr')" @click="scanning = true" /></div>
   </form>
   <InstanceQrScanner :open="scanning" :accept="scan" @close="scanning = false" />
 </template>
 
 <style>
-.instance-setup{display:flex;flex-direction:column;gap:18px;margin-top:16px}.instance-setup label{margin:0;font-size:11px}.instance-setup input{margin:0;font-size:13px}.instance-setup .button{height:43px}.instance-setup-message{margin:0;font-size:12px;line-height:1.5;color:#909aa9}
+.instance-setup{display:flex;flex-direction:column;gap:18px;margin-top:16px}.instance-setup label{margin:0;font-size:11px}.instance-setup input{margin:0;font-size:13px}.instance-connect{height:43px}.instance-setup-message{margin:0;font-size:12px;line-height:1.5;color:#909aa9}
 .instance-scan-button{display:flex;align-items:center;justify-content:center;width:43px;height:43px;padding:0}
 </style>

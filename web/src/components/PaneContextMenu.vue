@@ -108,6 +108,6 @@ const content = computed(() => ({ reference: { getBoundingClientRect: () => new 
 
 <style>
 .pane-context-menu{width:192px;max-width:calc(var(--ui-viewport-width) - 16px)}.pane-dialog{width:min(380px,calc(var(--ui-viewport-width) - 28px));max-height:calc(var(--mobile-height,var(--ui-viewport-height)) - 32px)}
-.pane-dialog label,.pane-dialog input{margin-top:0}.pane-dialog p{font-size:13px}.pane-action-error{color:#e0aaa5;margin-top:12px}
+.pane-dialog p{font-size:13px}.pane-action-error{color:#e0aaa5;margin-top:12px}
 .pane-dialog-actions{display:flex;justify-content:flex-end;gap:8px;width:100%}
 </style>
