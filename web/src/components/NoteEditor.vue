@@ -3,23 +3,24 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useFileDialog } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import UEditor from '@nuxt/ui/components/Editor.vue'
-import { Extension, Node, type Editor, type EditorOptions } from '@tiptap/core'
+import { Extension, Node, type Editor, type EditorEvents } from '@tiptap/core'
 import { dropCursor } from '@tiptap/pm/dropcursor'
 import type { EditorView } from '@tiptap/pm/view'
 import { Plugin } from '@tiptap/pm/state'
 import { closeHistory } from '@tiptap/pm/history'
 import { Slice } from '@tiptap/pm/model'
-import { VueNodeViewRenderer } from '@tiptap/vue-3'
+import { VueNodeViewRenderer, VueRenderer } from '@tiptap/vue-3'
 import { apiContext, segment } from '../api'
 import { hasFileTransfer, readFileTransfer } from '../browser-file-input'
 import { presentDownload, reportDownloadError } from '../downloads'
-import { attachmentToken, noteDocument, noteOffset, notePosition, serializeNote } from '../note-document'
-import { NoteSelectionEnter, noteRange, replaceNoteRange, type NoteRange } from '../note-editing'
+import { attachmentToken, noteDocument, noteOffset, serializeNote } from '../note-document'
+import { NoteSelectionEnter, mapNoteRange, noteRange, replaceNoteRange, uploadPlaceholder, type NoteRange } from '../note-editing'
 import { noteUpload, uploadNoteAttachment, pasteNoteAttachments, type NoteInsertion, type NoteOwner } from '../note-uploads'
 import { clipboardText, noteClipboard, readNoteClipboard, NOTE_CLIPBOARD_TYPE } from '../note-clipboard'
 import { beginCopyFeedback } from '../copy-feedback'
 import type { FileAsset } from '../types'
 import NoteAttachment from './NoteAttachment.vue'
+import NoteUploadPlaceholder from './NoteUploadPlaceholder.vue'
 import UploadProgress from './UploadProgress.vue'
 import { useNoteScroll } from '../note-scroll'
 
@@ -39,16 +40,42 @@ const pending = computed(() => !!task.value)
 const uploadName = computed(() => task.value && task.value.fileCount > 1 ? t('terminal.upload.files', { count: task.value.fileCount }) : task.value?.name || '')
 const uploadLabel = computed(() => task.value?.total && task.value.transferred < task.value.total
   ? `${Math.floor(task.value.transferred / task.value.total * 100)}%` : t('panels.file.adding'))
+// Not selectable: arrow keys step over a capsule and typing never replaces it.
+// ProseMirror handles its events like any leaf; the editor opens previews.
 const extension = Node.create({
-  name: 'noteAttachment', inline: true, group: 'inline', atom: true, selectable: true,
-  addOptions: () => ({ assets: () => assets.value, preview: (asset: FileAsset) => {
-    if (asset) void presentDownload({ ...asset, url: `/api/files/${segment(asset.id)}` }).catch(reportDownloadError)
-  } }),
+  name: 'noteAttachment', inline: true, group: 'inline', atom: true, selectable: false,
+  addOptions: () => ({ assets: () => assets.value }),
   addAttributes: () => ({ id: { default: null } }),
   parseHTML: () => [],
   renderText: ({ node }) => assets.value.find(asset => asset.id === node.attrs.id)?.filename ?? '[file]',
   renderHTML: ({ node }) => ['span', { 'data-note-attachment': node.attrs.id }, '[file]'],
-  addNodeView: () => VueNodeViewRenderer(NoteAttachment),
+  addNodeView: () => VueNodeViewRenderer(NoteAttachment, { stopEvent: () => false }),
+})
+const attachmentTarget = (event: Event) => (event.target as Element).closest?.('[data-note-attachment]')?.getAttribute('data-note-attachment')
+function preview(id: string) {
+  const asset = assets.value.find(item => item.id === id)
+  if (asset) void presentDownload({ ...asset, url: `/api/files/${segment(asset.id)}` }).catch(reportDownloadError)
+}
+// Pending ranges map before the view renders a transaction, so placeholders stay
+// current. A filtered transaction leaves the state, and the ranges, unchanged.
+function track({ transaction, nextState }: EditorEvents['beforeTransaction']) {
+  if (!transaction.docChanged || nextState.doc === transaction.before) return
+  for (const range of [task.value, selection?.range]) if (range) mapNoteRange(range, transaction)
+}
+// A plain plugin, not Tiptap's addDecorations: that builds in state.apply, before the ranges map.
+const placeholders = new WeakMap<globalThis.Node, VueRenderer>()
+const uploadPlaceholders = Extension.create({
+  name: 'noteUploadPlaceholders',
+  onBeforeCreate() { this.editor.on('beforeTransaction', track) },
+  addProseMirrorPlugins() {
+    const render = (files: readonly string[]) => {
+      const renderer = new VueRenderer(NoteUploadPlaceholder, { editor: this.editor, props: { files } })
+      const dom = renderer.element as HTMLElement
+      placeholders.set(dom, renderer); return dom
+    }
+    const destroy = (dom: globalThis.Node) => { placeholders.get(dom)?.destroy(); placeholders.delete(dom) }
+    return [new Plugin({ props: { decorations: state => uploadPlaceholder(state.doc, task.value?.uploading ? task.value : undefined, render, destroy) } })]
+  },
 })
 const sizeLimit = Extension.create({
   name: 'noteSizeLimit',
@@ -105,15 +132,6 @@ function compositionEnded() {
 }
 function fail(key: string) { window.dispatchEvent(new CustomEvent('canvas:error', { detail: new Error(t(key)) })) }
 function editor() { return input.value?.editor }
-const transaction: EditorOptions['onTransaction'] = ({ transaction }) => {
-  if (!transaction.docChanged) return
-  for (const range of [task.value, selection?.range]) {
-    if (!range) continue
-    const before = notePosition(transaction.before, range.offset), end = notePosition(transaction.before, range.end)
-    range.offset = noteOffset(transaction.doc, transaction.mapping.map(before))
-    range.end = Math.max(range.offset, noteOffset(transaction.doc, transaction.mapping.map(end, -1)))
-  }
-}
 function insert(value: NoteInsertion) {
   const current = editor()
   if (!current || current.isDestroyed) return false
@@ -127,6 +145,11 @@ watch(task, (current, previous) => {
   if (previous?.insert === insert) previous.insert = undefined
   if (current) current.insert = insert
 }, { immediate: true, flush: 'sync' })
+// Placeholders are decorations; an empty transaction redraws them.
+watch(task, () => {
+  const current = editor()
+  if (current && !current.isDestroyed) current.view.dispatch(current.state.tr)
+})
 function upload(files: File[], range?: NoteRange) {
   if (props.readOnly) return
   if (pending.value) { fail('panels.file.uploadBusy'); return }
@@ -232,12 +255,14 @@ defineExpose({ chooseFiles, pending, focus: () => editor()?.commands.focus('end'
 
 <template>
   <div class="note-editor-shell" @dragenter="dragOver" @dragover="dragOver">
-  <UEditor ref="input" :model-value="initial" content-type="json" :starter-kit="false" :image="false" :mention="false" :extensions="[extension, sizeLimit, NoteSelectionEnter, fileDropCursor]" :editable="!readOnly" :enable-input-rules="false" :enable-paste-rules="false" :placeholder="placeholder ?? t('panels.note.placeholder')" class="note-editor"
+  <UEditor ref="input" :model-value="initial" content-type="json" :starter-kit="false" :image="false" :mention="false" :extensions="[extension, uploadPlaceholders, sizeLimit, NoteSelectionEnter, fileDropCursor]" :editable="!readOnly" :enable-input-rules="false" :enable-paste-rules="false" :placeholder="placeholder ?? t('panels.note.placeholder')" class="note-editor"
     :ui="{ root: 'h-full min-h-0', content: 'h-full min-h-0', base: 'note-editor-content h-full min-h-0 outline-none' }"
     :editor-props="{ attributes: { 'aria-label': t('panels.note.content'), role: 'textbox', 'aria-multiline': 'true' },
-      handleDOMEvents: { copy: (_view, event) => copy(event), cut: (_view, event) => copy(event, true), compositionend: compositionEnded },
+      handleDOMEvents: { copy: (_view, event) => copy(event), cut: (_view, event) => copy(event, true), compositionend: compositionEnded,
+        // A capsule keeps the caret and focus; clicking it previews the file.
+        mousedown: (_view, event) => { if (!attachmentTarget(event)) return false; event.preventDefault(); return true },
+        click: (_view, event) => { const id = attachmentTarget(event); if (!id) return false; preview(id); return true } },
       handleDrop: (_view, event) => drop(event), handlePaste: (_view, event) => paste(event) }"
-    :on-transaction="transaction"
     :on-blur="() => emit('flush')" @update:model-value="changed" />
   </div>
   <UploadProgress v-if="task?.uploading" class="note-upload-status" :name="uploadName" :status="uploadLabel" :transferred="task.transferred" :total="task.total" active @cancel="task.controller.abort()" />
@@ -248,6 +273,6 @@ defineExpose({ chooseFiles, pending, focus: () => editor()?.commands.focus('end'
 .note-editor :deep(.note-editor-content){padding:11px 12px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;overscroll-behavior:contain;font-family:var(--content-font-family);font-feature-settings:var(--content-font-features);font-size:inherit;line-height:inherit}
 .note-editor :deep(p){margin:0;min-height:1lh}
 .note-editor :deep(.is-editor-empty:first-child::before){content:attr(data-placeholder);float:left;height:0;pointer-events:none;color:#75808d}
-.note-editor :deep(.ProseMirror-selectednode .note-attachment-button){outline:1px solid var(--ui-primary)}
+.note-editor :deep(.is-empty:has(.note-upload-placeholder)::before){content:none}
 .note-upload-status{position:absolute;left:8px;right:8px;bottom:6px}
 </style>

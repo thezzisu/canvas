@@ -19,6 +19,8 @@ export interface NoteUpload extends NoteRange {
   uploading: boolean
   name: string
   fileCount: number
+  /** Filenames the insertion adds, in document order, shown as placeholders while uploading. */
+  files: string[]
   transferred: number
   total?: number
   insert?: (value: NoteInsertion) => boolean
@@ -31,11 +33,11 @@ watch(apiRevision, () => {
 })
 
 /** Uploads belong to the note, so changing its canvas representation does not cancel them. */
-async function upload(owner: NoteOwner, offset: number, end: number, replaced: string,
+async function upload(owner: NoteOwner, offset: number, end: number, replaced: string, filenames: string[],
   prepare: (signal: AbortSignal) => Promise<{ files: (File | FileAsset)[]; parts: PastePart[] }>, insert: (value: NoteInsertion) => void, uploading = true) {
   if (pending.has(owner.key)) return
   const context = apiContext(), task = shallowReactive<NoteUpload>({ offset, end, replaced, controller: new AbortController(), uploading,
-    name: '', fileCount: 0, transferred: 0 })
+    name: '', fileCount: 0, files: filenames, transferred: 0 })
   pending.set(owner.key, task); pendingWrites.start(owner.key, 'upload')
   try {
     const signal = AbortSignal.any([context.signal, task.controller.signal])
@@ -56,12 +58,15 @@ async function upload(owner: NoteOwner, offset: number, end: number, replaced: s
     if (pending.get(owner.key) !== task) return
     const value: NoteInsertion = { content: parts.map(part => typeof part === 'string' ? part : attachmentToken(assets[part.file]!.id)).join(''),
       assets, offset: task.offset, end: task.end, replaced: task.replaced }
-    if (!task.insert?.(value)) insert(value)
+    // Settle before inserting, so the inserting transaction already drops the placeholders.
+    const target = task.insert
+    pending.delete(owner.key)
+    if (!target?.(value)) insert(value)
   } catch (error) { if (!task.controller.signal.aborted && !context.signal.aborted) reportDownloadError(error) }
   finally { if (pending.get(owner.key) === task) { pending.delete(owner.key); pendingWrites.stop(owner.key, 'upload') } }
 }
 export function uploadNoteAttachment(owner: NoteOwner, file: File, range: NoteRange, insert: (value: NoteInsertion) => void) {
-  return upload(owner, range.offset, range.end, range.replaced, async () => ({ files: [file], parts: [{ file: 0, format: 'path' }] }), insert)
+  return upload(owner, range.offset, range.end, range.replaced, [file.name], async () => ({ files: [file], parts: [{ file: 0, format: 'path' }] }), insert)
 }
 export function pasteNoteAttachments(owner: NoteOwner, note: NoteClipboard, offset: number, end: number, replaced: string,
   insert: (value: NoteInsertion) => void, ownedAssets: readonly FileAsset[] = []) {
@@ -72,7 +77,8 @@ export function pasteNoteAttachments(owner: NoteOwner, note: NoteClipboard, offs
   const localIds = [...new Set(note.parts.flatMap(part => typeof part !== 'string' && part.reference.base === context.base && !owned.has(part.reference.assetId)
     ? [part.reference.assetId] : []))]
   const uploading = note.parts.some(part => typeof part !== 'string' && part.reference.base !== context.base)
-  return upload(owner, offset, end, replaced, async signal => {
+  const filenames = note.parts.flatMap(part => typeof part === 'string' ? [] : [part.filename])
+  return upload(owner, offset, end, replaced, filenames, async signal => {
     if (localIds.length) {
       const linked = await api<FileAsset[]>(`${owner.path}/file-references`,
         { method: 'POST', body: JSON.stringify({ assetIds: localIds }), signal }, context)

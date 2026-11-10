@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { Editor, Node } from '@tiptap/core'
-import { AllSelection, EditorState, NodeSelection, TextSelection, type Selection } from '@tiptap/pm/state'
+import { AllSelection, EditorState, NodeSelection, TextSelection, type Selection, type Transaction } from '@tiptap/pm/state'
 import { closeHistory, history, undo } from '@tiptap/pm/history'
-import { NoteSelectionEnter, noteRange, replaceNoteRange } from './note-editing'
+import { NoteSelectionEnter, mapNoteRange, noteRange, replaceNoteRange, uploadPlaceholder } from './note-editing'
 import { attachmentToken, noteDocument, noteOffset, notePosition, serializeNote } from './note-document'
 
 const id = '11111111-1111-4111-8111-111111111111'
@@ -90,5 +90,50 @@ test('drop insertion leaves an unrelated selection selected after mapping', () =
   assert.equal(text(next), `fi${attachmentToken(id)}rst\nselected\nlast`)
   assert(next.selection.eq(state.selection.map(tr.doc, tr.mapping)))
   assert.equal(next.doc.textBetween(next.selection.from, next.selection.to), 'selected')
+  editor.destroy()
+})
+
+test('pending ranges follow typing, deletion and peer replacement around their insertion point', () => {
+  const editor = create(`ab${attachmentToken(id)}\ncd`), doc = editor.state.doc
+  const range = { offset: 2, end: 2, replaced: '' }
+  const apply = (state: EditorState, tr: Transaction) => { mapNoteRange(range, tr); return state.apply(tr) }
+  let state = EditorState.create({ doc })
+  state = apply(state, state.tr.insertText('X', 1))
+  assert.deepEqual(range, { offset: 3, end: 3, replaced: '' }, 'Text before the point moves it')
+  state = apply(state, state.tr.insertText('Y', notePosition(state.doc, 3)))
+  assert.equal(range.offset, 4, 'Text typed at the point stays in front of the insertion')
+  state = apply(state, state.tr.insertText('Z', state.doc.content.size - 1))
+  assert.equal(range.offset, 4, 'Text after the point leaves it')
+  state = apply(state, state.tr.delete(3, 6))
+  assert.equal(text(state), 'Xa\ncdZ')
+  assert.equal(range.offset, 2, 'Deleting across the point collapses it to the deletion')
+  state = apply(state, state.tr.replaceWith(0, state.doc.content.size, state.schema.nodeFromJSON(noteDocument('peer')).content))
+  assert.equal(range.offset, 4, 'A replaced document keeps the insertion at its end')
+  editor.destroy()
+})
+
+test('upload placeholders are display-only widgets at the mapped insertion point', () => {
+  const editor = create(`one ${attachmentToken(id)}\ntwo`), rendered: (readonly string[])[] = []
+  const render = (files: readonly string[]) => { rendered.push(files); return {} as HTMLElement }
+  let state = EditorState.create({ doc: editor.state.doc })
+  const upload = { offset: 4, end: 4, replaced: '', files: [] as string[] }
+  assert.equal(uploadPlaceholder(state.doc, undefined, render, () => {}).find().length, 0)
+  assert.equal(uploadPlaceholder(state.doc, upload, render, () => {}).find().length, 0, 'Nothing shows before filenames are known')
+  upload.files = ['a.png', 'b.txt']
+  const widgets = () => uploadPlaceholder(state.doc, upload, render, () => {}).find()
+  assert.equal(widgets().length, 1)
+  assert.equal(widgets()[0]!.from, notePosition(state.doc, 4))
+  assert(widgets()[0]!.spec.side > 0, 'The caret at the point is drawn before the placeholder')
+  for (const [position, typed] of [[1, 'A'], [() => notePosition(state.doc, upload.offset), 'B'], [() => state.doc.content.size - 1, 'C']] as const) {
+    const tr = state.tr.insertText(typed, typeof position === 'number' ? position : position())
+    mapNoteRange(upload, tr); state = state.apply(tr)
+  }
+  assert.equal(text(state), `Aone B${attachmentToken(id)}\ntwoC`, 'The placeholder never enters the document')
+  const at = widgets()[0]!.from
+  assert.equal(at, notePosition(state.doc, upload.offset))
+  const next = state.apply(replaceNoteRange(state, { ...upload, content: attachmentToken(id) }))
+  assert.equal(next.doc.nodeAt(at)?.type.name, 'noteAttachment', 'Completion inserts exactly where the placeholder was')
+  assert.equal(text(next), `Aone B${attachmentToken(id)}${attachmentToken(id)}\ntwoC`)
+  assert.deepEqual(rendered, [], 'Widgets render only in a view')
   editor.destroy()
 })

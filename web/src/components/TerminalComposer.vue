@@ -102,7 +102,7 @@ defineExpose({ send })
 <style scoped>
 .terminal-composer{position:absolute;z-index:7;top:0;left:0;right:0;display:flex;flex-direction:column;min-height:0;background:#1d2128;border-bottom:1px solid #3a4250;box-shadow:0 6px 18px #0007;color:#d7dce5;font-size:13px;line-height:1.5}
 .terminal-composer.full{border-bottom:0;box-shadow:none}
-.terminal-composer-editor{flex:1;min-height:0}
+.terminal-composer-editor{position:relative;flex:1;min-height:0}
 .terminal-composer-actions{display:flex;align-items:center;gap:6px;padding:0 6px 2px}
 .terminal-composer-error{margin:0;padding:0 12px 4px;color:var(--ui-error);font-size:12px}
 .terminal-composer-handle:focus-visible{outline:2px solid var(--ui-primary);outline-offset:-2px}
