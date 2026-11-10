@@ -5,7 +5,7 @@ export const mobileKeyboardFrame = shallowRef<ViewportFrame>()
 export const mobileKeyboardVisible = ref(false)
 export const mobileKeyboardOpen = ref(false)
 export type MobileKeyboardMode = 'system' | 'builtin'
-export interface MobileKeyboardState { mode: MobileKeyboardMode; dockHeight: number; switching: boolean; unavailable: boolean }
+export interface MobileKeyboardState { mode: MobileKeyboardMode; dockHeight: number; switching: boolean; unavailable: boolean; composer: boolean }
 
 interface VirtualKeyboard extends EventTarget {
   boundingRect: { height: number }
@@ -50,13 +50,16 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   let disableTimer: ReturnType<typeof setTimeout> | undefined
   let inputRevision = 0, resumeTimer: ReturnType<typeof setTimeout> | undefined
   let published: string | undefined
+  // The composer editor owns native input while open; release restores the prior keyboard.
+  let composer: { element: HTMLElement; prior?: MobileKeyboardMode; lost?: () => void } | undefined
+  const input = () => composer?.element || textarea
   const occluded = (frame: ViewportFrame) => (keyboard?.boundingRect.height || 0) > 0
     || baseline.height - frame.height > Math.max(80, baseline.height * .15)
   function state(): MobileKeyboardState {
     const frame = recovery?.frame || read()
     const target = mode === 'builtin' ? baseline.height - builtinHeight : bridgeTarget
     return { mode, dockHeight: requested && target !== undefined ? Math.max(0, frame.height - target) : 0,
-      switching: switching || suspended || !!picker || requested && document.hidden, unavailable }
+      switching: switching || suspended || !!picker || requested && document.hidden, unavailable, composer: !!composer }
   }
   function publish() {
     if (owner === controller) {
@@ -70,7 +73,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   const inputMode = (restoreBuiltinFocus = false) => {
     clearTimeout(disableTimer); disableTimer = undefined
     const revision = ++inputRevision
-    const editable = requested && mode === 'system' && !suspended
+    const editable = requested && mode === 'system' && !suspended && !composer
     const apply = () => {
       if (options.setEditable) options.setEditable(editable)
       else (textarea as HTMLTextAreaElement).readOnly = !editable
@@ -101,16 +104,17 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     if (owner === controller) mobileKeyboardFrame.value = undefined
   }
   function show(refocus = false) {
+    const element = input()
     changingFocus = true
     try {
-      if (refocus) textarea.blur()
-      textarea.focus({ preventScroll: true })
+      if (refocus) element.blur()
+      element.focus({ preventScroll: true })
       try { keyboard?.show() } catch { /* Focus is the fallback when the platform declines explicit control. */ }
     } finally { changingFocus = false }
   }
   function hideNative(restoreBuiltinFocus = false) {
     changingFocus = true
-    try { textarea.blur(); inputMode(restoreBuiltinFocus); try { keyboard?.hide() } catch { /* Blur also closes native input. */ } }
+    try { input().blur(); inputMode(restoreBuiltinFocus); try { keyboard?.hide() } catch { /* Blur also closes native input. */ } }
     finally { changingFocus = false }
   }
   function settleSwitch() {
@@ -134,9 +138,23 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     openingTimer = setTimeout(() => {
       openingTimer = undefined
       if (!requested || mode !== 'system' || occluded(read())) return
-      if (fallback) useBuiltin(true)
+      if (fallback && !composer) useBuiltin(true)
       else controller.blur()
     }, 900)
+  }
+  /** Move the system IME to the current input while holding the terminal's available frame. */
+  function handoff(fallback: boolean, target = (recovery?.frame || read()).height - state().dockHeight) {
+    cancelTimers(); mode = 'system'; switching = true; bridgeTarget = target
+    inputMode(); show(true); confirmOpening(fallback); publish()
+    if (occluded(read())) settleSwitch()
+  }
+  function dropComposer(close: boolean) {
+    const current = composer
+    if (!current) return
+    composer = undefined
+    current.element.removeEventListener('blur', blurred)
+    if (close) { current.element.blur(); mode = preferredMode() }
+    return current
   }
   function finishRecovery() {
     clearTimeout(recoveryTimer); recoveryTimer = undefined; recovery = undefined
@@ -149,19 +167,20 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     mobileKeyboardFrame.value = recovery.frame
     publish()
     recoveryTimer = setTimeout(() => {
-      if (requested && options.active() && !document.hidden && occluded(read()) && document.activeElement === textarea) {
+      if (requested && options.active() && !document.hidden && occluded(read()) && document.activeElement === input()) {
         finishRecovery(); observe()
-      } else if (requested && options.active() && !document.hidden) useBuiltin(true)
+      // The composer has no replacement keyboard: losing its IME collapses it instead.
+      } else if (requested && options.active() && !document.hidden && !composer) useBuiltin(true)
       else controller.blur()
     }, 800)
     queueMicrotask(() => {
       if (!recovery || !requested) return
       const active = document.activeElement
-      if (!options.active() || document.hidden || (active && active !== textarea && active !== document.body && active !== document.documentElement)) {
+      if (!options.active() || document.hidden || (active && active !== input() && active !== document.body && active !== document.documentElement)) {
         controller.blur(); return
       }
       // Synchronous clipboard copying can return focus within this task.
-      if (active === textarea && !recovery.moved && occluded(read())) { finishRecovery(); publish(); return }
+      if (active === input() && !recovery.moved && occluded(read())) { finishRecovery(); publish(); return }
       show(true)
     })
   }
@@ -193,7 +212,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     }
     if (recovery) {
       if (frame.height > recovery.frame.height + 2) recovery.moved = true
-      if (recovery.moved && visible && frame.height <= recovery.frame.height + 2 && document.activeElement === textarea) finishRecovery()
+      if (recovery.moved && visible && frame.height <= recovery.frame.height + 2 && document.activeElement === input()) finishRecovery()
     } else if (!switching && lastVisible && !visible) recover()
     if (visible) {
       clearTimeout(openingTimer); openingTimer = undefined
@@ -223,7 +242,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   function blurred() { if (!changingFocus && requested && !suspended) recover() }
   function focusChanged() {
     queueMicrotask(() => {
-      if (!picker && !suspended && mode === 'system' && requested && document.activeElement !== textarea && document.activeElement !== document.body && document.activeElement !== document.documentElement) controller.blur()
+      if (!picker && !suspended && mode === 'system' && requested && document.activeElement !== input() && document.activeElement !== document.body && document.activeElement !== document.documentElement) controller.blur()
     })
   }
   function finishPicker() {
@@ -231,7 +250,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     picker = undefined
     if (!requested || owner !== controller || !options.active()) { publish(); return }
     const active = document.activeElement
-    if (active !== textarea && active !== document.body && active !== document.documentElement) { controller.blur(); return }
+    if (active !== input() && active !== document.body && active !== document.documentElement) { controller.blur(); return }
     if (mode === 'system') {
       const visible = occluded(read())
       switching = true; bridgeTarget = baseline.height - (nativeHeight || builtinHeight)
@@ -259,7 +278,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       publish()
     },
     switchMode() {
-      if (!options.active()) return
+      if (!options.active() || composer) return
       if (owner !== controller) { owner?.blur(); owner = controller }
       if (!requested) mode = preferredMode()
       const next = mode === 'system' ? 'builtin' : 'system'
@@ -267,12 +286,29 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       unavailable = false; requested = true
       saveMode(next)
       if (next === 'builtin') useBuiltin()
-      else {
-        const target = baseline.height - builtinHeight
-        cancelTimers(); mode = 'system'; switching = true; bridgeTarget = target
-        inputMode(); show(true); confirmOpening(true); publish()
-        if (occluded(read())) settleSwitch()
+      else handoff(true, baseline.height - builtinHeight)
+    },
+    /** Lend the system IME to the composer editor in place, or return it to the prior keyboard. */
+    composer(element?: HTMLElement, lost?: () => void) {
+      if (!element) {
+        const prior = composer?.prior, available = options.active() && !document.hidden
+        if (!composer) return
+        if (prior === 'system' && available) { dropComposer(false); handoff(false) }
+        else if (prior === 'builtin' && available) { dropComposer(true); useBuiltin() }
+        else { dropComposer(true); controller.blur() }
+        return
       }
+      if (!options.active()) return
+      if (owner !== controller) { owner?.blur(); owner = controller }
+      const prior = composer ? composer.prior : requested ? mode : undefined
+      dropComposer(false)
+      composer = { element, prior, lost }
+      element.addEventListener('blur', blurred)
+      unavailable = false
+      if (prior) { handoff(false); return }
+      cancelTimers(); lastVisible = undefined; requested = true; mode = 'system'
+      baseline = { width: window.innerWidth, height: Math.max(baseline.height, window.innerHeight, read().height), scale: scale() }
+      confirmOpening(); inputMode(); show(); observe()
     },
     suspend(value: boolean) {
       clearTimeout(resumeTimer); resumeTimer = undefined
@@ -309,6 +345,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     },
     focus(value?: boolean) {
       if (!options.active()) return
+      if (value === false && composer) controller.blur()
       if (!requested) mode = preferredMode()
       if (owner !== controller) { owner?.blur(); owner = controller }
       if (value !== undefined && value !== requested) {
@@ -331,11 +368,12 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     },
     dismiss() { if (!suspended && !picker) controller.blur() },
     blur() {
+      const lost = dropComposer(true)?.lost
       picker = undefined; suspended = false
       clearTimeout(resumeTimer); resumeTimer = undefined; inputRevision++
       cancelTimers(); lastVisible = undefined; requested = false; unavailable = false
       if (options.active() || owner === controller) hideNative()
-      publish()
+      publish(); lost?.()
     },
     dispose() {
       controller.blur()

@@ -2,7 +2,7 @@ import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { viewportPolicy, type InteractiveWidget } from './developer-mode.ts'
 import { readViewportFrame } from './viewport-frame.ts'
-import { bindMobileKeyboard, dismissMobileKeyboard, hideMobileKeyboard, mobileKeyboardFrame, mobileKeyboardVisible, mobileKeyboardOpen, refreshMobileKeyboardViewport } from './mobile-keyboard.ts'
+import { bindMobileKeyboard, dismissMobileKeyboard, hideMobileKeyboard, mobileKeyboardFrame, mobileKeyboardVisible, mobileKeyboardOpen, refreshMobileKeyboardViewport, type MobileKeyboardState } from './mobile-keyboard.ts'
 
 function fixture(t: TestContext, policy: InteractiveWidget = 'resizes-content', finishEditing?: () => Promise<void>) {
   const previousPolicy = viewportPolicy.value
@@ -19,21 +19,29 @@ function fixture(t: TestContext, policy: InteractiveWidget = 'resizes-content', 
   const localStorage = { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => { storage.set(key, value) } }
   const originals = new Map(['window', 'document', 'navigator', 'localStorage'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]))
   for (const [name, value] of Object.entries({ window, document, navigator: {}, localStorage })) Object.defineProperty(globalThis, name, { configurable: true, value })
-  const textarea = Object.assign(new EventTarget(), {
-    readOnly: false, inputMode: 'text', focusCalls: 0,
-    focus() {
-      this.focusCalls++
-      if (document.activeElement === this) return
-      document.activeElement = this; textarea.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('focusin'))
-    },
-    blur() {
-      if (document.activeElement !== this) return
-      document.activeElement = document.body; textarea.dispatchEvent(new Event('blur'))
-    },
-  })
+  // Focusing one input blurs the previously focused one, as in browsers.
+  const input = () => {
+    const element = Object.assign(new EventTarget(), {
+      readOnly: false, inputMode: 'text', focusCalls: 0,
+      focus() {
+        element.focusCalls++
+        if (document.activeElement === element) return
+        const previous = document.activeElement as { blur?: () => void } | null
+        previous?.blur?.()
+        document.activeElement = element; element.dispatchEvent(new Event('focus')); document.dispatchEvent(new Event('focusin'))
+      },
+      blur() {
+        if (document.activeElement !== element) return
+        document.activeElement = document.body; element.dispatchEvent(new Event('blur'))
+      },
+    })
+    return element
+  }
+  const textarea = input(), editor = input()
   let requested = false, active = true
+  const states: MobileKeyboardState[] = []
   const control = bindMobileKeyboard(textarea as unknown as HTMLTextAreaElement, {
-    active: () => active, changed: value => { requested = value }, finishEditing,
+    active: () => active, changed: (value, state) => { requested = value; states.push(state) }, finishEditing,
   })
   t.after(() => {
     control.dispose()
@@ -51,7 +59,9 @@ function fixture(t: TestContext, policy: InteractiveWidget = 'resizes-content', 
     visual.dispatchEvent(new Event('resize'))
   }
   const open = () => { control.focus(true); resize(500) }
-  return { control, textarea, window, document, visual, css, storage, resize, open, requested: () => requested, deactivate: () => { active = false } }
+  let lost = 0
+  const compose = () => control.composer(editor as unknown as HTMLElement, () => { lost++ })
+  return { control, textarea, editor, compose, lost: () => lost, states, window, document, visual, css, storage, resize, open, requested: () => requested, deactivate: () => { active = false } }
 }
 
 test('mobile keyboard off gates all native focus while explicit opening permits input', t => {
@@ -114,7 +124,7 @@ test('rejected keyboard restoration replaces the IME without resizing or retryin
   f.resize(844); await Promise.resolve(); t.mock.timers.tick(800)
   t.mock.timers.tick(0)
   assert.equal(f.requested(), true); assert.equal(mobileKeyboardFrame.value, undefined)
-  assert.deepEqual(f.control.state, { mode: 'builtin', dockHeight: 344, switching: false, unavailable: true })
+  assert.deepEqual(f.control.state, { mode: 'builtin', dockHeight: 344, switching: false, unavailable: true, composer: false })
   assert.equal(f.textarea.readOnly, true); assert.equal(mobileKeyboardVisible.value, false)
   assert.equal(mobileKeyboardOpen.value, true)
   f.resize(844); t.mock.timers.tick(3000); await Promise.resolve()
@@ -496,4 +506,166 @@ test('automatic modal dismissal preserves borrowed sheet and picker intent while
   f.control.focus(true)
   dismissMobileKeyboard()
   assert.equal(f.requested(), false, 'an unrelated modal still dismisses the keyboard')
+})
+
+
+test('composer opened over the system keyboard takes the IME in place and returns it to the terminal', t => {
+  const f = fixture(t); f.open(); t.mock.timers.tick(1000)
+  f.compose()
+  assert.equal(f.document.activeElement, f.editor)
+  assert.equal(mobileKeyboardFrame.value, undefined, 'the terminal input blur starts no recovery'); assert.equal(f.lost(), 0)
+  assert.equal(f.textarea.readOnly, true, 'the terminal input stops accepting IME input')
+  assert.deepEqual(f.control.state, { mode: 'system', dockHeight: 0, switching: true, unavailable: false, composer: true })
+  assert.equal(f.requested(), true, 'the header keyboard button stays pressed')
+  t.mock.timers.tick(1000)
+  assert.equal(f.control.state.switching, false); assert.equal(f.requested(), true)
+  assert.equal(mobileKeyboardFrame.value, undefined); assert.equal(mobileKeyboardVisible.value, true)
+  f.control.switchMode()
+  assert.equal(f.control.state.mode, 'system', 'the disabled switch cannot replace the composer IME')
+  f.control.composer()
+  assert.equal(f.document.activeElement, f.textarea); assert.equal(f.textarea.readOnly, false)
+  assert.equal(f.control.state.composer, false); assert.equal(f.control.state.dockHeight, 0)
+  t.mock.timers.tick(1000)
+  assert.equal(f.requested(), true); assert.equal(f.control.state.mode, 'system'); assert.equal(f.control.state.switching, false)
+  assert.equal(f.lost(), 0)
+  assert(f.states.every(state => !state.unavailable))
+})
+
+test('composer opened over the builtin dock hands off to the system IME and restores the dock in place', t => {
+  const f = fixture(t); f.open(); f.control.setBuiltinMinHeight(260)
+  f.control.switchMode(); f.resize(844); t.mock.timers.tick(250)
+  assert.equal(f.control.state.dockHeight, 344); assert.equal(f.document.activeElement, f.textarea)
+  f.compose()
+  assert.equal(f.document.activeElement, f.editor); assert.equal(f.control.state.mode, 'system')
+  assert.equal(f.control.state.composer, true); assert.equal(f.requested(), true)
+  for (const height of [844, 760, 660, 570, 500]) {
+    f.resize(height)
+    assert.equal(height - f.control.state.dockHeight, 500, 'the terminal keeps its frame while the IME opens')
+  }
+  t.mock.timers.tick(250)
+  assert.equal(f.control.state.switching, false); assert.equal(f.control.state.dockHeight, 0)
+  f.control.composer()
+  assert.equal(f.control.state.mode, 'builtin'); assert.equal(f.control.state.composer, false)
+  for (const height of [500, 570, 660, 760, 844]) {
+    f.resize(height)
+    assert.equal(height - f.control.state.dockHeight, 500, 'the dock replaces the closing IME at the same height')
+  }
+  t.mock.timers.tick(250)
+  assert.equal(f.control.state.switching, false); assert.equal(f.control.state.dockHeight, 344)
+  assert.equal(f.document.activeElement, f.textarea); assert.equal(f.textarea.readOnly, true)
+  assert.equal(f.storage.get('canvas:mobile-keyboard-mode'), 'builtin', 'the composer never changes the preference')
+  assert.equal(f.lost(), 0); assert(f.states.every(state => !state.unavailable))
+})
+
+test('composer opened without a keyboard opens the IME once and collapsing closes it again', t => {
+  const f = fixture(t); f.control.focus(false)
+  f.storage.set('canvas:mobile-keyboard-mode', 'builtin')
+  f.compose()
+  assert.equal(f.document.activeElement, f.editor); assert.equal(f.requested(), true)
+  assert.deepEqual(f.control.state, { mode: 'system', dockHeight: 0, switching: false, unavailable: false, composer: true })
+  f.resize(500); t.mock.timers.tick(1000)
+  assert.equal(f.requested(), true); assert.equal(mobileKeyboardVisible.value, true)
+  f.control.composer()
+  assert.equal(f.requested(), false); assert.equal(f.control.state.composer, false)
+  assert.equal(f.document.activeElement, f.document.body)
+  assert.equal(f.control.state.mode, 'builtin', 'the closed keyboard shows the device preference again')
+  f.resize(844)
+  assert.equal(mobileKeyboardVisible.value, false); assert.equal(f.lost(), 0)
+})
+
+test('the header keyboard button collapses the composer and closes the keyboard without restoring it', t => {
+  const f = fixture(t); f.open(); f.control.switchMode(); f.resize(844); t.mock.timers.tick(250)
+  f.compose(); f.resize(500); t.mock.timers.tick(250)
+  f.control.blur()
+  assert.equal(f.lost(), 1, 'the composer is told to collapse')
+  assert.equal(f.requested(), false); assert.equal(f.control.state.composer, false)
+  assert.equal(f.control.state.mode, 'builtin'); assert.equal(f.control.state.dockHeight, 0)
+  assert.equal(f.document.activeElement, f.document.body)
+  f.control.composer()
+  assert.equal(f.requested(), false, 'the composer closing afterwards does not reopen the keyboard')
+  f.resize(844); t.mock.timers.tick(2000)
+  assert.equal(f.requested(), false); assert.equal(f.lost(), 1)
+})
+
+test('unexpected IME loss under the composer gets one bounded reopen on the editor, then collapses it', async t => {
+  const f = fixture(t); f.open(); f.compose(); t.mock.timers.tick(1000)
+  const before = f.editor.focusCalls, terminalFocus = f.textarea.focusCalls
+  f.resize(844)
+  assert.equal(mobileKeyboardFrame.value?.height, 500, 'the terminal keeps its frame while recovering')
+  await Promise.resolve()
+  assert.equal(f.editor.focusCalls, before + 1, 'the reopen targets the composer editor')
+  f.resize(500)
+  assert.equal(mobileKeyboardFrame.value, undefined); assert.equal(f.control.state.composer, true)
+  t.mock.timers.tick(1000)
+  f.editor.blur(); f.resize(844); await Promise.resolve()
+  assert.equal(f.editor.focusCalls, before + 2)
+  t.mock.timers.tick(800)
+  assert.equal(f.lost(), 1); assert.equal(f.requested(), false); assert.equal(f.control.state.composer, false)
+  assert.equal(f.control.state.mode, 'system'); assert.equal(f.control.state.dockHeight, 0)
+  assert.equal(mobileKeyboardFrame.value, undefined)
+  t.mock.timers.tick(4000); await Promise.resolve()
+  assert.equal(f.editor.focusCalls, before + 2); assert.equal(f.textarea.focusCalls, terminalFocus, 'no fallback onto the terminal input')
+  assert(f.states.every(state => !state.unavailable), 'no system-keyboard-unavailable fallback')
+})
+
+test('a declined composer IME collapses the composer with the keyboard closed instead of the builtin fallback', t => {
+  const f = fixture(t); f.open(); f.control.switchMode(); f.resize(844); t.mock.timers.tick(250)
+  f.compose(); t.mock.timers.tick(900)
+  assert.equal(f.lost(), 1); assert.equal(f.requested(), false)
+  assert.deepEqual(f.control.state, { mode: 'builtin', dockHeight: 0, switching: false, unavailable: false, composer: false })
+  assert(f.states.every(state => !state.unavailable))
+  f.control.composer()
+  assert.equal(f.requested(), false, 'the collapsing composer does not reopen the keyboard')
+})
+
+test('returning from a hidden page reopens the IME on the composer once, then collapses it', t => {
+  const f = fixture(t); f.open(); f.compose(); t.mock.timers.tick(1000)
+  f.document.hidden = true; f.document.dispatchEvent(new Event('visibilitychange'))
+  f.editor.blur(); f.resize(844); t.mock.timers.tick(2000)
+  assert.equal(f.lost(), 0, 'a hidden page does not revoke the composer')
+  const before = f.editor.focusCalls
+  f.document.hidden = false; f.document.dispatchEvent(new Event('visibilitychange'))
+  assert.equal(f.editor.focusCalls, before + 1); assert.equal(f.document.activeElement, f.editor)
+  t.mock.timers.tick(900)
+  assert.equal(f.lost(), 1); assert.equal(f.requested(), false)
+  assert(f.states.every(state => !state.unavailable))
+})
+
+test('releasing during recovery hands back to the prior keyboard and a reclaim keeps that prior', async t => {
+  const f = fixture(t); f.open(); f.control.switchMode(); f.resize(844); t.mock.timers.tick(250)
+  f.compose(); f.resize(500); t.mock.timers.tick(250)
+  f.resize(844); await Promise.resolve()
+  assert.equal(mobileKeyboardFrame.value?.height, 500, 'recovering')
+  f.control.composer()
+  assert.equal(mobileKeyboardFrame.value, undefined); assert.equal(f.control.state.mode, 'builtin')
+  t.mock.timers.tick(250)
+  assert.equal(f.control.state.dockHeight, 344); assert.equal(f.requested(), true)
+  f.compose(); f.resize(500); t.mock.timers.tick(250)
+  f.control.composer(); f.resize(844); t.mock.timers.tick(250)
+  assert.equal(f.control.state.mode, 'builtin', 'a reclaim after a refused send restores the same dock')
+  assert.equal(f.control.state.dockHeight, 344); assert.equal(f.lost(), 0)
+  t.mock.timers.tick(2000); assert(f.states.every(state => !state.unavailable))
+})
+
+test('a keyboard-less terminal focus closes the keyboard and the composer', t => {
+  const f = fixture(t); f.open(); f.compose(); t.mock.timers.tick(1000)
+  f.control.focus(false)
+  assert.equal(f.lost(), 1); assert.equal(f.requested(), false); assert.equal(f.control.state.composer, false)
+  assert.equal(f.document.activeElement, f.textarea); assert.equal(f.textarea.readOnly, true)
+})
+
+test('a terminal IME that does not survive the composer handback closes without the builtin fallback', t => {
+  const f = fixture(t); f.open(); f.compose(); t.mock.timers.tick(1000)
+  f.control.composer(); f.resize(844); t.mock.timers.tick(900)
+  assert.equal(f.requested(), false); assert.equal(f.control.state.mode, 'system')
+  assert(f.states.every(state => !state.unavailable))
+})
+
+test('modal dismissal and another editor taking focus collapse the composer', async t => {
+  const f = fixture(t); f.open(); f.compose(); t.mock.timers.tick(1000)
+  dismissMobileKeyboard()
+  assert.equal(f.lost(), 1); assert.equal(f.requested(), false)
+  f.resize(844); f.open(); f.compose(); t.mock.timers.tick(1000)
+  f.document.activeElement = {}; f.document.dispatchEvent(new Event('focusin')); await Promise.resolve()
+  assert.equal(f.lost(), 2); assert.equal(f.requested(), false); assert.equal(f.control.state.composer, false)
 })

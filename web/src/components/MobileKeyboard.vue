@@ -20,6 +20,8 @@ const props = defineProps<{
   disabled?: boolean
   keyboardMode: 'system' | 'builtin'
   keyboardOpen: boolean
+  /** The composer owns input: helper keys and the keyboard switch stay in place, disabled. */
+  composing?: boolean
   dockHeight: number
   modifiers: TerminalModifiers
   touchMode: TouchMode
@@ -41,6 +43,8 @@ const keyboard = ref<HTMLElement>()
 const dock = ref<HTMLElement>(), naturalDeck = ref<HTMLElement>(), actions = ref<HTMLElement>(), safeArea = ref<HTMLElement>()
 const switchLabel = computed(() => t(props.keyboardMode === 'system' ? 'terminal.keyboard.switchToBuiltin' : 'terminal.keyboard.switchToSystem'))
 const hasDock = computed(() => props.dockHeight > 0)
+// Disabled buttons still receive pointer events; presses check this as well.
+const inactive = computed(() => props.disabled || props.composing)
 const caps = ref(false)
 const sheet = ref<'select'>()
 const snapshot = ref('')
@@ -159,7 +163,7 @@ function stopRepeat() {
   if (press?.target.hasPointerCapture(press.pointer)) press.target.releasePointerCapture(press.pointer)
 }
 function send(key: string, modifiers?: Partial<TerminalModifiers>) {
-  if (props.disabled) return
+  if (inactive.value) return
   if (key === 'CapsLock') { caps.value = !caps.value; return }
   const modifier = modifierKeys[key]
   if (modifier) { emit('modifiers', { ...props.modifiers, [modifier]: !props.modifiers[modifier] }); return }
@@ -167,7 +171,7 @@ function send(key: string, modifiers?: Partial<TerminalModifiers>) {
   emit('key', key, modifiers)
 }
 function press(event: PointerEvent, key: string) {
-  if (event.button !== 0 || props.disabled) return
+  if (event.button !== 0 || inactive.value) return
   event.preventDefault()
   event.stopPropagation()
   stopRepeat()
@@ -314,8 +318,8 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
   <section ref="keyboard" class="mobile-keyboard" :class="{ 'has-dock': hasDock, 'reduced-motion': reducedMotion }" @pointerdown.stop @mousedown.stop @keydown.esc.stop.prevent="escape">
     <div ref="safeArea" class="mobile-key-safe" aria-hidden="true" />
     <div class="mobile-key-row" role="toolbar" :aria-label="t('terminal.keyboard.helperKeys')" @contextmenu.prevent>
-      <button v-for="key in keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :aria-pressed="keyPressed(key.key)" :class="{ 'arrow-key': key.symbol }" @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ key.symbol || key.label }}</button>
-      <button type="button" :aria-label="switchLabel" :title="switchLabel" :aria-pressed="keyboardMode === 'builtin'" :class="{ active: keyboardOpen && keyboardMode === 'builtin' || modifiers.shift || modifiers.alt || modifiers.meta }" @pointerdown.prevent @click="switchKeyboard"><Icon name="keyboard-switch" :size="19" /></button>
+      <button v-for="key in keys" :key="key.key" type="button" :disabled="inactive" :aria-label="key.label" :aria-pressed="keyPressed(key.key)" :class="{ 'arrow-key': key.symbol }" @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ key.symbol || key.label }}</button>
+      <button type="button" :disabled="composing" :aria-label="switchLabel" :title="switchLabel" :aria-pressed="keyboardMode === 'builtin'" :class="{ active: keyboardOpen && keyboardMode === 'builtin' || modifiers.shift || modifiers.alt || modifiers.meta }" @pointerdown.prevent @click="switchKeyboard"><Icon name="keyboard-switch" :size="19" /></button>
     </div>
     <div ref="dock" class="mobile-key-dock" :style="{ height: `${Math.max(0, dockHeight)}px` }" :inert="!hasDock" :aria-hidden="!hasDock" role="region" :aria-label="t('terminal.keyboard.full')" @wheel.stop>
       <div class="mobile-key-deck" role="group" :aria-label="t('terminal.keyboard.full')" @scroll.capture="stopRepeat" @contextmenu.prevent>

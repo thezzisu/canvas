@@ -42,8 +42,9 @@ import PaneContextMenu from './PaneContextMenu.vue'
 import type { PaneAction, PaneContext } from '../../../shared/pane-context'
 import { contentZoomMenu } from '../content-zoom-menu'
 import type { TerminalData } from '../types'
-// The editor stays out of the terminal bundle until a composer opens.
-const TerminalComposer = defineAsyncComponent(() => import('./TerminalComposer.vue'))
+// The editor stays out of the terminal bundle until a composer opens or a mobile terminal is focused.
+const loadComposer = () => import('./TerminalComposer.vue')
+const TerminalComposer = defineAsyncComponent(loadComposer)
 const { t } = useI18n()
 const toast = useToast()
 const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>>()
@@ -185,18 +186,20 @@ const canCompose = computed(() => !showApp.value && keepTerminal.value && !close
 const canSendComposer = computed(() => status.value.status === 'connected' && !status.value.readOnly && !!props.data.available)
 const composerDraft = computed(() => !composerOpen.value && !composerSending.value && composerHasContent(composer.value.content))
 const composerLabel = computed(() => composerDraft.value ? t('terminal.composer.draft') : t('terminal.composer.title'))
-// The composer and the text-selection sheet each borrow the IME; recovery resumes after both.
+// The text-selection sheet borrows the IME; the mobile composer editor owns it until it closes.
 const selecting = ref(false)
-const keyboardBorrowed = computed(() => !!props.data.mobile && composerOpen.value || selecting.value)
-watch(keyboardBorrowed, value => terminal?.suspendKeyboard(value))
+watch(selecting, value => terminal?.suspendKeyboard(value))
 function openComposer() {
   if (composerOpen.value || !canCompose.value) return
   composerOpen.value = true
 }
+// A late claim from a collapsing composer is ignored.
+function composerKeyboard(editor?: HTMLElement) { if (!editor || composerOpen.value) terminal?.composerKeyboard(editor, closeComposer) }
 function closeComposer(focusTerminal = false) {
   if (!composerOpen.value) return
   composerOpen.value = false
-  if (!props.data.mobile && focusTerminal) terminal?.focus()
+  if (props.data.mobile) terminal?.composerKeyboard()
+  else if (focusTerminal) terminal?.focus()
 }
 function toggleComposer() { if (composerOpen.value) closeComposer(true); else openComposer() }
 // Sending collapses at once and counts the draft as clean; a failure reopens it with the error.
@@ -214,6 +217,8 @@ function sendComposer(id: string, version: number, files: string[]) {
   })
 }
 watch(canCompose, value => { if (!value) closeComposer() })
+// A loaded editor mounts within the opening tap, so the IME moves to it in the same gesture.
+watch(mobileFocus, value => { if (value) void loadComposer() }, { immediate: true })
 watch(closed, value => { if (value) discardComposerDraft(composerTarget()) }, { flush: 'sync' })
 function toggleKeyboard() {
   if (status.value.keyboardRequested) terminal?.blur()
@@ -338,7 +343,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     </div>
     <div v-if="showApp && !trustedApp" class="capture-trust-prompt card-content" :inert="mobilePreview || editing || undefined"><Icon name="globe" :size="32" /><span>{{ app?.title }}</span><UButton v-if="!mobilePreview" color="neutral" variant="outline" @click="activateApp">{{ t('terminal.capture.app') }}</UButton></div>
     <div v-if="keepTerminal" ref="host" class="terminal-host card-content nodrag nopan nowheel" :data-content-active="inputFocused" :class="{ 'terminal-paused': maximizedElsewhere, 'terminal-drop-target': status.draggingFile }" :inert="mobilePreview || closed || showApp || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown="contentPointerDown" @mousedown.stop @wheel.stop @dblclick.stop><div class="terminal-transition-surface" aria-hidden="true" /></div>
-    <Transition name="terminal-composer"><TerminalComposer v-if="composerOpen && canCompose" :target="composerTarget()" :can-send="canSendComposer" :mobile="data.mobile" :error="composerError" @close="closeComposer(true)" @send="sendComposer" @edited="composerError = ''" /></Transition>
+    <Transition name="terminal-composer"><TerminalComposer v-if="composerOpen && canCompose" :target="composerTarget()" :can-send="canSendComposer" :mobile="data.mobile" :error="composerError" @close="closeComposer(true)" @send="sendComposer" @edited="composerError = ''" @keyboard="composerKeyboard" /></Transition>
     <PaneContextMenu :host="host" :enabled="!showApp && keepTerminal && !mobilePreview && !closed && !maximizedElsewhere && status.status === 'connected'" :allows-menu="allowsContextMenu" :lookup="paneContext" :action="paneAction" />
     <TerminalSettingsDialog v-model="overrides" :open="settingsOpen" @close="settingsOpen = false" />
 
@@ -359,7 +364,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <div v-if="!showApp && !closed && keepTerminal && !maximizedElsewhere && (status.status === 'connecting' || status.status === 'connected' && !status.screenReady)" class="terminal-loading nodrag" :class="{ 'terminal-loading-initial': !status.screenReady }" role="status"><span class="spinner" />{{ status.retryAttempt ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt }) : t('common.loading') }}</div>
     </div>
     <div v-if="mobilePreview && !closed && !editing" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: label })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
-    <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :keyboard-mode="status.keyboardMode || 'system'" :keyboard-open="!!status.keyboardRequested" :dock-height="(status.keyboardDockHeight || 0) / uiZoom" :read-text="readText" :copy-text="copyText" :prepare-files="prepareFiles" @switch-keyboard="switchKeyboard" @bounds="keyboardBounds" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @pointer="mobilePointer" @composer="openComposer" @reading="reading" />
+    <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :keyboard-mode="status.keyboardMode || 'system'" :keyboard-open="!!status.keyboardRequested" :composing="!!status.keyboardComposer" :dock-height="(status.keyboardDockHeight || 0) / uiZoom" :read-text="readText" :copy-text="copyText" :prepare-files="prepareFiles" @switch-keyboard="switchKeyboard" @bounds="keyboardBounds" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @pointer="mobilePointer" @composer="openComposer" @reading="reading" />
   </article>
   <CardLayoutControls :id="id" :label="label" :kind="app ? 'app' : 'terminal'" :width="data.width" :height="data.height" />
 </template>

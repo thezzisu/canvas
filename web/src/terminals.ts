@@ -63,6 +63,7 @@ export type TerminalStatus = {
   keyboardMode?: 'system' | 'builtin'
   keyboardDockHeight?: number
   keyboardUnavailable?: boolean
+  keyboardComposer?: boolean
   retryAttempt?: number
 }
 interface FocusResize { token: string; suspended: boolean; requested?: { cols: number; rows: number } }
@@ -1046,7 +1047,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     const keyboardChanged = (requested: boolean, state: MobileKeyboardState) => {
       current.keyboardRequested = requested
       setState(current, { ...current.state, keyboardMode: state.mode, keyboardDockHeight: state.dockHeight,
-        keyboardUnavailable: state.unavailable })
+        keyboardUnavailable: state.unavailable, keyboardComposer: state.composer })
       schedulePresentation(current)
     }
     session.keyboard = bindMobileKeyboard(input.element, {
@@ -1166,6 +1167,12 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       if (current.host !== host || !isCurrentApi(mountingContext)) return
       if (value) current.touchpad?.cancel()
       current.keyboard?.suspend(value)
+    },
+    /** The open composer editor owns the system IME; `lost` collapses it when that IME cannot stay. */
+    composerKeyboard(editor?: HTMLElement, lost?: () => void) {
+      if (current.host !== host || !isCurrentApi(mountingContext)) return
+      if (editor) { current.touchpad?.cancel(); setModifiers(current) }
+      current.keyboard?.composer(editor, lost)
     },
     setKeyboardMinHeight(height: number) {
       if (current.host === host) current.keyboard?.setBuiltinMinHeight(height * uiZoom.value)

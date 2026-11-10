@@ -10,7 +10,7 @@ import { readStoredHeight, storeHeight, composerHeightBounds } from '../composer
 import { useCardContentFocus } from '../card-content-focus'
 
 const props = defineProps<{ target: ComposerTarget; canSend: boolean; mobile?: boolean; error?: string }>()
-const emit = defineEmits<{ close: []; send: [composer: string, version: number, files: string[]]; edited: [] }>()
+const emit = defineEmits<{ close: []; send: [composer: string, version: number, files: string[]]; edited: []; keyboard: [editor?: HTMLElement] }>()
 const { t } = useI18n()
 const composer = useComposer(() => props.target)
 const owner = computed(() => composerOwner(props.target))
@@ -20,9 +20,18 @@ const fraction = ref(readStoredHeight())
 const { active: contentActive } = useCardContentFocus(root, () => false)
 const hasText = computed(() => composerHasContent(composer.value.content))
 const sending = ref(false)
+// On mobile the terminal keyboard controller moves the system IME into the editor in place.
+function claimKeyboard() {
+  const element = editor.value?.element()
+  if (props.mobile && element) emit('keyboard', element)
+}
+// Keep the editor focused, and so the IME open, when tapping composer buttons.
+function keepFocus(event: PointerEvent) { if (props.mobile) event.preventDefault() }
 
 async function send() {
   if (!props.canSend || !hasText.value || sending.value || editor.value?.pending) return
+  // Return the IME before the draft turns read-only so it never closes under the editor.
+  if (props.mobile) emit('keyboard')
   // The draft is read-only from flush to dispatch, so no keystroke can follow the sent version.
   sending.value = true
   try {
@@ -30,6 +39,8 @@ async function send() {
     if (view?.id) emit('send', view.id, view.version, sentFiles(view.content, view.attachments))
   } catch (error) { window.dispatchEvent(new CustomEvent('canvas:error', { detail: error })) }
   finally { sending.value = false }
+  // A send that did not collapse the composer, or was refused at once, takes the IME back.
+  await nextTick(); claimKeyboard()
 }
 function keydown(event: KeyboardEvent) {
   if (event.isComposing || event.keyCode === 229) return
@@ -65,7 +76,7 @@ function resizeKey(event: KeyboardEvent) {
   const height = root.value?.parentElement?.clientHeight || 400
   fraction.value = composerHeightBounds(fraction.value + step, height).value; storeHeight(fraction.value)
 }
-onMounted(() => { void nextTick(() => editor.value?.focus()) })
+onMounted(() => { void nextTick(() => { claimKeyboard(); editor.value?.focus() }) })
 onBeforeUnmount(() => saveComposer(props.target))
 defineExpose({ send })
 </script>
@@ -79,9 +90,9 @@ defineExpose({ send })
     </div>
     <p v-if="error" class="terminal-composer-error" role="alert">{{ error }}</p>
     <div class="terminal-composer-actions">
-      <UButton color="neutral" variant="ghost" :size="mobile ? 'lg' : 'sm'" square class="me-auto" :title="t('terminal.composer.attach')" :aria-label="t('terminal.composer.attach')" :disabled="editor?.pending" @click="editor?.chooseFiles()"><Icon name="paperclip" :size="16" /></UButton>
+      <UButton color="neutral" variant="ghost" :size="mobile ? 'lg' : 'sm'" square class="me-auto" :title="t('terminal.composer.attach')" :aria-label="t('terminal.composer.attach')" :disabled="editor?.pending" @pointerdown="keepFocus" @click="editor?.chooseFiles()"><Icon name="paperclip" :size="16" /></UButton>
       <SaveStatus :owner="owner.key" :size="mobile ? 'lg' : 'sm'" />
-      <UButton color="primary" variant="ghost" :size="mobile ? 'lg' : 'sm'" square class="terminal-composer-send" :title="t('terminal.composer.send')" :aria-label="t('terminal.composer.send')" :disabled="!canSend || !hasText || editor?.pending" :loading="sending" @click="send"><Icon name="send" :size="16" /></UButton>
+      <UButton color="primary" variant="ghost" :size="mobile ? 'lg' : 'sm'" square class="terminal-composer-send" :title="t('terminal.composer.send')" :aria-label="t('terminal.composer.send')" :disabled="!canSend || !hasText || editor?.pending" :loading="sending" @pointerdown="keepFocus" @click="send"><Icon name="send" :size="16" /></UButton>
     </div>
     <div class="terminal-composer-handle" role="separator" aria-orientation="horizontal" tabindex="0" :aria-label="t('terminal.composer.resize')" :aria-valuenow="Math.round(fraction * 100)" :aria-valuetext="`${Math.round(fraction * 100)}%`" aria-valuemin="0" aria-valuemax="100"
       @pointerdown="resizeStart" @pointermove="resizeMove" @pointerup="resizeEnd" @pointercancel="resizeEnd" @keydown="resizeKey"><span /></div>

@@ -222,7 +222,7 @@ function drop(event: DragEvent) {
 }
 watch(() => props.owner.key, () => { selection = undefined; uploaded.value = [] })
 onBeforeUnmount(() => { if (task.value?.insert === insert) task.value.insert = undefined })
-defineExpose({ chooseFiles, pending, focus: () => editor()?.commands.focus('end') })
+defineExpose({ chooseFiles, pending, focus: () => editor()?.commands.focus('end'), element: () => editor()?.view.dom })
 </script>
 
 <template>
