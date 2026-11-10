@@ -1,13 +1,12 @@
 import type { VitePWAOptions } from 'vite-plugin-pwa'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+import { cachedCodePreview, cachedFont, shellNavigation } from './web/src/pwa-routes.ts'
 
 const notificationSource = readFileSync(new URL('./web/notification-worker.js', import.meta.url), 'utf8')
 export const notificationWorker = { source: notificationSource,
   fileName: `assets/notification-worker-${createHash('sha256').update(notificationSource).digest('hex').slice(0, 12)}.js` }
 
-// Canvas uses fragment navigation. API and forwarded documents never get a shell fallback.
-const shellNavigation = /^\/(?:index\.html)?(?:\?.*)?$/
 export const pwaOptions: Partial<VitePWAOptions> = {
   registerType: 'prompt',
   injectRegister: false,
@@ -31,9 +30,8 @@ export const pwaOptions: Partial<VitePWAOptions> = {
     cleanupOutdatedCaches: true,
     skipWaiting: false,
     clientsClaim: false,
-    // Cache only requested, versioned public resources. No private files or API cache.
     runtimeCaching: [{
-      urlPattern: ({ request, url, sameOrigin }) => sameOrigin && request.destination === 'font' && /^\/assets\/[^/]+-[\w-]{8,}\.woff2$/.test(url.pathname),
+      urlPattern: cachedFont,
       handler: 'CacheFirst',
       options: {
         cacheName: 'canvas-content-fonts',
@@ -41,7 +39,7 @@ export const pwaOptions: Partial<VitePWAOptions> = {
         expiration: { maxEntries: 20, maxAgeSeconds: 365 * 24 * 60 * 60, purgeOnQuotaError: true },
       },
     }, {
-      urlPattern: ({ request, url, sameOrigin }) => sameOrigin && ['script', 'worker'].includes(request.destination) && /^\/assets\/code-preview\/[^/]+-[\w-]{8,}\.js$/.test(url.pathname),
+      urlPattern: cachedCodePreview,
       handler: 'CacheFirst',
       options: {
         cacheName: 'canvas-code-preview',
