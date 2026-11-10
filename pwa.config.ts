@@ -7,7 +7,7 @@ export const notificationWorker = { source: notificationSource,
   fileName: `assets/notification-worker-${createHash('sha256').update(notificationSource).digest('hex').slice(0, 12)}.js` }
 
 // Canvas uses fragment navigation. API and forwarded documents never get a shell fallback.
-export const shellNavigation = /^\/(?:index\.html)?(?:\?.*)?$/
+const shellNavigation = /^\/(?:index\.html)?(?:\?.*)?$/
 export const pwaOptions: Partial<VitePWAOptions> = {
   registerType: 'prompt',
   injectRegister: false,
