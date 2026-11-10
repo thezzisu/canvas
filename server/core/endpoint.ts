@@ -38,9 +38,8 @@ if not chosen:
  chosen=pathlib.Path(run)/'herdr-core'/(session+'.sock') if run else state_home/'herdr-core'/session/(session+'.sock')
 path=pathlib.Path(chosen)
 if not path.is_absolute() or len(str(path))>1000 or any(ord(c)<32 or ord(c)==127 or c==':' for c in str(path)):raise SystemExit('Core socket must be an absolute Unix socket path')
-if len(sys.argv)<3 or sys.argv[2]!='path':
- path=path.resolve(strict=True)
- if not stat.S_ISSOCK(path.stat().st_mode):raise SystemExit('Core endpoint is not a Unix socket')
+path=path.resolve(strict=True)
+if not stat.S_ISSOCK(path.stat().st_mode):raise SystemExit('Core endpoint is not a Unix socket')
 print(json.dumps({'socket':str(path)}))`
 
 export function parseCoreSocket(text: string): string {
@@ -51,23 +50,15 @@ export function parseCoreSocket(text: string): string {
   return value.socket
 }
 
-function discover(location: CoreLocation, environment: NodeJS.ProcessEnv, pathOnly: boolean, signal?: AbortSignal): Promise<string> {
+export function localCoreSocket(location: CoreLocation, signal?: AbortSignal): Promise<string> {
   validateCoreLocation(location)
   if (signal?.aborted) return Promise.reject(new DOMException('Core discovery cancelled', 'AbortError'))
   return new Promise((resolve, reject) => {
-    execFile('python3', ['-c', discoverCorePython, JSON.stringify(location), ...(pathOnly ? ['path'] : [])], {
-      env: environment, timeout: 10000, maxBuffer: 16 * 1024, signal,
+    execFile('python3', ['-c', discoverCorePython, JSON.stringify(location)], {
+      timeout: 10000, maxBuffer: 16 * 1024, signal,
     }, (error, stdout, stderr) => {
       if (error) { reject(new Error(`Core socket discovery failed: ${stderr.trim().slice(-500) || error.message}`)); return }
       try { resolve(parseCoreSocket(stdout)) } catch (error) { reject(error) }
     })
   })
-}
-
-/** Resolve without checking or opening an endpoint; useful for setup/testing. */
-export function coreSocketPath(location: CoreLocation, environment: NodeJS.ProcessEnv = process.env): Promise<string> {
-  return discover(location, environment, true)
-}
-export function localCoreSocket(location: CoreLocation, signal?: AbortSignal): Promise<string> {
-  return discover(location, process.env, false, signal)
 }

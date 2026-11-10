@@ -21,10 +21,6 @@ export function overviewResources(resources: readonly SourceResource[], statuses
   })
 }
 
-export function overviewLayoutKey(resources: readonly SourceResource[]): string {
-  return JSON.stringify(resources.map(source => [source.id, source.spaces.map(space => [space.id, space.windows.map(window => window.id)])]))
-}
-
 export type OverviewCard = { width: number; height: number }
 export type OverviewCardPlacement = OverviewCard & { x: number; y: number }
 

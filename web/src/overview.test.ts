@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { overviewFocusStatuses, overviewLayoutKey, overviewResources, overviewSpaceLayout, overviewStatuses } from './overview.ts'
+import { overviewFocusStatuses, overviewResources, overviewSpaceLayout, overviewStatuses } from './overview.ts'
 import type { SourceResource, WindowResource } from './types.ts'
 
 const window = (id: string, status?: WindowResource['status']): WindowResource => ({ id, name: id, status })
@@ -38,23 +38,12 @@ test('focus preset keeps attention, completed and working windows', () => {
   ])
 })
 
-test('status changes alter layout only when filtering or priority ordering changes visible membership/order', () => {
-  const resources = fixture(), changed = structuredClone(resources)
-  changed[0]!.spaces[0]!.windows[0]!.status = 'done'
-  const key = (value: SourceResource[], statuses: readonly WindowResource['status'][], order: 'native' | 'status') => overviewLayoutKey(overviewResources(value, statuses.filter(status => status !== undefined), order))
-  assert.equal(key(resources, overviewStatuses, 'native'), key(changed, overviewStatuses, 'native'))
-  assert.notEqual(key(resources, overviewStatuses, 'status'), key(changed, overviewStatuses, 'status'))
-  assert.notEqual(key(resources, ['done'], 'native'), key(changed, ['done'], 'native'))
-  changed[0]!.spaces[0]!.windows[0]!.name = 'renamed'
-  assert.equal(key(resources, overviewStatuses, 'native'), key(changed, overviewStatuses, 'native'))
-})
-
 test('the interacting native window remains visible after done is acknowledged as idle until interaction ends', () => {
   const resources = fixture(), interaction = { sourceId: 'a', windowId: 'done-1' }
   const before = overviewResources(resources, ['done'], 'native', interaction)
   resources[0]!.spaces[0]!.windows.find(window => window.id === 'done-1')!.status = 'idle'
   const during = overviewResources(resources, ['done'], 'native', interaction)
-  assert.equal(overviewLayoutKey(during), overviewLayoutKey(before))
+  assert.deepEqual(during.map(source => source.spaces.map(space => space.windows.map(window => window.id))), before.map(source => source.spaces.map(space => space.windows.map(window => window.id))))
   assert.equal(during[0]!.spaces[0]!.windows.find(window => window.id === 'done-1')?.status, 'idle')
   assert.equal(overviewResources(resources, ['done'], 'native')[0]!.spaces[0]!.windows.some(window => window.id === 'done-1'), false)
 })
