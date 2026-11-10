@@ -13,6 +13,7 @@ import { copyText } from '../clipboard'
 import { presentDownload } from '../downloads'
 import { filePreview } from '../file-preview'
 import Icon from './Icon.vue'
+import FileIcon from './FileIcon.vue'
 import { forwardSourceUrl, presentUrl } from '../urls'
 
 type Target = { sourceId: string; spaceId: string; windowId: string; name: string }
@@ -131,7 +132,7 @@ onBeforeUnmount(() => { cancelRequests() })
         <header><strong>{{ pane.name || t('terminal.pane', { name: pane.id.split(':').at(-1) || pane.id }) }}</strong><span v-if="pane.cwd" :title="pane.cwd">{{ pane.cwd }}</span></header>
         <div v-for="item in pane.items" :key="item.id" class="content-scan-item" :data-scan-item="item.id" :data-item-kind="item.kind" :aria-busy="opening === item.id">
           <div v-if="item.kind === 'file'" class="content-scan-open content-scan-file-label" :title="item.path || item.label">
-            <span v-if="opening === item.id" class="spinner" /><Icon v-else name="file" :size="16" />
+            <span v-if="opening === item.id" class="spinner" /><FileIcon v-else :name="item.displayLabel" :size="16" />
             <span><strong>{{ item.displayLabel }}</strong><small v-if="item.path !== item.displayLabel">{{ item.path || t('panels.scan.unresolved') }}</small></span>
           </div>
           <a v-else-if="item.href" class="content-scan-open" :href="item.href" target="_blank" rel="noopener noreferrer" :title="item.url"><Icon name="globe" :size="16" /><span><strong>{{ item.label }}</strong><small v-if="item.url !== item.label">{{ item.url }}</small></span></a>

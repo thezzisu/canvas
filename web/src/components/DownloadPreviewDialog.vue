@@ -8,6 +8,7 @@ import UButton from '@nuxt/ui/components/Button.vue'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import { DialogTitle } from 'reka-ui'
 import Icon from './Icon.vue'
+import FileIcon from './FileIcon.vue'
 import ImagePreview from './ImagePreview.vue'
 import MediaPreview from './MediaPreview.vue'
 import TextPreview from './TextPreview.vue'
@@ -139,7 +140,7 @@ onBeforeUnmount(() => request?.abort())
     <template #header>
       <header class="download-preview-header" :class="{ 'cutout-header': mobileHeader && expanded }" :data-cutout-position="mobileHeader && expanded && cutoutWidth > 0 ? cutoutPosition : undefined" :style="{ '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` }">
         <span v-if="preparing" class="download-preview-pending" role="status"><span class="spinner" />{{ t('common.loading') }}</span>
-        <DialogTitle class="download-preview-title" :class="{ 'cutout-title': mobileHeader && expanded, 'sr-only': preparing }">{{ downloadPreview.filename }}<span v-if="downloadPreviewCount > 1" class="download-preview-count" :aria-label="t('panels.preview.remaining', downloadPreviewCount - 1)"> +{{ n(downloadPreviewCount - 1) }}</span></DialogTitle>
+        <DialogTitle class="download-preview-title" :class="{ 'cutout-title': mobileHeader && expanded, 'sr-only': preparing }"><FileIcon class="me-2" :name="downloadPreview.filename" :size="16" />{{ downloadPreview.filename }}<span v-if="downloadPreviewCount > 1" class="download-preview-count" :aria-label="t('panels.preview.remaining', downloadPreviewCount - 1)"> +{{ n(downloadPreviewCount - 1) }}</span></DialogTitle>
         <div ref="actions" class="download-preview-actions" :class="{ 'cutout-actions': mobileHeader && expanded }" :style="{ '--header-actions-width': `${(textShortcuts.length + 3) * 44}px` }">
           <template v-for="key in textShortcuts" :key="key"><TextPreviewActions v-if="showShortcut(key)" :only="key" :filename="downloadPreview.filename" v-model:rendered="rendered" v-model:wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :source-preview="downloadPreview.sourcePreview" :preview-busy="previewBusy" @preview="previewSite" /></template>
           <UButton v-if="!preparing && showShortcut('download')" type="button" color="neutral" variant="ghost" class="download-preview-button download-preview-download" :aria-label="t('panels.file.download')" :title="t('panels.file.download')" @click="download"><Icon name="download" :size="16" /></UButton>

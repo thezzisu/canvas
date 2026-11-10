@@ -7,6 +7,7 @@ import { NodeResizer } from '@vue-flow/node-resizer'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import type { FileData } from '../types'
 import Icon from './Icon.vue'
+import FileIcon from './FileIcon.vue'
 import CardLayoutControls from './CardLayoutControls.vue'
 import { useLayoutCard } from '../layout-editing'
 import CardPreview from './CardPreview.vue'
@@ -124,7 +125,7 @@ const size = computed(() => {
   <NodeResizer v-if="!data.mobile && !data.focus" :node-id="id" :min-width="240" :min-height="160" :max-width="4000" :max-height="3000" @resize-start="event => data.onResizeStart(id, event.params)" @resize-end="event => data.onResize(id, event.params.width, event.params.height, event.params.x, event.params.y)" />
   <article ref="layoutRoot" class="file-card" :class="{ 'mobile-card-preview': mobilePreview, 'card-focused': data.focus, 'input-focused': contentActive }" :data-asset-id="data.assetId" :data-preview-kind="preview">
     <header class="file-header drag-handle" :class="{ 'cutout-header': data.focus && data.mobile }" :data-cutout-position="data.focus && data.mobile && cutoutWidth > 0 ? cutoutPosition : undefined" :style="data.focus && data.mobile ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` } : undefined" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined">
-      <span class="file-icon" :class="{ 'cutout-status': data.focus }"><Icon name="file" :size="13" /></span>
+      <span class="file-icon" :class="{ 'cutout-status': data.focus }"><FileIcon :name="data.asset.filename" :size="13" /></span>
       <span class="file-title" :class="{ 'cutout-title': data.focus }" :title="`${data.asset.filename} · ${size}`">{{ data.asset.filename }}</span>
       <CardHeaderActions class="file-actions" :class="{ 'cutout-actions': data.mobile && data.focus }" :items="menu" :expanded="!!data.focus" removable :mobile="!!data.mobile && !!data.focus" :shortcuts="shortcuts" :priority="['copy', 'zoom']" :add-label="t('app.addToOtherCanvas')" :remove-label="t('panels.file.remove')"
         @add="data.onAction?.('add', id)" @toggle="data.onAction?.(data.focus ? 'unfocus' : 'focus', id)" @remove="data.onRemove(id)">

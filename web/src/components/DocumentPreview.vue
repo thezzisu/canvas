@@ -4,6 +4,7 @@ import { useMediaQuery } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import UApp from '@nuxt/ui/components/App.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
+import FileIcon from './FileIcon.vue'
 import UDropdownMenu from '@nuxt/ui/components/DropdownMenu.vue'
 import TextPreview from './TextPreview.vue'
 import TextPreviewActions from './TextPreviewActions.vue'
@@ -47,7 +48,7 @@ onBeforeUnmount(() => controller.abort())
 <template>
   <UApp :locale="uiLocale">
     <main class="document-preview" :class="{ 'document-touch': mobile }">
-      <header><span class="document-name" :title="filename">{{ filename }}</span>
+      <header><span class="document-name" :title="filename"><FileIcon class="me-2" :name="filename" :size="16" />{{ filename }}</span>
         <TextPreviewActions v-if="!compact" :filename="filename" v-model:rendered="rendered" v-model:wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :source-preview="/\.html?$/i.test(filename)" :hide-site="!/\.html?$/i.test(filename)" @preview="openOriginal" />
         <UDropdownMenu v-else :items="menu" :modal="false" :ui="mobile ? { item: 'min-h-[44px] items-center' } : undefined"><UButton class="document-action" icon="i-lucide-ellipsis" color="neutral" variant="ghost" :aria-label="t('common.more')" /></UDropdownMenu>
         <UButton class="document-action" :href="document?.raw.href" :disabled="!document" icon="i-lucide-file-code" color="neutral" variant="ghost" :title="t('panels.preview.raw')" :aria-label="t('panels.preview.raw')" /><UButton class="document-action" :href="document?.download.href" :disabled="!document" icon="i-lucide-download" color="neutral" variant="ghost" :title="t('panels.file.download')" :aria-label="t('panels.file.download')" />
