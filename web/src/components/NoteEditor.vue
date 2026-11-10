@@ -14,7 +14,7 @@ import { apiContext, segment } from '../api'
 import { hasFileTransfer, readFileTransfer } from '../browser-file-input'
 import { presentDownload, reportDownloadError } from '../downloads'
 import { attachmentToken, noteDocument, noteOffset, serializeNote } from '../note-document'
-import { NoteSelectionEnter, mapNoteRange, noteRange, replaceNoteRange, selectedAttachment, uploadPlaceholder, type NoteRange } from '../note-editing'
+import { NoteSelectionEnter, mapNoteRange, noteRange, replaceNoteDocument, replaceNoteRange, selectedAttachment, uploadPlaceholder, type NoteRange } from '../note-editing'
 import { noteUpload, uploadNoteAttachment, pasteNoteAttachments, type NoteInsertion, type NoteOwner } from '../note-uploads'
 import { clipboardText, noteClipboard, readNoteClipboard, NOTE_CLIPBOARD_TYPE } from '../note-clipboard'
 import { beginCopyFeedback } from '../copy-feedback'
@@ -121,9 +121,7 @@ function synchronize() {
   const local = serializeNote(current.getJSON())
   if (content === local) { produced.length = 0; synced = content; return }
   if (produced.includes(content)) return
-  const position = current.state.selection.from
-  current.commands.setContent(noteDocument(content), { emitUpdate: false })
-  current.commands.setTextSelection(Math.min(position, current.state.doc.content.size))
+  current.view.dispatch(replaceNoteDocument(current.state, content).setMeta('preventUpdate', true))
   synced = content
 }
 watch(() => props.content, synchronize)

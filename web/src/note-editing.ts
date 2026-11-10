@@ -25,6 +25,21 @@ export function selectedAttachment(state: EditorState): string | undefined {
   return to === from + 1 && node?.type.name === 'noteAttachment' ? node.attrs.id : undefined
 }
 
+/**
+ * Apply another writer's content by replacing only the span that differs, so the caret,
+ * pending upload ranges and their placeholders map through it like through any edit.
+ */
+export function replaceNoteDocument(state: EditorState, content: string): Transaction {
+  const next = state.schema.nodeFromJSON(noteDocument(content)), tr = state.tr
+  const start = state.doc.content.findDiffStart(next.content)
+  if (start === null) return tr
+  let { a, b } = state.doc.content.findDiffEnd(next.content)!
+  // Repeated text can match both scans; the end moves past the start as ProseMirror's own DOM diff does.
+  const overlap = start - Math.min(a, b)
+  if (overlap > 0) { a += overlap; b += overlap }
+  return tr.replace(start, a, next.slice(start, b))
+}
+
 /** Keep a pending range on the same content while the editor changes around it. */
 export function mapNoteRange(range: NoteRange, tr: Transaction) {
   const before = notePosition(tr.before, range.offset), end = notePosition(tr.before, range.end)

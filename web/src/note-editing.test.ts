@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { Editor, Node } from '@tiptap/core'
 import { AllSelection, EditorState, NodeSelection, TextSelection, type Selection, type Transaction } from '@tiptap/pm/state'
 import { closeHistory, history, undo } from '@tiptap/pm/history'
-import { NoteSelectionEnter, mapNoteRange, noteRange, replaceNoteRange, selectedAttachment, uploadPlaceholder } from './note-editing'
+import { NoteSelectionEnter, mapNoteRange, noteRange, replaceNoteDocument, replaceNoteRange, selectedAttachment, uploadPlaceholder } from './note-editing'
 import { attachmentToken, noteDocument, noteOffset, notePosition, serializeNote } from './note-document'
 
 const id = '11111111-1111-4111-8111-111111111111'
@@ -146,5 +146,42 @@ test('only a selection covering exactly one attachment names it for preview', ()
   assert.equal(at(TextSelection.create(doc, 3, 4)), id)
   for (const [from, to] of [[2, 2], [3, 3], [4, 4], [1, 3], [2, 4], [3, 7]]) assert.equal(at(TextSelection.create(doc, from!, to!)), undefined)
   assert.equal(at(new AllSelection(doc)), undefined)
+  editor.destroy()
+})
+
+test('a peer document replaces only its differing span and yields exactly the peer content', () => {
+  const editor = create(''), other = '22222222-2222-4222-8222-222222222222'
+  const pieces = ['a', 'b', '\n', attachmentToken(id), attachmentToken(other)]
+  const contents = ['']
+  for (let length = 1; length <= 3; length++) for (const content of contents.filter(item => [...item.matchAll(/\n|\uFFFC[^\uFFFC]+\uFFFC|./gu)].length === length - 1))
+    for (const piece of pieces) contents.push(content + piece)
+  for (const before of contents) {
+    const state = EditorState.create({ doc: editor.schema.nodeFromJSON(noteDocument(before)) })
+    for (const after of contents) {
+      const tr = replaceNoteDocument(state, after)
+      assert.equal(text(state.apply(tr)), after, JSON.stringify([before, after]))
+      assert(tr.doc.eq(editor.schema.nodeFromJSON(noteDocument(after))))
+      assert.equal(tr.docChanged, before !== after)
+    }
+  }
+  editor.destroy()
+})
+
+test('a peer edit keeps the caret and a pending insertion at their logical place', () => {
+  const editor = create('one two\nthree'), doc = editor.state.doc
+  const range = { offset: 4, end: 4, replaced: '' }
+  const apply = (state: EditorState, tr: Transaction) => { mapNoteRange(range, tr); return state.apply(tr) }
+  let state = EditorState.create({ doc, selection: TextSelection.create(doc, notePosition(doc, 11)) })
+  state = apply(state, replaceNoteDocument(state, 'one two\nthree four'))
+  assert.equal(range.offset, 4, 'Text appended after the point leaves it')
+  assert.equal(noteOffset(state.doc, state.selection.from), 11)
+  state = apply(state, replaceNoteDocument(state, 'zero\none two\nthree four'))
+  assert.equal(range.offset, 9, 'A new line before the point moves it with its text')
+  assert.equal(noteOffset(state.doc, state.selection.from), 16)
+  state = apply(state, replaceNoteDocument(state, 'zero\none 2\nthree four'))
+  assert.equal(range.offset, 9, 'A replaced word after the point leaves it')
+  assert.equal(noteOffset(state.doc, state.selection.from), 14)
+  const next = state.apply(replaceNoteRange(state, { ...range, content: attachmentToken(id) }))
+  assert.equal(text(next), `zero\none ${attachmentToken(id)}2\nthree four`)
   editor.destroy()
 })
