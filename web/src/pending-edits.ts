@@ -13,18 +13,23 @@ export function retargetNoteEdit(edit: NoteEdit, canvases: Canvas[]): NoteEdit |
   return target && Object.keys(edit.patch).length ? { ...edit, canvasId: target.id } : undefined
 }
 
+/** One edit per note; later patches override earlier ones field by field. */
+export function mergeNoteEdits(notes: Iterable<NoteEdit>): NoteEdit[] {
+  const merged = new Map<string, NoteEdit>()
+  for (const note of notes) {
+    const id = JSON.stringify([note.canvasId, note.id])
+    merged.set(id, { ...note, patch: { ...merged.get(id)?.patch, ...note.patch } })
+  }
+  return [...merged.values()]
+}
+
 /** Drafts belong to the endpoint, even if another tab changes its local entry. */
 export function createPendingEdits(storage?: Storage) {
   const memory = new Map<string, string>()
   const key = (base: string) => `canvas:pending-edits:${encodeURIComponent(base)}`
   function save(base: string, layouts: Map<string, Map<string, LayoutPatch>>, notes: Iterable<NoteEdit>) {
     if (!base) return
-    const merged = new Map<string, NoteEdit>()
-    for (const note of notes) {
-      const id = JSON.stringify([note.canvasId, note.id])
-      merged.set(id, { ...note, patch: { ...merged.get(id)?.patch, ...note.patch } })
-    }
-    const value: PendingEdits = { layouts: [...layouts].filter(([, nodes]) => nodes.size).map(([id, nodes]) => [id, [...nodes]]), notes: [...merged.values()] }
+    const value: PendingEdits = { layouts: [...layouts].filter(([, nodes]) => nodes.size).map(([id, nodes]) => [id, [...nodes]]), notes: mergeNoteEdits(notes) }
     const serialized = value.layouts.length || value.notes.length ? JSON.stringify(value) : ''
     if (serialized) memory.set(base, serialized); else memory.delete(base)
     try { if (serialized) storage?.setItem(key(base), serialized); else storage?.removeItem(key(base)) } catch { /* Keep the current-page copy if session storage is unavailable. */ }

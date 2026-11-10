@@ -39,7 +39,7 @@ import { layoutEditingKey } from './layout-editing'
 import { useReducedMotion } from './reduced-motion'
 import { createLayoutSaves, type LayoutPatch } from './layout-saves'
 import { resizeFromDelta, snapCardPosition, snapCardResize, type CardBounds } from './card-alignment'
-import { createPendingEdits, retargetNoteEdit, type NoteEdit } from './pending-edits'
+import { createPendingEdits, mergeNoteEdits, retargetNoteEdit, type NoteEdit } from './pending-edits'
 import { guardPageExit, pendingWrites } from './pending-writes'
 import { cameraFromViewport, parseCanvasLocation, recallFreeCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type Feature, type WorkspaceLocation } from './canvas-location'
 import { useCanvasLocation, type CanvasAnchor, type CanvasTarget, type CanvasNavigation } from './use-canvas-location'
@@ -1932,7 +1932,13 @@ function retryNotes() { void flushNotes() }
 async function flushNotes(canvasId?: string, options: { force?: boolean; keepalive?: boolean } = {}): Promise<boolean> {
   const context = apiContext(), { force = true, keepalive = false } = options
   // A failed earlier batch leaves its edits pending; this flush sends them again with its own.
-  if (noteSave) { await noteSave; return isCurrentApi(context) && flushNotes(canvasId, options) }
+  if (noteSave) {
+    // A closing page may cancel the save in flight, so keepalive copies of every unsaved note go out now.
+    // That save and the flush after it still store and confirm them.
+    if (keepalive) for (const edit of mergeNoteEdits([...savingNotes.values(), ...pendingNotes.values()])) if (!canvasId || edit.canvasId === canvasId)
+      void api(`/api/canvases/${segment(edit.canvasId)}/notes/${segment(edit.id)}`, { method: 'PATCH', body: JSON.stringify(edit.patch), keepalive }, context).catch(() => {})
+    await noteSave; return isCurrentApi(context) && flushNotes(canvasId, options)
+  }
   const batch = [...pendingNotes.entries()].filter(([key, edit]) => (!canvasId || edit.canvasId === canvasId) && (force || !noteTimers.has(key)))
   if (!batch.length) return true
   for (const [key, edit] of batch) {
@@ -1977,7 +1983,7 @@ async function flushLayout(canvasId: string, keepalive = false) {
   clearTimeout(saveTimers.get(canvasId)); saveTimers.delete(canvasId)
   if (tracked) pendingWrites.start(owner)
   try {
-    await layoutSaves.flush(canvasId, batch => api(`/api/canvases/${segment(canvasId)}/layout`, { method: 'PATCH', body: JSON.stringify({ nodes: [...batch].map(([id, patch]) => ({ id, ...patch })) }), keepalive }, context), checkpointEdits)
+    await layoutSaves.flush(canvasId, batch => api(`/api/canvases/${segment(canvasId)}/layout`, { method: 'PATCH', body: JSON.stringify({ nodes: [...batch].map(([id, patch]) => ({ id, ...patch })) }), keepalive }, context), checkpointEdits, keepalive)
   } catch (reason) {
     if (isCurrentApi(context)) { checkpointEdits(); pendingWrites.failed(owner, () => { void flushLayout(canvasId).catch(showError) }) }
     throw reason

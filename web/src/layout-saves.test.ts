@@ -75,3 +75,26 @@ test('removing the last pending card leaves no empty canvas to block a drain', a
   await saves.flush('canvas', async () => { assert.fail('no empty batch should be written') })
   assert.equal(saves.pending.size, 0)
 })
+
+test('a keepalive flush copies every pending patch at once while the running save still confirms them', async () => {
+  const saves = createLayoutSaves(), first = gate(), second = gate()
+  const batches: ReadonlyMap<string, LayoutPatch>[] = [], copies: ReadonlyMap<string, LayoutPatch>[] = []
+  const write = async (batch: ReadonlyMap<string, LayoutPatch>) => {
+    batches.push(batch)
+    await (batches.length === 1 ? first : second).promise
+  }
+  saves.set('canvas', 'card', { x: 10 })
+  const result = saves.flush('canvas', write)
+  saves.set('canvas', 'card', { y: 20 })
+  saves.set('canvas', 'other', { width: 400 })
+  const keepalive = saves.flush('canvas', async batch => { copies.push(batch); throw new Error('page closed') }, undefined, true)
+  assert.equal(keepalive, result, 'the copy does not replace the running save')
+  assert.deepEqual(copies.map(batch => [...batch]), [[['card', { x: 10, y: 20 }], ['other', { width: 400 }]]])
+  assert.equal(batches.length, 1)
+  first.resolve()
+  await Promise.resolve(); await Promise.resolve()
+  assert.deepEqual([...batches[1]!], [['card', { x: 10, y: 20 }], ['other', { width: 400 }]])
+  second.resolve(); await result
+  assert.equal(saves.pending.size, 0)
+  assert.equal(saves.saving, false)
+})

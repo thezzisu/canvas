@@ -61,8 +61,15 @@ export function insertComposerAttachment(target: ComposerTarget, value: NoteInse
 /** Save pending text and return the exact stored version it produced. */
 export async function flushComposer(target: ComposerTarget, keepalive = false): Promise<ComposerView | undefined> {
   const current = key(target), owner = composerOwner(target), context = apiContext()
-  clearTimeout(timers.get(current)); timers.delete(current)
   const previous = saving.get(current)
+  // A closing page may cancel the save in flight, so a keepalive copy of the latest text goes out now.
+  // That save, then the edit timer or a flush waiting on it, still stores and confirms the text.
+  if (keepalive && previous) {
+    const content = drafts.get(current)?.content
+    if (content !== undefined) void api(owner.path, { method: 'PATCH', body: JSON.stringify({ content }), keepalive }, context).catch(() => {})
+    return
+  }
+  clearTimeout(timers.get(current)); timers.delete(current)
   if (previous) await previous.catch(() => undefined)
   if (!isCurrentApi(context)) return
   const content = drafts.get(current)?.content

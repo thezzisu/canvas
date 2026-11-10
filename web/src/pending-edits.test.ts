@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createPendingEdits, retargetNoteEdit } from './pending-edits.ts'
+import { createPendingEdits, mergeNoteEdits, retargetNoteEdit } from './pending-edits.ts'
 import type { Canvas } from './types.ts'
 
 const canvases: Canvas[] = [{ id: 'canvas', name: 'Canvas', nodes: [
@@ -56,4 +56,15 @@ test('restored drafts follow a surviving reference and retain its newer fields',
   assert.deepEqual(createPendingEdits(session).read('https://first.example', [{ ...canvases[0]!, id: 'survivor' }]), {
     layouts: [], notes: [{ canvasId: 'survivor', id: 'note', patch: { title: 'Shared title', content: 'Unsaved', color: 'green' } }],
   })
+})
+
+test('merged note edits keep in-flight fields under newer pending ones, per canvas', () => {
+  assert.deepEqual(mergeNoteEdits([
+    { canvasId: 'canvas', id: 'note', patch: { title: 'In-flight', content: 'Earlier' } },
+    { canvasId: 'other', id: 'note', patch: { color: 'green' } },
+    { canvasId: 'canvas', id: 'note', patch: { content: 'Latest' } },
+  ]), [
+    { canvasId: 'canvas', id: 'note', patch: { title: 'In-flight', content: 'Latest' } },
+    { canvasId: 'other', id: 'note', patch: { color: 'green' } },
+  ])
 })
