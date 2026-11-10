@@ -11,6 +11,7 @@ import UFormField from '@nuxt/ui/components/FormField.vue'
 import USeparator from '@nuxt/ui/components/Separator.vue'
 import TerminalSettingsDialog from './TerminalSettingsDialog.vue'
 import ContentFontSettings from './ContentFontSettings.vue'
+import { useContentFontEditor } from '../content-font-editor'
 import type { GlobalSettings } from '../../../shared/settings'
 import { inputMode, useMobileLayout } from '../mobile-layout'
 import { uiScale, uiZoom } from '../ui-scale'
@@ -68,23 +69,23 @@ const displayedCutoutWidth = computed({
   get: () => Math.max(0, Math.min(cutoutWidth.value, cutoutMaximum.value)),
   set: (width: number) => { cutoutWidth.value = width },
 })
-const fontBusy = ref(false)
-const canReload = computed(() => !fontBusy.value)
+const fontEditor = useContentFontEditor(() => props.settings, () => props.open, {
+  saved: value => emit('saved', value), error: message => emit('error', message) })
+const canReload = computed(() => fontEditor.canReload)
 function reloadPage() { if (canReload.value) window.location.reload() }
-const fontEditor = ref<{ settle(): void }>()
 const subdialog = ref<'terminal' | 'font'>()
 function close(open = false) {
   if (open) return
-  fontEditor.value?.settle()
+  fontEditor.settle()
   subdialog.value = undefined
   emit('close')
 }
-onBeforeUnmount(() => { disposed = true })
+onBeforeUnmount(() => { disposed = true; fontEditor.dispose() })
 defineExpose({ close })
 </script>
 
 <template>
-  <UModal :open="open" :title="t('common.settings')" :close="{ 'aria-label': t('settings.close') }"
+  <UModal v-if="open" :open="true" :title="t('common.settings')" :close="{ 'aria-label': t('settings.close') }"
     :ui="{ content: 'settings-modal', overlay: 'settings-overlay', header: 'settings-header', body: 'settings-body', footer: 'settings-footer', title: 'settings-title', close: 'settings-close' }" @update:open="close">
     <template #body>
       <!-- Sections own only their content; USeparator is the single divider between them. -->
@@ -96,18 +97,16 @@ defineExpose({ close })
         <UFormField :label="t('settings.contentFont')" orientation="horizontal" class="settings-field"><UButton color="neutral" variant="outline" size="sm" @click="subdialog = 'font'">{{ t('common.open') }}</UButton></UFormField>
       </section>
       <template v-if="mobile && hasDisplayCutout">
-        <USeparator />
+        <USeparator :label="`${t('settings.cutout')} · ${t('settings.thisBrowser')}`" />
         <section class="settings-section" :aria-label="t('settings.cutout')">
-          <UFormField :label="t('settings.cutout')" :hint="t('settings.thisBrowser')" class="settings-field" />
           <UFormField :label="t('settings.position')" orientation="horizontal" class="settings-field"><UTabs v-model="cutoutPosition" :items="cutoutPositions" :content="false" color="neutral" variant="pill" size="sm" :aria-label="t('settings.position')" /></UFormField>
           <UFormField :label="t('settings.width')" :hint="`${n(displayedCutoutWidth)} px`" class="settings-field">
             <USlider v-model="displayedCutoutWidth" class="w-full" :min="0" :max="cutoutMaximum" :step="1" size="sm" :disabled="cutoutMaximum === 0" :aria-label="t('settings.width')" :aria-valuetext="`${n(displayedCutoutWidth)} px`" />
           </UFormField>
         </section>
       </template>
-      <USeparator />
+      <USeparator :label="`${t('settings.notifications')} · ${t('settings.thisBrowser')}`" />
       <section class="settings-section" :aria-label="t('settings.notifications')">
-        <UFormField :label="t('settings.notifications')" :hint="t('settings.thisBrowser')" class="settings-field" />
         <div class="notification-setting-row">
           <USwitch :model-value="notificationSoundEnabled" :disabled="!notificationSoundSupported" :label="t('settings.notificationSound')" :aria-label="t('settings.notificationSound')" size="sm" @update:model-value="setNotificationSound" />
           <UButton type="button" color="neutral" variant="soft" size="xs" :loading="testingNotification === 'sound'" :disabled="!notificationSoundSupported || !!testingNotification || systemNotificationRequesting" :aria-label="t('settings.testSound')" @click="testNotification('sound')">{{ t('settings.test') }}</UButton>
@@ -165,9 +164,9 @@ defineExpose({ close })
     </template>
   </UModal>
   <TerminalSettingsDialog :open="open && subdialog === 'terminal'" defaults-mode @close="subdialog = undefined" />
-  <UModal :open="open && subdialog === 'font'" :title="t('settings.contentFont')" :close="{ 'aria-label': t('common.close') }"
-    :ui="{ content: 'terminal-settings-dialog' }" @update:open="value => { if (!value) { fontEditor?.settle(); subdialog = undefined } }">
-    <template #body><ContentFontSettings ref="fontEditor" :settings="settings" :open="open" @saved="value => emit('saved', value)" @error="value => emit('error', value)" @busy="value => { fontBusy = value }" /></template>
+  <UModal v-if="open && subdialog === 'font'" :open="true" :title="t('settings.contentFont')" :close="{ 'aria-label': t('common.close') }"
+    :ui="{ content: 'terminal-settings-dialog' }" @update:open="value => { if (!value) { fontEditor.settle(); subdialog = undefined } }">
+    <template #body><ContentFontSettings :editor="fontEditor" /></template>
   </UModal>
 </template>
 

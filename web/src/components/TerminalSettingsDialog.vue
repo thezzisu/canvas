@@ -17,7 +17,7 @@ function update(value: TerminalOverrides) {
 </script>
 
 <template>
-  <UModal :open="open" :title="t(defaultsMode ? 'terminal.settings.defaults' : 'terminal.settings.title')" :description="defaultsMode ? t('settings.thisBrowser') : undefined"
+  <UModal v-if="open" :open="true" :title="t(defaultsMode ? 'terminal.settings.defaults' : 'terminal.settings.title')" :description="defaultsMode ? t('settings.thisBrowser') : undefined"
     :close="{ 'aria-label': t('common.close') }" :ui="{ content: 'terminal-settings-dialog' }" @update:open="value => { if (!value) emit('close') }">
     <template #body>
       <TerminalSettingsFields v-if="defaultsMode" :model-value="defaults" show-zoom @update:model-value="update" />

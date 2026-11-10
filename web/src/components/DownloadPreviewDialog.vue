@@ -135,7 +135,7 @@ onBeforeUnmount(() => request?.abort())
 <template>
   <UModal v-if="downloadPreview" :key="downloadPreview.id" :open="true" :title="downloadPreview.filename" :fullscreen="expanded" :transition="false"
     :close="false" :content="modalContent"
-    :ui="{ content: `download-preview-modal${preparing ? ' download-preview-preparing' : ''}${expanded ? ' download-preview-fullscreen' : ''}${mobileHeader ? ' download-preview-mobile' : ''}`, overlay: 'download-preview-overlay', header: 'download-preview-header-slot', body: 'download-preview-body' }"
+    :ui="{ content: `download-preview-modal${preparing ? ' download-preview-preparing' : ''}${expanded ? ' download-preview-fullscreen' : ''}${mobileHeader ? ' download-preview-mobile' : ''}`, header: 'download-preview-header-slot', body: 'download-preview-body' }"
     @update:open="openChanged">
     <template #header>
       <header class="download-preview-header" :class="{ 'cutout-header': mobileHeader && expanded }" :data-cutout-position="mobileHeader && expanded && cutoutWidth > 0 ? cutoutPosition : undefined" :style="{ '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` }">
@@ -173,7 +173,6 @@ onBeforeUnmount(() => request?.abort())
 </template>
 
 <style>
-.download-preview-overlay{}
 .download-preview-modal{--preview-safe-top:var(--mobile-safe-top,var(--ui-safe-top));--preview-safe-bottom:var(--mobile-safe-bottom,var(--ui-safe-bottom));--preview-frame-width:var(--mobile-width,var(--preview-viewport-width));--preview-frame-height:var(--dialog-height);display:grid;grid-template-rows:auto minmax(0,1fr);gap:0;position:fixed;left:calc(var(--mobile-left,var(--preview-left)) + (var(--preview-frame-width) + var(--ui-safe-left) - var(--ui-safe-right))/2);top:calc(var(--dialog-top) + (var(--preview-frame-height) + var(--preview-safe-top) - var(--preview-safe-bottom))/2);translate:-50% -50%;width:min(var(--preview-width),calc(var(--preview-frame-width) - 12px - var(--ui-safe-left) - var(--ui-safe-right)));max-width:none;height:min(var(--preview-height),calc(var(--preview-frame-height) - 24px - var(--preview-safe-top) - var(--preview-safe-bottom)));max-height:none;overflow:auto;overscroll-behavior:contain;background:#191d23;border:1px solid #3b424c;box-shadow:0 16px 60px #0005}
 /* Media stays mounted while the transparent loading row waits for intrinsic size. */
 .download-preview-modal.download-preview-preparing{width:auto;height:auto;min-width:160px;overflow:visible;background:transparent;border-color:transparent;box-shadow:none}

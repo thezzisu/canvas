@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { computed } from 'vue'
 import { cutoutPosition, cutoutWidth } from '../display-cutout'
 import Icon from './Icon.vue'
+import UButton from '@nuxt/ui/components/Button.vue'
 import CardHeaderActions from './CardHeaderActions.vue'
 
 const { t } = useI18n()
@@ -16,8 +17,8 @@ const shortcuts = computed(() => props.captured ? [] : ['keyboard', 'zoom'])
       <span class="cutout-status cutout-preview-control"><i /></span>
       <span class="cutout-title">{{ t('terminal.previewTitle') }}</span>
       <CardHeaderActions class="cutout-actions" :items="[]" expanded mobile :removable="!overview" :shortcuts="shortcuts" :add-label="t('terminal.action.addToCanvas')">
-        <template #keyboard><span class="card-header-action"><Icon name="keyboard" :size="18" /></span></template>
-        <template #zoom><span class="card-header-action"><Icon name="zoom-in" :size="18" /></span></template>
+        <template #keyboard><UButton aria-hidden="true" tabindex="-1"><Icon name="keyboard" :size="18" /></UButton></template>
+        <template #zoom><UButton aria-hidden="true" tabindex="-1"><Icon name="zoom-in" :size="18" /></UButton></template>
       </CardHeaderActions>
     </div>
   </div>

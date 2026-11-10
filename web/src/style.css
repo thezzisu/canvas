@@ -83,7 +83,7 @@ html{zoom:var(--ui-zoom)}#app{position:fixed;inset:0;width:auto;height:auto}.app
 
 .vue-flow__node-note{padding:0;border:0;background:transparent;box-shadow:none}.note-card{--note-color:#d6b565;display:flex;flex-direction:column;width:100%;height:100%;min-height:30px;border:1px solid color-mix(in srgb,var(--note-color) 45%,#3d424a);border-radius:7px;overflow:visible;background:color-mix(in srgb,var(--note-color) 10%,#1b1e23);color:#d5d8df;box-shadow:0 5px 16px #0003}.note-header{height:30px;min-height:30px;display:flex;align-items:center;gap:7px;padding:0 7px;background:color-mix(in srgb,var(--note-color) 14%,#22262d);border-bottom:1px solid color-mix(in srgb,var(--note-color) 20%,#343941);border-radius:6px 6px 0 0;cursor:grab}.note-header:active{cursor:grabbing}.note-title{flex:1;min-width:0;margin:0;padding:0;height:23px;font-size:11px;font-weight:500;border:0;background:transparent;box-shadow:none;color:#d0d2d7}.note-title:focus{box-shadow:none;border:0}.note-content{display:block;flex:1;min-height:0;width:100%;resize:none;margin:0;padding:11px 12px;font-family:inherit;font-size:calc(13px * var(--content-zoom,1));line-height:1.65;white-space:pre-wrap;border:0;background:transparent;outline:none;box-shadow:none;border-radius:0 0 6px 6px;color:#cbd0d7;scrollbar-width:thin;scrollbar-color:#55606c transparent}.note-content:focus{border:0;box-shadow:none}.note-content::placeholder{color:#75808d}.note-color-picker{position:relative;display:flex;align-items:center}.note-color-dot{width:9px;height:9px;border-radius:50%;padding:0;background:var(--note-color);box-shadow:0 0 0 1px #ffffff20}.note-colors{position:absolute;left:-5px;top:19px;display:flex;gap:7px;padding:9px;background:#262b33;border:1px solid #434a55;border-radius:6px;z-index:10;box-shadow:0 5px 18px #0006}.note-color-choice{width:15px;height:15px;border-radius:50%;padding:0}
 
-.note-title{display:block;line-height:23px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.note-header input.note-title{cursor:text}.note-color-choice[aria-pressed=true]{outline:1px solid #e3d5c2;outline-offset:2px}.note-color-choice:focus-visible{outline-offset:3px}
+.note-title{display:block;line-height:23px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.note-header input.note-title{cursor:text;outline:none}.note-color-choice[aria-pressed=true]{outline:1px solid #e3d5c2;outline-offset:2px}.note-color-choice:focus-visible{outline-offset:3px}
 
 .app-shell.canvas-fullscreen{--app-header-height:var(--window-controls-height);position:fixed;inset:0;width:100%;height:100%;z-index:50;background:#15171b;grid-template:"workspace" minmax(0,1fr)/minmax(0,1fr)}.canvas-fullscreen>.workspace-header{display:none}.canvas-fullscreen .graph-wrap{width:100%;height:100%;overscroll-behavior:none}
 .terminal-host.terminal-paused{visibility:hidden;pointer-events:none}.terminal-maximized{position:absolute;inset:30px 0 0;display:flex;align-items:center;justify-content:center;color:#737e8e;font-size:12px}
@@ -113,7 +113,6 @@ html{zoom:var(--ui-zoom)}#app{position:fixed;inset:0;width:auto;height:auto}.app
 .mobile-layout .focus-overlay{position:absolute;inset:var(--window-controls-height) 0 0;padding:0 var(--ui-safe-right) 0 var(--ui-safe-left);align-items:stretch;justify-content:flex-start;overflow:hidden;min-height:0}
 .mobile-layout .focus-overlay>.terminal-card{flex-shrink:0;border-radius:0}
 
-.mobile-layout 
 .mobile-layout .modal{max-height:100%;padding:20px;border-radius:10px}
 .mobile-layout .modal input,.mobile-layout .modal select,.mobile-layout.login-screen input{font-size:16px}
 .mobile-layout .note-title{font-size:16px}.mobile-layout .note-content{font-size:calc(16px * var(--content-zoom,1))}
@@ -181,7 +180,7 @@ html{zoom:var(--ui-zoom)}#app{position:fixed;inset:0;width:auto;height:auto}.app
 .file-preview-activate{position:absolute;inset:0;z-index:1;cursor:pointer;outline:none}
 .note-content,.file-body :is(.text-preview-source,.text-preview-markdown){overscroll-behavior:contain}
 
-.canvas-create-menu{}.header-actions>.canvas-create-trigger{display:inline-flex;flex:none}
+.header-actions>.canvas-create-trigger{display:inline-flex;flex:none}
 
 /* Canvas jumps keep the operated window still; the other content follows sidebar order. */
 .graph-wrap.canvas-morph-leave .vue-flow__node:not(.canvas-morph-anchor){animation:canvas-morph-leave 140ms cubic-bezier(.4,0,1,1) forwards}
@@ -242,4 +241,6 @@ html{zoom:var(--ui-zoom)}#app{position:fixed;inset:0;width:auto;height:auto}.app
    Every Nuxt UI overlay portals into .overlay-root, the shell's last children, so dialogs,
    menus and nested dialogs stack among themselves by open order with no z-index of their own. */
 .app-shell{--layer-overlays:100}
-.overlay-root{position:relative;z-index:var(--layer-overlays)}
+/* Out of the shell grid: a viewport-sized layer that only its overlays make interactive. */
+.overlay-root{position:absolute;inset:0;z-index:var(--layer-overlays);pointer-events:none}
+.overlay-root>:not(.cutout-preview-frame){pointer-events:auto}

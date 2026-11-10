@@ -119,10 +119,17 @@ export class TerminalUploads {
 
   get hasPending() { return this.pending.length > 0 }
 
+  /** Every dropped batch reports to its sender; stored sends must learn they did not happen. */
+  private dropPending(error: string) {
+    const dropped = this.pending
+    this.pending = []
+    for (const batch of dropped) batch.stored?.done(error)
+  }
+
   /** Drop only unsent picker batches when their target is no longer valid. */
   invalidate(error = t('terminal.upload.disconnected')) {
     if (!this.pending.length) return
-    this.pending = []
+    this.dropPending(error)
     this.reject(error)
   }
 
@@ -204,7 +211,7 @@ export class TerminalUploads {
     if (!batch) return
     clearTimeout(this.timer)
     this.current = undefined
-    if (state !== 'completed') { batch.request?.abort(); this.pending = [] }
+    if (state !== 'completed') { batch.request?.abort(); this.dropPending(error || t('terminal.upload.cancelled')) }
     if (batch.stored) batch.stored.done(state === 'completed' ? undefined : error || t('terminal.upload.cancelled'))
     this.update({ state, error, cancelling: false, rejected: undefined, ...(state === 'completed' ? { transferred: batch.total } : {}) })
     if (this.current) return
@@ -214,7 +221,7 @@ export class TerminalUploads {
 
   cancel() {
     if (this.current) {
-      this.pending = []
+      this.dropPending(t('terminal.upload.cancelled'))
       const batch = this.current
       if (batch.cancelling) return
       batch.cancelling = true
@@ -224,7 +231,7 @@ export class TerminalUploads {
       this.update({ cancelling: true })
       this.timer = setTimeout(() => { if (this.current === batch) this.finish('cancelled') }, 5000)
     } else if (this.pending.length) {
-      this.pending = []
+      this.dropPending(t('terminal.upload.cancelled'))
       clearTimeout(this.dismissed)
       this.state = { name: '', transferred: 0, total: 0, state: 'cancelled' }
       this.options.changed(this.state)
@@ -237,7 +244,8 @@ export class TerminalUploads {
   }
 
   clear() {
-    this.pending = []
+    this.dropPending(t('terminal.upload.targetChanged'))
+    this.current?.stored?.done(t('terminal.upload.targetChanged'))
     this.current?.request?.abort()
     this.current = undefined
     clearTimeout(this.timer)

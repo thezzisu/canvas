@@ -120,7 +120,7 @@ onBeforeUnmount(() => { cancelRequests() })
 <template>
   <UModal v-if="target" :open="true" :transition="false" :title="t('panels.scan.title')" :content="modalContent"
     :close="{ 'aria-label': t('common.close') }"
-    :ui="{ content: 'content-scan-modal', overlay: 'content-scan-overlay', header: 'content-scan-header', wrapper: 'content-scan-heading', title: 'content-scan-title', description: 'content-scan-description', body: 'content-scan-body', close: 'content-scan-close' }"
+    :ui="{ content: 'content-scan-modal', header: 'content-scan-header', wrapper: 'content-scan-heading', title: 'content-scan-title', description: 'content-scan-description', body: 'content-scan-body', close: 'content-scan-close' }"
     @update:open="close">
     <template #description><span :title="target.name">{{ target.name }}</span><span>{{ t('panels.scan.scope') }}</span></template>
     <template #actions><UButton type="button" color="neutral" variant="ghost" class="content-scan-action" :disabled="loading || !!opening" :aria-label="t('panels.scan.refresh')" :title="t('panels.scan.refresh')" @click="scan"><Icon name="refresh" :size="15" /></UButton></template>
@@ -158,7 +158,6 @@ onBeforeUnmount(() => { cancelRequests() })
 </template>
 
 <style>
-.content-scan-overlay{}
 .content-scan-modal{--scan-safe-top:var(--mobile-safe-top,var(--ui-safe-top));--scan-safe-bottom:var(--mobile-safe-bottom,var(--ui-safe-bottom));position:fixed;left:calc(var(--mobile-left,0px) + (var(--mobile-width,var(--ui-viewport-width)) + var(--ui-safe-left) - var(--ui-safe-right))/2);top:calc(var(--dialog-top) + (var(--dialog-height) + var(--scan-safe-top) - var(--scan-safe-bottom))/2);translate:-50% -50%;display:flex;flex-direction:column;gap:0;width:min(620px,calc(var(--mobile-width,var(--ui-viewport-width)) - 24px - var(--ui-safe-left) - var(--ui-safe-right)));max-width:none;max-height:min(680px,calc(var(--dialog-height) - 24px - var(--scan-safe-top) - var(--scan-safe-bottom)));overflow:hidden;border:1px solid #414b59;border-radius:10px;background:#20252d;color:#cbd4df;box-shadow:0 16px 50px #0007}
 .content-scan-header{display:flex;align-items:center;flex:none;gap:6px;min-height:60px;padding:10px 8px 10px 14px;border-bottom:1px solid #343d49}
 .content-scan-heading{flex:1;min-width:0}

@@ -8,9 +8,9 @@ export type TerminalLinkTarget =
 const controls = /[\x00-\x1f\x7f-\x9f]/u
 
 function loopback(url: URL) {
-  const host = url.hostname.toLowerCase()
+  const host = url.hostname.toLowerCase().replace(/\.$/u, '')
   return host === 'localhost' || host.endsWith('.localhost') || /^127(?:\.\d{1,3}){3}$/u.test(host) ||
-    host === '[::1]' || host === '0.0.0.0' || host === '[::]'
+    host === '[::1]' || host === '0.0.0.0' || host === '[::]' || /^\[::ffff:(?:7f[0-9a-f]{2}:[0-9a-f]{1,4}|0:0)\]$/u.test(host)
 }
 
 /** A public web address the browser can open directly; source-local services need forwarding. */
@@ -54,7 +54,6 @@ export function scannedFile(scan: WindowContentScan, path: string): Extract<Wind
 }
 
 export interface TerminalLinkActions {
-  /** Synchronous, so the click's user activation still permits a new tab. */
   openWeb(url: string): void
   forwardWeb(url: string): void
   openFile(path: string): void

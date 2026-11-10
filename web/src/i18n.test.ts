@@ -50,18 +50,19 @@ test('one language preference drives application messages, status labels and Nux
   assert.equal(t('settings.developerAdvanced'), 'Advanced developer settings')
 })
 
-test('server transfer codes are localized and every code the server sends has a message', async context => {
+test('every server transfer code is localized, and the server sends only known codes', async context => {
   const { transferError } = await import('./transfer-error.ts')
+  const { transferErrors } = await import('../../shared/transfer-errors.ts')
   const { readFileSync } = await import('node:fs')
   const previous = locale.value
   context.after(() => { locale.value = previous })
-  const server = ['uploads.ts', 'composer-send.ts', 'inbox.ts', 'terminals.ts'].map(name => readFileSync(new URL(`../../server/${name}`, import.meta.url), 'utf8')).join('\n')
-  const codes = new Set([...server.matchAll(/(?:new Error\(|fail\(|this\.fail\(batch, )"([a-zA-Z]+)"/g)].map(match => match[1]!))
-  assert(codes.size > 10)
   for (const locale of ['en', 'zh-CN'] as const) {
     const messages = flatten(i18n.global.getLocaleMessage(locale))
-    for (const code of codes) assert(messages[`terminal.upload.errors.${code}`], `${locale} translates ${code}`)
+    for (const code of transferErrors) assert(messages[`terminal.upload.errors.${code}`], `${locale} translates ${code}`)
   }
+  const server = ['uploads.ts', 'composer-send.ts', 'inbox.ts', 'terminals.ts'].map(name => readFileSync(new URL(`../../server/${name}`, import.meta.url), 'utf8')).join('\n')
+  const known = new Set<string>(transferErrors)
+  for (const [, code] of server.matchAll(/(?:new Error\(|fail\(|this\.fail\(batch, )"([a-zA-Z]+)"/g)) assert(known.has(code!), `${code} is a declared transfer code`)
   locale.value = 'en'
   assert.equal(transferError('draftChanged'), 'The draft changed on another device')
   assert.equal(transferError(undefined), 'Transfer failed')

@@ -203,13 +203,15 @@ function toggleComposer() { if (composerOpen.value) closeComposer(true); else op
 const composerSending = ref(false), composerError = ref('')
 function sendComposer(id: string, version: number, files: string[]) {
   composerSending.value = true; composerError.value = ''
-  terminal?.sendComposer(id, version, files, error => {
+  // Collapse first: a refusal reported synchronously must be able to reopen it.
+  closeComposer(true)
+  if (!terminal) { composerSending.value = false; composerError.value = t('terminal.upload.disconnected'); openComposer(); return }
+  terminal.sendComposer(id, version, files, error => {
     composerSending.value = false
     if (!error) return
     composerError.value = error
     openComposer()
   })
-  closeComposer(true)
 }
 watch(canCompose, value => { if (!value) closeComposer() })
 watch(closed, value => { if (value) discardComposerDraft(composerTarget()) }, { flush: 'sync' })

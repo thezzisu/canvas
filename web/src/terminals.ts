@@ -9,7 +9,7 @@ import { terminalUnicodeAddon } from '../../shared/terminal-unicode'
 import { api, apiContext, apiFetch, apiUrl, isCurrentApi, segment, uuid } from './api'
 import { clearDownloads, disconnectDownloads, receiveDownload, reportDownloadError } from './downloads'
 import { clearDirectories, receiveDirectory } from './directories'
-import { clearUrls, presentSourceUrl, receiveUrl } from './urls'
+import { clearUrls, presentSourceUrl, presentUrl, receiveUrl } from './urls'
 import { terminalLinkHandler } from './terminal-links'
 import { previewWindowFile } from './content-scan'
 import { clearCaptures, receiveCapture, removeCaptures } from './capture'
@@ -805,7 +805,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       overviewRuler: { width: scrollbarWidth },
       allowProposedApi: true,
       linkHandler: terminalLinkHandler({
-        openWeb: url => { window.open(url, '_blank', 'noopener,noreferrer') },
+        // Terminal output controls link text, so public addresses open only after showing the real URL.
+        openWeb: url => { presentUrl({ id: uuid(), url, forwarded: false }) },
         forwardWeb: url => { void presentSourceUrl(session!.resource.sourceId, url, apiContext()).catch(reportDownloadError) },
         openFile: path => { openTerminalFile(session!, path) },
       // A selection gesture ending on a link selects; synthetic touchpad taps never select.

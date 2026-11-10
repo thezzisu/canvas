@@ -200,16 +200,16 @@ export function useCanvasNavigation(options: {
   }
 
   /**
-   * Card content scrolls natively once its card holds focus: the active body itself,
-   * or another content region of the same card such as a terminal's composer.
-   * Unfocused cards never capture the canvas wheel.
+   * Card content scrolls natively once content of its card holds focus: the active
+   * body itself, or another content region of the same card such as a terminal's
+   * composer. Header controls and unfocused cards never capture the canvas wheel.
    */
   function contentOwnsWheel(body: HTMLElement) {
     const focus = document.activeElement
     if (!document.hasFocus() || !focus || body.closest('[inert]')) return false
     if (body.dataset.contentActive === 'true' && body.contains(focus)) return true
-    const card = body.closest('.terminal-card, .note-card, .file-card')
-    return !!card?.contains(focus) && !body.querySelector('.card-content-activate')
+    const card = body.closest('.terminal-card, .note-card, .file-card'), focusedContent = focus.closest('.card-content')
+    return !!focusedContent && !!card?.contains(focusedContent) && !body.querySelector('.card-content-activate')
   }
   function wheel(event: WheelEvent) {
     if (options.blocked() || !surface.value) { cancelFeedback(false); return }

@@ -112,8 +112,8 @@ const items = computed<DropdownMenuItem[][]>(() => props.username === undefined 
       <Icon name="down" :size="12" />
     </button>
   </UDropdownMenu>
-  <UModal v-model:open="open" :title="t(draft.id ? 'instances.edit' : 'instances.add')"
-    :close="{ 'aria-label': t('common.close') }" :ui="{ content: 'instance-dialog', overlay: 'instance-dialog-overlay', body: 'instance-dialog-body' }">
+  <UModal v-if="open" v-model:open="open" :title="t(draft.id ? 'instances.edit' : 'instances.add')"
+    :close="{ 'aria-label': t('common.close') }" :ui="{ content: 'instance-dialog', body: 'instance-dialog-body' }">
     <template #body>
       <form id="instance-form" @submit.prevent="submit">
         <UFormField :label="t('instances.name')" name="name" required><UInput :model-value="draft.name" autofocus maxlength="80" class="w-full" :disabled="working" @update:model-value="(value: string | number) => editField('name', value)" /></UFormField>
@@ -140,7 +140,7 @@ const items = computed<DropdownMenuItem[][]>(() => props.username === undefined 
 .instance-version{flex:0 1 auto;min-width:0;max-width:60%;overflow:hidden;text-overflow:ellipsis;color:#7d899a;font-size:10px;font-weight:400;white-space:nowrap}.instance-version.stale{color:#707b8a}
 .instance-build-detail{display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 12px;margin:0;font-size:11px;color:#8995a6}.instance-build-detail dt{font-weight:400}.instance-build-detail dd{margin:0;color:#bbc5d2;overflow-wrap:anywhere}.instance-build-detail small{margin-left:7px;color:#7d899a}.instance-revision{font-family:monospace;overflow-wrap:anywhere;font-size:10px}
 .instance-dialog{width:min(420px,calc(var(--mobile-width,var(--ui-viewport-width)) - 28px));max-height:calc(var(--dialog-height) - 32px);}
-.instance-dialog-overlay{}.instance-add-scan{align-self:stretch;min-width:32px;justify-content:center}
+.instance-add-scan{align-self:stretch;min-width:32px;justify-content:center}
 .instance-dialog-body{padding:16px 20px}.instance-dialog form{display:flex;flex-direction:column;gap:16px}
 .instance-dialog label{margin-top:0}.instance-dialog input{margin-top:0;font-size:13px}
 .instance-error{color:#dfaaa5;font-size:12px}.login-content>.instance-trigger{margin:6px 0 2px}

@@ -57,3 +57,10 @@ test('a file link matches only its exact verified scan item', () => {
   assert.equal(scannedFile(scan, '/src/a.tsx'), undefined)
   assert.equal(scannedFile(scan, '/other'), undefined)
 })
+
+test('loopback detection covers trailing-dot and IPv4-mapped loopback hosts', async () => {
+  const { terminalLinkTarget } = await import('./terminal-links.ts')
+  for (const url of ['http://localhost./', 'http://[::ffff:127.0.0.1]:8080/', 'http://[::ffff:7f00:1]/'])
+    assert.deepEqual(terminalLinkTarget(url), { kind: 'web', url: new URL(url).href, loopback: true }, url)
+  assert.equal(terminalLinkTarget('http://[::ffff:8.8.8.8]/')?.kind === 'web' && (terminalLinkTarget('http://[::ffff:8.8.8.8]/') as { loopback: boolean }).loopback, false)
+})

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createSSRApp, defineComponent, h } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 import { MarkdownDocument } from '@comark/vue'
-import { Math } from '@comark/vue/plugins/math'
+import { KatexMath as Math } from './katex-math.ts'
 import { parseFileMarkdown, isMarkdownFile } from './markdown.ts'
 
 async function render(markdown: string) {
@@ -61,16 +61,22 @@ test('source documents resolve adjacent resources within their root and preserve
   assert.doesNotMatch(html, /target="_blank"/u)
 })
 
-test('KaTeX renders inline and display math with dollar and bracket delimiters', async () => {
-  const { html } = await render('Inline $x^2$ and \\(a+b\\).\n\n$$\n\\frac{1}{2}\n$$\n\n\\[\n\\sum_{i=1}^n i\n\\]')
-  assert.equal(html.match(/<span class="math inline"><span class="katex">/gu)?.length, 2)
-  assert.equal(html.match(/<div class="math block"><span class="katex-display">/gu)?.length, 2)
-  assert.match(html, /<annotation encoding="application\/x-tex">x\^2<\/annotation>/u)
+test('KaTeX renders dollar math while backslash brackets stay Markdown escapes', async () => {
+  const { html } = await render('Inline $x^2$ and \\[not math\\].\n\n$$\n\\sum_{i=1}^n i\n$$')
+  assert.equal(html.match(/<span class="math inline"><span class="katex">/gu)?.length, 1)
+  assert.equal(html.match(/<div class="math block"><span class="katex-display">/gu)?.length, 1)
   assert.match(html, /<annotation encoding="application\/x-tex">\\sum_\{i=1\}\^n i<\/annotation>/u)
+  assert(html.includes('[not math]'))
 })
 
 test('formulas in code spans and blocks stay literal text', async () => {
   const { html } = await render('`$x^2$` and `\\(y\\)`\n\n```\n$$\nz\n$$\n\\[w\\]\n```')
   assert.doesNotMatch(html, /katex/u)
   assert(html.includes('$x^2$')); assert(html.includes('\\(y\\)')); assert(html.includes('$$\nz\n$$\n\\[w\\]'))
+})
+
+test('an invalid formula keeps its source visible instead of an ellipsis', async () => {
+  const { html } = await render('Bad $\\frac{1}$ formula')
+  assert.match(html, /katex-error/u)
+  assert(html.includes('\\frac{1}'))
 })

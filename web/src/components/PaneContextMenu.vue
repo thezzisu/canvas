@@ -90,7 +90,7 @@ const content = computed(() => ({ reference: { getBoundingClientRect: () => new 
 
 <template>
   <UContextMenu v-model:open="open" :items="items" :modal="false" :content="content" :ui="{ content: 'pane-context-menu' }" />
-  <UModal :open="!!dialog" :title="t(dialog?.kind === 'rename' ? 'terminal.paneMenu.rename' : 'terminal.paneMenu.close')" :dismissible="!busy"
+  <UModal v-if="dialog" :open="true" :title="t(dialog?.kind === 'rename' ? 'terminal.paneMenu.rename' : 'terminal.paneMenu.close')" :dismissible="!busy"
     :close="{ 'aria-label': t('common.close'), disabled: busy }" :ui="{ content: 'pane-dialog', overlay: 'app-dialog-overlay' }" @update:open="value => { if (!value && !busy) dialog = undefined }">
     <template #body>
       <form :id="form" @submit.prevent="submit">

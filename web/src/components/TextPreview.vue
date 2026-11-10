@@ -84,7 +84,7 @@ useEventListener(window, ['pointerup', 'pointercancel', 'blur'], () => { pointer
 watch([readingElement, readingContent, renderMarkdown, () => props.wrap, () => props.text, loading, code], restoreReading, { flush: 'post' })
 onBeforeUnmount(() => { cancelAnimationFrame(restoreFrame); pointerDown = false; intentUntil = 0 })
 // KaTeX and its stylesheet load only when a document renders math.
-const KatexMath = defineAsyncComponent(() => Promise.all([import('@comark/vue/plugins/math'), import('katex/dist/katex.min.css')]).then(([math]) => math.Math))
+const KatexMath = defineAsyncComponent(() => Promise.all([import('../katex-math'), import('katex/dist/katex.min.css')]).then(([math]) => math.KatexMath))
 const prose = computed(() => ({ Math: KatexMath, ProseA: props.resources ? DocumentLink : ProseA, ProseBlockquote, ProseCode, ProseEm, ProseH1, ProseH2, ProseH3, ProseH4, ProseHr,
   ProseImg, ProseLi, ProseOl, ProseP, ProsePre, ProseStrong, ProseTable, ProseTbody, ProseTd, ProseTh, ProseThead, ProseTr, ProseUl }))
 let revision = 0

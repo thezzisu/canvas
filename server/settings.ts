@@ -3,7 +3,7 @@ import type { ContentFontSettings } from '../shared/settings.ts'
 
 // Each entry is a family name, not an arbitrary CSS declaration or a URL.
 const familyName = z.string().trim().min(1).max(100)
-  .regex(/^[\p{L}\p{N} _+.\-]+$/u, '请输入单个字体名称')
+  .regex(/^[\p{L}\p{N} _+.\-]+$/u, 'Enter one font family name')
 export const contentFontSchema = z.object({
   ligatures: z.boolean(),
   stack: z.array(z.object({ family: familyName }).strict()).min(1).max(12).transform(fonts => {

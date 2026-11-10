@@ -16,6 +16,6 @@ const { t } = useI18n()
   </div>
 </template>
 <style scoped>
-.pwa-settings{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding-top:16px;margin-top:16px;border-top:1px solid #343b46}.pwa-settings>small{font-size:11px;color:#d5a8b0}
+.pwa-settings{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.pwa-settings>small{font-size:11px;color:#d5a8b0}
 .pwa-settings>small[role=status]{color:var(--ui-text-muted)}
 </style>
