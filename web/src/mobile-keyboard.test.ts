@@ -608,11 +608,15 @@ test('unexpected IME loss under the composer gets one bounded reopen on the edit
   assert(f.states.every(state => !state.unavailable), 'no system-keyboard-unavailable fallback')
 })
 
-test('a declined composer IME collapses the composer with the keyboard closed instead of the builtin fallback', t => {
+test('a composer whose IME never appears stays open and editable without the builtin fallback', t => {
   const f = fixture(t); f.open(); f.control.switchMode(); f.resize(844); t.mock.timers.tick(250)
-  f.compose(); t.mock.timers.tick(900)
-  assert.equal(f.lost(), 1); assert.equal(f.requested(), false)
-  assert.deepEqual(f.control.state, { mode: 'builtin', dockHeight: 0, switching: false, unavailable: false, composer: false })
+  f.compose(); t.mock.timers.tick(2000)
+  assert.equal(f.lost(), 0, 'a hardware keyboard or declined IME keeps the composer')
+  assert.equal(f.requested(), true); assert.equal(f.document.activeElement, f.editor)
+  assert.deepEqual(f.control.state, { mode: 'system', dockHeight: 0, switching: false, unavailable: false, composer: true })
+  f.resize(500); t.mock.timers.tick(250)
+  f.resize(844); t.mock.timers.tick(2000)
+  assert.equal(f.lost(), 1, 'once the IME has appeared, losing it for good collapses the composer')
   assert(f.states.every(state => !state.unavailable))
   f.control.composer()
   assert.equal(f.requested(), false, 'the collapsing composer does not reopen the keyboard')

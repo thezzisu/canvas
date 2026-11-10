@@ -51,7 +51,8 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   let inputRevision = 0, resumeTimer: ReturnType<typeof setTimeout> | undefined
   let published: string | undefined
   // The composer editor owns native input while open; release restores the prior keyboard.
-  let composer: { element: HTMLElement; prior?: MobileKeyboardMode; lost?: () => void } | undefined
+  // `shown` records that its IME appeared; only then can losing the IME collapse it.
+  let composer: { element: HTMLElement; prior?: MobileKeyboardMode; lost?: () => void; shown?: boolean } | undefined
   const input = () => composer?.element || textarea
   const occluded = (frame: ViewportFrame) => (keyboard?.boundingRect.height || 0) > 0
     || baseline.height - frame.height > Math.max(80, baseline.height * .15)
@@ -138,7 +139,10 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     openingTimer = setTimeout(() => {
       openingTimer = undefined
       if (!requested || mode !== 'system' || occluded(read())) return
-      if (fallback && !composer) useBuiltin(true)
+      // A composer whose IME never appeared (hardware keyboard, declined focus)
+      // stays open and editable; a tap on the editor can still raise the IME.
+      if (composer && !composer.shown) { switching = false; bridgeTarget = undefined; publish() }
+      else if (fallback && !composer) useBuiltin(true)
       else controller.blur()
     }, 900)
   }
@@ -216,6 +220,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     } else if (!switching && lastVisible && !visible) recover()
     if (visible) {
       clearTimeout(openingTimer); openingTimer = undefined
+      if (composer) composer.shown = true
       if (switching) {
         lastVisible = frame; nativeHeight = Math.max(0, baseline.height - frame.height); settleSwitch()
       } else if (!recovery) {
