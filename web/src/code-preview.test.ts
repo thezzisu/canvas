@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { textCapabilities, processCodePreview, type CodePreviewRequest, type CodePreviewResult } from './code-preview'
-import { MAX_HIGHLIGHT_TOKENS, processCode } from './code-preview-process'
+import { extensions } from './code-preview-language'
+import { MAX_HIGHLIGHT_TOKENS, grammars, processCode } from './code-preview-process'
 
 const request = (filename: string, text: string, format = false, highlight = false) => ({ filename, text, format, highlight })
 
@@ -125,4 +126,22 @@ test('common formatters and highlight-only languages stay separate', async () =>
   assert.equal(result.text, python)
   assert.equal(result.formatError, undefined)
   assert(result.tokens?.some(token => token.color))
+})
+
+test('every mapped language has a matching bundled grammar in the worker', async () => {
+  for (const language of new Set(Object.values(extensions))) {
+    const grammar = await grammars[language]?.()
+    assert(grammar?.default.some(entry => entry.name === language), language)
+  }
+})
+
+test('Kotlin sources and Gradle Kotlin scripts highlight with the Kotlin grammar', async () => {
+  for (const filename of ['Main.kt', 'script.KTS', 'app/build.gradle.kts']) {
+    assert.deepEqual(textCapabilities(filename), { format: false, highlight: true, html: false }, filename)
+    const text = 'fun main() {\n  val greeting = "hello"\n}\n'
+    const result = await processCode(request(filename, text, false, true))
+    assert.equal(result.highlightError, undefined, filename)
+    assert.equal(result.tokens?.map(token => token.text).join(''), text, filename)
+    assert(new Set(result.tokens?.flatMap(token => token.color || [])).size > 1, filename)
+  }
 })

@@ -2,7 +2,7 @@ import { codeLanguage, textCapabilities, type CodePreviewRequest, type CodePrevi
 import type { Plugin } from 'prettier'
 import type { HighlighterCore, LanguageRegistration } from 'shiki/core'
 
-const grammars: Record<string, () => Promise<{ default: LanguageRegistration[] }>> = {
+export const grammars: Record<string, () => Promise<{ default: LanguageRegistration[] }>> = {
   html: () => import('shiki/langs/html.mjs'), vue: () => import('shiki/langs/vue.mjs'),
   javascript: () => import('shiki/langs/javascript.mjs'), jsx: () => import('shiki/langs/jsx.mjs'),
   typescript: () => import('shiki/langs/typescript.mjs'), tsx: () => import('shiki/langs/tsx.mjs'),
@@ -11,7 +11,7 @@ const grammars: Record<string, () => Promise<{ default: LanguageRegistration[] }
   markdown: () => import('shiki/langs/markdown.mjs'), yaml: () => import('shiki/langs/yaml.mjs'),
   python: () => import('shiki/langs/python.mjs'), shellscript: () => import('shiki/langs/shellscript.mjs'),
   sql: () => import('shiki/langs/sql.mjs'), rust: () => import('shiki/langs/rust.mjs'), go: () => import('shiki/langs/go.mjs'),
-  xml: () => import('shiki/langs/xml.mjs'),
+  kotlin: () => import('shiki/langs/kotlin.mjs'), xml: () => import('shiki/langs/xml.mjs'),
 }
 const parsers: Record<string, string> = { javascript: 'babel', jsx: 'babel', typescript: 'typescript', tsx: 'typescript', json: 'json', jsonc: 'json', vue: 'vue', html: 'html', css: 'css', scss: 'scss', less: 'less', markdown: 'markdown', yaml: 'yaml' }
 async function format(text: string, language: string): Promise<string> {

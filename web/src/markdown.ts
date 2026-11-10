@@ -1,4 +1,5 @@
 import { createMarkdownParser, type ComarkPlugin } from 'comark'
+import math from 'comark/plugins/math'
 import security from 'comark/plugins/security'
 import { visit } from 'comark/utils'
 
@@ -37,11 +38,11 @@ function links(resources?: MarkdownResources): ComarkPlugin { return {
   },
 } }
 
-/** Plain Markdown only: no HTML, MDC components, attributes, bindings or frontmatter. */
+/** Plain Markdown and KaTeX math only: no HTML, MDC components, attributes, bindings or frontmatter. */
 function parser(resources?: MarkdownResources) { return createMarkdownParser({
   registerDefaultPlugins: false, autoClose: false, headingIds: !!resources,
-  plugins: [security({ allowedTags: ['p', 'a', 'blockquote', 'code', 'pre', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr',
-    'img', 'ul', 'ol', 'li', 'strong', 'table', 'thead', 'tbody', 'td', 'th', 'tr', 'del', 'br'],
+  plugins: [math({ brackets: true }), security({ allowedTags: ['p', 'a', 'blockquote', 'code', 'pre', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr',
+    'img', 'ul', 'ol', 'li', 'strong', 'table', 'thead', 'tbody', 'td', 'th', 'tr', 'del', 'br', 'math'],
     allowedProtocols: ['http', 'https'], allowDataImages: false }), links(resources)],
 }) }
 const uploadedFileParser = parser()

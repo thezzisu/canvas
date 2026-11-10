@@ -7,14 +7,14 @@ export interface CodePreviewResult {
   highlightError?: true
 }
 
-const extensions: Record<string, string> = {
+export const extensions: Record<string, string> = {
   html: 'html', htm: 'html', vue: 'vue',
   js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'jsx',
   ts: 'typescript', mts: 'typescript', cts: 'typescript', tsx: 'tsx',
   json: 'json', jsonc: 'jsonc', css: 'css', scss: 'scss', less: 'less',
   md: 'markdown', markdown: 'markdown', mdown: 'markdown', mkd: 'markdown', mkdn: 'markdown',
   yaml: 'yaml', yml: 'yaml', py: 'python', sh: 'shellscript', bash: 'shellscript',
-  sql: 'sql', rs: 'rust', go: 'go', xml: 'xml', svg: 'xml',
+  sql: 'sql', rs: 'rust', go: 'go', kt: 'kotlin', kts: 'kotlin', xml: 'xml', svg: 'xml',
 }
 const formatted = new Set(['html', 'vue', 'javascript', 'jsx', 'typescript', 'tsx', 'json', 'jsonc', 'css', 'scss', 'less', 'markdown', 'yaml'])
 export function codeLanguage(filename: string): string | undefined {

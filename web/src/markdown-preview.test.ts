@@ -3,12 +3,13 @@ import assert from 'node:assert/strict'
 import { createSSRApp, defineComponent, h } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 import { MarkdownDocument } from '@comark/vue'
+import { Math } from '@comark/vue/plugins/math'
 import { parseFileMarkdown, isMarkdownFile } from './markdown.ts'
 
 async function render(markdown: string) {
   let mounted = 0
   const document = await parseFileMarkdown(markdown)
-  const app = createSSRApp({ render: () => h(MarkdownDocument, { value: document }) })
+  const app = createSSRApp({ render: () => h(MarkdownDocument, { value: document, components: { Math } }) })
   app.component('Canary', defineComponent({ setup() { mounted++; return () => h('div', 'component-ran') } }))
   return { document, html: await renderToString(app), mounted }
 }
@@ -58,4 +59,18 @@ test('source documents resolve adjacent resources within their root and preserve
   assert(html.includes('href="#heading"')); assert(html.includes('id="heading"'))
   assert.match(html, /target="_self"/u)
   assert.doesNotMatch(html, /target="_blank"/u)
+})
+
+test('KaTeX renders inline and display math with dollar and bracket delimiters', async () => {
+  const { html } = await render('Inline $x^2$ and \\(a+b\\).\n\n$$\n\\frac{1}{2}\n$$\n\n\\[\n\\sum_{i=1}^n i\n\\]')
+  assert.equal(html.match(/<span class="math inline"><span class="katex">/gu)?.length, 2)
+  assert.equal(html.match(/<div class="math block"><span class="katex-display">/gu)?.length, 2)
+  assert.match(html, /<annotation encoding="application\/x-tex">x\^2<\/annotation>/u)
+  assert.match(html, /<annotation encoding="application\/x-tex">\\sum_\{i=1\}\^n i<\/annotation>/u)
+})
+
+test('formulas in code spans and blocks stay literal text', async () => {
+  const { html } = await render('`$x^2$` and `\\(y\\)`\n\n```\n$$\nz\n$$\n\\[w\\]\n```')
+  assert.doesNotMatch(html, /katex/u)
+  assert(html.includes('$x^2$')); assert(html.includes('\\(y\\)')); assert(html.includes('$$\nz\n$$\n\\[w\\]'))
 })
