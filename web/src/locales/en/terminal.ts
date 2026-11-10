@@ -28,10 +28,11 @@ export default {
   clipboard: { failed: 'Copy failed', copied: 'Copied', cut: 'Cut', macPaste: 'Use ⌘V to paste' },
   keyboard: {
     input: 'Terminal input', arrowLeft: 'Left arrow', arrowDown: 'Down arrow', arrowUp: 'Up arrow', arrowRight: 'Right arrow',
-    more: 'More keys', full: 'Full keyboard', functions: 'Function keys', numbers: 'Numbers and symbols', modifiers: 'Modifiers and navigation',
+    full: 'Full keyboard', functions: 'Function keys', numbers: 'Numbers and symbols', modifiers: 'Modifiers and navigation',
+    switchToSystem: 'Switch to system keyboard', switchToBuiltin: 'Switch to built-in keyboard',
+    systemUnavailable: 'System keyboard unavailable. Using the built-in keyboard for now.',
     rightShift: 'Right Shift', rightAlt: 'Right Alt', rightCtrl: 'Right Ctrl', actions: 'Terminal actions', pasteText: 'Paste text',
     touchpad: 'Touchpad', mouseLeft: 'Left mouse button', mouseMiddle: 'Middle click / scroll', mouseRight: 'Right mouse button',
-    mouseLeftShort: 'Left', mouseMiddleShort: 'Middle / scroll', mouseRightShort: 'Right',
     selectText: 'Select text', touchScroll: 'Touch scroll', touchMouse: 'Touch mouse', helperKeys: 'Terminal shortcut keys',
     terminalText: 'Terminal text', textToPaste: 'Text to paste', longPressPaste: 'Touch and hold to paste', copySelection: 'Copy selection',
     copyAll: 'Copy all', pasteIntoTerminal: 'Paste into terminal',

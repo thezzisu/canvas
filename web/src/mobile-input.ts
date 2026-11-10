@@ -29,6 +29,12 @@ export function bindMobileInput(parent: HTMLElement, options: MobileInputOptions
   let editable = false
   let composing = false
   let commitTimer: ReturnType<typeof setTimeout> | undefined
+  let finishTimer: ReturnType<typeof setTimeout> | undefined
+  let finishResolve: (() => void) | undefined
+  const finish = () => {
+    clearTimeout(finishTimer); finishTimer = undefined
+    const resolve = finishResolve; finishResolve = undefined; resolve?.()
+  }
   // A preceding character lets Android's deleteSurroundingText emit Backspace
   // even after the previous input has already been sent to the terminal.
   const anchor = '\u200b'
@@ -97,14 +103,15 @@ export function bindMobileInput(parent: HTMLElement, options: MobileInputOptions
     // Chromium can deliver the final DOM edit after compositionend. Read that
     // edit once instead of forwarding both the composition and input events.
     clearTimeout(commitTimer); commitTimer = setTimeout(commit, 0)
+    if (finishResolve) { clearTimeout(finishTimer); finishTimer = setTimeout(finish, 0) }
   }
   const paste = (event: ClipboardEvent) => {
     // File paste is captured by the existing host upload handler before this.
     event.preventDefault(); event.stopPropagation()
     if (editable && options.active()) options.paste(event.clipboardData?.getData('text/plain') || '')
   }
-  const focus = () => { if (!composing) clear(); options.focus() }
-  const blur = () => { if (commitTimer !== undefined) commit(); options.blur() }
+  const focus = () => { if (!composing && commitTimer === undefined) clear(); options.focus() }
+  const blur = () => { options.blur() }
   element.addEventListener('keydown', key); element.addEventListener('keypress', key); element.addEventListener('keyup', key)
   element.addEventListener('beforeinput', beforeInput); element.addEventListener('input', input)
   element.addEventListener('compositionstart', start); element.addEventListener('compositionend', end)
@@ -113,8 +120,20 @@ export function bindMobileInput(parent: HTMLElement, options: MobileInputOptions
   parent.append(element)
   return {
     element, setEditable,
+    finishEditing() {
+      finish()
+      return new Promise<void>(resolve => {
+        finishResolve = resolve
+        // Native blur normally ends composition synchronously. If a browser
+        // omits compositionend, stop waiting without forwarding partial preedit.
+        finishTimer = setTimeout(() => {
+          if (!composing && commitTimer !== undefined) commit()
+          finish()
+        }, composing ? 120 : 0)
+      })
+    },
     dispose() {
-      stopLabel()
+      stopLabel(); finish()
       clearTimeout(commitTimer)
       element.removeEventListener('keydown', key); element.removeEventListener('keypress', key); element.removeEventListener('keyup', key)
       element.removeEventListener('beforeinput', beforeInput); element.removeEventListener('input', input)

@@ -3,47 +3,101 @@ import { readViewportFrame, type ViewportFrame } from './viewport-frame'
 
 export const mobileKeyboardFrame = shallowRef<ViewportFrame>()
 export const mobileKeyboardVisible = ref(false)
+export const mobileKeyboardOpen = ref(false)
+export type MobileKeyboardMode = 'system' | 'builtin'
+export interface MobileKeyboardState { mode: MobileKeyboardMode; dockHeight: number; switching: boolean; unavailable: boolean }
 
 interface VirtualKeyboard extends EventTarget {
   boundingRect: { height: number }
   show(): void
   hide(): void
 }
-interface KeyboardOptions { active(): boolean; changed(requested: boolean): void; setEditable?(value: boolean): void }
+interface KeyboardOptions {
+  active(): boolean
+  changed(requested: boolean, state: MobileKeyboardState): void
+  setEditable?(value: boolean): void
+  finishEditing?(): Promise<void>
+  scale?(): number
+}
+const preferenceKey = 'canvas:mobile-keyboard-mode'
+function preferredMode(): MobileKeyboardMode {
+  try { return localStorage.getItem(preferenceKey) === 'builtin' ? 'builtin' : 'system' } catch { return 'system' }
+}
+function saveMode(mode: MobileKeyboardMode) { try { localStorage.setItem(preferenceKey, mode) } catch { /* Storage can be unavailable. */ } }
 let owner: ReturnType<typeof bindMobileKeyboard> | undefined
 export function hideMobileKeyboard() { owner?.blur() }
+export function dismissMobileKeyboard() { owner?.dismiss() }
 export function refreshMobileKeyboardViewport() { owner?.refreshViewport() }
 
-/** Keep native keyboard intent, input focus and its temporary viewport together. */
+/** One open intent owns either the native IME or its replacement dock. */
 export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptions) {
   const visual = window.visualViewport
   const keyboard = (navigator as Navigator & { virtualKeyboard?: VirtualKeyboard }).virtualKeyboard
   const read = readViewportFrame
-  let baseline = { width: window.innerWidth, height: Math.max(window.innerHeight, read().height) }
-  let requested = false
-  let changingFocus = false
+  const scale = () => options.scale?.() || 1
+  let baseline = { width: window.innerWidth, height: Math.max(window.innerHeight, read().height), scale: scale() }
+  let requested = false, mode = preferredMode(), unavailable = false
+  let changingFocus = false, suspended = false
   let picker: { returned: boolean } | undefined
   let lastVisible: ViewportFrame | undefined
+  let nativeHeight = 0, builtinMinHeight = 260 * scale(), builtinHeight = builtinMinHeight
+  let switching = false, bridgeTarget: number | undefined
   let recovery: { frame: ViewportFrame; moved: boolean } | undefined
   let openingTimer: ReturnType<typeof setTimeout> | undefined
   let recoveryTimer: ReturnType<typeof setTimeout> | undefined
   let visibleTimer: ReturnType<typeof setTimeout> | undefined
+  let switchTimer: ReturnType<typeof setTimeout> | undefined
+  let disableTimer: ReturnType<typeof setTimeout> | undefined
+  let inputRevision = 0, resumeTimer: ReturnType<typeof setTimeout> | undefined
+  let published: string | undefined
   const occluded = (frame: ViewportFrame) => (keyboard?.boundingRect.height || 0) > 0
     || baseline.height - frame.height > Math.max(80, baseline.height * .15)
-  const updateIntent = (value: boolean) => { requested = value; options.changed(value) }
-  const inputMode = () => {
-    if (options.setEditable) options.setEditable(requested)
-    else (textarea as HTMLTextAreaElement).readOnly = !requested
-    textarea.inputMode = requested ? 'text' : 'none'
+  function state(): MobileKeyboardState {
+    const frame = recovery?.frame || read()
+    const target = mode === 'builtin' ? baseline.height - builtinHeight : bridgeTarget
+    return { mode, dockHeight: requested && target !== undefined ? Math.max(0, frame.height - target) : 0,
+      switching: switching || suspended || !!picker || requested && document.hidden, unavailable }
   }
-  function confirmOpening() {
-    openingTimer = setTimeout(() => { openingTimer = undefined; if (requested && !occluded(read())) controller.blur() }, 900)
+  function publish() {
+    if (owner === controller) {
+      mobileKeyboardOpen.value = requested && options.active()
+      mobileKeyboardVisible.value = options.active() && !document.hidden && (occluded(read()) || !!recovery)
+    }
+    const next = state(), signature = JSON.stringify([requested, next])
+    if (signature === published) return
+    published = signature; options.changed(requested, next)
+  }
+  const inputMode = (restoreBuiltinFocus = false) => {
+    clearTimeout(disableTimer); disableTimer = undefined
+    const revision = ++inputRevision
+    const editable = requested && mode === 'system' && !suspended
+    const apply = () => {
+      if (options.setEditable) options.setEditable(editable)
+      else (textarea as HTMLTextAreaElement).readOnly = !editable
+      textarea.inputMode = editable ? 'text' : 'none'
+      if (restoreBuiltinFocus && requested && mode === 'builtin' && !suspended && !picker && owner === controller && options.active() && !document.hidden) {
+        const active = document.activeElement
+        if (active === textarea || active === document.body || active === document.documentElement) textarea.focus({ preventScroll: true })
+      }
+    }
+    // Native blur may finish a composition after blur itself. Let its final
+    // input task drain before making the rich editor noneditable.
+    if (!editable && options.finishEditing) {
+      void options.finishEditing().then(() => { if (revision === inputRevision) apply() })
+    } else if (!editable && mode === 'builtin') {
+      disableTimer = setTimeout(() => { disableTimer = undefined; if (revision === inputRevision) apply() }, 0)
+    } else apply()
+  }
+  function fitHeight(height: number) {
+    const maximum = Math.max(0, Math.min(460 * scale(), baseline.height - 160 * scale()))
+    return Math.min(maximum, Math.max(Math.min(builtinMinHeight, maximum), height))
   }
   function cancelTimers() {
     clearTimeout(openingTimer); openingTimer = undefined
     clearTimeout(recoveryTimer); recoveryTimer = undefined
     clearTimeout(visibleTimer); visibleTimer = undefined
-    recovery = undefined
+    clearTimeout(switchTimer); switchTimer = undefined
+    recovery = undefined; switching = false; bridgeTarget = undefined
     if (owner === controller) mobileKeyboardFrame.value = undefined
   }
   function show(refocus = false) {
@@ -54,20 +108,51 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       try { keyboard?.show() } catch { /* Focus is the fallback when the platform declines explicit control. */ }
     } finally { changingFocus = false }
   }
+  function hideNative(restoreBuiltinFocus = false) {
+    changingFocus = true
+    try { textarea.blur(); inputMode(restoreBuiltinFocus); try { keyboard?.hide() } catch { /* Blur also closes native input. */ } }
+    finally { changingFocus = false }
+  }
+  function settleSwitch() {
+    clearTimeout(switchTimer)
+    switchTimer = setTimeout(() => {
+      switchTimer = undefined
+      if (!requested || suspended || picker) return
+      if (mode === 'system' && !occluded(read())) return
+      switching = false; bridgeTarget = undefined; publish()
+    }, 200)
+  }
+  function useBuiltin(failed = false) {
+    const oldHeight = nativeHeight || baseline.height - (lastVisible?.height || read().height)
+    cancelTimers(); mode = 'builtin'; unavailable = failed
+    builtinHeight = fitHeight(oldHeight || builtinHeight || builtinMinHeight)
+    switching = occluded(read()); hideNative(true); publish()
+    if (switching) settleSwitch()
+  }
+  function confirmOpening(fallback = false) {
+    clearTimeout(openingTimer)
+    openingTimer = setTimeout(() => {
+      openingTimer = undefined
+      if (!requested || mode !== 'system' || occluded(read())) return
+      if (fallback) useBuiltin(true)
+      else controller.blur()
+    }, 900)
+  }
   function finishRecovery() {
     clearTimeout(recoveryTimer); recoveryTimer = undefined; recovery = undefined
     mobileKeyboardFrame.value = undefined
   }
   function recover() {
-    if (picker || recovery || !lastVisible || !requested || !options.active() || document.hidden) return
+    if (picker || suspended || recovery || mode !== 'system' || !lastVisible || !requested || !options.active() || document.hidden) return
     clearTimeout(visibleTimer); visibleTimer = undefined
     recovery = { frame: { ...lastVisible }, moved: read().height > lastVisible.height + 2 }
     mobileKeyboardFrame.value = recovery.frame
-    mobileKeyboardVisible.value = true
+    publish()
     recoveryTimer = setTimeout(() => {
       if (requested && options.active() && !document.hidden && occluded(read()) && document.activeElement === textarea) {
         finishRecovery(); observe()
-      } else controller.blur()
+      } else if (requested && options.active() && !document.hidden) useBuiltin(true)
+      else controller.blur()
     }, 800)
     queueMicrotask(() => {
       if (!recovery || !requested) return
@@ -75,80 +160,147 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       if (!options.active() || document.hidden || (active && active !== textarea && active !== document.body && active !== document.documentElement)) {
         controller.blur(); return
       }
-      // HTTP clipboard copying temporarily moves focus within one task.
-      if (active === textarea && !recovery.moved && occluded(read())) { finishRecovery(); return }
+      // Synchronous clipboard copying can return focus within this task.
+      if (active === textarea && !recovery.moved && occluded(read())) { finishRecovery(); publish(); return }
       show(true)
     })
   }
   function observe() {
-    if (owner !== controller) return
-    if (picker) return
-    if (!options.active() || document.hidden) { controller.blur(); mobileKeyboardVisible.value = false; return }
+    if (owner !== controller || picker || suspended) return
+    if (!options.active()) { controller.blur(); return }
+    if (document.hidden) return
     const frame = read()
-    if (Math.abs(window.innerWidth - baseline.width) > 1) {
-      cancelTimers(); lastVisible = undefined
-      baseline = { width: window.innerWidth, height: Math.max(window.innerHeight, frame.height) }
-      if (requested) confirmOpening()
+    if (Math.abs(window.innerWidth - baseline.width) > 1 || scale() !== baseline.scale) {
+      cancelTimers(); lastVisible = undefined; nativeHeight = 0
+      baseline = { width: window.innerWidth, height: Math.max(window.innerHeight, frame.height), scale: scale() }
+      builtinHeight = fitHeight(builtinHeight)
+      if (requested && mode === 'system') confirmOpening()
     }
     const visible = occluded(frame)
     if (!requested) {
       if (!visible) baseline.height = Math.max(window.innerHeight, frame.height)
-      mobileKeyboardVisible.value = visible
-      return
+      publish(); return
+    }
+    if (mode === 'builtin') {
+      if (!switching && frame.height !== baseline.height) {
+        // With native input disabled this is the full available frame, not a
+        // newly opened IME inferred from an obsolete larger baseline.
+        baseline.height = frame.height; nativeHeight = 0; lastVisible = undefined
+        builtinHeight = fitHeight(builtinHeight)
+      } else if (!visible) baseline.height = Math.max(baseline.height, window.innerHeight, frame.height)
+      if (switching) settleSwitch()
+      publish(); return
     }
     if (recovery) {
       if (frame.height > recovery.frame.height + 2) recovery.moved = true
       if (recovery.moved && visible && frame.height <= recovery.frame.height + 2 && document.activeElement === textarea) finishRecovery()
-    } else if (lastVisible && !visible) recover()
+    } else if (!switching && lastVisible && !visible) recover()
     if (visible) {
       clearTimeout(openingTimer); openingTimer = undefined
-      if (!recovery) {
+      if (switching) {
+        lastVisible = frame; nativeHeight = Math.max(0, baseline.height - frame.height); settleSwitch()
+      } else if (!recovery) {
         clearTimeout(visibleTimer)
         if (!lastVisible || frame.height <= lastVisible.height + 2) {
-          lastVisible = frame; mobileKeyboardFrame.value = undefined
+          lastVisible = frame; nativeHeight = Math.max(0, baseline.height - frame.height); mobileKeyboardFrame.value = undefined
         } else {
-          // A growing viewport can be keyboard dismissal or a smaller candidate
-          // bar. Hold the last size until that distinction settles, without focus.
+          // Candidate bars and a closing animation share growing frames. Settle
+          // the former without refocus, keep the latter's stable terminal size.
           mobileKeyboardFrame.value = lastVisible
           visibleTimer = setTimeout(() => {
             visibleTimer = undefined
-            if (requested && !recovery && occluded(read())) { lastVisible = read(); mobileKeyboardFrame.value = undefined }
+            if (requested && mode === 'system' && !recovery && occluded(read())) {
+              lastVisible = read(); nativeHeight = Math.max(0, baseline.height - lastVisible.height)
+              mobileKeyboardFrame.value = undefined; publish()
+            }
           }, 200)
         }
       }
     }
-    mobileKeyboardVisible.value = visible || !!recovery
+    publish()
   }
   function focused() { if (options.active()) inputMode() }
-  function blurred() { if (!changingFocus && requested) recover() }
+  function blurred() { if (!changingFocus && requested && !suspended) recover() }
   function focusChanged() {
     queueMicrotask(() => {
-      if (!picker && requested && document.activeElement !== textarea && document.activeElement !== document.body && document.activeElement !== document.documentElement) controller.blur()
+      if (!picker && !suspended && mode === 'system' && requested && document.activeElement !== textarea && document.activeElement !== document.body && document.activeElement !== document.documentElement) controller.blur()
     })
   }
   function finishPicker() {
     if (!picker?.returned || document.hidden) return
     picker = undefined
-    if (!requested || owner !== controller || !options.active()) return
+    if (!requested || owner !== controller || !options.active()) { publish(); return }
     const active = document.activeElement
     if (active !== textarea && active !== document.body && active !== document.documentElement) { controller.blur(); return }
-    const visible = occluded(read())
-    show(!visible)
-    if (!visible) confirmOpening()
+    if (mode === 'system') {
+      const visible = occluded(read())
+      switching = true; bridgeTarget = baseline.height - (nativeHeight || builtinHeight)
+      inputMode(); show(!visible)
+      if (!visible) confirmOpening(true)
+    } else inputMode(true)
     observe()
   }
   function visibilityChanged() {
     if (picker) { finishPicker(); return }
-    if (document.hidden && owner === controller) controller.blur()
+    if (document.hidden && owner === controller) {
+      cancelTimers(); publish()
+    } else if (requested && owner === controller && options.active()) {
+      if (mode === 'system') { inputMode(); show(); confirmOpening(true) }
+      observe()
+    }
   }
   const controller = {
+    get state() { return state() },
     refreshViewport: observe,
-    /** A native picker temporarily hides the page; it does not turn off the IME. */
+    setBuiltinMinHeight(height: number) {
+      if (!(height > 0) || !Number.isFinite(height) || Math.abs(height - builtinMinHeight) < 1) return
+      builtinMinHeight = height
+      if (requested && mode === 'builtin') builtinHeight = fitHeight(builtinHeight)
+      publish()
+    },
+    switchMode() {
+      if (!options.active()) return
+      if (owner !== controller) { owner?.blur(); owner = controller }
+      if (!requested) mode = preferredMode()
+      const next = mode === 'system' ? 'builtin' : 'system'
+      baseline.height = Math.max(baseline.height, window.innerHeight, read().height)
+      unavailable = false; requested = true
+      saveMode(next)
+      if (next === 'builtin') useBuiltin()
+      else {
+        const target = baseline.height - builtinHeight
+        cancelTimers(); mode = 'system'; switching = true; bridgeTarget = target
+        inputMode(); show(true); confirmOpening(true); publish()
+        if (occluded(read())) settleSwitch()
+      }
+    },
+    suspend(value: boolean) {
+      clearTimeout(resumeTimer); resumeTimer = undefined
+      if (value) {
+        if (suspended) return
+        suspended = true; cancelTimers(); hideNative(); publish()
+      } else if (suspended) {
+        // Let the closing modal release its own focus before restoring native
+        // input. Its temporary focus target must not revoke the open intent.
+        resumeTimer = setTimeout(() => {
+          resumeTimer = undefined; suspended = false
+          if (requested && options.active() && !document.hidden) {
+            if (mode === 'system') {
+              switching = true; bridgeTarget = baseline.height - (nativeHeight || builtinHeight)
+              inputMode(); show(); confirmOpening(true)
+            } else if (occluded(read())) { switching = true; hideNative(true); settleSwitch() }
+            else inputMode(true)
+          }
+          observe(); publish()
+        }, 0)
+      }
+    },
+    /** Native file selection temporarily owns foreground/focus, not open intent. */
     filePicker() {
       if (!requested || owner !== controller) return
       const current: { returned: boolean } = { returned: false }
       picker = current
-      cancelTimers(); lastVisible = undefined
+      cancelTimers(); lastVisible = undefined; publish()
       return (restore: boolean) => {
         if (picker !== current) return
         if (!restore) { controller.blur(); return }
@@ -157,41 +309,37 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     },
     focus(value?: boolean) {
       if (!options.active()) return
+      if (!requested) mode = preferredMode()
       if (owner !== controller) { owner?.blur(); owner = controller }
       if (value !== undefined && value !== requested) {
         cancelTimers(); lastVisible = undefined
-        // Android caches rich-input support when focus changes. End the old
-        // noneditable focus before enabling the editor, then focus it again
-        // within the same user gesture so IME opening and image MIME types agree.
         changingFocus = true
         try { textarea.blur() } finally { changingFocus = false }
-        updateIntent(value)
+        requested = value
         if (value) {
-          baseline = { width: window.innerWidth, height: Math.max(baseline.height, window.innerHeight, read().height) }
-          confirmOpening()
+          mode = preferredMode(); unavailable = false
+          baseline = { width: window.innerWidth, height: Math.max(baseline.height, window.innerHeight, read().height), scale: scale() }
+          if (mode === 'system') confirmOpening()
+          else builtinHeight = fitHeight(nativeHeight || builtinMinHeight)
         }
       }
+      if (suspended) { publish(); return }
       inputMode()
-      if (requested) show()
+      if (requested && mode === 'system') show()
       else textarea.focus({ preventScroll: true })
       observe()
     },
+    dismiss() { if (!suspended && !picker) controller.blur() },
     blur() {
-      picker = undefined
-      cancelTimers(); lastVisible = undefined; updateIntent(false)
-      if (options.active() || owner === controller) {
-        changingFocus = true
-        try {
-          textarea.blur()
-          inputMode()
-          try { keyboard?.hide() } catch { /* Readonly and blur also close the native input. */ }
-        } finally { changingFocus = false }
-      }
-      if (owner === controller) mobileKeyboardVisible.value = options.active() && !document.hidden && occluded(read())
+      picker = undefined; suspended = false
+      clearTimeout(resumeTimer); resumeTimer = undefined; inputRevision++
+      cancelTimers(); lastVisible = undefined; requested = false; unavailable = false
+      if (options.active() || owner === controller) hideNative()
+      publish()
     },
     dispose() {
       controller.blur()
-      if (owner === controller) { owner = undefined; mobileKeyboardVisible.value = false }
+      if (owner === controller) { owner = undefined; mobileKeyboardVisible.value = false; mobileKeyboardOpen.value = false }
       textarea.removeEventListener('focus', focused); textarea.removeEventListener('blur', blurred)
       document.removeEventListener('focusin', focusChanged); document.removeEventListener('visibilitychange', visibilityChanged)
       window.removeEventListener('resize', observe); visual?.removeEventListener('resize', observe); visual?.removeEventListener('scroll', observe)

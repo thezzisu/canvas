@@ -92,7 +92,7 @@ import { useCanvasNavigation } from './canvas-navigation'
 import { cardMenuOpen } from './card-menu'
 import { inputMode, useMobileLayout } from './mobile-layout'
 import { uiZoom } from './ui-scale'
-import { hideMobileKeyboard } from './mobile-keyboard'
+import { dismissMobileKeyboard, hideMobileKeyboard } from './mobile-keyboard'
 import { useDisplayCutout } from './display-cutout'
 import { developerMode } from './developer-mode'
 import { useScreenWakeLock } from './screen-wake-lock'
@@ -2189,7 +2189,7 @@ function queueCameraResize() {
   })
 }
 watch([modalOpen, directoryRequest, downloadPreview, urlRequest], ([modal, directory, preview, url]) => {
-  if (modal || directory || preview || url) hideMobileKeyboard()
+  if (modal || directory || preview || url) dismissMobileKeyboard()
 })
 watch(graphSurface, element => {
   cameraObserver?.disconnect()

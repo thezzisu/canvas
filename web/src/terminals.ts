@@ -26,8 +26,9 @@ import { bindTerminalMouseDefaults, rightMouseInput } from './terminal-mouse-def
 import { defaultTerminalSettings, type TerminalSettings } from './terminal-settings'
 import { defaultContentFont, type ContentFontSettings } from '../../shared/settings'
 import { applyTerminalFontFeatures, type FontPresentation } from './fonts'
-import { bindMobileKeyboard } from './mobile-keyboard'
+import { bindMobileKeyboard, type MobileKeyboardState } from './mobile-keyboard'
 import { bindMobileInput } from './mobile-input'
+import { uiZoom } from './ui-scale'
 import { copiedFile } from './file-clipboard'
 import { loadCanvasFile } from './file-transfer'
 import { readNoteClipboard, loadNoteClipboard, terminalNoteClipboard, NOTE_CLIPBOARD_TYPE, type NoteClipboard } from './note-clipboard'
@@ -57,6 +58,9 @@ export type TerminalStatus = {
   modifiers?: TerminalModifiers
   touchMode?: TerminalTouchMode
   keyboardRequested?: boolean
+  keyboardMode?: 'system' | 'builtin'
+  keyboardDockHeight?: number
+  keyboardUnavailable?: boolean
   retryAttempt?: number
 }
 interface FocusResize { token: string; suspended: boolean; requested?: { cols: number; rows: number } }
@@ -745,6 +749,7 @@ function proposedSize(session: Session) {
 }
 function updateFocusSize(session: Session) {
   if (!session.magnified || session.focusResize?.suspended || session.state.status !== 'connected' || session.socket?.readyState !== WebSocket.OPEN) return
+  if (session.keyboard?.state.switching) return
   const proposed = proposedSize(session)
   if (!proposed) return
   if (!session.focusResize) {
@@ -932,7 +937,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       }
       if (current.mobile && document.activeElement === current.mobileInput?.element && event.type === 'keydown' &&
         !event.isComposing && event.keyCode !== 229 &&
-        (event.key.length !== 1 || !current.keyboardRequested && !event.ctrlKey && !event.altKey && !event.metaKey) &&
+        (event.key.length !== 1 || !current.mobileInput.element.isContentEditable && !event.ctrlKey && !event.altKey && !event.metaKey) &&
         sendTerminalKey(current, event.key, { shift: event.key.length !== 1 && event.shiftKey,
           ctrl: event.ctrlKey, alt: event.altKey, meta: event.metaKey })) {
         event.preventDefault(); return false
@@ -1021,11 +1026,20 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       focus: () => current.term.textarea?.dispatchEvent(new FocusEvent('focus')),
       blur: () => current.term.textarea?.dispatchEvent(new FocusEvent('blur')),
     })
+    const keyboardChanged = (requested: boolean, state: MobileKeyboardState) => {
+      current.keyboardRequested = requested
+      setState(current, { ...current.state, keyboardMode: state.mode, keyboardDockHeight: state.dockHeight,
+        keyboardUnavailable: state.unavailable })
+      schedulePresentation(current)
+    }
     session.keyboard = bindMobileKeyboard(input.element, {
       active: () => current.mobile && current.magnified && !!current.host?.isConnected,
-      changed: requested => { current.keyboardRequested = requested; setState(current, { ...current.state }) },
+      changed: keyboardChanged,
+      scale: () => uiZoom.value,
       setEditable: input.setEditable,
+      finishEditing: input.finishEditing,
     })
+    keyboardChanged(current.keyboardRequested, session.keyboard.state)
   }
   if (session.term.textarea) {
     // xterm internally focuses its textarea on mouse presses. Disable that
@@ -1126,6 +1140,19 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     setAppShowing(value: boolean) { if (current.host === host && isCurrentApi(mountingContext)) setContentHidden(current, 'appShowing', value) },
     focus(options: { keyboard?: boolean } = {}) { if (current.host === host && isCurrentApi(mountingContext)) focusTerminal(current, options.keyboard) },
     blur() { current.touchpad?.cancel(); if (current.mobile) current.keyboard?.blur(); else current.term.blur(); setModifiers(current) },
+    switchKeyboard() {
+      if (current.host !== host || !isCurrentApi(mountingContext) || !contentFocusable(current)) return
+      current.touchpad?.cancel(); setModifiers(current); claimFocus(current)
+      current.keyboard?.switchMode()
+    },
+    suspendKeyboard(value: boolean) {
+      if (current.host !== host || !isCurrentApi(mountingContext)) return
+      if (value) current.touchpad?.cancel()
+      current.keyboard?.suspend(value)
+    },
+    setKeyboardMinHeight(height: number) {
+      if (current.host === host) current.keyboard?.setBuiltinMinHeight(height * uiZoom.value)
+    },
     setModifiers(modifiers: Partial<TerminalModifiers>) { setModifiers(current, modifiers) },
     setZoom(percent: number) { if (current.host === host && isCurrentApi(mountingContext)) setTerminalZoom(current, percent) },
     sendKey(key: string, modifiers: Partial<TerminalModifiers> = current.modifiers) {

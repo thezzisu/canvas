@@ -166,3 +166,36 @@ test('inactive and disposed mobile input cannot send pending native edits', t =>
   assert.equal(f.element.removed, true)
   assert.deepEqual(f.events, [{ type: 'composing' }])
 })
+
+
+test('keyboard handoff waits for a final composition edit before disabling native input', async t => {
+  const f = fixture(t); f.control.setEditable(true)
+  f.dispatch('compositionstart'); f.edit('pin', { isComposing: true })
+  const finish = f.control.finishEditing().then(() => f.control.setEditable(false))
+  f.dispatch('blur')
+  f.dispatch('compositionend', { data: '拼' }); f.edit('拼音')
+  t.mock.timers.tick(0); await finish
+  assert.deepEqual(f.events.filter(event => event.type === 'input'), [{ type: 'input', data: '拼音' }])
+  assert.equal(f.element.contentEditable, 'false')
+  t.mock.timers.tick(200)
+  assert.deepEqual(f.events.filter(event => event.type === 'input'), [{ type: 'input', data: '拼音' }])
+})
+
+test('a missing native compositionend cannot send unfinished preedit during handoff', async t => {
+  const f = fixture(t); f.control.setEditable(true)
+  f.dispatch('compositionstart'); f.edit('pin', { isComposing: true })
+  const finish = f.control.finishEditing().then(() => f.control.setEditable(false))
+  t.mock.timers.tick(120); await finish
+  assert.deepEqual(f.events.filter(event => event.type === 'input'), [])
+  assert.equal(f.element.contentEditable, 'false')
+})
+
+
+test('native recovery refocus cannot erase a pending final composition commit', t => {
+  const f = fixture(t); f.control.setEditable(true)
+  f.dispatch('compositionstart'); f.edit('拼音', { isComposing: true }); f.dispatch('compositionend')
+  f.dispatch('blur'); f.dispatch('focus')
+  assert.equal(f.element.textContent, '\u200b拼音')
+  t.mock.timers.tick(0)
+  assert.deepEqual(f.events.filter(event => event.type === 'input'), [{ type: 'input', data: '拼音' }])
+})

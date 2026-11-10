@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { NodeProps } from '@vue-flow/core'
 import UButton from '@nuxt/ui/components/Button.vue'
+import { useToast } from '@nuxt/ui/composables/useToast'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import { NodeResizer } from '@vue-flow/node-resizer'
 import Icon from './Icon.vue'
@@ -32,6 +33,7 @@ import type { TerminalTouchMode } from '../terminal-touch'
 import type { TouchpadControl } from '../touchpad-gesture'
 import { cutoutPosition, cutoutWidth } from '../display-cutout'
 import { useDocumentFocus } from '../document-focus'
+import { uiZoom } from '../ui-scale'
 import { useTerminalSettings } from '../terminal-settings'
 import TerminalSettingsDialog from './TerminalSettingsDialog.vue'
 import ContentZoom from './ContentZoom.vue'
@@ -41,6 +43,7 @@ import type { PaneAction, PaneContext } from '../../../shared/pane-context'
 import { contentZoomMenu } from '../content-zoom-menu'
 import type { TerminalData } from '../types'
 const { t } = useI18n()
+const toast = useToast()
 const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>>()
 const layoutRoot = ref<HTMLElement>()
 const { editing } = useLayoutCard(layoutRoot)
@@ -176,12 +179,15 @@ function toggleKeyboard() {
   if (status.value.keyboardRequested) terminal?.blur()
   else terminal?.focus({ keyboard: true })
 }
+function switchKeyboard() { terminal?.switchKeyboard() }
+let keyboardMinHeight = 0
+function keyboardBounds(height: number) { keyboardMinHeight = height; terminal?.setKeyboardMinHeight(height) }
 function readText(signal: AbortSignal) { return terminal?.readText(signal) ?? Promise.reject(new Error(t('terminal.unavailable'))) }
 function paneContext(x: number, y: number, signal: AbortSignal) { return terminal?.paneContext(x, y, signal) ?? Promise.resolve(null) }
 function paneAction(pane: PaneContext, command: PaneAction) { return terminal?.paneAction(pane, command) ?? Promise.reject(new Error(t('terminal.unavailable'))) }
 function allowsContextMenu() { return terminal?.allowsContextMenu() ?? true }
 function copyText(text?: string) { return terminal?.copySelection(text) ?? Promise.resolve(false) }
-function reading(active: boolean) { if (active) terminal?.blur() }
+function reading(active: boolean) { terminal?.suspendKeyboard(active) }
 function mobileKey(key: string, modifiers?: Partial<TerminalModifiers>) { terminal?.sendKey(key, modifiers) }
 function mobileModifiers(value: TerminalModifiers) { terminal?.setModifiers(value) }
 function mobileMode(mode: TerminalTouchMode) { terminal?.setTouchMode(mode) }
@@ -225,6 +231,7 @@ function mount() {
   }, { magnified: props.data.focus, mobile: props.data.mobile, zoom: zoom.value, closed: !!props.data.closed, settings: settings.value })
   terminal?.setAppShowing(showApp.value)
   terminal?.setEditing(editing.value)
+  if (keyboardMinHeight) terminal?.setKeyboardMinHeight(keyboardMinHeight)
   if (mobileFocus.value && !showApp.value) {
     if (status.value.touchMode === 'select') terminal?.setTouchMode('scroll')
     terminal?.focus({ keyboard: false })
@@ -234,6 +241,10 @@ onMounted(() => { mount(); document.addEventListener('dragend', clearNoteDrag); 
 watch(() => props.data.closed, value => { if (value) terminal?.close() })
 watch([zoom, () => props.data.focus], () => { terminal?.setZoom(zoom.value) })
 watch(settings, value => terminal?.setSettings(value), { flush: 'sync' })
+watch(uiZoom, () => { if (keyboardMinHeight) terminal?.setKeyboardMinHeight(keyboardMinHeight) })
+watch(() => status.value.keyboardUnavailable, value => {
+  if (value) toast.add({ title: t('terminal.keyboard.systemUnavailable'), color: 'warning' })
+})
 watch([keepTerminal, () => props.data.mobile, () => props.data.focus], async () => { terminal?.dispose(); terminal = undefined; await nextTick(); mount() })
 onBeforeUnmount(() => { clearPreviewTap(); terminal?.dispose(); document.removeEventListener('dragend', clearNoteDrag); window.removeEventListener('blur', clearNoteDrag) })
 function action(name: string) {
@@ -309,7 +320,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <div v-if="!showApp && !closed && keepTerminal && !maximizedElsewhere && (status.status === 'connecting' || status.status === 'connected' && !status.screenReady)" class="terminal-loading nodrag" :class="{ 'terminal-loading-initial': !status.screenReady }" role="status"><span class="spinner" />{{ status.retryAttempt ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt }) : t('common.loading') }}</div>
     </div>
     <div v-if="mobilePreview && !closed && !editing" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: label })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
-    <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :read-text="readText" :copy-text="copyText" :prepare-files="prepareFiles" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @pointer="mobilePointer" @files="mobileFiles" @paste="mobilePaste" @paste-file="pasteFile" @reading="reading" />
+    <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :keyboard-mode="status.keyboardMode || 'system'" :keyboard-open="!!status.keyboardRequested" :dock-height="(status.keyboardDockHeight || 0) / uiZoom" :read-text="readText" :copy-text="copyText" :prepare-files="prepareFiles" @switch-keyboard="switchKeyboard" @bounds="keyboardBounds" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @pointer="mobilePointer" @files="mobileFiles" @paste="mobilePaste" @paste-file="pasteFile" @reading="reading" />
   </article>
   <CardLayoutControls :id="id" :label="label" :kind="app ? 'app' : 'terminal'" :width="data.width" :height="data.height" />
 </template>

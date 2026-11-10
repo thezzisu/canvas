@@ -2,9 +2,9 @@ import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { viewportPolicy, type InteractiveWidget } from './developer-mode.ts'
 import { readViewportFrame } from './viewport-frame.ts'
-import { bindMobileKeyboard, hideMobileKeyboard, mobileKeyboardFrame, mobileKeyboardVisible, refreshMobileKeyboardViewport } from './mobile-keyboard.ts'
+import { bindMobileKeyboard, dismissMobileKeyboard, hideMobileKeyboard, mobileKeyboardFrame, mobileKeyboardVisible, mobileKeyboardOpen, refreshMobileKeyboardViewport } from './mobile-keyboard.ts'
 
-function fixture(t: TestContext, policy: InteractiveWidget = 'resizes-content') {
+function fixture(t: TestContext, policy: InteractiveWidget = 'resizes-content', finishEditing?: () => Promise<void>) {
   const previousPolicy = viewportPolicy.value
   viewportPolicy.value = { viewportFit: 'cover', interactiveWidget: policy }
   t.mock.timers.enable({ apis: ['setTimeout'] })
@@ -15,8 +15,10 @@ function fixture(t: TestContext, policy: InteractiveWidget = 'resizes-content') 
     createElement: () => probe, activeElement: null as object | null })
   document.activeElement = document.body
   const window = Object.assign(new EventTarget(), { innerWidth: 390, innerHeight: 844, visualViewport: visual })
-  const originals = new Map(['window', 'document', 'navigator'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]))
-  for (const [name, value] of Object.entries({ window, document, navigator: {} })) Object.defineProperty(globalThis, name, { configurable: true, value })
+  const storage = new Map<string, string>()
+  const localStorage = { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => { storage.set(key, value) } }
+  const originals = new Map(['window', 'document', 'navigator', 'localStorage'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]))
+  for (const [name, value] of Object.entries({ window, document, navigator: {}, localStorage })) Object.defineProperty(globalThis, name, { configurable: true, value })
   const textarea = Object.assign(new EventTarget(), {
     readOnly: false, inputMode: 'text', focusCalls: 0,
     focus() {
@@ -31,7 +33,7 @@ function fixture(t: TestContext, policy: InteractiveWidget = 'resizes-content') 
   })
   let requested = false, active = true
   const control = bindMobileKeyboard(textarea as unknown as HTMLTextAreaElement, {
-    active: () => active, changed: value => { requested = value },
+    active: () => active, changed: value => { requested = value }, finishEditing,
   })
   t.after(() => {
     control.dispose()
@@ -49,7 +51,7 @@ function fixture(t: TestContext, policy: InteractiveWidget = 'resizes-content') 
     visual.dispatchEvent(new Event('resize'))
   }
   const open = () => { control.focus(true); resize(500) }
-  return { control, textarea, window, document, visual, css, resize, open, requested: () => requested, deactivate: () => { active = false } }
+  return { control, textarea, window, document, visual, css, storage, resize, open, requested: () => requested, deactivate: () => { active = false } }
 }
 
 test('mobile keyboard off gates all native focus while explicit opening permits input', t => {
@@ -107,13 +109,16 @@ test('blur followed by closing and reopening never releases the saved viewport e
   assert.equal(f.requested(), true)
 })
 
-test('rejected keyboard restoration closes intent and never retries in a loop', async t => {
+test('rejected keyboard restoration replaces the IME without resizing or retrying in a loop', async t => {
   const f = fixture(t); f.open(); const before = f.textarea.focusCalls
   f.resize(844); await Promise.resolve(); t.mock.timers.tick(800)
-  assert.equal(f.requested(), false); assert.equal(mobileKeyboardFrame.value, undefined)
+  t.mock.timers.tick(0)
+  assert.equal(f.requested(), true); assert.equal(mobileKeyboardFrame.value, undefined)
+  assert.deepEqual(f.control.state, { mode: 'builtin', dockHeight: 344, switching: false, unavailable: true })
   assert.equal(f.textarea.readOnly, true); assert.equal(mobileKeyboardVisible.value, false)
+  assert.equal(mobileKeyboardOpen.value, true)
   f.resize(844); t.mock.timers.tick(3000); await Promise.resolve()
-  assert.equal(f.textarea.focusCalls, before + 1)
+  assert.equal(f.textarea.focusCalls, before + 2, 'one native retry and one noneditable builtin focus')
 })
 
 test('a browser that declines the initial keyboard request leaves the button off', t => {
@@ -144,7 +149,7 @@ test('closing animation does not replace the last stable keyboard viewport', asy
   assert.equal(mobileKeyboardFrame.value, undefined)
 })
 
-test('other editors, explicit hiding and hidden pages cancel pending recovery', async t => {
+test('other editors and explicit hiding close intent while hidden pages pause recovery', async t => {
   const f = fixture(t); f.open(); f.textarea.blur()
   f.document.activeElement = {}; f.document.dispatchEvent(new Event('focusin'))
   await Promise.resolve()
@@ -152,7 +157,8 @@ test('other editors, explicit hiding and hidden pages cancel pending recovery', 
   f.resize(844); f.open(); f.resize(844); hideMobileKeyboard(); await Promise.resolve()
   assert.equal(f.requested(), false); assert.equal(mobileKeyboardFrame.value, undefined)
   f.open(); f.document.hidden = true; f.document.dispatchEvent(new Event('visibilitychange'))
-  assert.equal(f.requested(), false); assert.equal(mobileKeyboardVisible.value, false)
+  assert.equal(f.requested(), true); assert.equal(mobileKeyboardVisible.value, false)
+  assert.equal(f.control.state.switching, true)
 })
 
 test('synchronous clipboard focus restoration preserves the keyboard without refocusing', async t => {
@@ -315,7 +321,179 @@ test('picker never opens an initially closed keyboard and a declined restoration
   f.open(); const finish = f.control.filePicker()!, before = f.textarea.focusCalls
   f.resize(844); finish(true)
   await Promise.resolve(); t.mock.timers.tick(1000)
-  assert.equal(f.requested(), false); assert.equal(f.textarea.focusCalls, before + 1)
+  assert.equal(f.requested(), true); assert.equal(f.control.state.mode, 'builtin')
+  assert.equal(f.control.state.dockHeight, 344); assert.equal(f.control.state.unavailable, true)
+  assert.equal(f.textarea.focusCalls, before + 2, 'native restoration then noneditable builtin focus')
   f.resize(844); t.mock.timers.tick(4000)
-  assert.equal(f.textarea.focusCalls, before + 1)
+  assert.equal(f.textarea.focusCalls, before + 2)
+})
+
+
+test('native and builtin handoff preserves the available frame throughout both animations', t => {
+  const f = fixture(t); f.open()
+  f.control.setBuiltinMinHeight(260)
+  f.control.switchMode()
+  assert.equal(f.control.state.mode, 'builtin')
+  assert.equal(f.requested(), true)
+  for (const height of [500, 570, 660, 760, 844]) {
+    f.resize(height)
+    assert.equal(height - f.control.state.dockHeight, 500)
+  }
+  t.mock.timers.tick(250)
+  assert.equal(f.control.state.switching, false)
+  assert.equal(f.textarea.readOnly, true)
+  assert.equal(f.control.state.dockHeight, 344)
+  f.control.switchMode()
+  assert.equal(f.control.state.mode, 'system')
+  for (const height of [844, 760, 660, 570, 500]) {
+    f.resize(height)
+    assert.equal(height - f.control.state.dockHeight, 500)
+  }
+  t.mock.timers.tick(250)
+  assert.equal(f.control.state.switching, false)
+  assert.equal(f.control.state.dockHeight, 0)
+  assert.equal(f.textarea.readOnly, false)
+})
+
+test('builtin preference survives closing without automatically reopening', t => {
+  const f = fixture(t)
+  f.control.switchMode()
+  assert.equal(f.control.state.mode, 'builtin')
+  assert.equal(f.storage.get('canvas:mobile-keyboard-mode'), 'builtin')
+  assert.equal(f.requested(), true)
+  f.control.blur()
+  assert.equal(f.requested(), false); assert.equal(mobileKeyboardOpen.value, false)
+  f.control.focus()
+  assert.equal(f.requested(), false)
+  f.control.focus(true)
+  assert.equal(f.control.state.mode, 'builtin'); assert.equal(f.requested(), true)
+  assert.equal(f.control.state.dockHeight, 260)
+})
+
+test('builtin height clamps oversized system geometry and allows one settled change', t => {
+  const f = fixture(t)
+  f.control.focus(true); f.resize(244)
+  f.control.switchMode()
+  assert.equal(f.control.state.switching, true)
+  f.resize(844); t.mock.timers.tick(250)
+  assert.equal(f.control.state.dockHeight, 460)
+  assert.equal(f.control.state.switching, false)
+  assert.equal(844 - f.control.state.dockHeight, 384)
+})
+
+test('declined system switch keeps an available builtin dock and explicit preference', t => {
+  const f = fixture(t); f.open(); f.control.switchMode(); f.resize(844); t.mock.timers.tick(250)
+  f.control.switchMode()
+  assert.equal(f.control.state.mode, 'system')
+  assert.equal(f.control.state.dockHeight, 344)
+  t.mock.timers.tick(900)
+  assert.equal(f.control.state.mode, 'builtin'); assert.equal(f.control.state.dockHeight, 344)
+  assert.equal(f.control.state.unavailable, true); assert.equal(f.requested(), true)
+  assert.equal(f.storage.get('canvas:mobile-keyboard-mode'), 'system', 'one failure does not overwrite the preference')
+})
+
+test('copy and paste sheets borrow focus without revoking the builtin keyboard', async t => {
+  const f = fixture(t); f.open(); f.control.switchMode(); f.resize(844); t.mock.timers.tick(250)
+  f.control.suspend(true)
+  f.document.activeElement = {}; f.document.dispatchEvent(new Event('focusin'))
+  f.resize(500); await Promise.resolve()
+  assert.equal(f.requested(), true); assert.equal(f.control.state.switching, true)
+  f.control.suspend(false); t.mock.timers.tick(0)
+  assert.equal(f.control.state.switching, true, 'sheet IME closing still owns the resize hold')
+  f.resize(844); t.mock.timers.tick(250)
+  assert.equal(f.requested(), true); assert.equal(f.control.state.mode, 'builtin')
+  assert.equal(f.control.state.dockHeight, 344)
+  assert.equal(mobileKeyboardOpen.value, true)
+})
+
+test('builtin file picking preserves keyboard mode and never requests native input', async t => {
+  const f = fixture(t); f.control.switchMode()
+  const before = f.textarea.focusCalls, finish = f.control.filePicker()!
+  f.document.hidden = true; f.document.dispatchEvent(new Event('visibilitychange'))
+  t.mock.timers.tick(1500); await Promise.resolve()
+  finish(true)
+  f.document.hidden = false; f.document.dispatchEvent(new Event('visibilitychange'))
+  assert.equal(f.requested(), true); assert.equal(f.control.state.mode, 'builtin')
+  assert.equal(f.control.state.switching, false)
+  assert.equal(f.textarea.focusCalls, before)
+})
+
+
+test('explicit hide waits for native composition completion without reopening or late state changes', async t => {
+  let finished: (() => void) | undefined
+  const f = fixture(t, 'resizes-content', () => new Promise<void>(resolve => { finished = resolve }))
+  f.open()
+  const focusCalls = f.textarea.focusCalls
+  f.control.blur()
+  assert.equal(f.requested(), false)
+  assert.equal(f.textarea.readOnly, false, 'the final native commit can still drain')
+  finished!(); await Promise.resolve()
+  assert.equal(f.textarea.readOnly, true)
+  assert.equal(f.requested(), false); assert.equal(f.textarea.focusCalls, focusCalls)
+  assert.equal(f.document.activeElement, f.document.body)
+})
+
+test('a completed builtin handoff restores noneditable terminal focus without stealing another editor', async t => {
+  let finished: (() => void) | undefined
+  const f = fixture(t, 'resizes-content', () => new Promise<void>(resolve => { finished = resolve }))
+  f.open(); f.control.switchMode()
+  finished!(); await Promise.resolve()
+  assert.equal(f.document.activeElement, f.textarea)
+  assert.equal(f.textarea.readOnly, true); assert.equal(f.requested(), true)
+  f.control.switchMode(); f.resize(500); t.mock.timers.tick(250)
+  f.control.switchMode()
+  const other = {}; f.document.activeElement = other
+  finished!(); await Promise.resolve()
+  assert.equal(f.document.activeElement, other)
+})
+
+test('late completion of a hidden input cannot disable a newer system opening', async t => {
+  let finished: (() => void) | undefined
+  const f = fixture(t, 'resizes-content', () => new Promise<void>(resolve => { finished = resolve }))
+  f.open(); f.control.blur()
+  f.resize(844); f.open()
+  finished!(); await Promise.resolve()
+  assert.equal(f.requested(), true); assert.equal(f.textarea.readOnly, false)
+  assert.equal(f.document.activeElement, f.textarea)
+})
+
+
+test('activating a closed cached terminal refreshes the device keyboard preference', t => {
+  const f = fixture(t)
+  assert.equal(f.control.state.mode, 'system')
+  f.storage.set('canvas:mobile-keyboard-mode', 'builtin')
+  f.control.focus(false)
+  assert.equal(f.control.state.mode, 'builtin')
+  f.control.switchMode()
+  assert.equal(f.control.state.mode, 'system', 'switch selects the alternate of the refreshed preference')
+})
+
+
+test('a settled builtin keyboard follows same-width full viewport changes without phantom native input', t => {
+  const f = fixture(t); f.open(); f.control.switchMode(); f.resize(844); t.mock.timers.tick(250)
+  assert.equal(f.control.state.dockHeight, 344)
+  f.resize(700)
+  assert.equal(f.control.state.dockHeight, 344)
+  assert.equal(f.control.state.switching, false)
+  assert.equal(mobileKeyboardVisible.value, false)
+  f.resize(390)
+  assert.equal(f.control.state.dockHeight, 230, 'tiny frames refit once to retain terminal space')
+  assert.equal(mobileKeyboardVisible.value, false)
+})
+
+
+test('automatic modal dismissal preserves borrowed sheet and picker intent while explicit hide remains final', t => {
+  const f = fixture(t); f.control.switchMode()
+  f.control.suspend(true)
+  dismissMobileKeyboard()
+  assert.equal(f.requested(), true, 'a keyboard sheet is a temporary focus owner')
+  f.control.suspend(false); t.mock.timers.tick(0)
+  const finish = f.control.filePicker()!
+  dismissMobileKeyboard()
+  assert.equal(f.requested(), true, 'a native picker owns its pending restoration')
+  hideMobileKeyboard(); finish(true)
+  assert.equal(f.requested(), false, 'explicit close cancels even a borrowed input')
+  f.control.focus(true)
+  dismissMobileKeyboard()
+  assert.equal(f.requested(), false, 'an unrelated modal still dismisses the keyboard')
 })

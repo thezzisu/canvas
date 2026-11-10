@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 import type { CanvasViewport } from './mobile-layout'
-import { mobileKeyboardFrame, mobileKeyboardVisible, refreshMobileKeyboardViewport } from './mobile-keyboard'
+import { mobileKeyboardFrame, mobileKeyboardOpen, mobileKeyboardVisible, refreshMobileKeyboardViewport } from './mobile-keyboard'
 import { viewportPolicy } from './developer-mode'
 import { logicalViewportFrame, readViewportFrame, viewportProbe } from './viewport-frame'
 import { uiZoom } from './ui-scale'
@@ -61,7 +61,7 @@ export function useMobileViewport(mobile: Ref<boolean>) {
       ...(override ? { '--mobile-width': `${frame.width}px`, '--mobile-height': `${frame.height}px`,
         '--mobile-top': `${frame.top}px`, '--mobile-left': `${frame.left}px` } : {}),
       '--mobile-safe-top': override ? `max(0px, calc((env(safe-area-inset-top) - ${physicalViewport.value.top}px) / var(--ui-zoom)))` : 'var(--ui-safe-top)',
-      '--mobile-safe-bottom': mobileKeyboardVisible.value ? '0px' : 'var(--ui-safe-bottom)',
+      '--mobile-safe-bottom': mobileKeyboardOpen.value || mobileKeyboardVisible.value ? '0px' : 'var(--ui-safe-bottom)',
     }
   })
   return { viewport, style }

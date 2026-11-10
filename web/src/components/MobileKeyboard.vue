@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRafFn } from '@vueuse/core'
+import { useRafFn, useResizeObserver } from '@vueuse/core'
 import type { TerminalModifiers } from '../terminal-input'
 import type { TerminalTouchMode } from '../terminal-touch'
 import type { TouchpadControl } from '../touchpad-gesture'
@@ -9,14 +9,19 @@ import Icon from './Icon.vue'
 import UModal from './CanvasModal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import { copiedFile } from '../file-clipboard'
+import { useReducedMotion } from '../reduced-motion'
 
 const { t } = useI18n()
+const reducedMotion = useReducedMotion()
 
 type TouchMode = TerminalTouchMode
 interface Keycap { key: string; label: string; symbol?: string; span?: number }
 const props = defineProps<{
   sessionKey: string
   disabled?: boolean
+  keyboardMode: 'system' | 'builtin'
+  keyboardOpen: boolean
+  dockHeight: number
   modifiers: TerminalModifiers
   touchMode: TouchMode
   readText(signal: AbortSignal): Promise<string>
@@ -32,10 +37,14 @@ const emit = defineEmits<{
   pasteFile: []
   reading: [active: boolean]
   pointer: [action: TouchpadControl]
+  switchKeyboard: []
+  bounds: [minHeight: number]
 }>()
-const more = ref(false)
-const keyboard = ref<HTMLElement>(), moreTrigger = ref<HTMLButtonElement>()
+const keyboard = ref<HTMLElement>()
+const dock = ref<HTMLElement>(), naturalDeck = ref<HTMLElement>(), actions = ref<HTMLElement>(), safeArea = ref<HTMLElement>()
 const portal = computed(() => keyboard.value?.closest<HTMLElement>('.app-shell') || document.body)
+const switchLabel = computed(() => t(props.keyboardMode === 'system' ? 'terminal.keyboard.switchToBuiltin' : 'terminal.keyboard.switchToSystem'))
+const hasDock = computed(() => props.dockHeight > 0)
 const caps = ref(false)
 const sheet = ref<'select' | 'paste'>()
 const snapshot = ref('')
@@ -215,8 +224,8 @@ function releasePress(event: PointerEvent) {
 function keyboardClick(event: MouseEvent, key: string) {
   if (event.detail === 0) send(caps.value && /^[a-z]$/.test(key) ? key.toUpperCase() : key, { ...activeModifiers.value })
 }
-function toggleMore() { stopRepeat(); more.value = !more.value }
-function chooseMode(mode: TouchMode) { releasePointer(true); emit('mode', mode); more.value = false }
+function switchKeyboard() { cancelPress(); emit('switchKeyboard') }
+function chooseMode(mode: TouchMode) { releasePointer(true); emit('mode', mode) }
 function closeSheet() {
   if (!sheet.value) return
   textRequest?.abort(); textRequest = undefined
@@ -245,7 +254,6 @@ async function loadText() {
 }
 function openSheet(kind: 'select' | 'paste') {
   stopRepeat()
-  more.value = false
   previousMode = props.touchMode
   emit('reading', true)
   emit('mode', 'select')
@@ -282,7 +290,7 @@ function pasteFiles(event: ClipboardEvent) {
 }
 function pickFiles() {
   pendingFiles?.dispose()
-  more.value = false; pendingFiles = props.prepareFiles()
+  pendingFiles = props.prepareFiles()
   if (!pendingFiles) return
   fileInput.value?.click()
 }
@@ -294,49 +302,69 @@ function filesChanged(event: Event) {
   accept?.complete(files)
 }
 function filesCancelled() { const accept = pendingFiles; pendingFiles = undefined; accept?.complete([]) }
-function escape() { if (sheet.value) closeSheet(); else more.value = false; filesCancelled(); emit('reading', false); stopRepeat() }
-function reset(clearFileSelection = true) { cancelPress(); more.value = false; caps.value = false; if (clearFileSelection) { pendingFiles?.dispose(); pendingFiles = undefined }; emit('reading', false); closeSheet(); emit('modifiers', { shift: false, ctrl: false, alt: false, meta: false }) }
+function escape() { if (sheet.value) closeSheet(); else send('Escape'); stopRepeat() }
+function reset(clearFileSelection = true) { cancelPress(); caps.value = false; if (clearFileSelection) { pendingFiles?.dispose(); pendingFiles = undefined }; emit('reading', false); closeSheet(); emit('modifiers', { shift: false, ctrl: false, alt: false, meta: false }) }
+function measureBounds() {
+  if (!naturalDeck.value || !actions.value || !keyboard.value || !dock.value) return
+  const deckStyle = getComputedStyle(naturalDeck.value.parentElement!)
+  emit('bounds', Math.ceil(naturalDeck.value.offsetHeight + actions.value.offsetHeight +
+    parseFloat(deckStyle.paddingTop) + parseFloat(deckStyle.paddingBottom) + (safeArea.value?.offsetHeight || 0) + 1))
+}
+// Keep leaving flex items at their painted position while the remaining items move.
+function pinLeavingTool(element: Element) {
+  const button = element as HTMLElement
+  Object.assign(button.style, { left: `${button.offsetLeft}px`, top: `${button.offsetTop}px`, width: `${button.offsetWidth}px` })
+}
+function unpinTool(element: Element) {
+  const button = element as HTMLElement
+  button.style.removeProperty('left'); button.style.removeProperty('top'); button.style.removeProperty('width')
+}
 function visibilityChanged() { if (document.hidden) cancelPress() }
 watch(() => props.sessionKey, () => reset())
 watch(() => props.disabled, disabled => { if (disabled) reset(false) })
 watch(() => props.touchMode, () => releasePointer(true))
+watch(() => [props.keyboardOpen, props.keyboardMode], () => { cancelPress(); if (!props.keyboardOpen) closeSheet() })
+watch(hasDock, () => { void nextTick(measureBounds) })
+useResizeObserver([naturalDeck, actions, safeArea], measureBounds)
 onMounted(() => { window.addEventListener('blur', cancelPress); document.addEventListener('visibilitychange', visibilityChanged) })
 onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFiles = undefined; cancelPress(); window.removeEventListener('blur', cancelPress); document.removeEventListener('visibilitychange', visibilityChanged) })
 </script>
 
 <template>
-  <section ref="keyboard" class="mobile-keyboard" @pointerdown.stop @mousedown.stop @keydown.esc.stop.prevent="escape">
-    <div v-if="more" class="mobile-keys-dismiss" @pointerdown.stop.prevent="more = false" />
-    <div v-if="more" class="mobile-keys-more" role="region" :aria-label="t('terminal.keyboard.more')" @wheel.stop>
-      <div class="mobile-key-deck" role="group" :aria-label="t('terminal.keyboard.full')" @scroll.capture="stopRepeat" @contextmenu.prevent>
-        <div v-for="row in deckRows" :key="row.keys[0]?.key" class="mobile-key-deck-row" :class="row.class" role="group" :aria-label="row.name">
-          <button v-for="key in row.keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :title="key.label" :aria-pressed="keyPressed(key.key)" :style="key.span ? { gridColumn: `span ${key.span}` } : undefined"
-            :class="{ 'letter-key': key.key.length === 1, 'shift-key': key.key.startsWith('Shift'), 'backspace-key': key.key === 'Backspace', 'space-key': key.key === ' ', 'enter-key': key.key === 'Enter', 'symbol-key': ['Meta', 'Home', 'End'].includes(key.key) }"
-            @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ keyLabel(key) }}</button>
-        </div>
-      </div>
-      <div class="mobile-key-actions" :style="copiedFile ? { gridTemplateColumns: 'repeat(7,minmax(0,1fr))' } : undefined" role="toolbar" :aria-label="t('terminal.keyboard.actions')">
-        <button type="button" :disabled="disabled" :aria-label="t('terminal.upload.file')" :title="t('terminal.upload.file')" @pointerdown.prevent @click="pickFiles"><Icon name="file" :size="18" /></button>
-        <button type="button" :disabled="disabled" :aria-label="t('terminal.keyboard.pasteText')" :title="t('terminal.keyboard.pasteText')" @pointerdown.prevent @click="openSheet('paste')"><Icon name="copy" :size="18" /></button>
-        <button v-if="copiedFile" type="button" :disabled="disabled" :aria-label="t('fileTransfer.paste')" :title="t('fileTransfer.pasteNamed', { name: copiedFile.filename })" @pointerdown.prevent @click="emit('pasteFile')"><Icon name="clipboard" :size="18" /></button>
-        <button type="button" :aria-label="t('terminal.keyboard.selectText')" :title="t('terminal.keyboard.selectText')" @pointerdown.prevent @click="openSheet('select')"><Icon name="note" :size="18" /></button>
-        <button type="button" :aria-pressed="touchMode === 'scroll'" :aria-label="t('terminal.keyboard.touchScroll')" :title="t('terminal.keyboard.touchScroll')" @pointerdown.prevent @click="chooseMode('scroll')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18 M8 7l4-4 4 4 M8 17l4 4 4-4" /></svg></button>
-        <button type="button" :disabled="disabled" :aria-pressed="touchMode === 'mouse'" :aria-label="t('terminal.keyboard.touchMouse')" :title="t('terminal.keyboard.touchMouse')" @pointerdown.prevent @click="chooseMode('mouse')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="6" /><path d="M12 3v6" /></svg></button>
-        <UButton type="button" :disabled="disabled" :aria-pressed="touchMode === 'touchpad'" :aria-label="t('terminal.keyboard.touchpad')" :title="t('terminal.keyboard.touchpad')" icon="i-lucide-touchpad" @pointerdown.prevent @click="chooseMode('touchpad')" />
-      </div>
-    </div>
-    <div v-if="touchMode === 'touchpad'" class="mobile-touchpad-controls" role="toolbar" :aria-label="t('terminal.keyboard.touchpad')" @contextmenu.prevent>
-      <UButton type="button" :disabled="disabled" :aria-label="t('terminal.keyboard.mouseLeft')" :aria-pressed="pointerPress?.button === 'left'" icon="i-lucide-mouse-pointer-2" @pointerdown="pointerDown($event, 'left')" @pointerup="pointerUp($event)" @pointercancel="pointerUp($event, true)" @lostpointercapture="pointerUp($event, true)" @click="event => { if (event.detail === 0) emit('pointer', { type: 'click', button: 'left' }) }">{{ t('terminal.keyboard.mouseLeftShort') }}</UButton>
-      <UButton type="button" :disabled="disabled" :aria-label="t('terminal.keyboard.mouseMiddle')" :aria-pressed="pointerPress?.button === 'middle'" icon="i-lucide-move" @pointerdown="pointerDown($event, 'middle')" @pointermove="pointerMove" @pointerup="pointerUp($event)" @pointercancel="pointerUp($event, true)" @lostpointercapture="pointerUp($event, true)" @click="event => { if (event.detail === 0) emit('pointer', { type: 'click', button: 'middle' }) }">{{ t('terminal.keyboard.mouseMiddleShort') }}</UButton>
-      <UButton type="button" :disabled="disabled" :aria-label="t('terminal.keyboard.mouseRight')" icon="i-lucide-mouse-pointer-2" @pointerdown.prevent @click="emit('pointer', { type: 'click', button: 'right' })">{{ t('terminal.keyboard.mouseRightShort') }}</UButton>
-    </div>
+  <section ref="keyboard" class="mobile-keyboard" :class="{ 'has-dock': hasDock, 'reduced-motion': reducedMotion }" @pointerdown.stop @mousedown.stop @keydown.esc.stop.prevent="escape">
+    <div ref="safeArea" class="mobile-key-safe" aria-hidden="true" />
     <div class="mobile-key-row" role="toolbar" :aria-label="t('terminal.keyboard.helperKeys')" @contextmenu.prevent>
       <button v-for="key in keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :aria-pressed="keyPressed(key.key)" :class="{ 'arrow-key': key.symbol }" @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ key.symbol || key.label }}</button>
-      <button ref="moreTrigger" type="button" :aria-label="t('terminal.keyboard.more')" :aria-expanded="more" :class="{ active: more || modifiers.shift || modifiers.alt || modifiers.meta }" @pointerdown.prevent @click="toggleMore"><Icon name="more" :size="19" /></button>
+      <button type="button" :aria-label="switchLabel" :title="switchLabel" :aria-pressed="keyboardMode === 'builtin'" :class="{ active: keyboardOpen && keyboardMode === 'builtin' || modifiers.shift || modifiers.alt || modifiers.meta }" @pointerdown.prevent @click="switchKeyboard"><Icon name="keyboard-switch" :size="19" /></button>
+    </div>
+    <div ref="dock" class="mobile-key-dock" :style="{ height: `${Math.max(0, dockHeight)}px` }" :inert="!hasDock" :aria-hidden="!hasDock" role="region" :aria-label="t('terminal.keyboard.full')" @wheel.stop>
+      <div class="mobile-key-deck" role="group" :aria-label="t('terminal.keyboard.full')" @scroll.capture="stopRepeat" @contextmenu.prevent>
+        <div ref="naturalDeck">
+          <div v-for="row in deckRows" :key="row.keys[0]?.key" class="mobile-key-deck-row" :class="row.class" role="group" :aria-label="row.name">
+            <button v-for="key in row.keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :title="key.label" :aria-pressed="keyPressed(key.key)" :style="key.span ? { gridColumn: `span ${key.span}` } : undefined"
+              :class="{ 'letter-key': key.key.length === 1, 'shift-key': key.key.startsWith('Shift'), 'backspace-key': key.key === 'Backspace', 'space-key': key.key === ' ', 'enter-key': key.key === 'Enter', 'symbol-key': ['Meta', 'Home', 'End'].includes(key.key) }"
+              @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ keyLabel(key) }}</button>
+          </div>
+        </div>
+      </div>
+      <div ref="actions" class="mobile-key-actions" role="toolbar" :aria-label="t('terminal.keyboard.actions')" @contextmenu.prevent>
+        <TransitionGroup name="mobile-tool" @before-leave="pinLeavingTool" @leave-cancelled="unpinTool">
+          <button key="file" type="button" :disabled="disabled" :aria-label="t('terminal.upload.file')" :title="t('terminal.upload.file')" @pointerdown.prevent @click="pickFiles"><Icon name="file" :size="18" /></button>
+          <button key="paste" type="button" :disabled="disabled" :aria-label="t('terminal.keyboard.pasteText')" :title="t('terminal.keyboard.pasteText')" @pointerdown.prevent @click="openSheet('paste')"><Icon name="clipboard" :size="18" /></button>
+          <button v-if="copiedFile" key="paste-file" type="button" :disabled="disabled" :aria-label="t('fileTransfer.paste')" :title="t('fileTransfer.pasteNamed', { name: copiedFile.filename })" @pointerdown.prevent @click="emit('pasteFile')"><Icon name="file-paste" :size="18" /></button>
+          <button key="copy" type="button" :aria-label="t('terminal.keyboard.selectText')" :title="t('terminal.keyboard.selectText')" @pointerdown.prevent @click="openSheet('select')"><Icon name="copy" :size="18" /></button>
+          <button v-if="touchMode === 'touchpad'" key="left" type="button" class="mobile-mouse-button" :disabled="disabled" :aria-label="t('terminal.keyboard.mouseLeft')" :title="t('terminal.keyboard.mouseLeft')" :aria-pressed="pointerPress?.button === 'left'" @pointerdown="pointerDown($event, 'left')" @pointerup="pointerUp($event)" @pointercancel="pointerUp($event, true)" @lostpointercapture="pointerUp($event, true)" @click="event => { if (event.detail === 0) emit('pointer', { type: 'click', button: 'left' }) }"><Icon name="mouse-left" :size="18" /></button>
+          <button v-if="touchMode === 'touchpad'" key="middle" type="button" class="mobile-mouse-button" :disabled="disabled" :aria-label="t('terminal.keyboard.mouseMiddle')" :title="t('terminal.keyboard.mouseMiddle')" :aria-pressed="pointerPress?.button === 'middle'" @pointerdown="pointerDown($event, 'middle')" @pointermove="pointerMove" @pointerup="pointerUp($event)" @pointercancel="pointerUp($event, true)" @lostpointercapture="pointerUp($event, true)" @click="event => { if (event.detail === 0) emit('pointer', { type: 'click', button: 'middle' }) }"><Icon name="mouse-middle" :size="18" /></button>
+          <button v-if="touchMode === 'touchpad'" key="right" type="button" :disabled="disabled" :aria-label="t('terminal.keyboard.mouseRight')" :title="t('terminal.keyboard.mouseRight')" @pointerdown.prevent @click="emit('pointer', { type: 'click', button: 'right' })"><Icon name="mouse-right" :size="18" /></button>
+          <button key="scroll" type="button" :aria-pressed="touchMode === 'scroll'" :aria-label="t('terminal.keyboard.touchScroll')" :title="t('terminal.keyboard.touchScroll')" @pointerdown.prevent @click="chooseMode('scroll')"><Icon name="scroll" :size="18" /></button>
+          <button key="mouse" type="button" :disabled="disabled" :aria-pressed="touchMode === 'mouse'" :aria-label="t('terminal.keyboard.touchMouse')" :title="t('terminal.keyboard.touchMouse')" @pointerdown.prevent @click="chooseMode('mouse')"><Icon name="pointer" :size="18" /></button>
+          <button key="touchpad" type="button" :disabled="disabled" :aria-pressed="touchMode === 'touchpad'" :aria-label="t('terminal.keyboard.touchpad')" :title="t('terminal.keyboard.touchpad')" @pointerdown.prevent @click="chooseMode('touchpad')"><Icon name="touchpad" :size="18" /></button>
+        </TransitionGroup>
+      </div>
     </div>
     <input ref="fileInput" class="mobile-file-input" type="file" multiple tabindex="-1" :aria-label="t('terminal.upload.file')" @change="filesChanged" @cancel="filesCancelled" />
     <UModal :open="!!sheet" :portal="portal" :transition="false" :title="sheet === 'select' ? t('terminal.keyboard.selectText') : t('terminal.keyboard.pasteText')"
-      :close="{ 'aria-label': t('common.close') }" :content="{ onCloseAutoFocus: event => { event.preventDefault(); moreTrigger?.focus({ preventScroll: true }) } }"
+      :close="{ 'aria-label': t('common.close') }" :content="{ onCloseAutoFocus: event => event.preventDefault() }"
       :ui="{ content: 'mobile-text-sheet', overlay: 'mobile-text-backdrop', header: 'shrink-0 px-4 py-3', title: 'text-sm font-medium', body: 'flex flex-1 min-h-0 p-0 sm:p-0', footer: 'shrink-0 justify-end gap-2 p-2', close: 'min-w-[44px] min-h-[44px]' }"
       @update:open="value => { if (!value) closeSheet() }">
       <template #body>
@@ -356,8 +384,9 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
 </template>
 
 <style scoped>
-.mobile-keyboard{position:relative;flex:0 0 auto;min-width:0;border-top:1px solid #353c47;background:#1a1e25;padding:4px 4px calc(4px + var(--mobile-safe-bottom,0px));color:#cbd2dd;z-index:6;touch-action:manipulation}
-.mobile-key-row{position:relative;z-index:3;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:3px;overflow:hidden;min-height:40px;background:#1a1e25}
+.mobile-keyboard{position:relative;flex:0 0 auto;min-width:0;border-top:1px solid #353c47;background:#1a1e25;padding:4px 4px var(--mobile-safe-bottom,0px);color:#cbd2dd;z-index:6;touch-action:manipulation}
+.mobile-keyboard.has-dock{padding-bottom:0}
+.mobile-key-row{position:relative;z-index:3;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:3px;overflow:hidden;min-height:40px;margin-bottom:4px;background:#1a1e25}
 .mobile-keyboard button{min-height:44px;min-width:44px;padding:0 6px;border:1px solid #3a4350;border-bottom-color:#48515e;border-radius:5px;background:rgb(43 50 61 / var(--key-fill,1));box-shadow:inset 0 1px 0 #ffffff05,0 1px 1px #0003;color:#cbd2dd;font-size:12px;line-height:1;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;white-space:nowrap;-webkit-tap-highlight-color:transparent}
 .mobile-key-row>button{min-width:0;min-height:40px;padding:0;height:44px}
 .mobile-keyboard button:active{background:#414955;border-color:#637082;box-shadow:inset 0 1px 2px #0003}
@@ -365,8 +394,9 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
 .mobile-keyboard button:focus-visible{outline:2px solid var(--toggle-fg);outline-offset:-3px}
 .mobile-keyboard button:disabled{opacity:.4;cursor:default}
 .mobile-keyboard .arrow-key{font-size:21px;font-family:system-ui,sans-serif}
-.mobile-keys-dismiss{position:fixed;inset:0;z-index:1;background:transparent}
-.mobile-keys-more{--key-fill:.5;position:absolute;left:50%;bottom:calc(100% + 5px);width:min(760px,calc(100% - 8px));transform:translateX(-50%);z-index:2;display:flex;flex-direction:column;max-height:min(460px,calc(var(--mobile-height,var(--ui-viewport-height)) - 110px - var(--mobile-safe-top,0px) - var(--mobile-safe-bottom,0px)));overflow:hidden;background:#181d258c;border:1px solid #48515e;border-radius:9px;box-shadow:0 8px 32px #0008}
+.mobile-key-safe{position:absolute;width:0;height:var(--ui-safe-bottom,0px);visibility:hidden;pointer-events:none}
+.mobile-key-dock{--key-fill:.5;box-sizing:border-box;display:flex;flex-direction:column;min-height:0;margin:0 -4px;overflow:hidden;padding-bottom:var(--ui-safe-bottom,0px);border-top:1px solid #48515e;background:#181d258c}
+.mobile-keyboard:not(.has-dock) .mobile-key-dock{visibility:hidden;padding-bottom:0;border-top-width:0}
 .mobile-key-deck{container-type:inline-size;flex:1 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;padding:6px;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:thin;scrollbar-color:#515c6b transparent}
 .mobile-key-deck-row{display:grid;gap:2px;margin-bottom:4px;min-width:0}
 .mobile-key-deck-row:last-child{margin-bottom:0}
@@ -378,16 +408,20 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
 .mobile-key-bottom .symbol-key{font-size:clamp(12px,3.6cqw,18px);font-family:system-ui,sans-serif;letter-spacing:0}
 .mobile-key-deck .shift-key,.mobile-key-deck .backspace-key,.mobile-key-deck .enter-key{font-size:clamp(14px,4cqw,20px);background:rgb(37 44 54 / var(--key-fill,1))}
 .mobile-key-deck .shift-key[aria-pressed=true]{background:var(--toggle-bg)}
-.mobile-key-actions{flex:0 0 auto;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px;padding:6px;border-top:1px solid #3c4552}
-.mobile-touchpad-controls{display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:4px;margin-bottom:4px}
-.mobile-touchpad-controls button{touch-action:none}
-.mobile-key-actions button{min-width:0;min-height:44px;padding:0;background:rgb(37 45 55 / var(--key-fill,1));border-color:#35414f;color:#b7c3d2}
+.mobile-key-actions{position:relative;flex:0 0 auto;display:flex;gap:3px;padding:6px;border-top:1px solid #3c4552}
+.mobile-key-actions button{display:flex;align-items:center;justify-content:center;flex:1 1 0;min-width:0;min-height:44px;padding:0;background:rgb(37 45 55 / var(--key-fill,1));border-color:#35414f;color:#b7c3d2}
+.mobile-key-actions .mobile-mouse-button{touch-action:none}
+.mobile-tool-move{transition:transform 160ms ease-out}
+.mobile-tool-enter-active,.mobile-tool-leave-active{transition:opacity 120ms ease-out,transform 160ms ease-out}
+.mobile-tool-enter-from,.mobile-tool-leave-to{opacity:0;transform:translateY(3px)}
+.mobile-tool-leave-active{position:absolute;pointer-events:none}
+.reduced-motion :is(.mobile-tool-move,.mobile-tool-enter-active,.mobile-tool-leave-active){transition:none}
 .mobile-key-actions button[aria-pressed=true]{background:var(--toggle-bg);border-color:var(--toggle-pressed);color:var(--toggle-fg)}
 .mobile-key-actions button:active{background:#3b4654}
 .mobile-keyboard button:is([aria-pressed=true],.active):active:not(:disabled){background:var(--toggle-pressed)}
 .mobile-file-input{display:none}
 @media(hover:hover){.mobile-keyboard button:hover:not(:disabled):not([aria-pressed=true]):not(.active){background:#37414e;border-color:#526071}.mobile-keyboard button:is([aria-pressed=true],.active):hover:not(:active):not(:disabled){background:var(--toggle-hover)}}
-@media(prefers-reduced-transparency:reduce){.mobile-keys-more{--key-fill:1;background:#20252d}}
+@media(prefers-reduced-transparency:reduce){.mobile-key-dock{--key-fill:1;background:#20252d}}
 
 </style>
 
