@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
 import type { CanvasViewport } from './mobile-layout'
-import { mobileKeyboardFrame, mobileKeyboardOpen, mobileKeyboardVisible, refreshMobileKeyboardViewport } from './mobile-keyboard'
+import { mobileKeyboardInset, mobileKeyboardOpen, mobileKeyboardVisible, refreshMobileKeyboardViewport } from './mobile-keyboard'
 import { viewportPolicy } from './developer-mode'
 import { logicalViewportFrame, readViewportFrame, viewportProbe } from './viewport-frame'
 import { uiZoom } from './ui-scale'
@@ -25,8 +25,7 @@ export function canvasFrame(surface: HTMLElement | undefined): CanvasFrame | und
 /** Keep the app inside the visible viewport, including a persistently open keyboard. */
 export function useMobileViewport(mobile: Ref<boolean>) {
   const measured = ref(readViewportFrame())
-  const physicalViewport = computed(() => mobile.value && mobileKeyboardFrame.value ? mobileKeyboardFrame.value : measured.value)
-  const viewport = computed(() => logicalViewportFrame(physicalViewport.value, uiZoom.value))
+  const viewport = computed(() => logicalViewportFrame(measured.value, uiZoom.value))
   const update = () => {
     const next = readViewportFrame(), previous = measured.value
     if (next.width !== previous.width || next.height !== previous.height || next.top !== previous.top || next.left !== previous.left) measured.value = next
@@ -55,13 +54,15 @@ export function useMobileViewport(mobile: Ref<boolean>) {
     if (!mobile.value) return {}
     const frame = viewport.value
     // CSS owns content-resize and keyboard-inset geometry. Only an explicit visual policy
-    // or bounded keyboard recovery overrides the CSS viewport dimensions.
-    const override = viewportPolicy.value.interactiveWidget === 'resizes-visual' || !!mobileKeyboardFrame.value
+    // overrides the CSS viewport dimensions.
+    const override = viewportPolicy.value.interactiveWidget === 'resizes-visual'
     return {
       ...(override ? { '--mobile-width': `${frame.width}px`, '--mobile-height': `${frame.height}px`,
         '--mobile-top': `${frame.top}px`, '--mobile-left': `${frame.left}px` } : {}),
-      '--mobile-safe-top': override ? `max(0px, calc((env(safe-area-inset-top) - ${physicalViewport.value.top}px) / var(--ui-zoom)))` : 'var(--ui-safe-top)',
+      '--mobile-safe-top': override ? `max(0px, calc((env(safe-area-inset-top) - ${measured.value.top}px) / var(--ui-zoom)))` : 'var(--ui-safe-top)',
       '--mobile-safe-bottom': mobileKeyboardOpen.value || mobileKeyboardVisible.value ? '0px' : 'var(--ui-safe-bottom)',
+      // An overlaying IME covers the page bottom; bottom-anchored notices stay above it.
+      '--mobile-keyboard-inset': `${mobileKeyboardInset.value / uiZoom.value}px`,
     }
   })
   return { viewport, style }

@@ -4,7 +4,6 @@ import { useI18n } from 'vue-i18n'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { NodeProps } from '@vue-flow/core'
 import UButton from '@nuxt/ui/components/Button.vue'
-import { useToast } from '@nuxt/ui/composables/useToast'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import { NodeResizer } from '@vue-flow/node-resizer'
 import Icon from './Icon.vue'
@@ -47,7 +46,6 @@ import type { TerminalData } from '../types'
 const loadComposer = () => import('./TerminalComposer.vue')
 const TerminalComposer = defineAsyncComponent(loadComposer)
 const { t } = useI18n()
-const toast = useToast()
 const props = defineProps<Pick<NodeProps<TerminalData>, 'id' | 'data'> & Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>>()
 const layoutRoot = ref<HTMLElement>()
 const { editing } = useLayoutCard(layoutRoot)
@@ -287,9 +285,6 @@ watch(() => props.data.closed, value => { if (value) terminal?.close() })
 watch([zoom, () => props.data.focus], () => { terminal?.setZoom(zoom.value) })
 watch(settings, value => terminal?.setSettings(value), { flush: 'sync' })
 watch(uiZoom, () => { if (keyboardMinHeight) terminal?.setKeyboardMinHeight(keyboardMinHeight) })
-watch(() => status.value.keyboardUnavailable, value => {
-  if (value) toast.add({ title: t('terminal.keyboard.systemUnavailable'), color: 'warning' })
-})
 watch([keepTerminal, () => props.data.mobile, () => props.data.focus], async () => { terminal?.dispose(); terminal = undefined; await nextTick(); mount() })
 onBeforeUnmount(() => { clearPreviewTap(); terminal?.dispose(); document.removeEventListener('dragend', clearNoteDrag); window.removeEventListener('blur', clearNoteDrag) })
 function action(name: string) {
@@ -367,7 +362,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     <div v-if="!showApp && !closed && keepTerminal && !maximizedElsewhere && (status.status === 'connecting' || status.status === 'connected' && !status.screenReady)" class="terminal-loading nodrag" :class="{ 'terminal-loading-initial': !status.screenReady }" role="status"><UIcon name="i-lucide-loader-circle" class="spinner size-3.5 shrink-0 motion-safe:animate-spin" />{{ status.retryAttempt ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt }) : t('common.loading') }}</div>
     </div>
     <div v-if="mobilePreview && !closed && !editing" class="terminal-preview-button" role="button" tabindex="0" :aria-label="t('terminal.action.openWindow', { name: label })" @pointerdown="previewStart" @pointermove="previewMove" @pointerup="previewEnd" @pointercancel="clearPreviewTap" @click.stop.prevent="previewClick" @keydown.enter.stop.prevent="action('focus')" @keydown.space.stop.prevent="action('focus')" />
-    <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :keyboard-mode="status.keyboardMode || 'system'" :keyboard-open="!!status.keyboardRequested" :composing="!!status.keyboardComposer" :dock-height="(status.keyboardDockHeight || 0) / uiZoom" :read-text="readText" :copy-text="copyText" :prepare-files="prepareFiles" @switch-keyboard="switchKeyboard" @bounds="keyboardBounds" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @pointer="mobilePointer" @composer="openComposer" @reading="reading" />
+    <MobileKeyboard v-if="mobileFocus && !showApp" :session-key="`${data.sourceId}/${data.windowId}`" :disabled="!data.available || status.status !== 'connected' || maximizedElsewhere" :modifiers="modifiers" :touch-mode="status.touchMode || 'scroll'" :keyboard-mode="status.keyboardMode || 'system'" :keyboard-open="!!status.keyboardRequested" :composing="!!status.keyboardComposer" :dock-height="(status.keyboardDockHeight || 0) / uiZoom" :deck="!!status.keyboardDeck" :read-text="readText" :copy-text="copyText" :prepare-files="prepareFiles" @switch-keyboard="switchKeyboard" @bounds="keyboardBounds" @key="mobileKey" @modifiers="mobileModifiers" @mode="mobileMode" @pointer="mobilePointer" @composer="openComposer" @reading="reading" />
   </article>
   <CardLayoutControls :id="id" :label="label" :kind="app ? 'app' : 'terminal'" :width="data.width" :height="data.height" />
 </template>

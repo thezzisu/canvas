@@ -1,14 +1,20 @@
-import { ref, shallowRef } from 'vue'
-import { readViewportFrame, type ViewportFrame } from './viewport-frame'
+import { ref } from 'vue'
+import { readViewportFrame } from './viewport-frame'
 
-export const mobileKeyboardFrame = shallowRef<ViewportFrame>()
 export const mobileKeyboardVisible = ref(false)
 export const mobileKeyboardOpen = ref(false)
+/** Height of a system IME overlaying the page (VirtualKeyboard API) in page CSS pixels, otherwise 0. */
+export const mobileKeyboardInset = ref(0)
 export type MobileKeyboardMode = 'system' | 'builtin'
-export interface MobileKeyboardState { mode: MobileKeyboardMode; dockHeight: number; switching: boolean; unavailable: boolean; composer: boolean }
+/**
+ * `dockHeight` is the keyboard area the terminal card reserves below its helper row;
+ * `deck` shows the built-in keys in it rather than an empty area under the system IME.
+ */
+export interface MobileKeyboardState { mode: MobileKeyboardMode; dockHeight: number; deck: boolean; switching: boolean; composer: boolean }
 
 interface VirtualKeyboard extends EventTarget {
-  boundingRect: { height: number }
+  overlaysContent: boolean
+  readonly boundingRect: { height: number }
   show(): void
   hide(): void
 }
@@ -24,48 +30,73 @@ function preferredMode(): MobileKeyboardMode {
   try { return localStorage.getItem(preferenceKey) === 'builtin' ? 'builtin' : 'system' } catch { return 'system' }
 }
 function saveMode(mode: MobileKeyboardMode) { try { localStorage.setItem(preferenceKey, mode) } catch { /* Storage can be unavailable. */ } }
+// A requested IME that has not appeared by then was refused by the platform.
+const confirmDelay = 900
+// An IME that settles below a held area has finished animating once its geometry stays this long.
+const settleDelay = 500
+const resting = (element: Element | null) => !element || element === document.body || element === document.documentElement
 let owner: ReturnType<typeof bindMobileKeyboard> | undefined
 export function hideMobileKeyboard() { owner?.blur() }
 export function dismissMobileKeyboard() { owner?.dismiss() }
 export function refreshMobileKeyboardViewport() { owner?.refreshViewport() }
 
-/** One open intent owns either the native IME or its replacement dock. */
+/**
+ * One open intent owns either the system IME or the built-in keys, both in one bottom keyboard area.
+ * With the VirtualKeyboard API the IME overlays the page and the area reserves its inset, so the page
+ * never relayouts per IME frame. Without it the page resizes and the area only bridges the difference.
+ * A handoff never shrinks the area: it is held until the incoming keyboard covers it.
+ */
 export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptions) {
   const visual = window.visualViewport
-  const keyboard = (navigator as Navigator & { virtualKeyboard?: VirtualKeyboard }).virtualKeyboard
+  const api = (navigator as Navigator & { virtualKeyboard?: VirtualKeyboard }).virtualKeyboard
   const read = readViewportFrame
   const scale = () => options.scale?.() || 1
   let baseline = { width: window.innerWidth, height: Math.max(window.innerHeight, read().height), scale: scale() }
-  let requested = false, mode = preferredMode(), unavailable = false
+  let requested = false, mode = preferredMode()
   let changingFocus = false, suspended = false
   let picker: { returned: boolean } | undefined
-  let lastVisible: ViewportFrame | undefined
+  // `inset` is the IME's height over the page bottom; with `overlay` the page does not resize for it.
+  let overlay = false, inset = 0
+  // System mode keeps `hold` reserved until the IME covers it; `bridge` keeps the built-in keys shown meanwhile.
+  let hold = 0, bridge = false, switching = false
   let nativeHeight = 0, builtinMinHeight = 260 * scale(), builtinHeight = builtinMinHeight
-  let switching = false, bridgeTarget: number | undefined
-  let recovery: { frame: ViewportFrame; moved: boolean } | undefined
-  let openingTimer: ReturnType<typeof setTimeout> | undefined
-  let recoveryTimer: ReturnType<typeof setTimeout> | undefined
-  let visibleTimer: ReturnType<typeof setTimeout> | undefined
-  let switchTimer: ReturnType<typeof setTimeout> | undefined
+  let confirmTimer: ReturnType<typeof setTimeout> | undefined
+  let settleTimer: ReturnType<typeof setTimeout> | undefined
   let disableTimer: ReturnType<typeof setTimeout> | undefined
   let inputRevision = 0, resumeTimer: ReturnType<typeof setTimeout> | undefined
   let published: string | undefined
   // The composer editor owns native input while open; release restores the prior keyboard.
   // `shown` records that its IME appeared; only then can losing the IME collapse it.
-  let composer: { element: HTMLElement; prior?: MobileKeyboardMode; lost?: () => void; shown?: boolean } | undefined
+  // `keep` makes a refused IME leave it open with the keyboard off (picker return, explicit reopen).
+  let composer: { element: HTMLElement; prior?: MobileKeyboardMode; lost?: () => void; shown?: boolean; keep?: boolean } | undefined
   const input = () => composer?.element || textarea
-  const occluded = (frame: ViewportFrame) => (keyboard?.boundingRect.height || 0) > 0
-    || baseline.height - frame.height > Math.max(80, baseline.height * .15)
+  const occluded = (height: number) => overlay ? height > 0 : height > Math.max(80, baseline.height * .15)
+  const measure = () => overlay ? Math.max(0, api!.boundingRect.height) : Math.max(0, baseline.height - read().height)
+  const area = () => !requested ? inset : Math.max(inset, mode === 'builtin' ? builtinHeight : hold)
   function state(): MobileKeyboardState {
-    const frame = recovery?.frame || read()
-    const target = mode === 'builtin' ? baseline.height - builtinHeight : bridgeTarget
-    return { mode, dockHeight: requested && target !== undefined ? Math.max(0, frame.height - target) : 0,
-      switching: switching || suspended || !!picker || requested && document.hidden, unavailable, composer: !!composer }
+    // Without the overlay the page already shrank by the IME; the area only adds what it does not cover.
+    return { mode, dockHeight: Math.max(0, area() - (overlay ? 0 : inset)), deck: requested && (mode === 'builtin' || bridge),
+      switching: switching || suspended || !!picker || requested && document.hidden, composer: !!composer }
+  }
+  function setOverlay(value: boolean) {
+    if (!api || overlay === value) return
+    overlay = value
+    try { api.overlaysContent = value } catch { /* The page then resizes as without the API. */ }
+    document.documentElement.toggleAttribute('data-keyboard-overlay', value)
+    inset = measure()
+  }
+  // The IME overlays the page while this terminal owns input, and until its own IME has closed.
+  function syncOverlay() {
+    const active = document.activeElement
+    setOverlay(owner === controller && options.active() && (active === input() || active === textarea || resting(active)) &&
+      (requested || overlay && inset > 0))
   }
   function publish() {
+    syncOverlay()
     if (owner === controller) {
       mobileKeyboardOpen.value = requested && options.active()
-      mobileKeyboardVisible.value = options.active() && !document.hidden && (occluded(read()) || !!recovery)
+      mobileKeyboardVisible.value = options.active() && !document.hidden && occluded(inset)
+      mobileKeyboardInset.value = overlay ? inset : 0
     }
     const next = state(), signature = JSON.stringify([requested, next])
     if (signature === published) return
@@ -81,7 +112,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       textarea.inputMode = editable ? 'text' : 'none'
       if (restoreBuiltinFocus && requested && mode === 'builtin' && !suspended && !picker && owner === controller && options.active() && !document.hidden) {
         const active = document.activeElement
-        if (active === textarea || active === document.body || active === document.documentElement) textarea.focus({ preventScroll: true })
+        if (active === textarea || resting(active)) textarea.focus({ preventScroll: true })
       }
     }
     // Native blur may finish a composition after blur itself. Let its final
@@ -96,158 +127,165 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     const maximum = Math.max(0, Math.min(460 * scale(), baseline.height - 160 * scale()))
     return Math.min(maximum, Math.max(Math.min(builtinMinHeight, maximum), height))
   }
-  function cancelTimers() {
-    clearTimeout(openingTimer); openingTimer = undefined
-    clearTimeout(recoveryTimer); recoveryTimer = undefined
-    clearTimeout(visibleTimer); visibleTimer = undefined
-    clearTimeout(switchTimer); switchTimer = undefined
-    recovery = undefined; switching = false; bridgeTarget = undefined
-    if (owner === controller) mobileKeyboardFrame.value = undefined
+  function clearTimers() {
+    clearTimeout(confirmTimer); confirmTimer = undefined
+    clearTimeout(settleTimer); settleTimer = undefined
   }
-  function show(refocus = false) {
+  /** Request the system IME on input(); without the API only a fresh focus can request it again. */
+  function raise(refocus = false) {
     const element = input()
+    syncOverlay()
     changingFocus = true
     try {
-      if (refocus) element.blur()
+      if (refocus && !api) element.blur()
       element.focus({ preventScroll: true })
-      try { keyboard?.show() } catch { /* Focus is the fallback when the platform declines explicit control. */ }
+      try { api?.show() } catch { /* Focus remains the request. */ }
     } finally { changingFocus = false }
   }
   function hideNative(restoreBuiltinFocus = false) {
     changingFocus = true
-    try { input().blur(); inputMode(restoreBuiltinFocus); try { keyboard?.hide() } catch { /* Blur also closes native input. */ } }
+    // A manual keyboard policy only honours hide() while its input is focused.
+    try { try { api?.hide() } catch { /* Blur also closes native input. */ } input().blur(); inputMode(restoreBuiltinFocus) }
     finally { changingFocus = false }
   }
-  function settleSwitch() {
-    clearTimeout(switchTimer)
-    switchTimer = setTimeout(() => {
-      switchTimer = undefined
-      if (!requested || suspended || picker) return
-      if (mode === 'system' && !occluded(read())) return
-      switching = false; bridgeTarget = undefined; publish()
-    }, 200)
-  }
-  function useBuiltin(failed = false) {
-    const oldHeight = nativeHeight || baseline.height - (lastVisible?.height || read().height)
-    cancelTimers(); mode = 'builtin'; unavailable = failed
-    builtinHeight = fitHeight(oldHeight || builtinHeight || builtinMinHeight)
-    switching = occluded(read()); hideNative(true); publish()
-    if (switching) settleSwitch()
-  }
-  function confirmOpening(fallback = false) {
-    clearTimeout(openingTimer)
-    openingTimer = setTimeout(() => {
-      openingTimer = undefined
-      if (!requested || mode !== 'system' || occluded(read())) return
-      // A composer whose IME never appeared (hardware keyboard, declined focus)
-      // stays open and editable; a tap on the editor can still raise the IME.
-      if (composer && !composer.shown) { switching = false; bridgeTarget = undefined; publish() }
-      else if (fallback && !composer) useBuiltin(true)
+  /** The IME was requested on input(); without it after `confirmDelay` the platform refused it. */
+  function confirm() {
+    clearTimeout(confirmTimer)
+    confirmTimer = setTimeout(() => {
+      confirmTimer = undefined
+      inset = measure()
+      if (!requested || mode !== 'system' || suspended || picker || document.hidden || occluded(inset)) return
+      hold = 0; bridge = false; switching = false
+      // A composer whose IME never appeared (hardware keyboard) stays open and editable.
+      if (composer && !composer.shown) publish()
+      // A kept composer stays open with the keyboard off; tapping it or the keyboard button retries.
+      else if (composer?.keep) { requested = false; composer.keep = false; publish() }
       else controller.blur()
-    }, 900)
+    }, confirmDelay)
   }
-  /** Move the system IME to the current input while holding the terminal's available frame. */
-  function handoff(fallback: boolean, target = (recovery?.frame || read()).height - state().dockHeight) {
-    cancelTimers(); mode = 'system'; switching = true; bridgeTarget = target
-    inputMode(); show(true); confirmOpening(fallback); publish()
-    if (occluded(read())) settleSwitch()
+  /** The requested IME is on screen. */
+  function appeared() {
+    clearTimeout(confirmTimer); confirmTimer = undefined
+    if (composer) { composer.shown = true; composer.keep = false }
+  }
+  function release() {
+    clearTimeout(settleTimer); settleTimer = undefined
+    hold = 0; bridge = false; switching = false
+    if (occluded(inset)) nativeHeight = inset
+  }
+  /** A visible IME that stopped changing ends the transition, even below the held area. */
+  function settle() {
+    clearTimeout(settleTimer)
+    settleTimer = setTimeout(() => {
+      settleTimer = undefined
+      inset = measure()
+      if (!requested || suspended || picker || document.hidden || !occluded(inset)) return
+      if (mode === 'system') release(); else switching = false
+      publish()
+    }, settleDelay)
+  }
+  /** The IME disappeared under open intent: request it again at once; a refusal turns the keyboard off. */
+  function lost() {
+    if (confirmTimer || suspended || picker || document.hidden || !options.active()) return
+    const active = document.activeElement
+    if (active !== input() && !resting(active)) { controller.blur(); return }
+    switching = true; raise(true); confirm()
+  }
+  /** Show the built-in keys at the height of the area they replace, then close the IME under them. */
+  function useBuiltin(replaced: number) {
+    clearTimers(); mode = 'builtin'; hold = 0; bridge = false
+    builtinHeight = fitHeight(replaced || nativeHeight || builtinMinHeight)
+    switching = occluded(inset)
+    hideNative(true); publish()
+  }
+  /** Move the system IME to input(), holding the current area until the IME covers it. */
+  function toSystem(reserve: number) {
+    const fromBuiltin = mode === 'builtin'
+    clearTimers(); mode = 'system'; hold = reserve; bridge = fromBuiltin && reserve > 0
+    inputMode(); raise(true)
+    inset = measure()
+    if (!occluded(inset)) { switching = reserve > 0; confirm(); publish(); return }
+    appeared()
+    if (inset >= hold - 1) release()
+    else { switching = true; settle() }
+    publish()
+  }
+  /** Open the system IME from a closed keyboard; the area follows it as it appears. */
+  function openSystem() {
+    clearTimers(); requested = true; mode = 'system'; hold = 0; bridge = false; switching = false
+    baseline = { width: window.innerWidth, height: Math.max(baseline.height, window.innerHeight, read().height), scale: scale() }
+    inputMode(); raise(); confirm(); observe()
   }
   function dropComposer(close: boolean) {
     const current = composer
     if (!current) return
     composer = undefined
     current.element.removeEventListener('blur', blurred)
-    if (close) { current.element.blur(); mode = preferredMode() }
+    if (close) {
+      changingFocus = true
+      try {
+        if (document.activeElement === current.element) try { api?.hide() } catch { /* Blur also closes native input. */ }
+        current.element.blur()
+      } finally { changingFocus = false }
+      mode = preferredMode()
+    }
+    if (api) current.element.removeAttribute('virtualkeyboardpolicy')
     return current
   }
-  function finishRecovery() {
-    clearTimeout(recoveryTimer); recoveryTimer = undefined; recovery = undefined
-    mobileKeyboardFrame.value = undefined
-  }
-  function recover() {
-    if (picker || suspended || recovery || mode !== 'system' || !lastVisible || !requested || !options.active() || document.hidden) return
-    clearTimeout(visibleTimer); visibleTimer = undefined
-    recovery = { frame: { ...lastVisible }, moved: read().height > lastVisible.height + 2 }
-    mobileKeyboardFrame.value = recovery.frame
-    publish()
-    recoveryTimer = setTimeout(() => {
-      if (requested && options.active() && !document.hidden && occluded(read()) && document.activeElement === input()) {
-        finishRecovery(); observe()
-      // The composer has no replacement keyboard: losing its IME collapses it instead.
-      } else if (requested && options.active() && !document.hidden && !composer) useBuiltin(true)
-      else controller.blur()
-    }, 800)
-    queueMicrotask(() => {
-      if (!recovery || !requested) return
-      const active = document.activeElement
-      if (!options.active() || document.hidden || (active && active !== input() && active !== document.body && active !== document.documentElement)) {
-        controller.blur(); return
-      }
-      // Synchronous clipboard copying can return focus within this task.
-      if (active === input() && !recovery.moved && occluded(read())) { finishRecovery(); publish(); return }
-      show(true)
-    })
-  }
   function observe() {
-    if (owner !== controller || picker || suspended) return
+    if (owner !== controller) return
     if (!options.active()) { controller.blur(); return }
-    if (document.hidden) return
     const frame = read()
     if (Math.abs(window.innerWidth - baseline.width) > 1 || scale() !== baseline.scale) {
-      cancelTimers(); lastVisible = undefined; nativeHeight = 0
+      // A new orientation or interface scale makes every keyboard measurement obsolete.
+      clearTimeout(settleTimer); settleTimer = undefined; hold = 0; bridge = false; nativeHeight = 0
       baseline = { width: window.innerWidth, height: Math.max(window.innerHeight, frame.height), scale: scale() }
-      builtinHeight = fitHeight(builtinHeight)
-      if (requested && mode === 'system') confirmOpening()
+      builtinHeight = fitHeight(builtinHeight); inset = measure()
+      if (requested && mode === 'system' && !picker && !suspended && !document.hidden) confirm()
     }
-    const visible = occluded(frame)
-    if (!requested) {
-      if (!visible) baseline.height = Math.max(window.innerHeight, frame.height)
-      publish(); return
+    if (overlay || !requested && !occluded(baseline.height - frame.height)) baseline.height = Math.max(window.innerHeight, frame.height)
+    else if (requested && mode === 'builtin' && !switching && !suspended && !picker && frame.height !== baseline.height) {
+      // Without native input this is the full available frame, not a newly opened IME.
+      baseline.height = frame.height; builtinHeight = fitHeight(builtinHeight)
     }
-    if (mode === 'builtin') {
-      if (!switching && frame.height !== baseline.height) {
-        // With native input disabled this is the full available frame, not a
-        // newly opened IME inferred from an obsolete larger baseline.
-        baseline.height = frame.height; nativeHeight = 0; lastVisible = undefined
-        builtinHeight = fitHeight(builtinHeight)
-      } else if (!visible) baseline.height = Math.max(baseline.height, window.innerHeight, frame.height)
-      if (switching) settleSwitch()
-      publish(); return
-    }
-    if (recovery) {
-      if (frame.height > recovery.frame.height + 2) recovery.moved = true
-      if (recovery.moved && visible && frame.height <= recovery.frame.height + 2 && document.activeElement === input()) finishRecovery()
-    } else if (!switching && lastVisible && !visible) recover()
-    if (visible) {
-      clearTimeout(openingTimer); openingTimer = undefined
-      if (composer) composer.shown = true
-      if (switching) {
-        lastVisible = frame; nativeHeight = Math.max(0, baseline.height - frame.height); settleSwitch()
-      } else if (!recovery) {
-        clearTimeout(visibleTimer)
-        if (!lastVisible || frame.height <= lastVisible.height + 2) {
-          lastVisible = frame; nativeHeight = Math.max(0, baseline.height - frame.height); mobileKeyboardFrame.value = undefined
-        } else {
-          // Candidate bars and a closing animation share growing frames. Settle
-          // the former without refocus, keep the latter's stable terminal size.
-          mobileKeyboardFrame.value = lastVisible
-          visibleTimer = setTimeout(() => {
-            visibleTimer = undefined
-            if (requested && mode === 'system' && !recovery && occluded(read())) {
-              lastVisible = read(); nativeHeight = Math.max(0, baseline.height - lastVisible.height)
-              mobileKeyboardFrame.value = undefined; publish()
-            }
-          }, 200)
-        }
+    const previous = inset
+    inset = measure()
+    const visible = occluded(inset), changed = Math.abs(inset - previous) > .5
+    if (requested && !document.hidden && !picker && !suspended) {
+      if (mode === 'builtin') {
+        // The replaced IME is closing under the built-in keys.
+        if (switching && !visible) switching = false
+        else if (switching && (changed || !settleTimer)) settle()
+      } else {
+        if (visible) appeared()
+        // A shrinking IME may be closing: hold the area until it settles or returns.
+        if (inset < previous - 1) { hold = Math.max(hold, previous); switching = true }
+        if (visible) {
+          if (inset >= hold - 1) release()
+          else if (changed || !settleTimer) settle()
+        } else if (occluded(previous)) lost()
       }
     }
     publish()
   }
   function focused() { if (options.active()) inputMode() }
-  function blurred() { if (!changingFocus && requested && !suspended) recover() }
+  function blurred() {
+    if (changingFocus || !requested || suspended || picker || mode !== 'system') return
+    // Focus can return within this task (synchronous clipboard copy) or move to another editor.
+    queueMicrotask(() => {
+      if (!requested || suspended || picker || mode !== 'system' || owner !== controller) return
+      const active = document.activeElement
+      if (active === input()) return
+      if (!resting(active) || !options.active()) { controller.blur(); return }
+      if (!document.hidden) { hold = Math.max(hold, area()); lost(); publish() }
+    })
+  }
   function focusChanged() {
     queueMicrotask(() => {
-      if (!picker && !suspended && mode === 'system' && requested && document.activeElement !== input() && document.activeElement !== document.body && document.activeElement !== document.documentElement) controller.blur()
+      if (owner !== controller) return
+      const active = document.activeElement
+      if (!picker && !suspended && mode === 'system' && (requested || composer) && active !== input() && !resting(active)) controller.blur()
+      else publish()
     })
   }
   function finishPicker() {
@@ -255,23 +293,29 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     picker = undefined
     if (!requested || owner !== controller || !options.active()) { publish(); return }
     const active = document.activeElement
-    if (active !== input() && active !== document.body && active !== document.documentElement) { controller.blur(); return }
-    if (mode === 'system') {
-      const visible = occluded(read())
-      switching = true; bridgeTarget = baseline.height - (nativeHeight || builtinHeight)
-      inputMode(); show(!visible)
-      if (!visible) confirmOpening(true)
-    } else inputMode(true)
+    if (active !== input() && !resting(active)) { controller.blur(); return }
+    if (mode === 'builtin') { inputMode(true); observe(); return }
+    // At change or cancel, still within the picker's user activation, ask for the IME again.
+    if (composer) composer.keep = true
+    inputMode()
+    inset = measure()
+    if (!occluded(inset)) { switching = true; raise(true); confirm() }
     observe()
   }
   function visibilityChanged() {
     if (picker) { finishPicker(); return }
-    if (document.hidden && owner === controller) {
-      cancelTimers(); publish()
-    } else if (requested && owner === controller && options.active()) {
-      if (mode === 'system') { inputMode(); show(); confirmOpening(true) }
-      observe()
+    if (owner !== controller) return
+    if (document.hidden) {
+      clearTimers()
+      if (requested && mode === 'system') { hold = Math.max(hold, area()); switching = true }
+      publish(); return
     }
+    if (requested && options.active() && mode === 'system') {
+      inputMode(); raise()
+      inset = measure()
+      if (!occluded(inset)) confirm()
+    }
+    observe()
   }
   const controller = {
     get state() { return state() },
@@ -286,53 +330,58 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       if (!options.active() || composer) return
       if (owner !== controller) { owner?.blur(); owner = controller }
       if (!requested) mode = preferredMode()
-      const next = mode === 'system' ? 'builtin' : 'system'
+      const next = mode === 'system' ? 'builtin' : 'system', reserve = requested ? area() : 0
       baseline.height = Math.max(baseline.height, window.innerHeight, read().height)
-      unavailable = false; requested = true
       saveMode(next)
-      if (next === 'builtin') useBuiltin()
-      else handoff(true, baseline.height - builtinHeight)
+      if (next === 'builtin') { requested = true; useBuiltin(reserve) }
+      else if (reserve) toSystem(reserve)
+      else openSystem()
     },
     /** Lend the system IME to the composer editor in place, or return it to the prior keyboard. */
     composer(element?: HTMLElement, lost?: () => void) {
       if (!element) {
-        const prior = composer?.prior, available = options.active() && !document.hidden
         if (!composer) return
-        if (prior === 'system' && available) { dropComposer(false); handoff(false) }
-        else if (prior === 'builtin' && available) { dropComposer(true); useBuiltin() }
+        const prior = composer.prior, reserve = area()
+        // A composer left without its IME returns to a closed keyboard.
+        if (!requested) { dropComposer(true); publish(); return }
+        if (prior === 'system' && options.active() && !document.hidden) { dropComposer(false); toSystem(reserve) }
+        else if (prior === 'builtin' && options.active() && !document.hidden) { dropComposer(true); useBuiltin(reserve) }
         else { dropComposer(true); controller.blur() }
         return
       }
       if (!options.active()) return
       if (owner !== controller) { owner?.blur(); owner = controller }
-      const prior = composer ? composer.prior : requested ? mode : undefined
+      if (composer?.element === element) {
+        // Tapping the editor while its IME is off asks for it again.
+        if (lost) composer.lost = lost
+        if (!requested) { composer.keep = true; openSystem() }
+        return
+      }
+      const prior = composer ? composer.prior : requested ? mode : undefined, reserve = area()
       dropComposer(false)
       composer = { element, prior, lost }
       element.addEventListener('blur', blurred)
-      unavailable = false
-      if (prior) { handoff(false); return }
-      cancelTimers(); lastVisible = undefined; requested = true; mode = 'system'
-      baseline = { width: window.innerWidth, height: Math.max(baseline.height, window.innerHeight, read().height), scale: scale() }
-      confirmOpening(); inputMode(); show(); observe()
+      if (api) element.setAttribute('virtualkeyboardpolicy', 'manual')
+      if (prior && requested) toSystem(reserve)
+      else openSystem()
     },
     suspend(value: boolean) {
       clearTimeout(resumeTimer); resumeTimer = undefined
       if (value) {
         if (suspended) return
-        suspended = true; cancelTimers(); hideNative(); publish()
+        if (requested && mode === 'system') hold = Math.max(hold, area())
+        suspended = true; clearTimers(); hideNative(); publish()
       } else if (suspended) {
         // Let the closing modal release its own focus before restoring native
         // input. Its temporary focus target must not revoke the open intent.
         resumeTimer = setTimeout(() => {
           resumeTimer = undefined; suspended = false
           if (requested && options.active() && !document.hidden) {
-            if (mode === 'system') {
-              switching = true; bridgeTarget = baseline.height - (nativeHeight || builtinHeight)
-              inputMode(); show(); confirmOpening(true)
-            } else if (occluded(read())) { switching = true; hideNative(true); settleSwitch() }
+            if (mode === 'system') { switching = true; inputMode(); raise(); confirm() }
+            else if (occluded(measure())) { switching = true; hideNative(true) }
             else inputMode(true)
           }
-          observe(); publish()
+          observe()
         }, 0)
       }
     },
@@ -340,8 +389,9 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     filePicker() {
       if (!requested || owner !== controller) return
       const current: { returned: boolean } = { returned: false }
+      if (mode === 'system') hold = Math.max(hold, area())
       picker = current
-      cancelTimers(); lastVisible = undefined; publish()
+      clearTimers(); publish()
       return (restore: boolean) => {
         if (picker !== current) return
         if (!restore) { controller.blur(); return }
@@ -351,23 +401,25 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     focus(value?: boolean) {
       if (!options.active()) return
       if (value === false && composer) controller.blur()
-      if (!requested) mode = preferredMode()
       if (owner !== controller) { owner?.blur(); owner = controller }
+      // The keyboard button over a composer without its IME asks for it again.
+      if (value && composer) { if (!requested) { composer.keep = true; openSystem() } return }
+      if (!requested) mode = preferredMode()
       if (value !== undefined && value !== requested) {
-        cancelTimers(); lastVisible = undefined
+        clearTimers(); hold = 0; bridge = false; switching = false
         changingFocus = true
         try { textarea.blur() } finally { changingFocus = false }
         requested = value
         if (value) {
-          mode = preferredMode(); unavailable = false
+          mode = preferredMode()
           baseline = { width: window.innerWidth, height: Math.max(baseline.height, window.innerHeight, read().height), scale: scale() }
-          if (mode === 'system') confirmOpening()
+          if (mode === 'system') confirm()
           else builtinHeight = fitHeight(nativeHeight || builtinMinHeight)
         }
       }
       if (suspended) { publish(); return }
       inputMode()
-      if (requested && mode === 'system') show()
+      if (requested && mode === 'system') raise()
       else textarea.focus({ preventScroll: true })
       observe()
     },
@@ -376,22 +428,28 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       const lost = dropComposer(true)?.lost
       picker = undefined; suspended = false
       clearTimeout(resumeTimer); resumeTimer = undefined; inputRevision++
-      cancelTimers(); lastVisible = undefined; requested = false; unavailable = false
+      clearTimers(); hold = 0; bridge = false; switching = false; requested = false
       if (options.active() || owner === controller) hideNative()
       publish(); lost?.()
     },
     dispose() {
       controller.blur()
-      if (owner === controller) { owner = undefined; mobileKeyboardVisible.value = false; mobileKeyboardOpen.value = false }
+      if (owner === controller) {
+        owner = undefined; setOverlay(false)
+        mobileKeyboardVisible.value = false; mobileKeyboardOpen.value = false; mobileKeyboardInset.value = 0
+      }
+      if (api) textarea.removeAttribute('virtualkeyboardpolicy')
       textarea.removeEventListener('focus', focused); textarea.removeEventListener('blur', blurred)
       document.removeEventListener('focusin', focusChanged); document.removeEventListener('visibilitychange', visibilityChanged)
       window.removeEventListener('resize', observe); visual?.removeEventListener('resize', observe); visual?.removeEventListener('scroll', observe)
-      keyboard?.removeEventListener('geometrychange', observe)
+      api?.removeEventListener('geometrychange', observe)
     },
   }
+  // With the API, the IME opens and closes only on explicit requests, never on focus alone.
+  if (api) textarea.setAttribute('virtualkeyboardpolicy', 'manual')
   textarea.addEventListener('focus', focused); textarea.addEventListener('blur', blurred)
   document.addEventListener('focusin', focusChanged); document.addEventListener('visibilitychange', visibilityChanged)
   window.addEventListener('resize', observe); visual?.addEventListener('resize', observe); visual?.addEventListener('scroll', observe)
-  keyboard?.addEventListener('geometrychange', observe)
+  api?.addEventListener('geometrychange', observe)
   return controller
 }

@@ -38,7 +38,6 @@ export default {
     input: 'Terminal input', arrowLeft: 'Left arrow', arrowDown: 'Down arrow', arrowUp: 'Up arrow', arrowRight: 'Right arrow',
     full: 'Full keyboard', functions: 'Function keys', numbers: 'Numbers and symbols', modifiers: 'Modifiers and navigation',
     switchToSystem: 'Switch to system keyboard', switchToBuiltin: 'Switch to built-in keyboard',
-    systemUnavailable: 'System keyboard unavailable. Using the built-in keyboard for now.',
     rightShift: 'Right Shift', rightAlt: 'Right Alt', rightCtrl: 'Right Ctrl', actions: 'Terminal actions',
     touchpad: 'Touchpad', mouseLeft: 'Left mouse button', mouseMiddle: 'Middle click / scroll', mouseRight: 'Right mouse button',
     selectText: 'Select text', touchScroll: 'Touch scroll', touchMouse: 'Touch mouse', helperKeys: 'Terminal shortcut keys',

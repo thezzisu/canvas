@@ -63,7 +63,7 @@ export type TerminalStatus = {
   keyboardRequested?: boolean
   keyboardMode?: 'system' | 'builtin'
   keyboardDockHeight?: number
-  keyboardUnavailable?: boolean
+  keyboardDeck?: boolean
   keyboardComposer?: boolean
   retryAttempt?: number
 }
@@ -1054,7 +1054,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     const keyboardChanged = (requested: boolean, state: MobileKeyboardState) => {
       current.keyboardRequested = requested
       setState(current, { ...current.state, keyboardMode: state.mode, keyboardDockHeight: state.dockHeight,
-        keyboardUnavailable: state.unavailable, keyboardComposer: state.composer })
+        keyboardDeck: state.deck, keyboardComposer: state.composer })
       schedulePresentation(current)
     }
     session.keyboard = bindMobileKeyboard(input.element, {

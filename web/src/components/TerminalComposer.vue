@@ -20,7 +20,8 @@ const fraction = ref(readStoredHeight())
 const { active: contentActive } = useCardContentFocus(root, () => false)
 const hasText = computed(() => composerHasContent(composer.value.content))
 const sending = ref(false)
-// On mobile the terminal keyboard controller moves the system IME into the editor in place.
+// On mobile the terminal keyboard controller moves the system IME into the editor in place;
+// a tap on the editor asks for it again after it was refused.
 function claimKeyboard() {
   const element = editor.value?.element()
   if (props.mobile && element) emit('keyboard', element)
@@ -86,7 +87,7 @@ defineExpose({ send })
 <template>
   <section ref="root" class="terminal-composer card-content nodrag nopan nowheel" :data-content-active="contentActive" :class="{ full: fraction >= 1, mobile }" :style="{ height: `${fraction * 100}%` }" role="region" :aria-label="t('terminal.composer.title')"
     @pointerdown.stop @mousedown.stop @keydown.capture="keydown">
-    <div class="terminal-composer-editor">
+    <div class="terminal-composer-editor" @click="!sending && claimKeyboard()">
       <NoteEditor ref="editor" :content="composer.content" :attachments="composer.attachments" :owner="owner" :scroll-key="owner.key" :can-persist="() => false" :read-only="sending" placeholder="" :hold-keyboard="holdKeyboard"
         :insert-attachment="value => insertComposerAttachment(target, value)" @change="value => { editComposer(target, value); emit('edited') }" @flush="saveComposer(target)" />
     </div>

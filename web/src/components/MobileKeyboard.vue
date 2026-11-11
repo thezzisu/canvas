@@ -22,7 +22,9 @@ const props = defineProps<{
   keyboardOpen: boolean
   /** The composer owns input: helper keys and the keyboard switch stay in place, disabled. */
   composing?: boolean
+  /** The bottom keyboard area shared with the system IME; `deck` shows the built-in keys in it. */
   dockHeight: number
+  deck?: boolean
   modifiers: TerminalModifiers
   touchMode: TouchMode
   readText(signal: AbortSignal): Promise<string>
@@ -321,7 +323,7 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
       <button v-for="key in keys" :key="key.key" type="button" :disabled="inactive" :aria-label="key.label" :aria-pressed="keyPressed(key.key)" :class="{ 'arrow-key': key.symbol }" @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ key.symbol || key.label }}</button>
       <button type="button" :disabled="composing" :aria-label="switchLabel" :title="switchLabel" :aria-pressed="keyboardMode === 'builtin'" :class="{ active: keyboardOpen && keyboardMode === 'builtin' || modifiers.shift || modifiers.alt || modifiers.meta }" @pointerdown.prevent @click="switchKeyboard"><Icon name="keyboard-switch" :size="19" /></button>
     </div>
-    <div ref="dock" class="mobile-key-dock" :style="{ height: `${Math.max(0, dockHeight)}px` }" :inert="!hasDock" :aria-hidden="!hasDock" role="region" :aria-label="t('terminal.keyboard.full')" @wheel.stop>
+    <div ref="dock" class="mobile-key-dock" :class="{ blank: !deck }" :style="{ height: `${Math.max(0, dockHeight)}px` }" :inert="!hasDock || !deck" :aria-hidden="!hasDock || !deck" role="region" :aria-label="t('terminal.keyboard.full')" @wheel.stop>
       <div class="mobile-key-deck" role="group" :aria-label="t('terminal.keyboard.full')" @scroll.capture="stopRepeat" @contextmenu.prevent>
         <div ref="naturalDeck">
           <div v-for="row in deckRows" :key="row.keys[0]?.key" class="mobile-key-deck-row" :class="row.class" role="group" :aria-label="row.name">
@@ -378,6 +380,8 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
 .mobile-key-safe{position:absolute;width:0;height:var(--ui-safe-bottom,0px);visibility:hidden;pointer-events:none}
 .mobile-key-dock{--key-fill:.5;box-sizing:border-box;display:flex;flex-direction:column;min-height:0;margin:0 -4px;overflow:hidden;padding-bottom:var(--ui-safe-bottom,0px);border-top:1px solid #48515e;background:#181d258c}
 .mobile-keyboard:not(.has-dock) .mobile-key-dock{visibility:hidden;padding-bottom:0;border-top-width:0}
+/* Under the system keyboard the area stays reserved but shows no built-in keys. */
+.mobile-key-dock.blank>*{visibility:hidden}
 .mobile-key-deck{container-type:inline-size;flex:1 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;padding:6px;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:thin;scrollbar-color:#515c6b transparent}
 .mobile-key-deck-row{display:grid;gap:2px;margin-bottom:4px;min-width:0}
 .mobile-key-deck-row:last-child{margin-bottom:0}

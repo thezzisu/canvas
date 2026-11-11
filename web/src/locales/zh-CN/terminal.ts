@@ -37,7 +37,6 @@ export default {
     input: '终端输入', arrowLeft: '向左', arrowDown: '向下', arrowUp: '向上', arrowRight: '向右',
     full: '完整键盘', functions: '功能键', numbers: '数字和符号', modifiers: '修改键和导航',
     switchToSystem: '切换到系统键盘', switchToBuiltin: '切换到内建键盘',
-    systemUnavailable: '系统键盘暂不可用，已暂用内建键盘。',
     rightShift: '右 Shift', rightAlt: '右 Alt', rightCtrl: '右 Ctrl', actions: '终端操作',
     touchpad: '触摸板', mouseLeft: '鼠标左键', mouseMiddle: '中键点击／滚轮', mouseRight: '鼠标右键',
     selectText: '选择文本', touchScroll: '触控滚动', touchMouse: '触控鼠标', helperKeys: '终端辅助键',
