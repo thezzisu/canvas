@@ -1,6 +1,5 @@
 export default {
   copy: '复制文件',
-  copyOrDrag: '复制文件 · 拖入终端上传',
   drop: '上传文件',
   preparing: '正在读取文件…',
   sourceMissing: '来源实例已移除',

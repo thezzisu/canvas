@@ -26,7 +26,6 @@ export default {
     title: 'Terminal settings',
     defaults: 'Default terminal settings',
     inherit: 'Default',
-    defaultValue: 'Default ({value})',
     restoreDefault: 'Restore default',
     defaultZoom: 'Default maximized zoom',
     maximizedZoom: 'Maximized zoom',

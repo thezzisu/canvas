@@ -1,6 +1,5 @@
 export default {
   copy: 'Copy file',
-  copyOrDrag: 'Copy file · drag to a terminal to upload',
   drop: 'Upload file',
   preparing: 'Reading file…',
   sourceMissing: 'The source instance is no longer saved',

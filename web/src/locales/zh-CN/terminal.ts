@@ -26,7 +26,6 @@ export default {
     title: '终端设置',
     defaults: '默认终端设置',
     inherit: '默认',
-    defaultValue: '默认（{value}）',
     restoreDefault: '恢复默认',
     defaultZoom: '默认最大化缩放',
     maximizedZoom: '最大化缩放',
