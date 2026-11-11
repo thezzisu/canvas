@@ -157,7 +157,7 @@ const content = computed(() => ({
       v-bind="$attrs"
       @click="emit('select')"
     >
-      <UIcon :name="icon" class="size-4 shrink-0" />
+      <UIcon :name="icon" class="size-[16px] shrink-0" />
       <span class="canvas-nav-name"
         ><span>{{ name }}</span
         ><small v-if="indicator" class="canvas-nav-count">{{ n(indicator.count) }}</small></span

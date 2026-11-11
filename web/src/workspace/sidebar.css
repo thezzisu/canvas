@@ -222,3 +222,10 @@
 .sidebar-open .sidebar-account small {
   font-size: 10px;
 }
+/* The footer's settings button sits on the same rail as the section buttons and status dots. */
+.sidebar-settings {
+  justify-self: center;
+}
+.sidebar-open .sidebar-settings {
+  min-height: 40px;
+}

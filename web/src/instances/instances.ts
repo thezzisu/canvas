@@ -133,8 +133,10 @@ const link = parseInstanceLink(location.href)
 export const invalidInstanceLink = !!link?.invalid
 if (link) {
   if (link.server) {
-    // A shared link names the sender's saved instance; open the imported one instead.
-    link.url.hash = canvasHref({ instance: importInstance(link.server).id, canvas: 'overview' })
+    // A shared link may name the sender's saved instance; only an address for the imported one is kept.
+    const instance = importInstance(link.server).id
+    if (!link.url.hash.startsWith(`#/i/${instance}/`))
+      link.url.hash = canvasHref({ instance, canvas: 'overview' })
   }
   history.replaceState(history.state, '', `${link.url.pathname}${link.url.search}${link.url.hash}`)
 }

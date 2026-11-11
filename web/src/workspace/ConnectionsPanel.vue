@@ -29,6 +29,21 @@ const dismiss = usePointerDismiss(
   }),
   () => document.querySelector<HTMLElement>('.connections-panel'),
 )
+/** A click elsewhere closes the panel and keeps the focus that click gave. */
+let clickedOutside = false
+const content = {
+  onInteractOutside: dismiss.onInteractOutside,
+  // Focus returning to a menu's trigger is not a reason to close.
+  onFocusOutside: (event: Event) => event.preventDefault(),
+  onPointerDownOutside() {
+    clickedOutside = true
+  },
+  onCloseAutoFocus(event: Event) {
+    if (clickedOutside) event.preventDefault()
+    else dismiss.onCloseAutoFocus(event)
+    clickedOutside = false
+  },
+}
 const resourceOf = (source: Source) => workspace.resources.find((item) => item.id === source.id)
 const runtime = (source: Source) => (source.runtime === 'core' ? 'herdr-core' : 'herdr')
 const online = (resource?: SourceResource) => resource?.status === 'online' && !resource.error
@@ -63,9 +78,10 @@ function removeSource(source: Source) {
     :title="t('app.connectionsWindows')"
     :modal="false"
     :overlay="false"
-    :content="{ ...dismiss, onFocusOutside: (event: Event) => event.preventDefault() }"
+    :content="content"
     :ui="{
-      content: 'connections-panel w-[min(380px,var(--ui-viewport-width))]',
+      content:
+        'connections-panel top-[var(--window-controls-height)] w-[min(380px,var(--ui-viewport-width))]',
       body: 'flex flex-col gap-3',
     }"
   >
@@ -99,7 +115,7 @@ function removeSource(source: Source) {
                 </span>
                 <span
                   v-if="resourceOf(source)?.serverVersion"
-                  class="source-version flex-none"
+                  class="source-version min-w-0 truncate"
                   :title="`${runtime(source)} ${resourceOf(source)!.serverVersion}`"
                 >
                   {{ runtime(source) }} {{ resourceOf(source)!.serverVersion }}

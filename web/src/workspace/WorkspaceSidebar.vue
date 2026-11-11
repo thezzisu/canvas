@@ -220,7 +220,11 @@ function addConnection() {
     side="left"
     :title="t('app.canvases')"
     :description="t('app.openCanvasList')"
-    :ui="{ content: 'w-[min(280px,85vw)]' }"
+    :ui="{
+      overlay: 'top-[var(--window-controls-height)]',
+      content:
+        'top-[var(--window-controls-height)] w-[min(280px,calc(var(--ui-viewport-width)*0.85))]',
+    }"
   >
     <template #content>
       <aside id="canvas-sidebar" class="sidebar sidebar-open">
