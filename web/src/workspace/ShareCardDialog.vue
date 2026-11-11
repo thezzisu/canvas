@@ -49,7 +49,8 @@ const destination = computed(() =>
 async function submit() {
   const canvas = destination.value
   if (!canvas) return
-  const added = await run(async () => {
+  let added = false
+  await run(async () => {
     if (!(await edits.flushAll())) return
     await write(`/api/canvases/${segment(canvas.id)}/references`, 'POST', {
       sourceCanvasId: props.canvasId,
@@ -58,6 +59,7 @@ async function submit() {
       y: 80,
     })
     await workspace.sync()
+    added = true
   })
   if (!added) return
   notify.success(t('app.addedToCanvas', { name: canvas.name }))

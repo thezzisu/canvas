@@ -282,9 +282,9 @@ export function useWindowReveal(scene: CanvasScene) {
       jumping.value = undefined
     },
     /** The window a canvas is asked to keep visible: a pending reveal or an arriving jump. */
-    target(canvasId: string): WindowFocus | undefined {
+    target(canvasId: string, includeJump = true): WindowFocus | undefined {
       if (reveal.value?.canvasId === canvasId) return reveal.value.target
-      if (jumping.value?.canvasId === canvasId) return jumping.value.anchor
+      if (includeJump && jumping.value?.canvasId === canvasId) return jumping.value.anchor
     },
     /** Input anywhere but the revealed card gives up the reveal. */
     interacted(event: Event) {

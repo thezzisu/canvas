@@ -1,8 +1,18 @@
-import { computed, inject, provide, ref, shallowRef, watch, type InjectionKey, type Ref } from 'vue'
+import {
+  computed,
+  inject,
+  onScopeDispose,
+  provide,
+  ref,
+  shallowRef,
+  watch,
+  type InjectionKey,
+  type Ref,
+} from 'vue'
 import { useVueFlow } from '@vue-flow/core'
-import { useEventListener, useTitle } from '@vueuse/core'
-import { useI18n } from 'vue-i18n'
+import { useEventListener } from '@vueuse/core'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router'
+import { isCurrentApi } from '../../api/api'
 import { notify } from '../../lib/notify'
 import { useReducedMotion } from '../../lib/reduced-motion'
 import { setDownloadContext } from '../../files/downloads'
@@ -90,7 +100,6 @@ export function useCanvasScene() {
 }
 
 export function createCanvasScene(): CanvasScene {
-  const { t } = useI18n()
   const router = useRouter()
   // The remaining parts are attached below, in dependency order.
   const scene = {
@@ -111,14 +120,7 @@ export function createCanvasScene(): CanvasScene {
   scene.canvas = computed(() =>
     workspace.canvases.find((canvas) => canvas.id === route.canvasId.value),
   )
-  scene.name = computed(() =>
-    scene.kind.value === 'overview'
-      ? t('app.overview')
-      : scene.kind.value === 'working-set'
-        ? t('app.workingSet')
-        : scene.canvas.value?.name || t('app.canvas'),
-  )
-  useTitle(() => (workspace.state ? `${scene.name.value} - Canvas` : 'Canvas'))
+  scene.name = computed(() => workspace.canvasName(route.canvasId.value))
 
   const settingsDialog = shallowRef<InstanceType<typeof SettingsDialog>>()
   scene.dialogs = {
@@ -139,7 +141,9 @@ export function createCanvasScene(): CanvasScene {
   const pruning = usePreferencePruning(() => scene.removalUndo?.preferences())
   scene.removalUndo = useCardRemovalUndo({
     sync: workspace.sync,
-    released: pruning.pruneCards,
+    released: (context) => {
+      if (isCurrentApi(context)) pruning.pruneCards()
+    },
     error: notify.error,
   })
   watch(
@@ -162,7 +166,7 @@ export function createCanvasScene(): CanvasScene {
   scene.camera = useCanvasCamera(scene)
 
   scene.visit = async (canvasId, target) => {
-    if (!scene.reveal.target(canvasId)) scene.reveal.cancel()
+    if (!scene.reveal.target(canvasId, false)) scene.reveal.cancel()
     scene.focus.clearContent()
     scene.windows.cancelReveal()
     shell.sidebarOpen = false
@@ -176,7 +180,8 @@ export function createCanvasScene(): CanvasScene {
   }
 
   // Leaving: unsaved layout drafts decide first, then the canvas plays out.
-  session.onBeforeLeave(scene.layout.leave)
+  onScopeDispose(session.onBeforeLeave(scene.layout.leave))
+  route.onAborted(scene.morph.cancel)
   onBeforeRouteLeave(() => session.canLeave())
   onBeforeRouteUpdate(async (to, from) => {
     if (to.params.instance !== from.params.instance) return session.canLeave()
@@ -187,7 +192,7 @@ export function createCanvasScene(): CanvasScene {
     scene.camera.halt()
     scene.focus.clearContent()
     scene.windows.cancelReveal()
-    if (!scene.reveal.target(next)) scene.reveal.cancel()
+    if (!scene.reveal.target(next, false)) scene.reveal.cancel()
     if (scene.focus.cardId.value) void edits.flushNotes(String(from.params.canvas))
     await scene.morph.leave(next, route.pendingTarget()?.anchor)
     return true
@@ -203,9 +208,11 @@ export function createCanvasScene(): CanvasScene {
       shown = request.location.canvas
       scene.camera.halt()
       scene.focus.reset()
+      if (!request.anchor) scene.reveal.cancelJump()
       scene.paging.reset(request.location.view === 'paged')
       if (switched) {
         scene.layout.endGesture()
+        scene.windows.forget()
         scene.menus.display.value = scene.menus.canvas.value = scene.menus.create.value = false
         shell.scanTarget = null
         scene.graph.rebuild()
@@ -244,6 +251,7 @@ export function createCanvasScene(): CanvasScene {
     )
     return canvas && anchor ? { canvasId: canvas.id, anchorId: anchor.id } : undefined
   })
+  onScopeDispose(() => setDownloadContext())
 
   useEventListener(window, 'keydown', (event) => {
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
@@ -270,6 +278,8 @@ export function createCanvasScene(): CanvasScene {
       scene.paging.active.value &&
       !scene.focus.terminal.value &&
       !panelOpen &&
+      !scene.menus.display.value &&
+      !scene.menus.canvas.value &&
       !event.ctrlKey &&
       !event.altKey &&
       !event.metaKey &&

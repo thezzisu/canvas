@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, watch } from 'vue'
+import { useTitle } from '@vueuse/core'
 import { RouterView, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import UApp from '@nuxt/ui/components/App.vue'
@@ -46,6 +47,11 @@ useScreenWakeLock(computed(() => session.authenticated))
 /** Signed in to the instance the address names, and that address is a canvas. */
 const working = computed(
   () => session.authenticated && !session.unknownInstance && route.name === 'canvas',
+)
+useTitle(() =>
+  working.value && workspace.state
+    ? `${workspace.canvasName(String(route.params.canvas))} - Canvas`
+    : 'Canvas',
 )
 // Touch layouts: 44px menu rows; text entry uses 16px so focusing a field never zooms the page.
 const touchTheme = {

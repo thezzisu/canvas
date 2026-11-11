@@ -1,4 +1,5 @@
-import { computed, shallowRef, watch } from 'vue'
+import { computed, onScopeDispose, shallowRef, watch } from 'vue'
+import { createEventHook } from '@vueuse/core'
 import { isNavigationFailure, NavigationFailureType, useRoute, useRouter } from 'vue-router'
 import {
   locationQuery,
@@ -26,6 +27,21 @@ export function useCanvasRoute() {
   /** Routes this view wrote itself while following the camera; they are not requests. */
   const written = new Set<string>()
   let revision = 0
+  /** A navigation that is not ours and has not settled; camera writes wait for it. */
+  let arriving: string | undefined
+  const aborted = createEventHook<void>()
+  onScopeDispose(
+    router.beforeEach((to) => {
+      if (!written.has(to.fullPath)) arriving = to.fullPath
+    }),
+  )
+  onScopeDispose(
+    router.afterEach((to, _from, failure) => {
+      if (arriving !== to.fullPath) return
+      arriving = undefined
+      if (failure) void aborted.trigger()
+    }),
+  )
 
   const toRoute = (location: CanvasLocation) => ({
     name: 'canvas' as const,
@@ -61,6 +77,8 @@ export function useCanvasRoute() {
     instanceId,
     canvasId,
     request,
+    /** A navigation was refused or superseded before it arrived. */
+    onAborted: aborted.on,
     /** The view the address names right now. */
     current: () => parseLocation(instanceId.value, canvasId.value, route.query),
     /** The target of a navigation that has not committed yet, for its leave guard. */
@@ -80,7 +98,7 @@ export function useCanvasRoute() {
     },
     /** Follow the camera in the address bar; ignored while a request is being applied. */
     save(location: CanvasLocation, remember?: boolean) {
-      if (request.value || location.instance !== instanceId.value) return false
+      if (arriving || request.value || location.instance !== instanceId.value) return false
       write(location, remember)
       return true
     },

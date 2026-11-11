@@ -262,7 +262,7 @@ export function useCanvasCamera(scene: CanvasScene) {
       scene.reveal.finishJump(anchored)
       return
     }
-    const revealed = scene.reveal.target(id)
+    const revealed = scene.reveal.target(id, false)
     const target = request?.fitNodeId
       ? nodes.value.find((node) => node.id === request.fitNodeId)
       : revealed && windowNode(nodes.value, revealed)

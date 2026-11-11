@@ -180,6 +180,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       spaceId: home?.id || node.spaceId,
     }
   }
+  function canvasName(id: string) {
+    if (id === 'overview') return t('app.overview')
+    if (id === 'working-set') return t('app.workingSet')
+    return canvases.value.find((canvas) => canvas.id === id)?.name || t('app.canvas')
+  }
   function windowCanvases(sourceId: string, windowId: string) {
     return canvasesByWindow.value.get(`${sourceId}/${windowId}`) || []
   }
@@ -407,6 +412,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     windowSize,
     resourceFor,
     windowCanvases,
+    canvasName,
     onApplied: applied.on,
     onNotification: notified.on,
     apply,

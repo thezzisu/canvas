@@ -559,6 +559,8 @@ export function useCanvasNavigation(options: {
   })
   onBeforeUnmount(() => {
     resetPagingFeedback()
+    // Fullscreen presents a canvas; it ends with the view.
+    void exitFullscreen()
     document.removeEventListener('fullscreenchange', fullscreenChanged)
     document.removeEventListener('pointerdown', pointerDown, true)
     document.removeEventListener('focusin', interacted, true)

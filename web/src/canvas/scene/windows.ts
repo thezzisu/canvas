@@ -334,6 +334,9 @@ export function useCanvasWindows(scene: CanvasScene) {
     creationId,
     cancelReveal,
     remember,
+    forget() {
+      lastInteraction = undefined
+    },
     createSpace,
     createTab,
     editSpace,

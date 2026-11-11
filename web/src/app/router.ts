@@ -67,7 +67,8 @@ export function followInstance() {
     )
       return session.canLeave()
   })
-  router.afterEach((to) => {
+  router.afterEach((to, _from, failure) => {
+    if (failure) return
     const id = to.params.instance
     const wasUnknown = !!session.unknownInstance
     session.unknownInstance = id && !known(id) ? String(id) : undefined

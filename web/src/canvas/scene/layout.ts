@@ -51,6 +51,8 @@ export function useCanvasLayout(scene: CanvasScene) {
   const snaps = () => !!scene.canvas.value?.snapToGrid
 
   onScopeDispose(edits.guardDraft(() => !!draft.value?.changes.size))
+  // A prompt still open when the view goes away is answered: stay.
+  onScopeDispose(() => resolveExit?.(false))
 
   function endGesture() {
     before = undefined
