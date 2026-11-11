@@ -107,7 +107,7 @@ const items = computed<DropdownMenuItem[][]>(() => [
       :class="{ active: view.filtered }"
       icon="i-lucide-list-filter"
       color="neutral"
-      variant="ghost"
+      :variant="view.filtered ? 'soft' : 'ghost'"
       :size="size"
       :title="t('app.filterSort')"
       :aria-label="t('app.overviewFilterSort')"

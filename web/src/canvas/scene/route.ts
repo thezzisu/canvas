@@ -47,8 +47,9 @@ export function useCanvasRoute() {
     { flush: 'sync' },
   )
 
-  function write(location: CanvasLocation) {
-    if (workspace.pageVisible) rememberCanvasLocation(localStorage, location)
+  /** A background tab follows its own address but never overwrites the remembered view. */
+  function write(location: CanvasLocation, remember = workspace.pageVisible) {
+    if (remember) rememberCanvasLocation(localStorage, location)
     const next = toRoute(location),
       path = router.resolve(next).fullPath
     if (path === route.fullPath) return
@@ -78,9 +79,9 @@ export function useCanvasRoute() {
       else if (failure) target = undefined
     },
     /** Follow the camera in the address bar; ignored while a request is being applied. */
-    save(location: CanvasLocation) {
+    save(location: CanvasLocation, remember?: boolean) {
       if (request.value || location.instance !== instanceId.value) return false
-      write(location)
+      write(location, remember)
       return true
     },
     /** The request reached its camera: the address now names where the view actually is. */

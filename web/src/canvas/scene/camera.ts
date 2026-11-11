@@ -209,10 +209,11 @@ export function useCanvasCamera(scene: CanvasScene) {
       ...(scene.paging.active.value && page ? { page: page.id } : {}),
     }
   }
-  function save() {
+  /** `remember` forces the view into browser storage, as when the tab is being hidden. */
+  function save(remember?: boolean) {
     if (pending || !session.authenticated || !workspace.resourcesLoaded) return
     if (scene.focus.maximized.value) {
-      scene.route.save(location())
+      scene.route.save(location(), remember)
       return
     }
     const next = canvasFrame(scene.surface.value)
@@ -222,7 +223,7 @@ export function useCanvasCamera(scene: CanvasScene) {
       return
     }
     if (next) frame = next
-    scene.route.save(location())
+    scene.route.save(location(), remember)
   }
   function settled(request: typeof scene.route.request.value, actual = location()) {
     pending = ''
@@ -339,20 +340,17 @@ export function useCanvasCamera(scene: CanvasScene) {
   }
   useResizeObserver(scene.surface, queueResize)
   useEventListener(window, 'resize', queueResize)
-  useEventListener(window, 'beforeunload', save)
-  watch(
-    () => workspace.pageVisible,
-    () => save(),
-    { flush: 'sync' },
-  )
+  useEventListener(window, 'beforeunload', () => save())
+  // The view at the moment the tab is hidden is the one to come back to.
+  useEventListener(document, 'visibilitychange', () => save(document.hidden || undefined))
   watch([() => shell.viewport, uiZoom], () => void nextTick(queueResize))
-  watchDebounced(getViewport, save, { debounce: 160 })
+  watchDebounced(getViewport, () => save(), { debounce: 160 })
 
   const navigation = useCanvasNavigation({
     getCanvasId: () => `${activeInstance.value.id}/${scene.route.canvasId.value}`,
     getViewport,
     setViewport,
-    saveViewport: save,
+    saveViewport: () => save(),
     onError: notify.error,
     blocked: () =>
       workspace.pending ||

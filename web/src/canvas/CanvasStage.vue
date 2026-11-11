@@ -215,7 +215,7 @@ function minimapColor(node: Node) {
         @node-drag-start="layout.dragStart"
         @node-drag="layout.snapDrag"
         @node-drag-stop="layout.dragStop"
-        @move-end="camera.save"
+        @move-end="camera.save()"
         @init="camera.restore"
         @nodes-initialized="camera.nodesInitialized"
         @nodes-change="layout.change"

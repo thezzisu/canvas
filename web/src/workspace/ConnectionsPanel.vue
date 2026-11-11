@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UCollapsible from '@nuxt/ui/components/Collapsible.vue'
@@ -7,6 +7,7 @@ import UIcon from '@nuxt/ui/components/Icon.vue'
 import USlideover from '@nuxt/ui/components/Slideover.vue'
 import { write, segment } from '../api/api'
 import { useCanvasScene } from '../canvas/scene/scene'
+import { usePointerDismiss } from '../lib/pointer-dismiss'
 import { statusColor, statusLabel } from '../lib/status'
 import type { Source, SourceResource, TerminalCanvasNode } from '../api/types'
 import { needsAttention } from './canvas-status'
@@ -18,6 +19,16 @@ const { t } = useI18n()
 const scene = useCanvasScene()
 const { workspace, shell } = scene
 const expanded = ref('')
+// Canvas and terminal gestures stop pointer events before the panel's own outside listener.
+const dismiss = usePointerDismiss(
+  computed({
+    get: () => shell.connectionsOpen && !shell.modalOpen,
+    set: (open) => {
+      shell.connectionsOpen = open
+    },
+  }),
+  () => document.querySelector<HTMLElement>('.connections-panel'),
+)
 const resourceOf = (source: Source) => workspace.resources.find((item) => item.id === source.id)
 const runtime = (source: Source) => (source.runtime === 'core' ? 'herdr-core' : 'herdr')
 const online = (resource?: SourceResource) => resource?.status === 'online' && !resource.error
@@ -52,6 +63,7 @@ function removeSource(source: Source) {
     :title="t('app.connectionsWindows')"
     :modal="false"
     :overlay="false"
+    :content="dismiss"
     :ui="{
       content: 'connections-panel w-[min(380px,var(--ui-viewport-width))]',
       body: 'flex flex-col gap-3',

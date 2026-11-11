@@ -87,10 +87,7 @@ export function followInstance() {
   )
   return router.isReady().then(() => {
     if (session.unknownInstance || invalidInstanceLink) session.suspend()
-    else if (
-      router.currentRoute.value.params.instance === activeInstance.value.id ||
-      !hasActiveInstance.value
-    )
-      void session.activate()
+    // Selecting the instance the address names has already started its check.
+    else if (!session.ready) void session.activate()
   })
 }
