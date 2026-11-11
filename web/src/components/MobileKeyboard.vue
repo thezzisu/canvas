@@ -380,8 +380,10 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
 .mobile-key-safe{position:absolute;width:0;height:var(--ui-safe-bottom,0px);visibility:hidden;pointer-events:none}
 .mobile-key-dock{--key-fill:.5;box-sizing:border-box;display:flex;flex-direction:column;min-height:0;margin:0 -4px;overflow:hidden;padding-bottom:var(--ui-safe-bottom,0px);border-top:1px solid #48515e;background:#181d258c}
 .mobile-keyboard:not(.has-dock) .mobile-key-dock{visibility:hidden;padding-bottom:0;border-top-width:0}
-/* Under the system keyboard the area stays reserved but shows no built-in keys. */
-.mobile-key-dock.blank>*{visibility:hidden}
+/* Under the system keyboard the area stays reserved but shows no built-in keys. A browser may
+   report the final keyboard rectangle as the keyboard starts rising, so replaced keys stay painted
+   under it for its animation; this never changes the area's height. */
+.mobile-key-dock.blank>*{visibility:hidden;transition:visibility 0s 400ms}
 /* Rows share the dock height above their minimum, so the keys fill a dock of any height. */
 .mobile-key-deck{container-type:inline-size;flex:1 1 auto;display:flex;flex-direction:column;gap:4px;min-height:0;overflow-x:hidden;overflow-y:auto;padding:6px;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:thin;scrollbar-color:#515c6b transparent}
 .mobile-key-deck-row{flex:1 0 0;display:grid;gap:2px;min-width:0;min-height:28px}

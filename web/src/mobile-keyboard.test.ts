@@ -374,6 +374,17 @@ test('native and builtin handoff preserves the available frame throughout both a
   assert.equal(f.textarea.readOnly, false)
 })
 
+test('a closing IME tail below the occlusion threshold still belongs to the switch', t => {
+  const f = fixture(t); f.open(); f.control.switchMode()
+  for (const height of [600, 760, 800, 830]) {
+    f.resize(height)
+    assert.equal(f.terminal(), 500, `the closing tail is not a new full frame (${height})`)
+    assert.equal(f.control.state.switching, true)
+  }
+  f.resize(844)
+  assert.equal(f.terminal(), 500); assert.equal(f.control.state.switching, false)
+})
+
 test('builtin preference survives closing without automatically reopening', t => {
   const f = fixture(t)
   f.control.switchMode()
@@ -394,6 +405,7 @@ test('builtin height clamps oversized system geometry and allows one settled cha
   f.control.focus(true); f.resize(244)
   f.control.switchMode()
   assert.equal(f.control.state.switching, true)
+  for (const height of [300, 430, 570, 700]) { f.resize(height); assert.equal(f.terminal(), 244, 'no intermediate growth') }
   f.resize(844)
   assert.equal(f.control.state.dockHeight, 460)
   assert.equal(f.control.state.switching, false)
@@ -773,6 +785,16 @@ test('the built-in keys take the height of the system keyboard they replace with
   assert.equal(f.control.state.dockHeight, 258, 'the keys never shrink below their minimum rows')
 })
 
+test('an oversized overlay IME replaced by the built-in keys changes the area once, after it closed', t => {
+  const f = fixture(t, { api: true }); f.control.setBuiltinMinHeight(258); f.control.focus(true); f.keyboard(600)
+  const switches = f.states.length
+  f.control.switchMode()
+  for (const height of [520, 400, 260, 100, 10]) { f.keyboard(height); assert.equal(f.control.state.dockHeight, 600) }
+  f.keyboard(0)
+  assert.equal(f.control.state.dockHeight, 460); assert.equal(f.control.state.switching, false)
+  assert.deepEqual([...new Set(f.states.slice(switches).map(state => state.dockHeight))], [600, 460])
+})
+
 test('without a measured system keyboard the built-in keys use their minimum rows', t => {
   const f = fixture(t, { api: true }); f.storage.set('canvas:mobile-keyboard-mode', 'builtin')
   f.control.setBuiltinMinHeight(258); f.control.focus(true)
@@ -849,6 +871,13 @@ test('another editor taking focus ends the overlay at once so its page can resiz
   f.document.activeElement = {}; f.document.dispatchEvent(new Event('focusin')); await Promise.resolve()
   assert.equal(f.requested(), false); assert.equal(f.virtualKeyboard.overlaysContent, false)
   assert.equal(f.control.state.dockHeight, 0)
+})
+
+test('a keyboard-less terminal focus hides an open overlay IME', t => {
+  const f = fixture(t, { api: true }); f.control.focus(true); f.keyboard(340)
+  f.control.focus(false)
+  assert.equal(f.virtualKeyboard.hides, 1, 'a manual keyboard policy does not hide on blur alone')
+  assert.equal(f.requested(), false); assert.equal(f.document.activeElement, f.textarea)
 })
 
 test('disposing the overlay owner restores the page policy', t => {

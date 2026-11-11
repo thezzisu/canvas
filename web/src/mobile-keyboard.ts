@@ -57,7 +57,8 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   let picker: { returned: boolean } | undefined
   // `inset` is the IME's height over the page bottom; with `overlay` the page does not resize for it.
   let overlay = false, inset = 0
-  // System mode keeps `hold` reserved until the IME covers it; `bridge` keeps the built-in keys shown meanwhile.
+  // A handoff keeps `hold` reserved until the incoming keyboard covers it (system) or the
+  // replaced IME has closed (built-in); `bridge` keeps the built-in keys shown meanwhile.
   let hold = 0, bridge = false, switching = false
   let nativeHeight = 0, builtinMinHeight = 260 * scale(), builtinHeight = builtinMinHeight
   let confirmTimer: ReturnType<typeof setTimeout> | undefined
@@ -72,7 +73,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   const input = () => composer?.element || textarea
   const occluded = (height: number) => overlay ? height > 0 : height > Math.max(80, baseline.height * .15)
   const measure = () => overlay ? Math.max(0, api!.boundingRect.height) : Math.max(0, baseline.height - read().height)
-  const area = () => !requested ? inset : Math.max(inset, mode === 'builtin' ? builtinHeight : hold)
+  const area = () => !requested ? inset : Math.max(inset, hold, mode === 'builtin' ? builtinHeight : 0)
   function state(): MobileKeyboardState {
     // Without the overlay the page already shrank by the IME; the area only adds what it does not cover.
     return { mode, dockHeight: Math.max(0, area() - (overlay ? 0 : inset)), deck: requested && (mode === 'builtin' || bridge),
@@ -134,11 +135,12 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   /** Request the system IME on input(); without the API only a fresh focus can request it again. */
   function raise(refocus = false) {
     const element = input()
-    syncOverlay()
     changingFocus = true
     try {
       if (refocus && !api) element.blur()
       element.focus({ preventScroll: true })
+      // A manual keyboard policy shows nothing on focus: the overlay is in place before show().
+      syncOverlay()
       try { api?.show() } catch { /* Focus remains the request. */ }
     } finally { changingFocus = false }
   }
@@ -173,14 +175,16 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     hold = 0; bridge = false; switching = false
     if (occluded(inset)) nativeHeight = inset
   }
-  /** A visible IME that stopped changing ends the transition, even below the held area. */
+  /** An IME that stopped changing ends the transition, even short of the held area. */
   function settle() {
     clearTimeout(settleTimer)
     settleTimer = setTimeout(() => {
       settleTimer = undefined
       inset = measure()
-      if (!requested || suspended || picker || document.hidden || !occluded(inset)) return
-      if (mode === 'system') release(); else switching = false
+      if (!requested || suspended || picker || document.hidden) return
+      if (mode === 'builtin') { switching = false; hold = 0 }
+      else if (occluded(inset)) release()
+      else return
       publish()
     }, settleDelay)
   }
@@ -193,9 +197,11 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   }
   /** Show the built-in keys at the height of the area they replace, then close the IME under them. */
   function useBuiltin(replaced: number) {
-    clearTimers(); mode = 'builtin'; hold = 0; bridge = false
+    clearTimers(); mode = 'builtin'; bridge = false
     builtinHeight = fitHeight(replaced || nativeHeight || builtinMinHeight)
-    switching = occluded(inset)
+    switching = inset >= 1
+    // An area outside the built-in bounds changes once, after the IME under it has closed.
+    hold = switching ? replaced : 0
     hideNative(true); publish()
   }
   /** Move the system IME to input(), holding the current area until the IME covers it. */
@@ -253,8 +259,8 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     const visible = occluded(inset), changed = Math.abs(inset - previous) > .5
     if (requested && !document.hidden && !picker && !suspended) {
       if (mode === 'builtin') {
-        // The replaced IME is closing under the built-in keys.
-        if (switching && !visible) switching = false
+        // The replaced IME is closing under the built-in keys until it is gone.
+        if (switching && inset < 1) { switching = false; hold = 0 }
         else if (switching && (changed || !settleTimer)) settle()
       } else {
         if (visible) appeared()
@@ -407,8 +413,8 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       if (!requested) mode = preferredMode()
       if (value !== undefined && value !== requested) {
         clearTimers(); hold = 0; bridge = false; switching = false
-        changingFocus = true
-        try { textarea.blur() } finally { changingFocus = false }
+        if (value) { changingFocus = true; try { textarea.blur() } finally { changingFocus = false } }
+        else hideNative()
         requested = value
         if (value) {
           mode = preferredMode()
