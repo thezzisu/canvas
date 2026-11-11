@@ -123,7 +123,7 @@ npm run server:dev   # backend on 127.0.0.1:3010
 npm run dev          # frontend with hot reload
 ```
 
-Run `npm run typecheck`, `npm test` and `npm run build` before submitting.
+Run `npm run check` and `npm run build` before submitting.
 Native integration tests use isolated sockets and run when
 `CANVAS_TEST_HERDR_SERVER_BINARY` or `CANVAS_TEST_CORE_BINARY` points to an
 official herdr or herdr-core executable.
