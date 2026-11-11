@@ -162,7 +162,9 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     confirmTimer = setTimeout(() => {
       confirmTimer = undefined
       inset = measure()
-      if (!requested || mode !== 'system' || suspended || picker || document.hidden || occluded(inset)) return
+      if (!requested || mode !== 'system' || suspended || picker || document.hidden) return
+      // The IME stayed up (e.g. a blur that did not close it): settle the area as for any visible IME.
+      if (occluded(inset)) { observe(); return }
       hold = 0; bridge = false; switching = false
       // A composer whose IME never appeared (hardware keyboard) stays open and editable.
       if (composer && !composer.shown) publish()
@@ -224,10 +226,10 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     publish()
   }
   /** Open the system IME from a closed keyboard; the area follows it as it appears. */
-  function openSystem() {
+  function openSystem(refocus = true) {
     clearTimers(); requested = true; mode = 'system'; hold = 0; bridge = false; switching = false
     baseline = { width: window.innerWidth, height: Math.max(baseline.height, window.innerHeight, read().height), scale: scale() }
-    inputMode(); raise(); confirm(); observe()
+    inputMode(); raise(refocus); confirm(); observe()
   }
   function dropComposer(close: boolean) {
     const current = composer
@@ -256,8 +258,11 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       builtinHeight = fitHeight(builtinHeight); inset = measure()
       if (requested && mode === 'system' && !picker && !suspended && !document.hidden) confirm()
     }
-    if (overlaid || !requested && !occluded(baseline.height - frame.height)) baseline.height = Math.max(window.innerHeight, frame.height)
-    else if (requested && mode === 'builtin' && !switching && !suspended && !picker && frame.height !== baseline.height) {
+    const refit = requested && mode === 'builtin' && !switching && !suspended && !picker
+    if (overlaid || !requested && !occluded(baseline.height - frame.height)) {
+      baseline.height = Math.max(window.innerHeight, frame.height)
+      if (refit) builtinHeight = fitHeight(builtinHeight)
+    } else if (refit && frame.height !== baseline.height) {
       // Without native input this is the full available frame, not a newly opened IME.
       baseline.height = frame.height; builtinHeight = fitHeight(builtinHeight)
     }
@@ -365,9 +370,10 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       if (!options.active()) return
       claim()
       if (composer?.element === element) {
-        // Tapping the editor while its IME is off asks for it again.
+        // Tapping the editor while its IME is off asks for it again; the tap itself is the focus request.
         if (lost) composer.lost = lost
-        if (!requested) { composer.keep = true; openSystem() }
+        if (!requested) { composer.keep = true; openSystem(false) }
+        else if (mode === 'system' && !occluded(inset) && !confirmTimer) { raise(); confirm() }
         return
       }
       const prior = composer ? composer.prior : requested ? mode : undefined, reserve = area()

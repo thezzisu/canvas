@@ -902,6 +902,49 @@ test('another terminal taking the keyboard inherits and ends the page overlay', 
   second.dispose()
 })
 
+test('without the API, opening the system keyboard on an already focused input refocuses it', t => {
+  const f = fixture(t); f.storage.set('canvas:mobile-keyboard-mode', 'builtin'); f.control.focus(false)
+  let focusEvents = 0; f.textarea.addEventListener('focus', () => focusEvents++)
+  f.control.switchMode()
+  assert.equal(f.control.state.mode, 'system'); assert.equal(focusEvents, 1, 'a fresh focus requests the IME')
+})
+
+test('without the API, the keyboard button over a kept composer refocuses its editor', t => {
+  const f = fixture(t); f.open(); f.compose(); t.mock.timers.tick(1000)
+  const finish = f.control.filePicker()!
+  f.resize(844); finish(true); t.mock.timers.tick(900)
+  assert.equal(f.requested(), false); assert.equal(f.document.activeElement, f.editor)
+  let focusEvents = 0; f.editor.addEventListener('focus', () => focusEvents++)
+  f.control.focus(true)
+  assert.equal(focusEvents, 1)
+})
+
+test('tapping an overlay composer whose IME never appeared asks for it', t => {
+  const f = fixture(t, { api: true })
+  f.compose(); t.mock.timers.tick(2000)
+  const shows = f.virtualKeyboard.shows
+  f.compose()
+  assert.equal(f.virtualKeyboard.shows, shows + 1)
+  t.mock.timers.tick(900); assert.equal(f.lost(), 0, 'still a hardware-keyboard composer when refused')
+})
+
+test('a blur that leaves the overlay IME up releases the held area after confirmation', async t => {
+  const f = fixture(t, { api: true }); f.control.focus(true); f.keyboard(340); f.control.switchMode(); f.keyboard(0)
+  f.control.switchMode(); f.keyboard(300); t.mock.timers.tick(500)
+  f.textarea.blur(); await Promise.resolve()
+  assert.equal(f.control.state.switching, true)
+  t.mock.timers.tick(900)
+  assert.equal(f.control.state.switching, false); assert.equal(f.control.state.dockHeight, 300); assert.equal(f.requested(), true)
+})
+
+test('an overlay built-in deck refits when the window gets shorter at the same width', t => {
+  const f = fixture(t, { api: true }); f.control.setBuiltinMinHeight(258); f.control.focus(true); f.keyboard(400)
+  f.control.switchMode(); f.keyboard(0)
+  assert.equal(f.control.state.dockHeight, 400)
+  f.window.innerHeight = 500; f.css.height = 500; f.visual.height = 500; f.visual.dispatchEvent(new Event('resize'))
+  assert.equal(f.control.state.dockHeight, 340, 'the terminal keeps its 160px reserve')
+})
+
 test('disposing the overlay owner restores the page policy', t => {
   const f = fixture(t, { api: true }); f.control.focus(true); f.keyboard(340)
   f.control.dispose()
