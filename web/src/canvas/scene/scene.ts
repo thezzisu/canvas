@@ -207,6 +207,8 @@ export function createCanvasScene(): CanvasScene {
       const switched = shown !== request.location.canvas
       shown = request.location.canvas
       scene.camera.halt()
+      scene.focus.clearContent()
+      scene.windows.cancelReveal()
       scene.focus.reset()
       if (!request.anchor) scene.reveal.cancelJump()
       scene.paging.reset(request.location.view === 'paged')

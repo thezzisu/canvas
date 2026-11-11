@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, useTemplateRef } from 'vue'
+import { computed, nextTick, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
@@ -177,10 +177,17 @@ const menuItems = computed<DropdownMenuItem[][]>(() => {
       : []),
   ]
 })
+watch(
+  () => shell.backgroundCanvas,
+  (editing, was) => {
+    if (was && !editing) void nextTick(() => menuTrigger.value?.$el.focus())
+  },
+)
 const hidden = computed(() => (contentFontReady.value && shell.cardMaximized) || undefined)
 const labelled = { label: '@max-[620px]/header:hidden' }
 const menuUi = ref({
   content: 'canvas-menu min-w-[200px] w-max max-w-[calc(var(--ui-viewport-width)-16px)]',
+  group: 'space-y-0.5',
   itemLabel: 'whitespace-nowrap',
 })
 </script>

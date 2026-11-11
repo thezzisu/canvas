@@ -63,7 +63,7 @@ function removeSource(source: Source) {
     :title="t('app.connectionsWindows')"
     :modal="false"
     :overlay="false"
-    :content="dismiss"
+    :content="{ ...dismiss, onFocusOutside: (event: Event) => event.preventDefault() }"
     :ui="{
       content: 'connections-panel w-[min(380px,var(--ui-viewport-width))]',
       body: 'flex flex-col gap-3',
@@ -97,7 +97,11 @@ function removeSource(source: Source) {
                 <span class="source-address truncate">
                   {{ source.transport === 'local' ? t('app.local') : source.target }}
                 </span>
-                <span v-if="resourceOf(source)?.serverVersion" class="source-version flex-none">
+                <span
+                  v-if="resourceOf(source)?.serverVersion"
+                  class="source-version flex-none"
+                  :title="`${runtime(source)} ${resourceOf(source)!.serverVersion}`"
+                >
                   {{ runtime(source) }} {{ resourceOf(source)!.serverVersion }}
                 </span>
               </span>

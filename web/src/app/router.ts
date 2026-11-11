@@ -9,6 +9,7 @@ import {
 import {
   activeInstance,
   hasActiveInstance,
+  hasSavedInstances,
   instances,
   invalidInstanceLink,
   selectInstance,
@@ -60,12 +61,11 @@ export function followInstance() {
   router.beforeEach(async (to, from) => {
     // An address for an instance this browser does not know signs nothing in or out,
     // but the work on the current one must be stored before it is put away.
-    if (
-      to.params.instance &&
-      !known(to.params.instance) &&
-      to.params.instance !== from.params.instance
-    )
-      return session.canLeave()
+    const unknown = !!to.params.instance && !known(to.params.instance)
+    // Before anything is saved, the built-in instance has a new identity on every load,
+    // so an address from an earlier load names nothing: start over.
+    if (unknown && !hasSavedInstances.value) return { name: 'home' }
+    if (unknown && to.params.instance !== from.params.instance) return session.canLeave()
   })
   router.afterEach((to, _from, failure) => {
     if (failure) return

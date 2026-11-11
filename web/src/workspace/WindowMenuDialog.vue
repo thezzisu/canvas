@@ -12,14 +12,26 @@ export interface WindowMenuItem {
 </script>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import UModal from '../components/CanvasModal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import USeparator from '@nuxt/ui/components/Separator.vue'
 import WindowTitle from './WindowTitle.vue'
-import type { WindowResource } from '../api/types'
+import { useWorkspaceStore } from '../stores/workspace'
+import type { TerminalCanvasNode } from '../api/types'
 
 // Window actions as one list of stock buttons; groups are separated like menu groups.
-defineProps<{ window: Pick<WindowResource, 'name' | 'panes'>; items: WindowMenuItem[][] }>()
+const props = defineProps<{
+  target: Pick<TerminalCanvasNode, 'sourceId' | 'spaceId' | 'windowId'>
+  items: WindowMenuItem[][]
+}>()
+const { t } = useI18n()
+const workspace = useWorkspaceStore()
+/** Live: a rename or new pane title shows while the menu is open. */
+const window = computed(
+  () => workspace.resourceFor(props.target).window || { name: t('app.window') },
+)
 const emit = defineEmits<{ close: [value?: string] }>()
 let chosen: WindowMenuItem | undefined
 function choose(item: WindowMenuItem) {

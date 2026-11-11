@@ -1,14 +1,12 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, watch } from 'vue'
+import { computed, defineAsyncComponent } from 'vue'
 import { useTitle } from '@vueuse/core'
 import { RouterView, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import UApp from '@nuxt/ui/components/App.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import UTheme from '@nuxt/ui/components/Theme.vue'
-import { useToast } from '@nuxt/ui/composables/useToast'
 import { apiRevision } from '../api/api'
-import { installNotices } from '../lib/notify'
 import { useScreenWakeLock } from '../lib/screen-wake-lock'
 import { notificationPortal } from '../notifications/notification-surface'
 import TrustedPreviewDialog from '../files/TrustedPreviewDialog.vue'
@@ -18,6 +16,7 @@ import { useShellStore } from '../stores/shell'
 import { useWorkspaceStore } from '../stores/workspace'
 import { developerMode } from './developer-mode'
 import { uiLocale } from './i18n'
+import NoticeHost from './NoticeHost.vue'
 import PwaUpdatePrompt from './PwaUpdatePrompt.vue'
 
 const ViewportDiagnostics = defineAsyncComponent(
@@ -28,21 +27,6 @@ const route = useRoute()
 const session = useSessionStore(),
   shell = useShellStore(),
   workspace = useWorkspaceStore()
-const { toasts, add } = useToast()
-installNotices(add)
-// A notification raised for an account or session that is gone never appears.
-watch(
-  [toasts, apiRevision, () => session.authenticated, () => workspace.state?.instanceId],
-  ([items, revision, signedIn, backend]) => {
-    const prefix = `notification:${revision}:${backend}:`
-    const current = items.filter((item) => {
-      const id = String(item.id)
-      return !id.startsWith('notification:') || (signedIn && id.startsWith(prefix))
-    })
-    if (current.length !== items.length) toasts.value = current
-  },
-  { flush: 'sync' },
-)
 useScreenWakeLock(computed(() => session.authenticated))
 /** Signed in to the instance the address names, and that address is a canvas. */
 const working = computed(
@@ -76,6 +60,7 @@ const touchTheme = {
         ui: { viewport: 'canvas-notifications' },
       }"
     >
+      <NoticeHost />
       <PwaUpdatePrompt />
       <div v-if="!session.ready" class="boot-screen">
         <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" />

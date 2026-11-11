@@ -46,6 +46,8 @@ watch(
   () => pruneInstancePreferences(instances.value),
   { immediate: true },
 )
+/** The user has saved at least one instance in this browser. */
+export const hasSavedInstances = computed(() => savedInstances.value.length > 0)
 export const activeInstance = computed(() => configuration.value.active)
 export const hasActiveInstance = computed(() => !!activeInstance.value.base)
 watch(

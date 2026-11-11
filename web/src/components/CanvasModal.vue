@@ -42,9 +42,13 @@ const content = computed(() => ({
   onCloseAutoFocus(event: Event) {
     element.value = undefined
     props.content?.onCloseAutoFocus?.(event)
-    if (event.defaultPrevented || !trigger?.isConnected) return
+    if (event.defaultPrevented) return
+    const focused = document.activeElement
+    // Focus placed on purpose while the dialog closed, such as on a new terminal, stays there.
+    const taken = focused instanceof HTMLElement && focused !== document.body && focused.isConnected
+    if (!taken && !trigger?.isConnected) return
     event.preventDefault()
-    trigger.focus({ preventScroll: true })
+    if (!taken) trigger!.focus({ preventScroll: true })
   },
 }))
 

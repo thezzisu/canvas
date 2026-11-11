@@ -115,15 +115,13 @@ export function useCardActions(scene: CanvasScene) {
       ],
       [{ label: t('app.closeWindow'), icon: 'i-lucide-trash', color: 'error', value: 'close' }],
     ]
-    void scene.dialogs
-      .windowMenu({ window: live || { name: t('app.window') }, items })
-      .then((action) => {
-        if (action === 'settings') scene.dialogs.settings()
-        else if (action === 'tab') scene.graph.terminalData(node).newTab?.create()
-        else if (action === 'scan') scan(node)
-        else if (action === 'add') void addToCanvas(node)
-        else if (action === 'rename' || action === 'close') scene.windows.editWindow(node, action)
-      })
+    void scene.dialogs.windowMenu({ target: node, items }).then((action) => {
+      if (action === 'settings') scene.dialogs.settings()
+      else if (action === 'tab') scene.graph.terminalData(node).newTab?.create()
+      else if (action === 'scan') scan(node)
+      else if (action === 'add') void addToCanvas(node)
+      else if (action === 'rename' || action === 'close') scene.windows.editWindow(node, action)
+    })
   }
 
   function terminalAction(action: string, id: string) {

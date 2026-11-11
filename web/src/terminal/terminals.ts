@@ -1631,6 +1631,15 @@ export function mountTerminal(
       return true
     }
     term.attachCustomKeyEventHandler(current.keyHandler)
+    // A program may change or reset the default background; the card margins follow once xterm has applied it.
+    const refill = () => {
+      requestAnimationFrame(() => {
+        if (current.host && term.element) fillTerminalBackground(term.element, current.host)
+      })
+      return false
+    }
+    term.parser.registerOscHandler(11, refill)
+    term.parser.registerOscHandler(111, refill)
     sessions.set(id, session)
   }
   // Vue may mount a replacement host before disposing the old component. Only
@@ -1744,7 +1753,7 @@ export function mountTerminal(
       copyGesture: () => current.clipboard?.touchSelectionCompleted(),
     })
   }
-  // xterm sets its theme background inline when it opens; the theme never changes.
+  // xterm sets its theme background inline when it opens.
   if (session.term.element) fillTerminalBackground(session.term.element, host)
   if (!session.mobile && session.keyboard) {
     session.keyboard.dispose()

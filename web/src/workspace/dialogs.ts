@@ -12,7 +12,6 @@ import type {
   NoteCanvasNode,
   Source,
   TerminalCanvasNode,
-  WindowResource,
 } from '../api/types'
 
 /** Open a dialog that answers a question; resolves with what it closed with. */
@@ -47,6 +46,6 @@ export const shareCard = (request: { canvasId: string; node: NoteCanvasNode | Fi
   ask<boolean>(ShareCardDialog, request)
 /** A window's actions as a list. Resolves with the chosen item's value. */
 export const chooseWindowAction = (request: {
-  window: Pick<WindowResource, 'name' | 'panes'>
+  target: Pick<TerminalCanvasNode, 'sourceId' | 'spaceId' | 'windowId'>
   items: WindowMenuItem[][]
 }) => ask<string>(WindowMenuDialog, request)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import UAlert from '@nuxt/ui/components/Alert.vue'
@@ -12,7 +12,12 @@ import BrandMark from '../app/BrandMark.vue'
 import LanguageSelect from '../app/LanguageSelect.vue'
 import InstancePicker from '../instances/InstancePicker.vue'
 import InstanceSetup from '../instances/InstanceSetup.vue'
-import { activeInstance, hasActiveInstance, instances } from '../instances/instances'
+import {
+  activeInstance,
+  activeInstanceId,
+  hasActiveInstance,
+  instances,
+} from '../instances/instances'
 import { useSessionStore } from '../stores/session'
 import { useShellStore } from '../stores/shell'
 
@@ -22,6 +27,9 @@ const router = useRouter()
 const session = useSessionStore(),
   shell = useShellStore()
 const password = ref('')
+watch(activeInstanceId, () => {
+  password.value = ''
+})
 async function signIn() {
   if (await session.login(password.value)) password.value = ''
 }
