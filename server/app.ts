@@ -21,10 +21,13 @@ import {
   noteNodeSchema,
   noteColorSchema,
   isTerminalNode,
+  composerKey,
   type Source,
   type Canvas,
 } from './state.ts'
 import * as runtimes from './runtimes.ts'
+import { WriteOrder, parseWriteMark } from './write-order.ts'
+import { layoutFields, type LayoutField, type LayoutUpdate } from '../shared/layout.ts'
 import type { TerminalManager } from './terminals.ts'
 import type { CanvasNotification } from '../shared/notification.ts'
 import type { DownloadContext } from './open-download.ts'
@@ -101,6 +104,10 @@ const isCanvasFileUpload = (method: string, path: string) =>
   method === 'POST' &&
   (/^\/api\/canvases\/[^/]+\/(?:notes\/[^/]+\/)?files$/.test(path) ||
     /^\/api\/sources\/[^/]+\/windows\/[^/]+\/composer\/files$/.test(path))
+const writtenFields = (node: LayoutUpdate) =>
+  layoutFields.filter((field) => node[field] !== undefined)
+const pick = <Value extends object, Key extends keyof Value>(value: Value, keys: readonly Key[]) =>
+  Object.fromEntries(keys.map((key) => [key, value[key]])) as Pick<Value, Key>
 const composerSchema = z.object({ content: z.string().max(200_000) }).strict()
 export type { Account } from './account.ts'
 export interface DownloadResponse {
@@ -137,6 +144,7 @@ export function createApp(
   } = {},
 ) {
   const app = new Hono()
+  const order = new WriteOrder()
   const origins = options.allowedOrigins || new Set<string>()
   async function loadFile(id: string, download: boolean): Promise<DownloadResponse | undefined> {
     const file = await options.assets?.read(id)
@@ -215,7 +223,7 @@ export function createApp(
     }
     if (c.req.method === 'OPTIONS') {
       c.header('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS')
-      c.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range')
+      c.header('Access-Control-Allow-Headers', 'Authorization, Canvas-Write, Content-Type, Range')
       c.header('Access-Control-Max-Age', '600')
       return c.body(null, 204)
     }
@@ -349,9 +357,16 @@ export function createApp(
     windowId: c.req.param('window'),
   })
   app.patch('/api/sources/:id/windows/:window/composer', async (c) => {
-    const target = composerTarget(c)
+    const target = composerTarget(c),
+      mark = parseWriteMark(c.req.header('canvas-write')),
+      resource = `composer/${composerKey(target)}`
     if (!store.acceptsWindow(target)) return c.json({ error: 'Window not found' }, 404)
-    return c.json(store.updateComposer(target, composerSchema.parse(await c.req.json()).content))
+    const { content } = composerSchema.parse(await c.req.json())
+    if (!order.fresh(mark, resource, ['content']).length)
+      return c.json(store.currentComposer(target))
+    const view = store.updateComposer(target, content)
+    order.record(mark, resource, ['content'])
+    return c.json(view)
   })
   app.post('/api/sources/:id/windows/:window/composer/files', async (c) => {
     const target = composerTarget(c)
@@ -903,22 +918,57 @@ export function createApp(
   })
   app.patch('/api/canvases/:id/notes/:node', async (c) => {
     const id = c.req.param('id'),
-      nodeId = c.req.param('node')
+      nodeId = c.req.param('node'),
+      mark = parseWriteMark(c.req.header('canvas-write')),
+      resource = `note/${nodeId}`
     if (id === 'overview') return c.json({ error: 'Overview is read-only' }, 403)
     const patch = notePatchSchema.parse(await c.req.json())
     const canvas = store.get<Canvas>('canvas', id)
     if (!canvas) return c.json({ error: 'Canvas not found' }, 404)
     const node = canvas.nodes.find((item) => item.id === nodeId)
     if (!node || node.type !== 'note') return c.json({ error: 'Note not found' }, 404)
-    return c.json(store.canvasView(store.updateNote(id, nodeId, patch)))
+    const fields = Object.keys(patch) as (keyof typeof patch)[],
+      fresh = order.fresh(mark, resource, fields)
+    if (fields.length && !fresh.length) return c.json(store.canvasView(canvas))
+    const updated = store.updateNote(id, nodeId, pick(patch, fresh))
+    order.record(mark, resource, fresh)
+    return c.json(store.canvasView(updated))
   })
   app.patch('/api/canvases/:id/layout', async (c) => {
-    const id = c.req.param('id')
+    const id = c.req.param('id'),
+      mark = parseWriteMark(c.req.header('canvas-write'))
     if (id === 'overview') return c.json({ error: 'Overview is read-only' }, 403)
     const { nodes } = layoutSchema.parse(await c.req.json())
+    const cards = store.get<Canvas>('canvas', id)?.nodes ?? []
+    // Every canvas showing a window shares its size, so that is ordered per window.
+    const resource = (node: LayoutUpdate, field: LayoutField) => {
+      const card = cards.find((item) => item.id === node.id)
+      return card && isTerminalNode(card) && (field === 'width' || field === 'height')
+        ? `window-size/${card.sourceId}/${card.windowId}`
+        : `layout/${id}/${node.id}`
+    }
+    const fresh = nodes.flatMap((node): LayoutUpdate[] => {
+      const fields = writtenFields(node).filter(
+        (field) => order.fresh(mark, resource(node, field), [field]).length,
+      )
+      if (!fields.length) return []
+      return [
+        {
+          id: node.id,
+          ...pick(node, fields),
+          ...(node.expected && { expected: pick(node.expected, fields) }),
+        },
+      ]
+    })
     try {
-      const canvas = store.applyLayout(id, nodes)
-      return canvas ? c.json(store.canvasView(canvas)) : c.json({ error: 'Canvas not found' }, 404)
+      const canvas =
+        nodes.length && !fresh.length
+          ? store.get<Canvas>('canvas', id)
+          : store.applyLayout(id, fresh)
+      if (!canvas) return c.json({ error: 'Canvas not found' }, 404)
+      for (const node of fresh)
+        for (const field of writtenFields(node)) order.record(mark, resource(node, field), [field])
+      return c.json(store.canvasView(canvas))
     } catch (error) {
       if (error instanceof LayoutConflict)
         return c.json({ error: 'Layout changed on another device', code: 'layout-conflict' }, 409)

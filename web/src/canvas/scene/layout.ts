@@ -1,7 +1,14 @@
 import { computed, onScopeDispose, provide, ref, shallowRef, watch } from 'vue'
 import type { Node, NodeChange } from '@vue-flow/core'
 import { useI18n } from 'vue-i18n'
-import { api, apiContext, isCurrentApi, requireCurrentApi, segment, ApiError } from '../../api/api'
+import {
+  apiContext,
+  isCurrentApi,
+  orderedWrite,
+  requireCurrentApi,
+  segment,
+  ApiError,
+} from '../../api/api'
 import { inputMode } from '../../lib/mobile-layout'
 import {
   resizeFromDelta,
@@ -232,9 +239,10 @@ export function useCanvasLayout(scene: CanvasScene) {
     error.value = ''
     const context = apiContext()
     try {
-      await api(
+      await orderedWrite(
         `/api/canvases/${segment(staged.canvasId)}/layout`,
-        { method: 'PATCH', body: JSON.stringify({ nodes: [...staged.changes.values()] }) },
+        { nodes: [...staged.changes.values()] },
+        false,
         context,
       )
       await workspace.sync()

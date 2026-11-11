@@ -1,9 +1,9 @@
 import { defineStore } from 'pinia'
 import { createEventHook } from '@vueuse/core'
-import { api, apiContext, isCurrentApi, requireCurrentApi, segment } from '../api/api'
+import { apiContext, isCurrentApi, orderedWrite, requireCurrentApi, segment } from '../api/api'
 import { createAutosave } from '../lib/autosave'
 import { notify } from '../lib/notify'
-import { guardPageExit, pendingWrites } from '../lib/pending-writes'
+import { createKeepaliveCopies, guardPageExit, pendingWrites } from '../lib/pending-writes'
 import { createLayoutSaves, type LayoutPatch } from '../canvas/layout-saves'
 import {
   createPendingEdits,
@@ -29,6 +29,7 @@ export const useEditsStore = defineStore('edits', () => {
   const savingNotes = new Map<string, NoteEdit>()
   const noteTimers = createAutosave()
   let noteSave: Promise<boolean> | undefined
+  const noteCopies = createKeepaliveCopies()
   const layoutSaves = createLayoutSaves()
   const pendingLayouts = layoutSaves.pending
   const layoutTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -165,11 +166,14 @@ export const useEditsStore = defineStore('edits', () => {
     void noteChanged.trigger(id)
   }
   const writeNote = (edit: NoteEdit, keepalive: boolean, context = apiContext()) =>
-    api(
+    orderedWrite(
       `/api/canvases/${segment(edit.canvasId)}/notes/${segment(edit.id)}`,
-      { method: 'PATCH', body: JSON.stringify(edit.patch), keepalive },
+      edit.patch,
+      keepalive,
       context,
     )
+  const carried = (edit: NoteEdit) =>
+    [noteKey(edit.canvasId, edit.id), JSON.stringify(edit.patch)] as const
   /** Store pending notes; `force: false` leaves those still inside their typing pause. */
   async function flushNotes(
     canvasId?: string,
@@ -179,12 +183,15 @@ export const useEditsStore = defineStore('edits', () => {
       { force = true, keepalive = false } = options
     // A failed earlier batch leaves its edits pending; this flush sends them again with its own.
     if (noteSave) {
-      // A closing page may cancel the save in flight, so keepalive copies of every unsaved
-      // note go out now. That save and the flush after it still store and confirm them.
+      // A closing page may cancel the save in flight, so a keepalive copy of every unsaved note
+      // goes out, unless a keepalive request already carries exactly its fields.
+      // That save and the flush after it still store and confirm them.
       if (keepalive)
-        for (const edit of mergeNoteEdits(unsavedNotes()))
-          if (!canvasId || edit.canvasId === canvasId)
-            void writeNote(edit, true, context).catch(() => {})
+        for (const edit of mergeNoteEdits(unsavedNotes())) {
+          const [key, value] = carried(edit)
+          if ((!canvasId || edit.canvasId === canvasId) && noteCopies.claim(key, value))
+            void writeNote(edit, true, context).catch(() => noteCopies.release(key, value))
+        }
       await noteSave
       return isCurrentApi(context) && flushNotes(canvasId, options)
     }
@@ -203,6 +210,7 @@ export const useEditsStore = defineStore('edits', () => {
       const results = await Promise.all(
         batch.map(async ([key, edit]) => {
           try {
+            if (keepalive) noteCopies.claim(...carried(edit))
             await writeNote(edit, keepalive, context)
             if (savingNotes.get(key) !== edit) return true
             savingNotes.delete(key)
@@ -232,7 +240,10 @@ export const useEditsStore = defineStore('edits', () => {
     try {
       saved = await noteSave
     } finally {
-      if (isCurrentApi(context)) noteSave = undefined
+      if (isCurrentApi(context)) {
+        noteSave = undefined
+        noteCopies.forget()
+      }
     }
     if (!saved || !isCurrentApi(context)) return false
     return force ? flushNotes(canvasId, options) : true
@@ -265,13 +276,10 @@ export const useEditsStore = defineStore('edits', () => {
       await layoutSaves.flush(
         canvasId,
         (batch) =>
-          api(
+          orderedWrite(
             `/api/canvases/${segment(canvasId)}/layout`,
-            {
-              method: 'PATCH',
-              body: JSON.stringify({ nodes: [...batch].map(([id, patch]) => ({ id, ...patch })) }),
-              keepalive,
-            },
+            { nodes: [...batch].map(([id, patch]) => ({ id, ...patch })) },
+            keepalive,
             context,
           ),
         checkpoint,
@@ -321,6 +329,7 @@ export const useEditsStore = defineStore('edits', () => {
     clearNotes()
     noteTimers.clear()
     noteSave = undefined
+    noteCopies.forget()
     unsavedDraft = () => false
   }
 

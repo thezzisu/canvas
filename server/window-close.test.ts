@@ -19,6 +19,8 @@ import {
   listResources,
 } from './runtimes.ts'
 
+/** Ordered writes carry their page and sequence number. */
+let writes = 0
 async function fixture(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'canvas-close-'))
   const store = new Store(join(directory, 'canvas.db'))
@@ -126,11 +128,15 @@ async function fixture(t: TestContext) {
     },
   } as unknown as TerminalManager)
   store.addSession('fixture')
-  const headers = { Authorization: 'Bearer fixture', 'Content-Type': 'application/json' }
+  const headers = () => ({
+    Authorization: 'Bearer fixture',
+    'Content-Type': 'application/json',
+    'Canvas-Write': `test.${++writes}`,
+  })
   const request = (path: string, method = 'GET', body?: unknown) =>
     app.request(`http://localhost${path}`, {
       method,
-      headers,
+      headers: headers(),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
   const close = (window = 'closed') =>
@@ -244,7 +250,7 @@ async function fixture(t: TestContext) {
         release,
         result: app.request(`http://localhost/api/canvases/${a.id}/layout`, {
           method: 'PATCH',
-          headers,
+          headers: headers(),
           body,
           duplex: 'half',
         } as RequestInit),

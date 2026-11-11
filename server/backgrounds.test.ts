@@ -10,6 +10,8 @@ import { createApp } from './app.ts'
 import { Store, canvasSchema, type CanvasView } from './state.ts'
 import type { TerminalManager } from './terminals.ts'
 
+/** Ordered writes carry their page and sequence number. */
+let writes = 0
 function fixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), 'canvas-backgrounds-'))
   const path = join(directory, 'canvas.db')
@@ -40,6 +42,7 @@ function fixture(t: TestContext) {
         Origin: 'http://localhost',
         Authorization: 'Bearer fixture-session',
         'Content-Type': 'application/json',
+        'Canvas-Write': `test.${++writes}`,
         ...headers,
       },
       ...(body === undefined

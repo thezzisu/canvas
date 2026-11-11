@@ -9,6 +9,8 @@ import { Store, type SharedState, type Canvas } from './state.ts'
 import type { TerminalManager } from './terminals.ts'
 import type { CanvasNotification } from '../shared/notification.ts'
 
+/** Ordered writes carry their page and sequence number. */
+let writes = 0
 function fixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), 'canvas-sync-'))
   const store = new Store(join(directory, 'canvas.db'))
@@ -41,6 +43,7 @@ function fixture(t: TestContext) {
         Host: 'localhost',
         Authorization: `Bearer ${session}`,
         'Content-Type': 'application/json',
+        'Canvas-Write': `test.${++writes}`,
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })

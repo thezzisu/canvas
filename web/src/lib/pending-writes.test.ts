@@ -1,7 +1,12 @@
 import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { computed } from 'vue'
-import { createPendingWrites, guardPageExit, keepaliveFetch } from './pending-writes.ts'
+import {
+  createKeepaliveCopies,
+  createPendingWrites,
+  guardPageExit,
+  keepaliveFetch,
+} from './pending-writes.ts'
 
 test('a write shows saving, then saved for two seconds, then nothing', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
@@ -199,4 +204,21 @@ test('keepalive stays within the browser budget and larger writes still go out',
   assert.equal(keepalive(3), true, 'completed requests release their bytes')
   void send('/e', { method: 'PATCH', body: 'x', keepalive: true })
   assert.equal(keepalive(4), false, 'the budget counts encoded bytes')
+})
+
+test('a value goes out as a keepalive copy once, again after it failed or its save settled', () => {
+  const copies = createKeepaliveCopies()
+  assert.equal(copies.claim('note', 'a'), true)
+  assert.equal(copies.claim('note', 'a'), false, 'a request already carries it')
+  assert.equal(copies.claim('other', 'a'), true, 'owners are separate')
+  assert.equal(copies.claim('note', 'b'), true, 'a newer value needs its own copy')
+  copies.release('note', 'a')
+  assert.equal(copies.claim('note', 'b'), false, 'an older failure does not release the newer copy')
+  copies.release('note', 'b')
+  assert.equal(copies.claim('note', 'b'), true)
+  copies.forget('note')
+  assert.equal(copies.claim('note', 'b'), true)
+  assert.equal(copies.claim('other', 'a'), false)
+  copies.forget()
+  assert.equal(copies.claim('other', 'a'), true)
 })

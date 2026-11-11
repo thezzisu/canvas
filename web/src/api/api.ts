@@ -159,6 +159,30 @@ export function apiUpload<T>(
 export function write<T = unknown>(path: string, method: string, body?: unknown): Promise<T> {
   return api<T>(path, { method, body: body === undefined ? undefined : JSON.stringify(body) })
 }
+const page = uuid()
+let written = 0
+/**
+ * Store a value that this page may write again before the answer arrives, as a hidden page does
+ * with a keepalive copy. Each write carries the page's next sequence number, taken here in call
+ * order, so the server keeps the newest when two for one resource arrive out of order.
+ */
+export function orderedWrite<T = unknown>(
+  path: string,
+  value: unknown,
+  keepalive = false,
+  context = apiContext(),
+): Promise<T> {
+  return api<T>(
+    path,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(value),
+      headers: { 'Canvas-Write': `${page}.${++written}` },
+      keepalive,
+    },
+    context,
+  )
+}
 export function segment(value: string): string {
   return encodeURIComponent(value)
 }

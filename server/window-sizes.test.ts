@@ -9,6 +9,8 @@ import { Store, type Canvas, type SharedState } from './state.ts'
 import type { TerminalManager } from './terminals.ts'
 import { defaultSettings } from '../shared/settings.ts'
 
+/** Ordered writes carry their page and sequence number. */
+let writes = 0
 test('terminal presentation dimensions are shared across canvases while positions and notes stay local', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'canvas-shared-sizes-')),
     store = new Store(join(dir, 'state.db'))
@@ -29,6 +31,7 @@ test('terminal presentation dimensions are shared across canvases while position
         Host: 'localhost',
         Authorization: 'Bearer test',
         'Content-Type': 'application/json',
+        'Canvas-Write': `test.${++writes}`,
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })

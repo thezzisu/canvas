@@ -21,6 +21,8 @@ class FakeSocket {
   }
 }
 
+/** Ordered writes carry their page and sequence number. */
+let writes = 0
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), 'canvas-composer-')),
     store = new Store(join(root, 'canvas.db'))
@@ -79,6 +81,7 @@ async function fixture(t: TestContext) {
       headers: {
         Authorization: 'Bearer fixture',
         'Content-Type': 'application/json',
+        'Canvas-Write': `test.${++writes}`,
         ...init.headers,
       },
     })
@@ -122,7 +125,11 @@ test('a composer is a window-owned note shared through state and released when e
       await f.app.request(`http://canvas.test/api/sources/${randomUUID()}/windows/w/composer`, {
         method: 'PATCH',
         body: JSON.stringify({ content: 'x' }),
-        headers: { Authorization: 'Bearer fixture', 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: 'Bearer fixture',
+          'Content-Type': 'application/json',
+          'Canvas-Write': `test.${++writes}`,
+        },
       })
     ).status,
     404,

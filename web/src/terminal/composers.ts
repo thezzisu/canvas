@@ -1,7 +1,7 @@
 import { computed, shallowReactive, shallowRef, watch } from 'vue'
-import { api, apiContext, apiRevision, isCurrentApi, segment } from '../api/api'
+import { apiContext, apiRevision, isCurrentApi, orderedWrite, segment } from '../api/api'
 import { insertNoteContent } from '../notes/note-document'
-import { pendingWrites } from '../lib/pending-writes'
+import { createKeepaliveCopies, pendingWrites } from '../lib/pending-writes'
 import type { NoteInsertion, NoteOwner } from '../notes/note-uploads'
 import type { ComposerView } from '../api/types'
 import { createAutosave } from '../lib/autosave'
@@ -23,10 +23,12 @@ const remote = shallowRef<Record<string, ComposerView>>({})
 const drafts = shallowReactive(new Map<string, { target: ComposerTarget; content: string }>())
 const timers = createAutosave()
 const saving = new Map<string, Promise<ComposerView | undefined>>()
+const copies = createKeepaliveCopies()
 
 export function resetComposers() {
   timers.clear()
   saving.clear()
+  copies.forget()
   drafts.clear()
   remote.value = {}
 }
@@ -87,34 +89,37 @@ export async function flushComposer(
     owner = composerOwner(target),
     context = apiContext()
   const previous = saving.get(current)
-  // A closing page may cancel the save in flight, so a keepalive copy of the latest text goes out now.
+  // A closing page may cancel the save in flight, so a keepalive copy of the latest text goes out,
+  // unless a keepalive request already carries exactly that text.
   // That save, then the edit timer or a flush waiting on it, still stores and confirms the text.
   if (keepalive && previous) {
     const content = drafts.get(current)?.content
-    if (content !== undefined)
-      void api(
-        owner.path,
-        { method: 'PATCH', body: JSON.stringify({ content }), keepalive },
-        context,
-      ).catch(() => {})
+    if (content !== undefined && copies.claim(current, content))
+      void orderedWrite(owner.path, { content }, true, context).catch(() =>
+        copies.release(current, content),
+      )
     return
   }
   timers.cancel(current)
   if (previous) await previous.catch(() => undefined)
   if (!isCurrentApi(context)) return
-  const content = drafts.get(current)?.content
-  if (content === undefined) return remote.value[current]
+  const draft = drafts.get(current)
+  if (!draft) return remote.value[current]
   pendingWrites.start(owner.key)
-  const request = api<ComposerView>(
+  if (keepalive) copies.claim(current, draft.content)
+  const request = orderedWrite<ComposerView>(
     owner.path,
-    { method: 'PATCH', body: JSON.stringify({ content }), keepalive },
+    { content: draft.content },
+    keepalive,
     context,
   )
   saving.set(current, request)
   try {
     const view = await request
     if (!isCurrentApi(context)) return
-    if (drafts.get(current)?.content === content) {
+    // An edit made meanwhile stays a draft even when it restores this text: a copy of the text
+    // between them may have been stored after this save.
+    if (drafts.get(current) === draft) {
       drafts.delete(current)
       pendingWrites.saved(owner.key)
     }
@@ -126,10 +131,13 @@ export async function flushComposer(
       remote.value = { ...remote.value, [current]: view }
     return view
   } catch (error) {
-    if (isCurrentApi(context) && drafts.get(current)?.content === content)
+    if (isCurrentApi(context) && drafts.get(current) === draft)
       pendingWrites.failed(owner.key, () => saveComposer(target))
     throw error
   } finally {
-    if (saving.get(current) === request) saving.delete(current)
+    if (saving.get(current) === request) {
+      saving.delete(current)
+      copies.forget(current)
+    }
   }
 }

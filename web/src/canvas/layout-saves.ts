@@ -1,4 +1,5 @@
 import type { CanvasNode } from '../api/types'
+import { createKeepaliveCopies } from '../lib/pending-writes'
 
 export type LayoutPatch = Partial<Pick<CanvasNode, 'x' | 'y' | 'width' | 'height'>>
 
@@ -6,6 +7,8 @@ export type LayoutPatch = Partial<Pick<CanvasNode, 'x' | 'y' | 'width' | 'height
 export function createLayoutSaves() {
   const pending = new Map<string, Map<string, LayoutPatch>>()
   const running = new Map<string, Promise<void>>()
+  const copies = createKeepaliveCopies()
+  const carried = (nodes: ReadonlyMap<string, LayoutPatch>) => JSON.stringify([...nodes])
   let generation = 0
 
   function set(canvasId: string, id: string, patch: LayoutPatch) {
@@ -22,10 +25,15 @@ export function createLayoutSaves() {
   ): Promise<void> {
     const existing = running.get(canvasId)
     if (existing) {
-      // A closing page may cancel the write in flight, so a keepalive copy of every pending patch goes out now.
+      // A closing page may cancel the write in flight, so a keepalive copy of every pending patch goes out,
+      // unless a keepalive request already carries exactly these.
       // The running save still writes and acknowledges them afterwards.
       const nodes = pending.get(canvasId)
-      if (keepalive && nodes?.size) void write(new Map(nodes)).catch(() => {})
+      if (keepalive && nodes?.size) {
+        const value = carried(nodes)
+        if (copies.claim(canvasId, value))
+          void write(new Map(nodes)).catch(() => copies.release(canvasId, value))
+      }
       return existing
     }
     const revision = generation
@@ -37,6 +45,9 @@ export function createLayoutSaves() {
           return
         }
         const batch = new Map(nodes)
+        // A copy sent before this batch may hold patches that the batch now replaces.
+        copies.forget(canvasId)
+        if (keepalive) copies.claim(canvasId, carried(batch))
         await write(batch)
         if (generation !== revision) return
         if (pending.get(canvasId) === nodes) {
@@ -46,7 +57,9 @@ export function createLayoutSaves() {
         acknowledged?.()
       }
     })().finally(() => {
-      if (running.get(canvasId) === task) running.delete(canvasId)
+      if (running.get(canvasId) !== task) return
+      running.delete(canvasId)
+      copies.forget(canvasId)
     })
     running.set(canvasId, task)
     return task
@@ -63,6 +76,7 @@ export function createLayoutSaves() {
       generation++
       pending.clear()
       running.clear()
+      copies.forget()
     },
   }
 }

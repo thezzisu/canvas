@@ -914,6 +914,12 @@ export class Store extends EventEmitter {
   composer(target: ComposerTarget): Composer | undefined {
     return this.get<Composer>('composer', composerKey(target))
   }
+  /** The stored draft, or the empty one of a window that has none. */
+  currentComposer(target: ComposerTarget): ComposerView {
+    return this.composerView(
+      this.composer(target) ?? { id: '', ...target, content: '', version: 0 },
+    )
+  }
   composerView(composer: Composer): ComposerView {
     return { ...composer, attachments: this.noteAttachments(composer.id) }
   }
@@ -970,7 +976,7 @@ export class Store extends EventEmitter {
       const current = this.composer(target)
       if (current?.content === content || (!current && !content)) {
         this.db.exec('ROLLBACK')
-        return this.composerView(current ?? { id: '', ...target, content: '', version: 0 })
+        return this.currentComposer(target)
       }
       composer = {
         ...(current ?? { id: randomUUID(), ...target, version: 0 }),

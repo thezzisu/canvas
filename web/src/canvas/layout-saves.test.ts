@@ -162,3 +162,87 @@ test('a keepalive flush copies every pending patch at once while the running sav
   assert.equal(saves.pending.size, 0)
   assert.equal(saves.saving, false)
 })
+
+test('a page hidden again while a save runs copies only what no keepalive request holds', async () => {
+  const saves = createLayoutSaves(),
+    held = gate()
+  const copies: ReadonlyMap<string, LayoutPatch>[] = []
+  let offline = false
+  const copy = async (batch: ReadonlyMap<string, LayoutPatch>) => {
+    copies.push(batch)
+    if (offline) throw new Error('offline')
+  }
+  const hide = () => saves.flush('canvas', copy, undefined, true)
+  saves.set('canvas', 'card', { x: 10 })
+  const result = saves.flush('canvas', async () => held.promise)
+  void hide()
+  void hide()
+  assert.equal(
+    copies.length,
+    1,
+    'the ordinary save may be cancelled, so one copy outlives the page',
+  )
+  saves.set('canvas', 'card', { x: 20 })
+  offline = true
+  void hide()
+  assert.equal(copies.length, 2, 'a newer patch needs its own copy')
+  await Promise.resolve()
+  await Promise.resolve()
+  void hide()
+  assert.equal(copies.length, 3, 'a copy that failed is sent again')
+  held.resolve()
+  await result.catch(() => {})
+})
+
+test('a save sent as a keepalive request needs no copy of the same patches', async () => {
+  const saves = createLayoutSaves(),
+    held = gate()
+  let writes = 0
+  const write = async () => {
+    writes++
+    await held.promise
+  }
+  saves.set('canvas', 'card', { x: 10 })
+  const result = saves.flush('canvas', write, undefined, true)
+  void saves.flush('canvas', write, undefined, true)
+  assert.equal(writes, 1)
+  saves.set('canvas', 'card', { x: 20 })
+  void saves.flush('canvas', write, undefined, true)
+  assert.equal(writes, 2)
+  held.resolve()
+  await result
+})
+
+test('a patch restored after a newer batch went out is copied again', async () => {
+  const saves = createLayoutSaves(),
+    first = gate(),
+    second = gate()
+  let batches = 0,
+    copies = 0
+  const write = async () => {
+    await (++batches === 1 ? first : second).promise
+  }
+  const hide = () =>
+    saves.flush(
+      'canvas',
+      async () => {
+        copies++
+      },
+      undefined,
+      true,
+    )
+  saves.set('canvas', 'card', { x: 10 })
+  const result = saves.flush('canvas', write)
+  saves.set('canvas', 'card', { x: 20 })
+  void hide()
+  saves.set('canvas', 'card', { x: 30 })
+  first.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(batches, 2, 'the newer patch is in flight as an ordinary save')
+  saves.set('canvas', 'card', { x: 20 })
+  void hide()
+  assert.equal(copies, 2)
+  second.resolve()
+  await result
+})

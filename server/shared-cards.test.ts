@@ -9,6 +9,8 @@ import { AssetStore } from './assets.ts'
 import { createApp } from './app.ts'
 import type { TerminalManager } from './terminals.ts'
 
+/** Ordered writes carry their page and sequence number. */
+let writes = 0
 async function fixture(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'canvas-shared-cards-')),
     store = new Store(join(directory, 'canvas.db'))
@@ -23,7 +25,11 @@ async function fixture(t: TestContext) {
   const request = (path: string, method = 'GET', body?: unknown) =>
     app.request(`http://localhost${path}`, {
       method,
-      headers: { Authorization: 'Bearer fixture', 'Content-Type': 'application/json' },
+      headers: {
+        Authorization: 'Bearer fixture',
+        'Content-Type': 'application/json',
+        'Canvas-Write': `test.${++writes}`,
+      },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
   const a = store.put<Canvas>('canvas', { id: randomUUID(), name: 'A', nodes: [] })

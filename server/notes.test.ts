@@ -8,6 +8,8 @@ import { createApp } from './app.ts'
 import { Store, type Canvas } from './state.ts'
 import type { TerminalManager } from './terminals.ts'
 
+/** Ordered writes carry their page and sequence number. */
+let writes = 0
 function fixture(t: TestContext) {
   const dir = mkdtempSync(join(tmpdir(), 'canvas-notes-'))
   const store = new Store(join(dir, 'canvas.db'))
@@ -21,15 +23,16 @@ function fixture(t: TestContext) {
     store.close()
     rmSync(dir, { recursive: true, force: true })
   })
-  const headers = {
+  const headers = () => ({
     Host: 'localhost',
     Authorization: 'Bearer test',
     'Content-Type': 'application/json',
-  }
+    'Canvas-Write': `test.${++writes}`,
+  })
   const request = (path: string, method = 'GET', body?: unknown) =>
     app.request(`http://localhost${path}`, {
       method,
-      headers,
+      headers: headers(),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
   function delayed(path: string, method: string, value: unknown) {
@@ -44,7 +47,7 @@ function fixture(t: TestContext) {
     })
     const result = app.request(`http://localhost${path}`, {
       method,
-      headers,
+      headers: headers(),
       body,
       duplex: 'half',
     } as RequestInit)

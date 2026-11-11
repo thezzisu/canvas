@@ -121,6 +121,32 @@ export function guardPageExit(
   }
 }
 
+/**
+ * A save in flight when its page is hidden may not outlive the page, so its owner sends a keepalive
+ * copy of its latest value. This holds the value each owner last sent as a keepalive request while
+ * its save runs, so a page hidden again sends only what no such request carries yet.
+ */
+export function createKeepaliveCopies() {
+  const sent = new Map<string, string>()
+  return {
+    /** Whether `value` still needs a keepalive request; it then counts as sent. */
+    claim(key: string, value: string) {
+      if (sent.get(key) === value) return false
+      sent.set(key, value)
+      return true
+    },
+    /** The request carrying `value` failed, so the next hide sends it again. */
+    release(key: string, value: string) {
+      if (sent.get(key) === value) sent.delete(key)
+    },
+    /** The owner's save settled; without a key, every owner's did. */
+    forget(key?: string) {
+      if (key === undefined) sent.clear()
+      else sent.delete(key)
+    },
+  }
+}
+
 /** Browsers reject keepalive bodies beyond 64 KiB in flight; larger writes still go out as ordinary requests. */
 export function keepaliveFetch(send: typeof fetch, quota = 65536): typeof fetch {
   let inFlight = 0
