@@ -9,7 +9,7 @@ export default {
   },
   background: {
     title: '背景图片', preview: '背景预览', choose: '选择图片', change: '更换图片', remove: '移除',
-    reading: '读取中…', saving: '保存中…', opacity: '不透明度', opacityLabel: '背景不透明度',
+    opacity: '不透明度', opacityLabel: '背景不透明度',
     invalidType: '请选择 PNG、JPEG 或 WebP 图片', unreadable: '无法读取这张图片',
   },
   directory: { title: '在本地继续', openVSCode: '在 VS Code 打开' },

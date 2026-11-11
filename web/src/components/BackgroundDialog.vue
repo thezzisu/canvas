@@ -1,18 +1,22 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, useTemplateRef } from 'vue'
 import UModal from './CanvasModal.vue'
+import UAlert from '@nuxt/ui/components/Alert.vue'
+import UButton from '@nuxt/ui/components/Button.vue'
+import UFormField from '@nuxt/ui/components/FormField.vue'
+import UIcon from '@nuxt/ui/components/Icon.vue'
+import USlider from '@nuxt/ui/components/Slider.vue'
 import { api, segment, write } from '../api'
 import type { Canvas } from '../types'
-import Icon from './Icon.vue'
 import { useBackgroundUrl } from '../backgrounds'
 
 const { t, n } = useI18n()
 
 const props = defineProps<{ canvas: Canvas }>()
 const emit = defineEmits<{ close: []; saved: [canvas: Canvas] }>()
-const picker = ref<HTMLInputElement>()
-const chooseButton = ref<HTMLButtonElement>()
+const picker = useTemplateRef('picker')
+const chooseButton = useTemplateRef('chooseButton')
 const file = ref<File | null>(null)
 const objectUrl = ref('')
 const removed = ref(false)
@@ -24,6 +28,7 @@ let selection = 0
 let disposed = false
 const { url: backgroundUrl } = useBackgroundUrl(() => props.canvas.background?.url)
 const preview = computed(() => removed.value ? '' : objectUrl.value || backgroundUrl.value)
+const opacityLabel = computed(() => n(opacity.value, { style: 'percent', maximumFractionDigits: 0 }))
 const changed = computed(() => !!file.value || (!!props.canvas.background && (removed.value || opacity.value !== props.canvas.background.opacity)))
 
 function clearObjectUrl() { if (objectUrl.value) URL.revokeObjectURL(objectUrl.value); objectUrl.value = '' }
@@ -72,18 +77,29 @@ onBeforeUnmount(() => { disposed = true; selection++; clearObjectUrl() })
 </script>
 
 <template>
-  <UModal :open="true" :title="t('panels.background.title')" :dismissible="!saving" :transition="false" :close="false" :ui="{ content: 'app-dialog-shell', overlay: 'app-dialog-overlay' }" :content="{ onOpenAutoFocus: (event: Event) => { event.preventDefault(); chooseButton?.focus() } }" @update:open="value => { if (!value) close() }">
-    <template #content><section class="modal background-modal" :aria-busy="saving">
-      <header><h2 id="background-title">{{ t('panels.background.title') }}</h2><button class="icon-button" :aria-label="t('common.close')" :disabled="saving" @click="close"><Icon name="close" /></button></header>
-      <div class="background-preview" :class="{ 'has-image': preview }">
-        <img v-if="preview" :src="preview" :style="{ opacity }" :alt="t('panels.background.preview')" />
-        <Icon v-else name="image" :size="28" />
+  <UModal :open="true" :title="t('panels.background.title')" :dismissible="!saving" :close="{ 'aria-label': t('common.close'), disabled: saving }"
+    :ui="{ content: 'background-modal [--dialog-width:30rem]' }" :content="{ onOpenAutoFocus: (event: Event) => { event.preventDefault(); chooseButton?.$el?.focus() } }" @update:open="value => { if (!value) close() }">
+    <template #body>
+      <div class="flex flex-col gap-4" :aria-busy="saving">
+        <div class="background-preview" :class="{ 'has-image': preview }">
+          <img v-if="preview" :src="preview" :style="{ opacity }" :alt="t('panels.background.preview')" />
+          <UIcon v-else name="i-lucide-image" class="size-8" />
+        </div>
+        <input ref="picker" class="hidden" type="file" accept="image/png,image/jpeg,image/webp" tabindex="-1" :aria-label="t('panels.background.choose')" :disabled="saving" @change="chooseFile" />
+        <div class="flex flex-wrap items-center gap-2">
+          <UButton ref="chooseButton" color="neutral" variant="outline" size="sm" icon="i-lucide-image" :loading="inspecting" :disabled="saving" @click="picker?.click()">{{ t(preview ? 'panels.background.change' : 'panels.background.choose') }}</UButton>
+          <UButton v-if="preview" color="neutral" variant="ghost" size="sm" :disabled="saving || inspecting" @click="remove">{{ t('panels.background.remove') }}</UButton>
+          <span class="ms-auto text-xs text-dimmed">PNG / JPEG / WebP</span>
+        </div>
+        <UFormField v-if="preview" :label="t('panels.background.opacity')" :hint="opacityLabel">
+          <USlider v-model="opacity" class="w-full" :min="0" :max="1" :step="0.05" size="sm" :disabled="saving" :aria-label="t('panels.background.opacityLabel')" :aria-valuetext="opacityLabel" />
+        </UFormField>
+        <UAlert v-if="error" color="error" variant="subtle" :title="error instanceof Error ? error.message : t(error)" role="alert" class="[overflow-wrap:anywhere]" />
       </div>
-      <input ref="picker" class="file-input" type="file" accept="image/png,image/jpeg,image/webp" tabindex="-1" :aria-label="t('panels.background.choose')" :disabled="saving" @change="chooseFile" />
-      <div class="background-file-actions"><button ref="chooseButton" class="button subtle" :disabled="saving || inspecting" @click="picker?.click()"><Icon name="image" :size="15" />{{ t(inspecting ? 'panels.background.reading' : preview ? 'panels.background.change' : 'panels.background.choose') }}</button><button v-if="preview" class="text-button" :disabled="saving || inspecting" @click="remove">{{ t('panels.background.remove') }}</button><span>PNG / JPEG / WebP</span></div>
-      <label v-if="preview" class="background-opacity"><span>{{ t('panels.background.opacity') }}<output>{{ n(opacity, { style: 'percent', maximumFractionDigits: 0 }) }}</output></span><input v-model.number="opacity" type="range" min="0" max="1" step="0.05" :aria-label="t('panels.background.opacityLabel')" :disabled="saving" /></label>
-      <p v-if="error" class="form-error" role="alert">{{ error instanceof Error ? error.message : t(error) }}</p>
-      <footer><button class="button subtle" :disabled="saving" @click="close">{{ t('common.cancel') }}</button><button class="button primary" :disabled="!changed || saving || inspecting" @click="save"><span v-if="saving" class="spinner" />{{ t(saving ? 'panels.background.saving' : 'common.save') }}</button></footer>
-    </section></template>
+    </template>
+    <template #footer>
+      <UButton color="neutral" variant="outline" :disabled="saving" @click="close">{{ t('common.cancel') }}</UButton>
+      <UButton :loading="saving" :disabled="!changed || inspecting" @click="save">{{ t('common.save') }}</UButton>
+    </template>
   </UModal>
 </template>

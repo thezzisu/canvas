@@ -7,6 +7,7 @@ import UApp from '@nuxt/ui/components/App.vue'
 import UTheme from '@nuxt/ui/components/Theme.vue'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
+import UAlert from '@nuxt/ui/components/Alert.vue'
 import UModal from './components/CanvasModal.vue'
 import { useToast } from '@nuxt/ui/composables/useToast'
 import { useI18n } from 'vue-i18n'
@@ -77,7 +78,12 @@ import { clearCaptureTrust } from './capture-trust'
 import { capturedApp, pruneCaptureViews } from './capture'
 import WindowContentDialog from './components/WindowContentDialog.vue'
 import CanvasFileDrop from './components/CanvasFileDrop.vue'
-import WindowPickerTree from './components/WindowPickerTree.vue'
+import SourceDialog from './components/SourceDialog.vue'
+import CanvasNameDialog from './components/CanvasNameDialog.vue'
+import ActionDialog from './components/ActionDialog.vue'
+import AddWindowsDialog from './components/AddWindowsDialog.vue'
+import ShareCardDialog from './components/ShareCardDialog.vue'
+import WindowMenuDialog, { type WindowMenuItem } from './components/WindowMenuDialog.vue'
 import WindowTitle from './components/WindowTitle.vue'
 import { windowLabel } from './window-title'
 import SettingsDialog from './components/SettingsDialog.vue'
@@ -275,20 +281,14 @@ const shareTargets = computed(() => canvases.value.filter(canvas => canvas.id !=
 const windowMenu = ref<{ node: TerminalCanvasNode; name: string } | null>(null)
 const windowMenuWindow = computed(() => windowMenu.value ? resourceFor(windowMenu.value.node).window || { name: windowMenu.value.name } : undefined)
 const appDialogOpen = computed(() => sourceDialog.value || canvasDialog.value || !!actionDialog.value || addDialog.value || !!shareCard.value || !!windowMenu.value)
-const appDialogTitle = computed(() => sourceDialog.value ? t(sourceDraft.id ? 'app.editConnection' : 'app.addConnection')
-  : canvasDialog.value ? t(canvasDraft.id ? 'app.renameCanvas' : 'app.newCanvas') : actionDialog.value?.title
-    || (addDialog.value ? t('app.addWindows') : shareCard.value ? t('app.addToOtherCanvas') : (windowMenuWindow.value ? windowLabel(windowMenuWindow.value) : '')))
 const overlayRoot = ref<HTMLElement>()
-const appDialogFields = ref<HTMLElement>()
-const appDialogDismiss = usePointerDismiss(computed({ get: () => appDialogOpen.value && !busy.value, set: () => closeAppDialog() }),
-  appDialogFields, { event: 'click', outside: event => event.target instanceof Element && event.target.classList.contains('app-dialog-backdrop') })
 let pendingKeyboard: TerminalCanvasNode | undefined
-function closeAppDialog(open = false) {
-  if (open || busy.value) return
+function closeAppDialog() {
+  if (busy.value) return
   sourceDialog.value = false; canvasDialog.value = false; actionDialog.value = null; addDialog.value = false; shareCard.value = undefined; windowMenu.value = null
 }
+/** The window menu's keyboard action hands focus to its terminal instead of the menu trigger. */
 function restoreDialogFocus(event: Event) {
-  appDialogDismiss.onCloseAutoFocus(event)
   if (!pendingKeyboard) return
   event.preventDefault()
   const node = pendingKeyboard; pendingKeyboard = undefined
@@ -297,6 +297,21 @@ function restoreDialogFocus(event: Event) {
 function showWindowKeyboard() {
   pendingKeyboard = windowMenu.value?.node
   windowMenu.value = null
+}
+/** Evaluated on render: live terminal availability is not reactive state. */
+function windowMenuItems(menu: { node: TerminalCanvasNode; name: string }): WindowMenuItem[][] {
+  const { node } = menu, live = windowMenuWindow.value
+  return [[
+    ...(mobile.value && focused.value?.id === node.id ? [{ label: t('terminal.action.showKeyboard'), icon: 'i-lucide-keyboard', keepFocus: true, onSelect: showWindowKeyboard }] : []),
+    ...(mobile.value ? [{ label: t('common.settings'), icon: 'i-lucide-settings', onSelect: () => { windowMenu.value = null; openSettings() } }] : []),
+    ...(mobile.value && !isOverview.value && node.id ? [{ label: t('app.newTab'), icon: 'i-lucide-square-plus', disabled: !terminalData(node).available,
+      onSelect: () => { terminalData(node).newTab?.create(); windowMenu.value = null } }] : []),
+    { label: t('panels.scan.title'), icon: 'i-lucide-scan-text', disabled: !hasLiveTerminal(node.sourceId, node.windowId), onSelect: () => scanWindowContent(node, live ? windowLabel(live) : menu.name) },
+    { label: t('app.addToOtherCanvas'), icon: 'i-lucide-layers', onSelect: () => { openAdd(node); windowMenu.value = null } },
+    { label: t('app.renameWindow'), icon: 'i-lucide-pencil', onSelect: () => windowAction(node, 'rename') },
+  ], [
+    { label: t('app.closeWindow'), icon: 'i-lucide-trash', color: 'error', onSelect: () => windowAction(node, 'close') },
+  ]]
 }
 const scanTarget = shallowRef<{ sourceId: string; spaceId: string; windowId: string; name: string } | null>(null)
 const notificationCenter = ref<InstanceType<typeof NotificationCenter>>()
@@ -2225,11 +2240,6 @@ function keydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
     if (sidebarOpen.value) sidebarOpen.value = false
     else if (overviewMenuOpen.value) overviewMenuOpen.value = false
-    else if (windowMenu.value) windowMenu.value = null
-    else if (actionDialog.value) { if (!busy.value) actionDialog.value = null }
-    else if (sourceDialog.value) sourceDialog.value = false
-    else if (canvasDialog.value) canvasDialog.value = false
-    else if (addDialog.value) addDialog.value = false
     else if (focused.value) void closeFocus()
     else if (focusedCardId.value) { event.preventDefault(); void closeCardFocus() }
     else sourcePanel.value = false
@@ -2411,16 +2421,15 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
     <WindowContentDialog :target="scanTarget" :canvases="canvases" @close="scanTarget = null" />
     <SettingsDialog ref="settingsDialogComponent" v-if="settings" :open="settingsDialog" :settings="settings" :has-display-cutout="hasSafeTop" @close="settingsDialog = false" @saved="settingsSaved" @error="showError" />
     <AccountDialog :open="accountDialog" :username="username" @close="accountDialog = false" @saved="value => { username = value }" />
-    <UModal v-if="appDialogOpen" :open="true" :title="appDialogTitle" :dismissible="!busy" :transition="false" :close="false" :ui="{ content: 'app-dialog-shell', overlay: 'app-dialog-overlay app-dialog-backdrop' }" :content="{ onCloseAutoFocus: restoreDialogFocus }" @update:open="closeAppDialog">
-      <template #content><fieldset ref="appDialogFields" class="app-dialog-fields" :disabled="busy" :aria-busy="busy">
-      <section v-if="sourceDialog" class="modal source-modal"><header><div><h2 id="source-title">{{ sourceDraft.id ? t('app.editConnection') : t('app.addConnection') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="sourceDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitSource"><label>{{ t('app.connectionName') }}<input v-model="sourceDraft.name" name="sourceName" required :placeholder="t('app.connectionNamePlaceholder')" /></label><label>{{ t('app.runtime') }}<select v-model="sourceDraft.runtime" name="runtime"><option value="tui">Herdr TUI</option><option value="core">Herdr Core / App</option></select></label><div class="segmented-control"><button type="button" :class="{ selected: sourceDraft.transport === 'local' }" @click="sourceDraft.transport = 'local'"><Icon name="server" :size="15" />{{ t('app.local') }}</button><button type="button" :class="{ selected: sourceDraft.transport === 'ssh' }" @click="sourceDraft.transport = 'ssh'"><Icon name="globe" :size="15" />{{ t('app.remoteSsh') }}</button></div><label v-if="sourceDraft.transport === 'ssh'">{{ t('app.sshAddress') }}<input v-model="sourceDraft.target" name="target" placeholder="ssh://user@hostname:22" :required="sourceDraft.transport === 'ssh'" /></label><label>{{ t('app.session') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.herdrSession" name="herdrSession" placeholder="default" /></label><details><summary>{{ t('app.advanced') }}</summary><template v-if="sourceDraft.transport === 'ssh'"><label>{{ t('app.sshIdentity') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.sshIdentityFile" name="sshIdentityFile" placeholder="/path/to/id_ed25519" /></label><label>{{ t('app.sshKnownHosts') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.sshKnownHostsFile" name="sshKnownHostsFile" placeholder="/path/to/known_hosts" /></label></template><label>{{ t('app.socketPath') }} <span class="optional">{{ t('app.optional') }}</span><input v-model="sourceDraft.herdrSocket" name="herdrSocket" :placeholder="sourceDraft.runtime === 'core' ? '/path/to/default.sock' : '/path/to/herdr.sock'" /></label></details><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><div class="source-probe-status" :class="{ failed: sourceProbe.error }" role="status"><span v-if="sourceProbe.pending" class="spinner" /><span :title="sourceProbe.error || sourceProbe.version">{{ sourceProbe.pending ? t('app.checkingConnection') : sourceProbe.error ? t('app.connectionProbeFailed') : sourceProbe.version ? `${sourceDraft.runtime === 'core' ? 'herdr-core' : 'herdr'} ${sourceProbe.version}` : '' }}</span><button v-if="sourceProbe.error" type="button" class="icon-button" :aria-label="t('common.retry')" :title="t('common.retry')" @click="sourceProbeRetry++"><Icon name="refresh" :size="14" /></button></div><button class="button subtle" type="button" @click="sourceDialog = false">{{ t('common.cancel') }}</button><button class="button primary" type="submit" :disabled="busy || !sourceProbeReady || !sourceDraft.name.trim()"><span v-if="busy" class="spinner" />{{ busy ? t('app.saving') : t('common.save') }}</button></footer></form></section>
-      <section v-else-if="canvasDialog" class="modal"><header><div><h2 id="canvas-title">{{ canvasDraft.id ? t('app.renameCanvas') : t('app.newCanvas') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="canvasDialog = false"><Icon name="close" /></button></header><form @submit.prevent="submitCanvas"><label>{{ t('app.canvasName') }}<input v-model="canvasDraft.name" name="canvasName" required autofocus :placeholder="t('app.canvasNamePlaceholder')" maxlength="80" /></label><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="canvasDialog = false">{{ t('common.cancel') }}</button><button class="button primary" :disabled="busy" type="submit">{{ canvasDraft.id ? t('common.save') : t('app.createCanvas') }}</button></footer></form></section>
-      <section v-else-if="actionDialog" class="modal"><header><h2 id="action-title">{{ actionDialog.title }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" :disabled="busy" @click="actionDialog = null"><Icon name="close" /></button></header><p v-if="actionDialog.description">{{ actionDialog.description }}</p><form @submit.prevent="submitAction"><label v-if="actionDialog.label">{{ actionDialog.label }}<input v-model="actionDialog.value" name="resourceName" :required="!actionDialog.optional" :placeholder="actionDialog.optional ? t('app.automaticName') : undefined" autofocus maxlength="100" /></label><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" :disabled="busy" @click="actionDialog = null">{{ t('common.cancel') }}</button><button class="button" :class="actionDialog.danger ? 'danger' : 'primary'" :disabled="busy" type="submit">{{ actionDialog.button }}</button></footer></form></section>
-      <section v-else-if="addDialog" class="modal add-modal"><header><div><h2 id="add-title">{{ t('app.addWindows') }}</h2></div><button class="icon-button" :aria-label="t('app.closeDialog')" @click="addDialog = false"><Icon name="close" /></button></header><label>{{ t('app.targetCanvas') }}<select v-model="addTarget"><option v-for="canvas in canvases" :key="canvas.id" :value="canvas.id">{{ canvas.name }}</option><option value="">{{ t('app.newMyCanvas') }}</option></select></label><div class="search-field"><Icon name="search" :size="16" /><input v-model="addSearch" :aria-label="t('app.searchWindows')" :placeholder="t('app.searchPlaceholder')" /></div><p v-if="!resourcesLoaded || undiscoveredSources.length" class="panel-empty" role="status">{{ loadFailure ? t('app.loadFailed') : t('common.loading') }}</p><WindowPickerTree :fresh="freshStatuses" v-if="resourcesLoaded" v-model:selected="selectedWindows" :sources="sources" :resources="resources" :query="addSearch" :existing="existingAddWindows" /><p v-if="dialogError" class="form-error">{{ dialogError }}</p><footer><span class="selection-count">{{ t('app.selectedWindows', selectedAddWindows.length) }}</span><button class="button primary" :disabled="busy || !selectedAddWindows.length" @click="submitAdd">{{ t('app.addToCanvas') }}<Icon name="arrow" :size="16" /></button></footer></section>
-      <section v-else-if="shareCard" class="modal share-card-modal"><header><h2>{{ t('app.addToOtherCanvas') }}</h2><button class="icon-button" :aria-label="t('app.closeDialog')" @click="shareCard = undefined"><Icon name="close" /></button></header><form @submit.prevent="submitCardReference"><label>{{ t('app.targetCanvas') }}<select v-model="shareTarget" name="targetCanvas"><option v-if="!shareTargets.length" value="" disabled>{{ t('app.noOtherCanvases') }}</option><option v-for="canvas in shareTargets" :key="canvas.id" :value="canvas.id" :disabled="canvas.disabled">{{ canvas.name }}</option></select></label><p v-if="dialogError" class="form-error" role="alert">{{ dialogError }}</p><footer><button class="button subtle" type="button" @click="shareCard = undefined">{{ t('common.cancel') }}</button><button class="button primary" type="submit" :disabled="busy || !shareTargets.some(canvas => canvas.id === shareTarget && !canvas.disabled)">{{ t('app.addToCanvas') }}</button></footer></form></section>
-      <section v-else-if="windowMenu" class="modal window-menu"><header><h2 id="window-title"><WindowTitle v-if="windowMenuWindow" :window="windowMenuWindow" /></h2><button class="icon-button" :aria-label="t('app.closeDialog')" @click="windowMenu = null"><Icon name="close" /></button></header><button v-if="mobile && focused?.id === windowMenu.node.id" @pointerdown.prevent @click="showWindowKeyboard"><Icon name="terminal" />{{ t('terminal.action.showKeyboard') }}</button><button v-if="mobile" @click="windowMenu = null; openSettings()"><Icon name="canvas" />{{ t('common.settings') }}</button><button v-if="mobile && !isOverview && windowMenu.node.id" :disabled="!terminalData(windowMenu.node).available" @click="terminalData(windowMenu.node).newTab?.create(); windowMenu = null"><Icon name="tab-plus" />{{ t('app.newTab') }}</button><button :disabled="!hasLiveTerminal(windowMenu.node.sourceId, windowMenu.node.windowId)" @click="scanWindowContent(windowMenu.node, windowMenuWindow ? windowLabel(windowMenuWindow) : windowMenu.name)"><Icon name="search" />{{ t('panels.scan.title') }}</button><button @click="openAdd(windowMenu.node); windowMenu = null"><Icon name="layers" />{{ t('app.addToOtherCanvas') }}</button><button @click="windowAction(windowMenu.node, 'rename')"><Icon name="edit" />{{ t('app.renameWindow') }}</button><button class="danger-text" @click="windowAction(windowMenu.node, 'close')"><Icon name="trash" />{{ t('app.closeWindow') }}</button></section>
-      </fieldset></template>
-    </UModal>
+    <SourceDialog v-if="sourceDialog" v-model:draft="sourceDraft" :probe="sourceProbe" :ready="sourceProbeReady" :busy="busy" :error="dialogError" @close="closeAppDialog" @submit="submitSource" @retry="sourceProbeRetry++" />
+    <CanvasNameDialog v-else-if="canvasDialog" v-model:draft="canvasDraft" :busy="busy" :error="dialogError" @close="closeAppDialog" @submit="submitCanvas" />
+    <ActionDialog v-else-if="actionDialog" v-model="actionDialog.value" :title="actionDialog.title" :description="actionDialog.description" :label="actionDialog.label" :optional="actionDialog.optional"
+      :danger="actionDialog.danger" :button="actionDialog.button" :busy="busy" :error="dialogError" @close="closeAppDialog" @submit="submitAction" />
+    <AddWindowsDialog v-else-if="addDialog" v-model:target="addTarget" v-model:search="addSearch" v-model:selected="selectedWindows" :canvases="canvases" :sources="sources" :resources="resources"
+      :existing="existingAddWindows" :count="selectedAddWindows.length" :loading="!resourcesLoaded || !!undiscoveredSources.length" :load-failed="!!loadFailure" :loaded="resourcesLoaded"
+      :fresh="freshStatuses" :busy="busy" :error="dialogError" @close="closeAppDialog" @submit="submitAdd" />
+    <ShareCardDialog v-else-if="shareCard" v-model="shareTarget" :targets="shareTargets" :busy="busy" :error="dialogError" @close="closeAppDialog" @submit="submitCardReference" />
+    <WindowMenuDialog v-else-if="windowMenu" :window="windowMenuWindow!" :items="windowMenuItems(windowMenu)" :busy="busy" @close="closeAppDialog" @close-auto-focus="restoreDialogFocus" />
     <!-- Single portal root for every overlay: one stacking layer above the shell, nested by open order. -->
     <div ref="overlayRoot" class="overlay-root" />
     <!-- Same layer, later in document order: previews and developer tools paint above dialogs. -->
@@ -2429,9 +2438,14 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
       <ViewportDiagnostics v-if="developerMode" :settings="settings" :reload-blocked="!!modalOpen" />
     </div>
   </div>
-    <UModal v-if="layoutExitOpen" :open="true" :title="t('app.layoutUnsaved')" :dismissible="!layoutBusy" @update:open="value => { if (!value) chooseLayoutExit('stay') }">
-      <template #body><p>{{ t('app.layoutLeave') }}</p><p v-if="layoutError" role="alert">{{ layoutError }}</p></template>
-      <template #footer><button class="button subtle" :disabled="layoutBusy" @click="chooseLayoutExit('stay')">{{ t('app.layoutStay') }}</button><button class="button subtle" :disabled="layoutBusy" @click="chooseLayoutExit('discard')">{{ t('app.layoutDiscard') }}</button><button class="button primary" :disabled="layoutBusy" @click="chooseLayoutExit('apply')">{{ t('app.layoutApply') }}</button></template>
+    <UModal v-if="layoutExitOpen" :open="true" :title="t('app.layoutUnsaved')" :description="t('app.layoutLeave')" :dismissible="!layoutBusy"
+      :close="{ 'aria-label': t('app.closeDialog'), disabled: layoutBusy }" :ui="{ content: '[--dialog-width:28rem]', footer: 'flex-wrap' }" @update:open="value => { if (!value) chooseLayoutExit('stay') }">
+      <template v-if="layoutError" #body><UAlert color="error" variant="subtle" :title="layoutError" role="alert" class="[overflow-wrap:anywhere]" /></template>
+      <template #footer>
+        <UButton color="neutral" variant="outline" :disabled="layoutBusy" @click="chooseLayoutExit('stay')">{{ t('app.layoutStay') }}</UButton>
+        <UButton color="neutral" variant="outline" :disabled="layoutBusy" @click="chooseLayoutExit('discard')">{{ t('app.layoutDiscard') }}</UButton>
+        <UButton :loading="layoutBusy" @click="chooseLayoutExit('apply')">{{ t('app.layoutApply') }}</UButton>
+      </template>
     </UModal>
     <TrustedPreviewDialog />
   </UApp>

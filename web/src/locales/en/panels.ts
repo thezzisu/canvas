@@ -9,7 +9,7 @@ export default {
   },
   background: {
     title: 'Wallpaper', preview: 'Wallpaper preview', choose: 'Choose image', change: 'Change image', remove: 'Remove',
-    reading: 'Reading…', saving: 'Saving…', opacity: 'Opacity', opacityLabel: 'Wallpaper opacity',
+    opacity: 'Opacity', opacityLabel: 'Wallpaper opacity',
     invalidType: 'Choose a PNG, JPEG or WebP image', unreadable: 'Unable to read this image',
   },
   directory: { title: 'Continue locally', openVSCode: 'Open in VS Code' },

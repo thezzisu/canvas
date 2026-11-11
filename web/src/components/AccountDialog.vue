@@ -57,7 +57,7 @@ async function save() {
 
 <template>
   <UModal v-if="open" :open="true" :title="t(sharing ? 'account.shareQr' : 'account.title')" :dismissible="!saving"
-    :close="{ 'aria-label': t('common.close'), disabled: saving }" :ui="{ content: 'account-dialog', overlay: 'app-dialog-overlay' }" @update:open="value => { if (!value) close() }">
+    :close="{ 'aria-label': t('common.close'), disabled: saving }" :ui="{ content: 'account-dialog' }" @update:open="value => { if (!value) close() }">
     <template #body>
       <InstanceQrShare v-if="sharing" :link="shareLink" :name="activeInstance.name" :base="activeInstance.base" :username="username" />
       <form v-else :id="formId" class="account-form" @submit.prevent="save">

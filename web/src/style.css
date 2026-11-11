@@ -47,7 +47,7 @@ body,
   height: 100%;
   overflow: hidden;
 }
-:where(.login-content, .modal) :is(input, select) {
+:where(.login-content) input {
   font: inherit;
   outline: none;
   width: 100%;
@@ -61,28 +61,23 @@ body,
     border-color 0.15s,
     box-shadow 0.15s;
 }
-:where(.login-content, .modal) :is(input, select):focus {
+:where(.login-content) input:focus {
   border-color: #b98c6d;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-primary) 7%, transparent);
 }
-:where(.login-content, .modal) input::placeholder {
+:where(.login-content) input::placeholder {
   color: #616975;
 }
-:where(.login-content, .modal) label {
+:where(.login-content) label {
   display: block;
   color: #b8bec9;
   font-size: 12px;
   margin-top: 19px;
 }
-:where(.login-content, .modal) label :is(input, select) {
+:where(.login-content) label input {
   margin-top: 8px;
 }
-:where(.login-content, .modal) h2 {
-  font-size: 21px;
-  font-weight: 600;
-  letter-spacing: -0.5px;
-}
-:where(.login-content, .modal) p {
+:where(.login-content) p {
   line-height: 1.8;
 }
 .button {
@@ -112,14 +107,6 @@ body,
 .button.subtle:hover {
   background: #2d323a;
 }
-.button.danger {
-  background: #a64747;
-  color: #fff;
-  border: 1px solid #c26161;
-}
-.button.danger:hover {
-  background: #bb5454;
-}
 .full-width {
   width: 100%;
 }
@@ -133,14 +120,6 @@ body,
 .icon-button:hover {
   background: #ffffff09;
   color: #d9dce4;
-}
-.text-button {
-  font-size: 11px;
-  color: #838c9a;
-  padding: 3px;
-}
-.text-button:hover {
-  color: #d0d5dd;
 }
 .spinner {
   display: inline-block;
@@ -796,8 +775,7 @@ html {
   font-size: 11px;
   padding: 30px 15px;
 }
-.danger-hover:hover,
-.danger-text {
+.danger-hover:hover {
   color: var(--danger) !important;
 }
 .slide-enter-active,
@@ -824,87 +802,6 @@ html {
 .focus-overlay .terminal-name {
   font-size: 12px;
 }
-.modal {
-  width: 430px;
-  max-width: 100%;
-  max-height: calc(var(--ui-viewport-height) - 48px);
-  overflow-y: auto;
-  border: 1px solid #42464d;
-  border-radius: 13px;
-  background: #202329;
-  padding: 28px;
-  box-shadow: 0 25px 90px #0007;
-}
-.modal > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 15px;
-  margin-bottom: 19px;
-}
-.modal header h2 {
-  font-size: 20px;
-}
-.modal > p {
-  font-size: 11px;
-  color: #929aaa;
-  margin-bottom: 22px;
-  line-height: 1.9;
-}
-.modal footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 9px;
-  margin-top: 26px;
-  padding-top: 21px;
-  border-top: 1px solid #343942;
-}
-.modal footer .button {
-  height: 37px;
-  min-width: 73px;
-}
-.modal .icon-button {
-  margin-right: -5px;
-}
-.segmented-control {
-  display: flex;
-  align-items: center;
-  padding: 4px;
-  border: 1px solid #333943;
-  background: #171a20;
-  border-radius: 7px;
-  margin-top: 20px;
-  gap: 4px;
-}
-.segmented-control button {
-  flex: 1;
-  height: 31px;
-  border-radius: 4px;
-  font-size: 11px;
-  color: #8491a2;
-}
-.segmented-control button.selected {
-  background: #2c323d;
-  color: #c6cfdd;
-  box-shadow: 0 1px 3px #0002;
-}
-.optional {
-  font-size: 10px;
-  color: #5f6e83;
-  margin-left: 4px;
-}
-.modal details {
-  margin-top: 23px;
-}
-.modal summary {
-  font-size: 10px;
-  color: #8b97a8;
-  cursor: pointer;
-}
-.modal details label {
-  margin-top: 14px;
-}
 .form-error {
   font-size: 11px !important;
   color: #e4aaaa !important;
@@ -915,57 +812,6 @@ html {
   margin-top: 17px !important;
   line-height: 1.7 !important;
   overflow-wrap: anywhere;
-}
-.add-modal {
-  width: 480px;
-}
-.search-field {
-  position: relative;
-  margin-top: 23px;
-}
-.search-field > svg {
-  position: absolute;
-  top: 13px;
-  left: 12px;
-  color: #63728a;
-}
-.search-field input {
-  padding-left: 36px;
-  font-size: 11px;
-}
-.selection-count {
-  margin-right: auto;
-  color: #8290a5;
-  font-size: 10px;
-}
-.window-menu {
-  width: 340px;
-  padding: 22px;
-}
-.window-menu > header {
-  margin-bottom: 16px;
-}
-.window-menu h2 {
-  font-size: 16px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 250px;
-}
-.window-menu > button {
-  display: flex;
-  width: 100%;
-  justify-content: flex-start;
-  text-align: left;
-  height: 44px;
-  padding: 0 7px;
-  border-top: 1px solid #343b46;
-  font-size: 11px;
-  color: #afbacb;
-  gap: 10px;
-}
-.window-menu > button:hover {
-  background: #ffffff03;
 }
 ::-webkit-scrollbar {
   width: 5px;
@@ -1048,12 +894,6 @@ html {
   }
   .source-panel {
     width: min(340px, var(--ui-viewport-width));
-  }
-  .modal {
-    padding: 23px;
-  }
-  .modal {
-    max-height: calc(var(--ui-viewport-height) - 30px);
   }
   .focus-overlay {
     padding: 16px;
@@ -1207,16 +1047,6 @@ html {
 .graph-wrap.has-background .empty-state h2 {
   text-shadow: 0 1px 8px #000;
 }
-.background-modal {
-  width: 420px;
-  padding: 22px;
-}
-.background-modal header h2 {
-  font-size: 16px;
-}
-.background-modal > header {
-  margin-bottom: 16px;
-}
 .background-preview {
   position: relative;
   aspect-ratio: 16/9;
@@ -1242,79 +1072,6 @@ html {
 }
 .file-input {
   display: none;
-}
-.background-file-actions {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-top: 12px;
-}
-.background-file-actions .button {
-  min-height: 30px;
-  height: 30px;
-  font-size: 11px;
-  padding: 0 9px;
-  border-radius: 5px;
-}
-.background-file-actions > .text-button {
-  font-size: 11px;
-}
-.background-file-actions > span {
-  margin-left: auto;
-  font-size: 9px;
-  color: #707c8d;
-  white-space: nowrap;
-}
-.background-opacity {
-  margin-top: 21px;
-  font-size: 11px;
-}
-.background-opacity > span {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.background-opacity output {
-  font-size: 10px;
-  color: #8793a4;
-  font-variant-numeric: tabular-nums;
-}
-.background-opacity input {
-  height: 18px;
-  padding: 0;
-  margin-top: 10px;
-  background: none;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  accent-color: var(--ui-primary);
-  cursor: pointer;
-}
-.background-opacity input:focus-visible {
-  outline: 2px solid var(--ui-primary);
-  outline-offset: 3px;
-}
-.background-modal footer {
-  margin-top: 21px;
-  padding-top: 17px;
-}
-.background-modal footer .button {
-  min-height: 32px;
-  height: 32px;
-  font-size: 11px;
-}
-.background-modal button:disabled {
-  cursor: default;
-}
-@media (max-width: 390px) {
-  .background-file-actions {
-    flex-wrap: wrap;
-  }
-  .background-file-actions > span {
-    width: 100%;
-    margin-left: 0;
-    margin-top: 2px;
-  }
 }
 
 .vue-flow__node-note {
@@ -1602,13 +1359,6 @@ html {
   border-radius: 0;
 }
 
-.mobile-layout .modal {
-  max-height: 100%;
-  padding: 20px;
-  border-radius: 10px;
-}
-.mobile-layout .modal input,
-.mobile-layout .modal select,
 .mobile-layout.login-screen input {
   font-size: 16px;
 }
@@ -1880,36 +1630,6 @@ html {
   color: var(--ui-primary);
 }
 
-.source-probe-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-  margin-right: auto;
-  color: #8996a5;
-  font-size: 11px;
-}
-.source-probe-status > span:not(.spinner) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.source-probe-status.failed {
-  color: #d49c9c;
-}
-.source-probe-status .spinner {
-  width: 12px;
-  height: 12px;
-  flex: none;
-}
-.source-probe-status .icon-button {
-  width: 24px;
-  height: 24px;
-  margin: 0;
-  flex: none;
-}
-
 .login-endpoint {
   display: flex;
   align-items: baseline;
@@ -1934,33 +1654,6 @@ html {
   color: #7d899a;
 }
 
-.app-dialog-shell {
-  width: max-content;
-  max-width: calc(100% - 32px);
-  max-height: calc(var(--dialog-height) - 32px);
-  padding: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  overflow: auto;
-  outline: none;
-  --tw-ring-shadow: 0 0 #0000;
-}
-.app-dialog-overlay {
-  background: #090b10a8;
-  backdrop-filter: blur(5px);
-}
-.app-dialog-fields {
-  display: contents;
-}
-.app-dialog-shell .modal {
-  max-width: 100%;
-  max-height: none;
-}
-.mobile-layout .app-dialog-shell {
-  max-width: calc(100% - 20px);
-  max-height: calc(var(--dialog-height) - max(10px, var(--ui-safe-top)) - max(10px, var(--ui-safe-bottom)));
-}
 
 .workspace-status {
   position: absolute;
