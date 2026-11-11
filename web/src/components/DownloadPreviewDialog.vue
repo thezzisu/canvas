@@ -115,6 +115,7 @@ function imageLoaded(id: string, width: number, height: number) {
   loading.value = false
   imageSize.value = { width, height }
 }
+function mediaFailed() { loading.value = false; error.value = 'panels.preview.mediaUnavailable' }
 function mediaLoaded(width: number, height: number) {
   loading.value = false
   imageSize.value = { width, height }
@@ -159,7 +160,7 @@ onBeforeUnmount(() => request?.abort())
         <div v-else-if="loading || (downloadPreview.preview !== 'text' && !previewUrl)" class="download-preview-status" role="status"><UIcon name="i-lucide-loader-circle" class="spinner size-3.5 shrink-0 motion-safe:animate-spin" /> {{ t('common.loading') }}</div>
         <div v-if="error && downloadPreview.preview !== 'audio' && downloadPreview.preview !== 'video'" class="download-preview-status" role="alert"><span>{{ error instanceof Error ? error.message : t(error) }}</span><UButton v-if="downloadPreview.preview === 'text'" color="primary" variant="link" size="xs" @click="loadText">{{ t('common.retry') }}</UButton></div>
         <ImagePreview v-if="downloadPreview.preview === 'image' && previewUrl && !error" :key="downloadPreview.id" :id="downloadPreview.id" :src="previewUrl" :alt="downloadPreview.filename" @loaded="imageLoaded" @failed="imageFailed" />
-        <MediaPreview v-else-if="(downloadPreview.preview === 'audio' || downloadPreview.preview === 'video') && previewUrl" :key="downloadPreview.id" :kind="downloadPreview.preview" :src="previewUrl" :title="downloadPreview.filename" @download="download" @loaded="mediaLoaded" @failed="loading = false; error = 'panels.preview.mediaUnavailable'" />
+        <MediaPreview v-else-if="(downloadPreview.preview === 'audio' || downloadPreview.preview === 'video') && previewUrl" :key="downloadPreview.id" :kind="downloadPreview.preview" :src="previewUrl" :title="downloadPreview.filename" @download="download" @loaded="mediaLoaded" @failed="mediaFailed" />
         <template v-else-if="downloadPreview.preview === 'pdf'">
           <iframe v-if="pdfPreview && previewUrl" class="download-preview-pdf" :src="previewUrl" :title="downloadPreview.filename" referrerpolicy="no-referrer" />
           <div v-else class="download-preview-status">{{ t('panels.preview.pdfUnavailable') }}</div>

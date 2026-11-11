@@ -21,6 +21,7 @@ const { t } = useI18n()
 const currentBuild = computed(() => instanceBuild(activeInstance.value))
 const open = ref(false), working = ref(false), error = ref('')
 const scanning = ref(false), scanned = ref<InstanceLink>()
+function rescan() { scanned.value = undefined; scanning.value = true }
 const menuOpen = defineModel<boolean>('menuOpen', { default: false }), menuTrigger = ref<HTMLButtonElement>()
 const menuDismiss = usePointerDismiss(menuOpen, menuTrigger, {
   // Reka owns the whole menu tree, including portalled submenus. Only canvas
@@ -122,7 +123,7 @@ const items = computed<DropdownMenuItem[][]>(() => props.username === undefined 
         <p v-if="error" role="alert" class="instance-error">{{ t(error) }}</p>
       </form>
     </template>
-    <template #footer><div class="instance-probe-footer"><UButton type="submit" form="instance-form" :loading="working" :disabled="!canSubmit">{{ t(draft.id ? 'common.save' : 'instances.connect') }}</UButton><span class="instance-probe-status" role="status"><span v-if="probe.pending.value">{{ t('instances.probing') }}</span><button v-else-if="probe.failed.value" type="button" @click="probe.retry">{{ t('instances.probeFailed') }} · {{ t('instances.retry') }}</button><span v-else-if="displayedBuild" :title="`${t('instances.serverVersion')}: ${displayedBuild.version}${displayedBuild.revision ? ` · ${displayedBuild.revision}` : ''}`">{{ buildLabel(displayedBuild) }}</span></span><UButton v-if="!draft.id" type="button" color="neutral" variant="ghost" icon="i-lucide-scan-qr-code" class="instance-add-scan" :disabled="working" :title="t('instances.scanQr')" :aria-label="t('instances.scanQr')" @click="scanned = undefined; scanning = true" /></div></template>
+    <template #footer><div class="instance-probe-footer"><UButton type="submit" form="instance-form" :loading="working" :disabled="!canSubmit">{{ t(draft.id ? 'common.save' : 'instances.connect') }}</UButton><span class="instance-probe-status" role="status"><span v-if="probe.pending.value">{{ t('instances.probing') }}</span><button v-else-if="probe.failed.value" type="button" @click="probe.retry">{{ t('instances.probeFailed') }} · {{ t('instances.retry') }}</button><span v-else-if="displayedBuild" :title="`${t('instances.serverVersion')}: ${displayedBuild.version}${displayedBuild.revision ? ` · ${displayedBuild.revision}` : ''}`">{{ buildLabel(displayedBuild) }}</span></span><UButton v-if="!draft.id" type="button" color="neutral" variant="ghost" icon="i-lucide-scan-qr-code" class="instance-add-scan" :disabled="working" :title="t('instances.scanQr')" :aria-label="t('instances.scanQr')" @click="rescan" /></div></template>
   </UModal>
   <InstanceQrScanner :open="open && scanning" :accept="scan" @close="scanning = false" />
 </template>

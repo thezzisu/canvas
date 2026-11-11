@@ -29,6 +29,7 @@ watch([() => props.open, visibility], () => {
   if (props.open) { error.value = ''; accepted = false }
 }, { flush: 'sync' })
 
+function retryCamera() { attempt.value++; error.value = '' }
 watch([cameraVisible, video, attempt], async ([visible, element], _previous, cleanup) => {
   let cancelled = false, scanner: QrScanner | undefined
   cleanup(() => { cancelled = true; if (scanner) { void scanner.pause(true); scanner.destroy() } })
@@ -89,7 +90,7 @@ onBeforeUnmount(() => { fileAttempt++ })
       <div class="instance-qr-actions">
         <input ref="fileInput" class="file-input" type="file" accept="image/*" :aria-label="t('instances.chooseQrImage')" @change="readImage" />
         <UButton type="button" color="neutral" variant="outline" icon="i-lucide-image" :loading="reading" @click="fileInput?.click()">{{ t('instances.chooseQrImage') }}</UButton>
-        <UButton v-if="cameraAvailable && camera === 'failed'" type="button" color="neutral" variant="ghost" icon="i-lucide-camera" :aria-label="t('instances.useCamera')" @click="attempt++; error = ''">{{ t('common.retry') }}</UButton>
+        <UButton v-if="cameraAvailable && camera === 'failed'" type="button" color="neutral" variant="ghost" icon="i-lucide-camera" :aria-label="t('instances.useCamera')" @click="retryCamera">{{ t('common.retry') }}</UButton>
       </div>
     </template>
   </UModal>
