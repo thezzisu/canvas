@@ -260,7 +260,9 @@ export function useCanvasWindows(scene: CanvasScene) {
       scene.focus.pending.note = ''
       return
     }
-    const editor = document.querySelector<HTMLTextAreaElement>(`[data-note-id="${id}"] textarea`)
+    const editor = document.querySelector<HTMLElement>(
+      `[data-note-id="${id}"] [contenteditable="true"]`,
+    )
     if (editor?.checkVisibility()) {
       editor.focus()
       if (document.activeElement === editor) {
