@@ -129,6 +129,8 @@ function fixture(
     },
     finishEditing,
   })
+  // The built-in keys report their natural height once mounted.
+  control.setBuiltinMinHeight(260)
   t.after(() => {
     control.dispose()
     viewportPolicy.value = previousPolicy
@@ -610,29 +612,28 @@ test('picker never opens an initially closed keyboard and a refused restoration 
   assert.equal(f.textarea.focusCalls, before + 1)
 })
 
-test('native and builtin handoff preserves the available frame throughout both animations', (t) => {
+test('without the API each switch between the keyboards moves the terminal once', (t) => {
   const f = fixture(t)
   f.open()
-  f.control.setBuiltinMinHeight(260)
   f.control.switchMode()
   assert.equal(f.control.state.mode, 'builtin')
   assert.equal(f.control.state.deck, true)
   assert.equal(f.requested(), true)
-  for (const height of [500, 570, 660, 760, 844]) {
+  for (const height of [500, 570, 660, 760]) {
     f.resize(height)
-    assert.equal(f.terminal(), 500)
+    assert.equal(f.terminal(), 500, `the closing IME keeps its area (${height})`)
   }
-  t.mock.timers.tick(250)
+  f.resize(844)
+  t.mock.timers.tick(0)
   assert.equal(f.control.state.switching, false)
   assert.equal(f.textarea.readOnly, true)
-  assert.equal(f.control.state.dockHeight, 344)
+  assert.equal(f.control.state.dockHeight, 260, 'the built-in keys have their own height')
+  assert.equal(f.terminal(), 584)
   f.control.switchMode()
   assert.equal(f.control.state.mode, 'system')
   assert.equal(f.control.state.deck, true, 'the built-in keys stay until the IME covers them')
-  for (const height of [844, 760, 660, 570, 500]) {
-    f.resize(height)
-    assert.equal(f.terminal(), 500)
-  }
+  assert.equal(f.terminal(), 584)
+  f.resize(500)
   assert.equal(
     f.control.state.switching,
     false,
@@ -641,6 +642,40 @@ test('native and builtin handoff preserves the available frame throughout both a
   assert.equal(f.control.state.dockHeight, 0)
   assert.equal(f.control.state.deck, false)
   assert.equal(f.textarea.readOnly, false)
+  assert.equal(f.terminal(), 500)
+})
+
+test('a page resizing in steps for a taller IME moves the terminal only towards its new size', (t) => {
+  const f = fixture(t)
+  f.storage.set('canvas:mobile-keyboard-mode', 'builtin')
+  f.control.focus(true)
+  f.control.switchMode()
+  const sizes = [844, 760, 660, 570, 500].map((height) => {
+    f.resize(height)
+    return f.terminal()
+  })
+  assert.deepEqual(sizes, [584, 584, 584, 570, 500])
+})
+
+test('without the API a shorter IME replaces the built-in keys once it has settled', (t) => {
+  const f = fixture(t)
+  f.storage.set('canvas:mobile-keyboard-mode', 'builtin')
+  f.control.focus(true)
+  f.control.switchMode()
+  for (const height of [844, 760, 644]) {
+    f.resize(height)
+    assert.equal(f.terminal(), 584)
+  }
+  t.mock.timers.tick(500)
+  assert.equal(f.control.state.dockHeight, 0)
+  assert.equal(f.control.state.deck, false)
+  assert.equal(f.terminal(), 644)
+  f.control.switchMode()
+  assert.equal(f.terminal(), 584, 'the taller built-in keys take their height at once')
+  for (const height of [700, 800, 844]) {
+    f.resize(height)
+    assert.equal(f.terminal(), 584)
+  }
 })
 
 test('a closing IME tail below the occlusion threshold still belongs to the switch', (t) => {
@@ -653,7 +688,7 @@ test('a closing IME tail below the occlusion threshold still belongs to the swit
     assert.equal(f.control.state.switching, true)
   }
   f.resize(844)
-  assert.equal(f.terminal(), 500)
+  assert.equal(f.terminal(), 584)
   assert.equal(f.control.state.switching, false)
 })
 
@@ -671,27 +706,7 @@ test('builtin preference survives closing without automatically reopening', (t) 
   f.control.focus(true)
   assert.equal(f.control.state.mode, 'builtin')
   assert.equal(f.requested(), true)
-  assert.equal(
-    f.control.state.dockHeight,
-    260,
-    'without a measured IME the dock uses its natural height',
-  )
-})
-
-test('builtin height clamps oversized system geometry and allows one settled change', (t) => {
-  const f = fixture(t)
-  f.control.focus(true)
-  f.resize(244)
-  f.control.switchMode()
-  assert.equal(f.control.state.switching, true)
-  for (const height of [300, 430, 570, 700]) {
-    f.resize(height)
-    assert.equal(f.terminal(), 244, 'no intermediate growth')
-  }
-  f.resize(844)
-  assert.equal(f.control.state.dockHeight, 460)
-  assert.equal(f.control.state.switching, false)
-  assert.equal(f.terminal(), 384)
+  assert.equal(f.control.state.dockHeight, 260, 'the dock has its natural height')
 })
 
 test('a declined system switch turns the keyboard off and keeps the explicit preference', (t) => {
@@ -702,7 +717,7 @@ test('a declined system switch turns the keyboard off and keeps the explicit pre
   t.mock.timers.tick(250)
   f.control.switchMode()
   assert.equal(f.control.state.mode, 'system')
-  assert.equal(f.control.state.dockHeight, 344, 'the area holds while the IME is awaited')
+  assert.equal(f.control.state.dockHeight, 260, 'the area holds while the IME is awaited')
   t.mock.timers.tick(900)
   assert.equal(f.requested(), false)
   assert.equal(f.control.state.dockHeight, 0)
@@ -722,7 +737,7 @@ test('copy and paste sheets borrow focus without revoking the builtin keyboard',
   await Promise.resolve()
   assert.equal(f.requested(), true)
   assert.equal(f.control.state.switching, true)
-  assert.equal(f.terminal(), 500, 'a sheet IME never moves the terminal')
+  assert.equal(f.terminal(), 500, 'the frame a taller sheet IME resized is not reserved twice')
   f.control.suspend(false)
   t.mock.timers.tick(0)
   assert.equal(f.control.state.switching, true, 'sheet IME closing still owns the resize hold')
@@ -730,7 +745,7 @@ test('copy and paste sheets borrow focus without revoking the builtin keyboard',
   t.mock.timers.tick(250)
   assert.equal(f.requested(), true)
   assert.equal(f.control.state.mode, 'builtin')
-  assert.equal(f.control.state.dockHeight, 344)
+  assert.equal(f.control.state.dockHeight, 260)
   assert.equal(mobileKeyboardOpen.value, true)
 })
 
@@ -838,13 +853,13 @@ test('a settled builtin keyboard follows same-width full viewport changes withou
   f.control.switchMode()
   f.resize(844)
   t.mock.timers.tick(250)
-  assert.equal(f.control.state.dockHeight, 344)
+  assert.equal(f.control.state.dockHeight, 260)
   f.resize(700)
-  assert.equal(f.control.state.dockHeight, 344)
+  assert.equal(f.control.state.dockHeight, 260)
   assert.equal(f.control.state.switching, false)
   assert.equal(mobileKeyboardVisible.value, false)
   f.resize(390)
-  assert.equal(f.control.state.dockHeight, 230, 'tiny frames refit once to retain terminal space')
+  assert.equal(f.control.state.dockHeight, 230, 'tiny frames retain terminal space')
   assert.equal(mobileKeyboardVisible.value, false)
 })
 
@@ -905,36 +920,35 @@ test('composer opened over the system keyboard takes the IME in place and return
   assert(f.states.every((state) => f.terminal() === 500 && !state.deck))
 })
 
-test('composer opened over the builtin dock hands off to the system IME and restores the dock in place', (t) => {
+test('composer opened over the builtin dock hands off to the system IME and restores the dock', (t) => {
   const f = fixture(t)
   f.open()
-  f.control.setBuiltinMinHeight(260)
   f.control.switchMode()
   f.resize(844)
   t.mock.timers.tick(250)
-  assert.equal(f.control.state.dockHeight, 344)
+  assert.equal(f.control.state.dockHeight, 260)
   assert.equal(f.document.activeElement, f.textarea)
   f.compose()
   assert.equal(f.document.activeElement, f.editor)
   assert.equal(f.control.state.mode, 'system')
   assert.equal(f.control.state.composer, true)
   assert.equal(f.requested(), true)
-  for (const height of [844, 760, 660, 570, 500]) {
-    f.resize(height)
-    assert.equal(f.terminal(), 500, 'the terminal keeps its frame while the IME opens')
-  }
+  assert.equal(f.terminal(), 584, 'the dock stays until the IME covers it')
+  f.resize(500)
+  assert.equal(f.terminal(), 500)
   assert.equal(f.control.state.switching, false)
   assert.equal(f.control.state.dockHeight, 0)
   f.control.composer()
   assert.equal(f.control.state.mode, 'builtin')
   assert.equal(f.control.state.composer, false)
-  for (const height of [500, 570, 660, 760, 844]) {
+  for (const height of [500, 570, 660, 760]) {
     f.resize(height)
-    assert.equal(f.terminal(), 500, 'the dock replaces the closing IME at the same height')
+    assert.equal(f.terminal(), 500, 'the closing IME keeps its area')
   }
-  t.mock.timers.tick(250)
+  f.resize(844)
+  t.mock.timers.tick(0)
   assert.equal(f.control.state.switching, false)
-  assert.equal(f.control.state.dockHeight, 344)
+  assert.equal(f.control.state.dockHeight, 260)
   assert.equal(f.document.activeElement, f.textarea)
   assert.equal(f.textarea.readOnly, true)
   assert.equal(
@@ -1101,9 +1115,9 @@ test('releasing during recovery hands back to the prior keyboard and a reclaim k
   assert.equal(f.terminal(), 500, 'recovering')
   f.control.composer()
   assert.equal(f.control.state.mode, 'builtin')
-  assert.equal(f.control.state.dockHeight, 344)
+  assert.equal(f.control.state.dockHeight, 260)
   t.mock.timers.tick(250)
-  assert.equal(f.control.state.dockHeight, 344)
+  assert.equal(f.control.state.dockHeight, 260)
   assert.equal(f.requested(), true)
   f.compose()
   f.resize(500)
@@ -1116,7 +1130,7 @@ test('releasing during recovery hands back to the prior keyboard and a reclaim k
     'builtin',
     'a reclaim after a refused send restores the same dock',
   )
-  assert.equal(f.control.state.dockHeight, 344)
+  assert.equal(f.control.state.dockHeight, 260)
   assert.equal(f.lost(), 0)
 })
 
@@ -1287,89 +1301,78 @@ test('with the VirtualKeyboard API the IME overlays the page and the area reserv
   assert.equal(mobileKeyboardInset.value, 0)
 })
 
-test('switching system and built-in keyboards keeps the overlay area height on every frame', (t) => {
-  const f = fixture(t, { api: true })
-  f.control.focus(true)
-  f.keyboard(340)
-  f.control.setBuiltinMinHeight(258)
-  const switches = f.states.length
-  f.control.switchMode()
-  assert.equal(f.virtualKeyboard.hides, 1)
-  for (const height of [340, 280, 190, 90, 20, 0]) {
-    f.keyboard(height)
-    assert.equal(
-      f.control.state.dockHeight,
-      340,
-      `built-in keys replace the IME at its height (${height})`,
-    )
+for (const ime of [340, 220])
+  test(`each overlay switch between a ${ime}px IME and the built-in keys changes the area once`, (t) => {
+    const f = fixture(t, { api: true })
+    f.control.setBuiltinMinHeight(258)
+    f.control.focus(true)
+    f.keyboard(ime)
+    // The areas published from `start` on, without repeats.
+    const areas = (start: number) =>
+      f.states
+        .slice(start)
+        .map((state) => state.dockHeight)
+        .filter((height, index, all) => height !== all[index - 1])
+    let start = f.states.length - 1
+    f.control.switchMode()
+    assert.equal(f.virtualKeyboard.hides, 1)
     assert.equal(f.control.state.deck, true)
-  }
-  assert.equal(f.control.state.switching, false, 'the closed IME ends the switch')
-  f.control.switchMode()
-  assert.equal(f.virtualKeyboard.shows, 2)
-  for (const height of [0, 40, 150, 260, 330]) {
-    f.keyboard(height)
-    assert.equal(
-      f.control.state.dockHeight,
-      340,
-      `the IME rises over the built-in keys (${height})`,
-    )
-    assert.equal(f.control.state.deck, true)
-    assert.equal(f.control.state.switching, true)
-  }
-  f.keyboard(340)
-  assert.deepEqual(f.control.state, {
-    mode: 'system',
-    dockHeight: 340,
-    deck: false,
-    switching: false,
-    composer: false,
+    f.keyboard(0)
+    assert.equal(f.control.state.switching, false, 'the closed IME ends the switch')
+    assert.deepEqual(areas(start), [ime, 258], 'system to built-in')
+    start = f.states.length - 1
+    f.control.switchMode()
+    assert.equal(f.virtualKeyboard.shows, 2)
+    assert.equal(f.control.state.deck, true, 'the built-in keys stay while the IME rises')
+    f.keyboard(ime)
+    t.mock.timers.tick(500)
+    assert.deepEqual(f.control.state, {
+      mode: 'system',
+      dockHeight: ime,
+      deck: false,
+      switching: false,
+      composer: false,
+    })
+    assert.deepEqual(areas(start), [258, ime], 'built-in to system')
   })
-  assert(
-    f.states.slice(switches).every((state) => state.dockHeight === 340),
-    'no published frame changes the area',
-  )
-})
 
-test('the built-in keys take the height of the system keyboard they replace within their bounds', (t) => {
+test('the built-in keys keep their own height whatever system keyboards were shown', (t) => {
   const f = fixture(t, { api: true })
   f.control.setBuiltinMinHeight(258)
   f.control.focus(true)
+  for (const ime of [300, 500, 200]) {
+    f.keyboard(ime)
+    t.mock.timers.tick(500)
+    assert.equal(f.control.state.dockHeight, ime)
+    f.control.switchMode()
+    f.keyboard(0)
+    assert.equal(f.control.state.dockHeight, 258, `after a ${ime}px IME`)
+    f.control.switchMode()
+  }
   f.keyboard(300)
   f.control.switchMode()
   f.keyboard(0)
-  assert.equal(f.control.state.dockHeight, 300)
-  f.control.switchMode()
-  f.keyboard(500)
-  f.control.switchMode()
-  f.keyboard(0)
-  assert.equal(f.control.state.dockHeight, 460, 'an oversized IME is clamped')
-  f.control.switchMode()
-  f.keyboard(200)
-  t.mock.timers.tick(500)
-  f.control.switchMode()
-  f.keyboard(0)
-  assert.equal(f.control.state.dockHeight, 258, 'the keys never shrink below their minimum rows')
+  f.control.blur()
+  f.control.focus(true)
+  assert.equal(f.control.state.mode, 'builtin')
+  assert.equal(f.control.state.dockHeight, 258, 'a reopened deck remembers no IME')
 })
 
-test('an oversized overlay IME replaced by the built-in keys changes the area once, after it closed', (t) => {
+test('a system keyboard of another height is simply followed', (t) => {
   const f = fixture(t, { api: true })
   f.control.setBuiltinMinHeight(258)
   f.control.focus(true)
-  f.keyboard(600)
-  const switches = f.states.length
+  f.keyboard(340)
   f.control.switchMode()
-  for (const height of [520, 400, 260, 100, 10]) {
-    f.keyboard(height)
-    assert.equal(f.control.state.dockHeight, 600)
-  }
   f.keyboard(0)
-  assert.equal(f.control.state.dockHeight, 460)
+  f.control.switchMode()
+  f.keyboard(420)
+  assert.equal(f.control.state.dockHeight, 420, 'a taller keyboard than before')
   assert.equal(f.control.state.switching, false)
-  assert.deepEqual(
-    [...new Set(f.states.slice(switches).map((state) => state.dockHeight))],
-    [600, 460],
-  )
+  f.keyboard(280)
+  t.mock.timers.tick(500)
+  assert.equal(f.control.state.dockHeight, 280, 'a shorter one, once it has settled')
+  assert.equal(f.control.state.deck, false)
 })
 
 test('a built-in switch whose IME stops reporting geometry still ends and releases native resizing', (t) => {
@@ -1384,7 +1387,7 @@ test('a built-in switch whose IME stops reporting geometry still ends and releas
   assert.equal(f.control.state.dockHeight, 340)
 })
 
-test('without a measured system keyboard the built-in keys use their minimum rows', (t) => {
+test('the built-in keys open at their own height without requesting the IME', (t) => {
   const f = fixture(t, { api: true })
   f.storage.set('canvas:mobile-keyboard-mode', 'builtin')
   f.control.setBuiltinMinHeight(258)
@@ -1394,22 +1397,20 @@ test('without a measured system keyboard the built-in keys use their minimum row
   assert.equal(f.virtualKeyboard.shows, 0, 'the built-in keys never request the IME')
 })
 
-test('an IME settling below the held area releases it once', (t) => {
+test('an IME settling below the built-in keys it replaces releases their area once', (t) => {
   const f = fixture(t, { api: true })
+  f.storage.set('canvas:mobile-keyboard-mode', 'builtin')
   f.control.focus(true)
-  f.keyboard(340)
   f.control.switchMode()
-  f.keyboard(0)
-  f.control.switchMode()
-  for (const height of [100, 200, 300]) {
+  for (const height of [100, 200, 220]) {
     f.keyboard(height)
-    assert.equal(f.control.state.dockHeight, 340)
+    assert.equal(f.control.state.dockHeight, 260)
   }
   t.mock.timers.tick(499)
-  assert.equal(f.control.state.dockHeight, 340)
+  assert.equal(f.control.state.dockHeight, 260)
   assert.equal(f.control.state.switching, true)
   t.mock.timers.tick(1)
-  assert.equal(f.control.state.dockHeight, 300)
+  assert.equal(f.control.state.dockHeight, 220)
   assert.equal(f.control.state.switching, false)
 })
 
@@ -1617,19 +1618,24 @@ test('a blur that leaves the overlay IME up releases the held area after confirm
   assert.equal(f.requested(), true)
 })
 
-test('an overlay built-in deck refits when the window gets shorter at the same width', (t) => {
+test('an overlay built-in deck is capped while the window is short', (t) => {
   const f = fixture(t, { api: true })
   f.control.setBuiltinMinHeight(258)
   f.control.focus(true)
   f.keyboard(400)
   f.control.switchMode()
   f.keyboard(0)
-  assert.equal(f.control.state.dockHeight, 400)
-  f.window.innerHeight = 500
-  f.css.height = 500
-  f.visual.height = 500
-  f.visual.dispatchEvent(new Event('resize'))
-  assert.equal(f.control.state.dockHeight, 340, 'the terminal keeps its 160px reserve')
+  assert.equal(f.control.state.dockHeight, 258)
+  const frame = (height: number) => {
+    f.window.innerHeight = height
+    f.css.height = height
+    f.visual.height = height
+    f.visual.dispatchEvent(new Event('resize'))
+  }
+  frame(400)
+  assert.equal(f.control.state.dockHeight, 240, 'the terminal keeps its 160px reserve')
+  frame(844)
+  assert.equal(f.control.state.dockHeight, 258)
 })
 
 test('a page that still resizes under the overlay request is followed as without the API', (t) => {
@@ -1648,7 +1654,7 @@ test('a page that still resizes under the overlay request is followed as without
     'the built-in keys replace the IME in its resized frame',
   )
   f.resize(844)
-  assert.equal(f.control.state.dockHeight, 344)
+  assert.equal(f.control.state.dockHeight, 260)
 })
 
 test('disposing the overlay owner restores the page policy', (t) => {
@@ -1689,11 +1695,12 @@ test('a closing IME tail below the threshold keeps the baseline for a keyboard r
   assert.equal(mobileKeyboardVisible.value, false)
   f.open()
   f.control.switchMode()
-  for (const height of [600, 760, 800, 844]) {
+  for (const height of [600, 760, 800]) {
     f.resize(height)
-    assert.equal(f.terminal(), 500, `the built-in keys replace the whole IME (${height})`)
+    assert.equal(f.terminal(), 500, `the whole IME keeps its area while it closes (${height})`)
   }
-  assert.equal(f.control.state.dockHeight, 344)
+  f.resize(844)
+  assert.equal(f.control.state.dockHeight, 260)
 })
 
 test('a closing IME that settles short of the old frame leaves browser chrome behind', (t) => {
@@ -1707,8 +1714,8 @@ test('a closing IME that settles short of the old frame leaves browser chrome be
   f.control.switchMode()
   f.resize(788)
   assert.equal(f.control.state.switching, false, 'the IME closed onto the frame under the chrome')
-  assert.equal(f.control.state.dockHeight, 344)
-  assert.equal(f.terminal(), 444)
+  assert.equal(f.control.state.dockHeight, 260)
+  assert.equal(f.terminal(), 528)
 })
 
 test('a frame that shrinks a little while the keyboard is closed is browser chrome', (t) => {
@@ -1718,11 +1725,11 @@ test('a frame that shrinks a little while the keyboard is closed is browser chro
   for (const height of [700, 844, 788]) f.resize(height)
   f.open()
   f.control.switchMode()
+  f.resize(600)
+  assert.equal(f.control.state.dockHeight, 100, 'the IME was measured under the new chrome')
   f.resize(788)
-  t.mock.timers.tick(500)
-  f.resize(788)
-  assert.equal(f.control.state.dockHeight, 288, 'the IME was measured under the new chrome')
-  assert.equal(f.terminal(), 500)
+  assert.equal(f.control.state.dockHeight, 260)
+  assert.equal(f.terminal(), 528)
 })
 
 test('the text sheet borrows focus from an overlay IME and the area holds until it returns', async (t) => {
@@ -1779,7 +1786,7 @@ test('the text sheet over the overlay built-in keys keeps them and never asks fo
   await Promise.resolve()
   assert.equal(f.requested(), true)
   assert.equal(f.control.state.deck, true)
-  assert.equal(f.control.state.dockHeight, 340)
+  assert.equal(f.control.state.dockHeight, 258)
   assert.equal(f.control.state.switching, true)
   assert.equal(f.virtualKeyboard.overlaysContent, false)
   f.document.activeElement = f.document.body
@@ -1791,7 +1798,7 @@ test('the text sheet over the overlay built-in keys keeps them and never asks fo
   assert.equal(f.virtualKeyboard.overlaysContent, true)
   assert.deepEqual(f.control.state, {
     mode: 'builtin',
-    dockHeight: 340,
+    dockHeight: 258,
     deck: true,
     switching: false,
     composer: false,
@@ -1893,14 +1900,14 @@ test('rotation that closes the overlay IME turns the stale intent off', (t) => {
   assert.equal(f.virtualKeyboard.overlaysContent, false)
 })
 
-test('rotation refits the overlay built-in keys to the landscape frame', (t) => {
+test('rotation caps the overlay built-in keys in the landscape frame', (t) => {
   const f = fixture(t, { api: true })
   f.control.setBuiltinMinHeight(258)
   f.control.focus(true)
   f.keyboard(340)
   f.control.switchMode()
   f.keyboard(0)
-  assert.equal(f.control.state.dockHeight, 340)
+  assert.equal(f.control.state.dockHeight, 258)
   f.window.innerWidth = 844
   f.visual.width = 844
   f.resize(390)
@@ -1909,6 +1916,6 @@ test('rotation refits the overlay built-in keys to the landscape frame', (t) => 
   f.window.innerWidth = 390
   f.visual.width = 390
   f.resize(844)
-  assert.equal(f.control.state.dockHeight, 258, 'the portrait IME height is no longer known')
+  assert.equal(f.control.state.dockHeight, 258, 'the portrait frame fits the keys again')
   assert.equal(f.virtualKeyboard.shows, 1)
 })

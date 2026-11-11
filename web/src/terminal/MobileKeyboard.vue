@@ -45,7 +45,7 @@ const emit = defineEmits<{
   reading: [active: boolean]
   pointer: [action: TouchpadControl]
   switchKeyboard: []
-  bounds: [minHeight: number]
+  naturalHeight: [height: number]
 }>()
 const deckElement = ref<HTMLElement>(),
   actions = ref<HTMLElement>(),
@@ -523,18 +523,18 @@ function reset(clearFileSelection = true) {
   closeSheet()
   emit('modifiers', { shift: false, ctrl: false, alt: false, meta: false })
 }
-// The smallest dock that fits the tools and every key row at its minimum height. Taller
-// docks, matching the system keyboard they replace, stretch the rows.
-function measureBounds() {
+// The dock's own height: the tools and every key row at the size the deck width gives it. It
+// never follows a system keyboard.
+function measureHeight() {
   const deck = deckElement.value
   if (!deck || !actions.value) return
   const style = getComputedStyle(deck),
     rows = [...deck.children]
   const keys =
-    rows.reduce((sum, row) => sum + parseFloat(getComputedStyle(row).minHeight), 0) +
+    rows.reduce((sum, row) => sum + parseFloat(getComputedStyle(row).height), 0) +
     parseFloat(style.rowGap) * Math.max(0, rows.length - 1)
   emit(
-    'bounds',
+    'naturalHeight',
     Math.ceil(
       keys +
         parseFloat(style.paddingTop) +
@@ -584,7 +584,7 @@ watch(
     if (!props.keyboardOpen) closeSheet()
   },
 )
-useResizeObserver([actions, safeArea], measureBounds)
+useResizeObserver([actions, safeArea], measureHeight)
 onMounted(() => {
   window.addEventListener('blur', cancelPress)
   document.addEventListener('visibilitychange', visibilityChanged)
@@ -1025,6 +1025,8 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  /* Keys replacing a taller system keyboard appear where they stay once its area is released. */
+  justify-content: flex-end;
   min-height: 0;
   margin: 0 -4px;
   overflow: hidden;
@@ -1044,11 +1046,11 @@ onBeforeUnmount(() => {
   visibility: hidden;
   transition: visibility 0s 400ms;
 }
-/* Rows share the dock height above their minimum, so the keys fill a dock of any height. The
-   minimum grows with the deck width, as the key labels do, up to a full touch target. */
+/* The deck has the height of its rows and scrolls where a short frame caps the dock. A row grows
+   with the deck width, as the key labels do, up to a full touch target. */
 .mobile-key-deck {
   container-type: inline-size;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1062,11 +1064,11 @@ onBeforeUnmount(() => {
   scrollbar-color: #515c6b transparent;
 }
 .mobile-key-deck-row {
-  flex: 1 0 0;
+  flex: none;
   display: grid;
   gap: 2px;
   min-width: 0;
-  min-height: clamp(28px, 8cqw, 44px);
+  height: clamp(28px, 8cqw, 44px);
 }
 .mobile-key-deck button {
   min-width: 0;

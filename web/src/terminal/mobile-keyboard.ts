@@ -80,9 +80,11 @@ export function refreshMobileKeyboardViewport() {
  * With the VirtualKeyboard API the IME overlays the page and the area reserves its inset, so the browser
  * does not resize the page for it; the area still follows the inset the IME reports. Without the API
  * the page resizes and the area only bridges the difference.
- * A handoff holds the area while the keyboards change places. It is released once the incoming IME
- * covers it, settles at another height or is refused, and built-in keys outside their bounds take
- * their own height after the IME they replace has closed.
+ * System keyboards differ in height and none is stable, so the built-in keys never adopt one: their
+ * area has the natural height of the keys, and a switch resizes the terminal as changing system
+ * keyboards does. A handoff only holds the outgoing area while the keyboards change places, so that
+ * resize happens once: until the incoming IME covers it, settles at another height or is refused, or
+ * until the IME the built-in keys replace has closed.
  */
 export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptions) {
   const visual = window.visualViewport
@@ -103,15 +105,14 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   // `shrink` is the part of it by which the page itself resized.
   let inset = 0,
     shrink = 0
-  // A handoff keeps `hold` reserved until the incoming IME covers it, settles or is refused (system)
-  // or the replaced IME has closed or stopped changing (built-in); `bridge` keeps the built-in keys
-  // shown while the system IME rises over them.
+  // A handoff keeps `hold`, the outgoing area, reserved until the incoming IME covers it, settles or
+  // is refused (system) or the replaced IME has closed or stopped changing (built-in); `bridge`
+  // keeps the built-in keys shown while the system IME rises over them.
   let hold = 0,
     bridge = false,
     switching = false
-  let nativeHeight = 0,
-    builtinMinHeight = 260 * scale(),
-    builtinHeight = builtinMinHeight
+  // The natural height of the built-in keys, as their component measures it.
+  let deckHeight = 0
   let confirmTimer: ReturnType<typeof setTimeout> | undefined
   let settleTimer: ReturnType<typeof setTimeout> | undefined
   let disableTimer: ReturnType<typeof setTimeout> | undefined
@@ -139,8 +140,9 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     shrink = !overlaid || resized > threshold() ? resized : 0
     return Math.max(shrink, overlaid && api ? api.boundingRect.height : 0)
   }
-  const area = () =>
-    !requested ? inset : Math.max(inset, hold, mode === 'builtin' ? builtinHeight : 0)
+  // The built-in keys leave part of a short frame to the terminal.
+  const deck = () => Math.max(0, Math.min(deckHeight, baseline.height - 160 * scale()))
+  const area = () => (!requested ? inset : Math.max(inset, hold, mode === 'builtin' ? deck() : 0))
   function state(): MobileKeyboardState {
     // Where the page already shrank by the IME, the area only adds what it does not cover.
     return {
@@ -213,10 +215,6 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
         if (revision === inputRevision) apply()
       }, 0)
     } else apply()
-  }
-  function fitHeight(height: number) {
-    const maximum = Math.max(0, Math.min(460 * scale(), baseline.height - 160 * scale()))
-    return Math.min(maximum, Math.max(Math.min(builtinMinHeight, maximum), height))
   }
   /** Take keyboard ownership from another terminal, whose IME may still be on screen. */
   function claim() {
@@ -304,7 +302,6 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     hold = 0
     bridge = false
     switching = false
-    if (occluded(inset)) nativeHeight = inset
   }
   /** An IME that stopped changing ends the transition, even short of the held area. */
   function settle() {
@@ -333,14 +330,13 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     raise(true)
     confirm()
   }
-  /** Show the built-in keys at the height of the area they replace, then close the IME under them. */
+  /** Show the built-in keys at their own height, then close the IME under them. */
   function useBuiltin(replaced: number) {
     clearTimers()
     mode = 'builtin'
     bridge = false
-    builtinHeight = fitHeight(replaced || nativeHeight || builtinMinHeight)
     switching = inset >= 1
-    // An area outside the built-in bounds changes once, after the IME under it has closed.
+    // A taller area they replace shrinks once, after the IME under it has closed.
     hold = switching ? replaced : 0
     hideNative(true)
     publish()
@@ -424,17 +420,15 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       settleTimer = undefined
       hold = 0
       bridge = false
-      nativeHeight = 0
       baseline = {
         width: window.innerWidth,
         height: Math.max(window.innerHeight, frame.height),
         scale: scale(),
       }
-      builtinHeight = fitHeight(builtinHeight)
       inset = measure()
       if (requested && mode === 'system' && !picker && !suspended && !document.hidden) confirm()
     }
-    const refit = requested && mode === 'builtin' && !switching && !suspended && !picker,
+    const builtinOnly = requested && mode === 'builtin' && !switching && !suspended && !picker,
       resized = baseline.height - frame.height
     // An overlay request the browser does not honour leaves the system IME resizing the page instead.
     const resizingIme =
@@ -457,11 +451,9 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     }
     if ((overlaid && !resizingIme) || (!requested && !tail && !occluded(resized))) {
       baseline.height = Math.max(window.innerHeight, frame.height)
-      if (refit) builtinHeight = fitHeight(builtinHeight)
-    } else if (refit && frame.height !== baseline.height) {
+    } else if (builtinOnly) {
       // Without native input this is the full available frame, not a newly opened IME.
       baseline.height = frame.height
-      builtinHeight = fitHeight(builtinHeight)
     }
     const previous = inset
     inset = measure()
@@ -582,11 +574,10 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       return state()
     },
     refreshViewport: observe,
+    /** The measured natural height of the built-in keys. */
     setBuiltinMinHeight(height: number) {
-      if (!(height > 0) || !Number.isFinite(height) || Math.abs(height - builtinMinHeight) < 1)
-        return
-      builtinMinHeight = height
-      if (requested && mode === 'builtin') builtinHeight = fitHeight(builtinHeight)
+      if (!(height > 0) || !Number.isFinite(height) || Math.abs(height - deckHeight) < 1) return
+      deckHeight = height
       publish()
     },
     switchMode() {
@@ -734,7 +725,6 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
             scale: scale(),
           }
           if (mode === 'system') confirm()
-          else builtinHeight = fitHeight(nativeHeight || builtinMinHeight)
         }
       }
       if (suspended) {

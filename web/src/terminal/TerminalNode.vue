@@ -445,9 +445,9 @@ function toggleKeyboard() {
 function switchKeyboard() {
   terminal?.switchKeyboard()
 }
-let keyboardMinHeight = 0
-function keyboardBounds(height: number) {
-  keyboardMinHeight = height
+let keyboardNaturalHeight = 0
+function keyboardMeasured(height: number) {
+  keyboardNaturalHeight = height
   terminal?.setKeyboardMinHeight(height)
 }
 function readText(signal: AbortSignal) {
@@ -546,7 +546,7 @@ function mount() {
     )
   terminal?.setAppShowing(showApp.value)
   terminal?.setEditing(editing.value)
-  if (keyboardMinHeight) terminal?.setKeyboardMinHeight(keyboardMinHeight)
+  if (keyboardNaturalHeight) terminal?.setKeyboardMinHeight(keyboardNaturalHeight)
   if (mobileFocus.value && !showApp.value) {
     if (status.value.touchMode === 'select') terminal?.setTouchMode('scroll')
     terminal?.focus({ keyboard: false })
@@ -568,7 +568,7 @@ watch([zoom, () => props.data.focus], () => {
 })
 watch(settings, (value) => terminal?.setSettings(value), { flush: 'sync' })
 watch(uiZoom, () => {
-  if (keyboardMinHeight) terminal?.setKeyboardMinHeight(keyboardMinHeight)
+  if (keyboardNaturalHeight) terminal?.setKeyboardMinHeight(keyboardNaturalHeight)
 })
 watch([keepTerminal, () => props.data.mobile, () => props.data.focus], async () => {
   terminal?.dispose()
@@ -1098,7 +1098,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
       :copy-text="copyText"
       :prepare-files="prepareFiles"
       @switch-keyboard="switchKeyboard"
-      @bounds="keyboardBounds"
+      @natural-height="keyboardMeasured"
       @key="mobileKey"
       @modifiers="mobileModifiers"
       @mode="mobileMode"
