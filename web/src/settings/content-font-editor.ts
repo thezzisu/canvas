@@ -160,6 +160,9 @@ export function useContentFontEditor(
     const entry = draft.stack[index]
     if (entry) entry.family = family
   }
+  function setLigatures(value: boolean) {
+    draft.ligatures = value
+  }
   function addFont() {
     if (draft.stack.length >= 12) return
     draft.stack.push({ family: '' })
@@ -208,6 +211,7 @@ export function useContentFontEditor(
     previewText,
     canReload,
     setFamily,
+    setLigatures,
     addFont,
     moveFont,
     removeFont,

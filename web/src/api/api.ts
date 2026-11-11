@@ -94,7 +94,7 @@ export async function api<T = unknown>(
   const headers = new Headers(init?.headers)
   if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   const response = await apiFetch(path, { ...init, headers }, context)
-  let body: any
+  let body: { error?: string; message?: string } | undefined
   const text = await response.text()
   requireCurrentApi(context)
   try {

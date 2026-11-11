@@ -4,11 +4,7 @@ import {
   type CodePreviewResult,
 } from './code-preview-language'
 export { textCapabilities } from './code-preview-language'
-export type {
-  CodePreviewRequest,
-  CodePreviewResult,
-  CodePreviewToken,
-} from './code-preview-language'
+export type { CodePreviewRequest, CodePreviewResult } from './code-preview-language'
 
 let worker: Worker | undefined,
   sequence = 0

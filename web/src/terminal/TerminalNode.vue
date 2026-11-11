@@ -706,10 +706,6 @@ async function resized(event: { params: { width: number; height: number; x: numb
     :data-content-mode="showApp ? 'app' : 'terminal'"
     :data-input-focused="inputFocused"
     :data-note-drop="noteDrag ? (noteDropAvailable ? 'ready' : 'unavailable') : undefined"
-    @dragenter.capture="noteDragOver"
-    @dragover.capture="noteDragOver"
-    @dragleave="noteDragLeave"
-    @drop.capture="dropNote"
     :style="{
       '--program-color': statusColor(frameStatus),
       '--capture-toolbar-height': `${captureToolbarHeight}px`,
@@ -717,6 +713,10 @@ async function resized(event: { params: { width: number; height: number; x: numb
       height: dimensions || data.focus ? '100%' : `${data.height}px`,
     }"
     :aria-label="`${label} · ${data.subtitle}`"
+    @dragenter.capture="noteDragOver"
+    @dragover.capture="noteDragOver"
+    @dragleave="noteDragLeave"
+    @drop.capture="dropNote"
   >
     <header
       class="terminal-header drag-handle"

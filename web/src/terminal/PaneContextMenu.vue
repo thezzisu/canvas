@@ -36,7 +36,7 @@ let request: AbortController | undefined
 let mounted = true
 let revision = 0
 
-async function lookup() {
+async function locate() {
   request?.abort()
   const current = (request = new AbortController())
   pane.value = undefined
@@ -61,7 +61,7 @@ function show(event: MouseEvent) {
   if (busy.value) return
   point.value = { x: event.clientX, y: event.clientY }
   open.value = true
-  void lookup()
+  void locate()
 }
 useEventListener(toRef(props, 'host'), 'contextmenu', show, { capture: true })
 watch(open, (value) => {
@@ -128,7 +128,7 @@ const items = computed<ContextMenuItem[]>(() =>
             icon: 'i-lucide-refresh-cw',
             onSelect: (event) => {
               event.preventDefault()
-              void lookup()
+              void locate()
             },
           },
         ]

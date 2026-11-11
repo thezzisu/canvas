@@ -25,7 +25,7 @@ import {
 
 class FakeSocket {
   readyState = 1
-  messages: Record<string, any>[] = []
+  messages: Record<string, unknown>[] = []
   send(value: string) {
     this.messages.push(JSON.parse(value))
   }
@@ -792,7 +792,7 @@ test('real native terminal receives no upload paths until the whole batch succee
       class Client extends EventEmitter {
         readyState = 1
         bufferedAmount = 0
-        messages: Record<string, any>[] = []
+        messages: Record<string, unknown>[] = []
         send(value: string | Buffer) {
           if (typeof value === 'string') this.messages.push(JSON.parse(value))
         }

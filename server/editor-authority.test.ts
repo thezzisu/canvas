@@ -73,9 +73,8 @@ ${body}
     child.once('error', reject)
     child.once('close', (code) => {
       clearTimeout(timer)
-      code === 0
-        ? resolve()
-        : reject(new Error(output || `editor authority fixture exited ${code}`))
+      if (code === 0) resolve()
+      else reject(new Error(output || `editor authority fixture exited ${code}`))
     })
   })
 }

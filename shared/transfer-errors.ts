@@ -26,4 +26,3 @@ export const transferErrors = [
   'draftEmpty',
   'fileMissing',
 ] as const
-export type TransferError = (typeof transferErrors)[number]

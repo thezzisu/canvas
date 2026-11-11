@@ -10,7 +10,7 @@ import {
 import { viewportPolicy } from '../app/developer-mode'
 import { logicalViewportFrame, readViewportFrame, viewportProbe } from './viewport-frame'
 import { uiZoom } from '../app/ui-scale'
-export { viewportFrame, type ViewportFrame } from './viewport-frame'
+export { viewportFrame } from './viewport-frame'
 
 export interface CanvasFrame {
   layoutWidth: number

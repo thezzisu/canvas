@@ -297,12 +297,12 @@ onBeforeUnmount(() => request?.abort())
             <template v-for="key in textShortcuts" :key="key"
               ><TextPreviewActions
                 v-if="showShortcut(key)"
-                :only="key"
-                :filename="downloadPreview.filename"
                 v-model:rendered="rendered"
                 v-model:wrap="wrap"
                 v-model:formatted="formatted"
                 v-model:highlighted="highlighted"
+                :only="key"
+                :filename="downloadPreview.filename"
                 :source-preview="downloadPreview.sourcePreview"
                 :preview-busy="previewBusy"
                 @preview="previewSite"
@@ -400,8 +400,8 @@ onBeforeUnmount(() => request?.abort())
         </div>
         <ImagePreview
           v-if="downloadPreview.preview === 'image' && previewUrl && !error"
-          :key="downloadPreview.id"
           :id="downloadPreview.id"
+          :key="downloadPreview.id"
           :src="previewUrl"
           :alt="downloadPreview.filename"
           @loaded="imageLoaded"
@@ -432,12 +432,12 @@ onBeforeUnmount(() => request?.abort())
         </template>
         <template v-else-if="downloadPreview.preview === 'text' && !loading && !error">
           <TextPreview
+            v-model:formatted="formatted"
+            v-model:highlighted="highlighted"
             :text="text"
             :filename="downloadPreview.filename"
             :rendered="rendered"
             :wrap="wrap"
-            v-model:formatted="formatted"
-            v-model:highlighted="highlighted"
           />
           <div v-if="truncated" class="download-preview-truncated">
             {{ t('panels.preview.truncated') }}

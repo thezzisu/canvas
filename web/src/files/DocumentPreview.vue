@@ -72,11 +72,11 @@ onBeforeUnmount(() => controller.abort())
         >
         <TextPreviewActions
           v-if="!compact"
-          :filename="filename"
           v-model:rendered="rendered"
           v-model:wrap="wrap"
           v-model:formatted="formatted"
           v-model:highlighted="highlighted"
+          :filename="filename"
           :source-preview="/\.html?$/i.test(filename)"
           :hide-site="!/\.html?$/i.test(filename)"
           @preview="openOriginal"
@@ -118,13 +118,13 @@ onBeforeUnmount(() => controller.abort())
       </p>
       <TextPreview
         v-else
+        v-model:formatted="formatted"
+        v-model:highlighted="highlighted"
         :text="text"
         :filename="filename"
         :resources="resources"
         :rendered="rendered"
         :wrap="wrap"
-        v-model:formatted="formatted"
-        v-model:highlighted="highlighted"
       />
       <p v-if="truncated" role="status">{{ t('panels.preview.truncated') }}</p>
     </main>

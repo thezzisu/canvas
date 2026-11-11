@@ -12,13 +12,11 @@ self.addEventListener('notificationclick', (event) => {
   event.waitUntil(
     (async () => {
       const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-      const instance = new URLSearchParams(url.hash.slice(1)).get('instance')
+      // Canvas addresses are `#/i/<instance>/<canvas>`; reuse a tab already on that instance.
+      const instance = (address) => address.hash.match(/^#\/i\/([^/?]+)/)?.[1]
       const client = windows.find((client) => {
         const current = new URL(client.url)
-        return (
-          current.pathname === url.pathname &&
-          new URLSearchParams(current.hash.slice(1)).get('instance') === instance
-        )
+        return current.pathname === url.pathname && instance(current) === instance(url)
       })
       if (client) {
         await client.focus()

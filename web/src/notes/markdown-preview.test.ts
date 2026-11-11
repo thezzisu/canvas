@@ -13,7 +13,7 @@ async function render(markdown: string) {
     render: () => h(MarkdownDocument, { value: document, components: { Math } }),
   })
   app.component(
-    'Canary',
+    'RenderCanary',
     defineComponent({
       setup() {
         mounted++
@@ -45,11 +45,11 @@ test('HTML, event attributes and Vue/MDC syntax stay text and never instantiate 
     [
       '<script>globalThis.previewExecuted = true</script>',
       '<img src="x" onerror="globalThis.previewExecuted = true">',
-      '<Canary @click="globalThis.previewExecuted = true" />',
+      '<RenderCanary @click="globalThis.previewExecuted = true" />',
       '::canary\ncomponent body\n::',
       '{{ globalThis.previewExecuted }}',
       '[styled]{onclick="run()"}',
-      '---\ncomponent: Canary\n---',
+      '---\ncomponent: RenderCanary\n---',
     ].join('\n\n'),
   )
   assert.equal(mounted, 0)

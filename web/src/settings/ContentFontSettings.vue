@@ -86,7 +86,11 @@ const field = { root: 'items-center gap-4', labelWrapper: 'justify-start', descr
       >{{ t('settings.add') }}</UButton
     >
     <UFormField :label="t('settings.ligatures')" orientation="horizontal" :ui="field">
-      <USwitch v-model="editor.draft.ligatures" :aria-label="t('settings.ligatures')" />
+      <USwitch
+        :model-value="editor.draft.ligatures"
+        :aria-label="t('settings.ligatures')"
+        @update:model-value="editor.setLigatures"
+      />
     </UFormField>
     <UFormField
       :label="t('settings.preview')"

@@ -231,7 +231,8 @@ export async function removeInboxFiles(source: Source, paths: string[]): Promise
     })
     child.once('close', (code) => {
       clearTimeout(timer)
-      code === 0 ? resolve() : reject(new Error('cleanupFailed'))
+      if (code === 0) resolve()
+      else reject(new Error('cleanupFailed'))
     })
   })
 }

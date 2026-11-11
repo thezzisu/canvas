@@ -176,8 +176,8 @@ defineExpose({ send })
         :title="t('terminal.composer.attach')"
         :aria-label="t('terminal.composer.attach')"
         :disabled="editor?.pending"
-        @pointerdown="keepFocus"
         icon="i-lucide-paperclip"
+        @pointerdown="keepFocus"
         @click="editor?.chooseFiles()"
       />
       <SaveStatus :owner="owner.key" :size="mobile ? 'lg' : 'sm'" />
@@ -191,8 +191,8 @@ defineExpose({ send })
         :aria-label="t('terminal.composer.send')"
         :disabled="!canSend || !hasText || editor?.pending"
         :loading="sending"
-        @pointerdown="keepFocus"
         icon="i-lucide-send"
+        @pointerdown="keepFocus"
         @click="send"
       />
     </div>

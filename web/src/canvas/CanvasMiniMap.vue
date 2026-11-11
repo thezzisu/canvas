@@ -27,7 +27,7 @@ function clicked(event: MouseEvent, node: GraphNode) {
   <MiniMap v-bind="{ ...props, ...$attrs }">
     <!-- Node slots replace the built-in rectangles. One slot paints the ordered
          layer while MiniMap retains its viewport, mask, pan and zoom behavior. -->
-    <template v-for="type in types" #[`node-${type}`]="slot">
+    <template v-for="type in types" :key="type" #[`node-${type}`]="slot">
       <g v-if="slot.id === visible[0]?.id">
         <g v-for="node in ordered" :key="node.id">
           <!-- The status pulse changes alpha; keep covered cards occluded. -->

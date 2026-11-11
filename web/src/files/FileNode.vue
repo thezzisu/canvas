@@ -279,12 +279,12 @@ const size = computed(() => {
       >
         <template v-for="key in textShortcuts" :key="key" #[key]
           ><TextPreviewActions
-            :only="key"
-            :filename="data.asset.filename"
             v-model:rendered="rendered"
             v-model:wrap="wrap"
             v-model:formatted="formatted"
             v-model:highlighted="highlighted"
+            :only="key"
+            :filename="data.asset.filename"
             :source-preview="data.asset.sourcePreview"
             :preview-busy="previewBusy"
             @preview="previewSite"
@@ -341,8 +341,8 @@ const size = computed(() => {
       </div>
       <ImagePreview
         v-else-if="preview === 'image' && url && !imageFailed"
-        :key="data.assetId"
         :id="data.assetId"
+        :key="data.assetId"
         :src="url"
         :alt="data.asset.filename"
         :read-only="mobilePreview"
@@ -371,12 +371,12 @@ const size = computed(() => {
         </div>
         <TextPreview
           v-else
+          v-model:formatted="formatted"
+          v-model:highlighted="highlighted"
           :text="text"
           :filename="data.asset.filename"
           :rendered="rendered"
           :wrap="wrap"
-          v-model:formatted="formatted"
-          v-model:highlighted="highlighted"
           :reading="reading"
           :read-only="mobilePreview"
           @reading="remember"

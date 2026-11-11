@@ -67,7 +67,7 @@ watch(
   },
   { immediate: true },
 )
-const agents = computed(() => {
+const listed = computed(() => {
   if (!open.value) return currentAgents.value
   const current = new Map(currentAgents.value.map((agent) => [agent.key, agent]))
   return openedKeys.value.flatMap((key) => current.get(key) || [])
@@ -206,10 +206,10 @@ const content = computed(() => ({
         <div :id="panelId" ref="panel" class="canvas-agents-panel p-1 outline-none" tabindex="-1">
           <div class="flex items-baseline justify-between px-2 py-1.5 text-sm">
             <span>{{ t('canvasUi.agents') }}</span
-            ><span class="text-xs text-muted tabular-nums">{{ n(agents.length) }}</span>
+            ><span class="text-xs text-muted tabular-nums">{{ n(listed.length) }}</span>
           </div>
           <UButton
-            v-for="agent in agents"
+            v-for="agent in listed"
             :key="agent.key"
             color="neutral"
             variant="ghost"

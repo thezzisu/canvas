@@ -50,17 +50,17 @@ async function click(
 }
 test('notification click focuses the matching saved instance without switching another client', async () => {
   const focused: string[] = [],
-    messages: any[] = []
+    messages: Array<{ type: string; windowId: string }> = []
   const client = (instance: string) => ({
-    url: `https://canvas.example/#instance=${instance}&canvas=overview`,
+    url: `https://canvas.example/#/i/${instance}/overview`,
     focus: async () => {
       focused.push(instance)
     },
-    postMessage: (value: unknown) => {
+    postMessage: (value: (typeof messages)[number]) => {
       messages.push(value)
     },
   })
-  const result = await click('https://canvas.example/#instance=b&canvas=overview&view=paged', [
+  const result = await click('https://canvas.example/#/i/b/overview?view=paged', [
     client('a'),
     client('b'),
   ])
@@ -72,7 +72,7 @@ test('notification click focuses the matching saved instance without switching a
   assert.deepEqual(result.opened, [])
 })
 test('a closed matching view opens its safe frontend URL; external destinations are rejected', async () => {
-  const url = 'https://canvas.example/#instance=b&canvas=overview'
+  const url = 'https://canvas.example/#/i/b/overview'
   assert.deepEqual((await click(url, [])).opened, [url])
   assert.deepEqual(await click('https://elsewhere.example/', []), { opened: [], closed: false })
 })
