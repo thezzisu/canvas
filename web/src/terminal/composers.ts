@@ -5,6 +5,7 @@ import { pendingWrites } from '../lib/pending-writes'
 import type { NoteInsertion, NoteOwner } from '../notes/note-uploads'
 import type { ComposerView } from '../api/types'
 import { createAutosave } from '../lib/autosave'
+import { notify } from '../lib/notify'
 export { composerHasContent, sentFiles } from './composer-content'
 
 export interface ComposerTarget {
@@ -45,12 +46,9 @@ export function discardComposerDraft(target: ComposerTarget) {
   drafts.delete(current)
   pendingWrites.discard(composerOwner(target).key)
 }
-function reportSaveFailure(error: unknown) {
-  window.dispatchEvent(new CustomEvent('canvas:error', { detail: error }))
-}
 /** Store the draft without waiting; failures stay visible on the composer until a retry stores it. */
 export function saveComposer(target: ComposerTarget, keepalive = false) {
-  void flushComposer(target, keepalive).catch(reportSaveFailure)
+  void flushComposer(target, keepalive).catch(notify.error)
 }
 
 export function useComposer(target: () => ComposerTarget) {

@@ -38,6 +38,7 @@ import {
   NOTE_CLIPBOARD_TYPE,
 } from './note-clipboard'
 import { beginCopyFeedback } from '../lib/copy-feedback'
+import { notify } from '../lib/notify'
 import type { FileAsset } from '../api/types'
 import NoteAttachment from './NoteAttachment.vue'
 import NoteUploadPlaceholder from './NoteUploadPlaceholder.vue'
@@ -229,7 +230,7 @@ function compositionEnded() {
   return false
 }
 function fail(key: string) {
-  window.dispatchEvent(new CustomEvent('canvas:error', { detail: new Error(t(key)) }))
+  notify.error(t(key))
 }
 function editor() {
   return input.value?.editor

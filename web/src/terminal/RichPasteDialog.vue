@@ -84,7 +84,6 @@ const content = {
     :title="t('terminal.richPaste.title')"
     :description="undefined"
     :content="content"
-    :close="{ 'aria-label': t('common.close') }"
     :ui="{ content: 'rich-paste-modal', body: 'rich-paste-body', footer: 'justify-end gap-2' }"
     @update:open="close"
   >

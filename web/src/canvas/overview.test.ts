@@ -52,12 +52,12 @@ test('overview status order stays within each space and retains native order for
   const resources = fixture(),
     original = structuredClone(resources)
   assert.deepEqual(
-    overviewResources(resources, overviewStatuses, 'native')[0]!.spaces[0]!.windows.map(
+    overviewResources(resources, { statuses: overviewStatuses }, 'native')[0]!.spaces[0]!.windows.map(
       (window) => window.id,
     ),
     resources[0]!.spaces[0]!.windows.map((window) => window.id),
   )
-  const sorted = overviewResources(resources, overviewStatuses, 'status')
+  const sorted = overviewResources(resources, { statuses: overviewStatuses }, 'status')
   assert.deepEqual(
     sorted[0]!.spaces.map((space) => space.id),
     ['first', 'second'],
@@ -80,7 +80,7 @@ test('overview filtering uses window aggregates, removes empty groups and suppor
     { id: 'blocked-pane', name: 'blocked', status: 'attention', active: true },
   ]
   resources[0]!.spaces[0]!.windows[0]!.status = 'attention'
-  const filtered = overviewResources(resources, ['done', 'unknown'], 'native')
+  const filtered = overviewResources(resources, { statuses: ['done', 'unknown'] }, 'native')
   assert.deepEqual(
     filtered.map((source) => source.id),
     ['a'],
@@ -93,11 +93,11 @@ test('overview filtering uses window aggregates, removes empty groups and suppor
     filtered[0]!.spaces[0]!.windows.map((window) => window.id),
     ['done-1', 'done-2', 'unknown'],
   )
-  assert.deepEqual(overviewResources(resources, [], 'status'), [])
+  assert.deepEqual(overviewResources(resources, { statuses: [] }, 'status'), [])
 })
 
 test('focus preset keeps attention, completed and working windows', () => {
-  const visible = overviewResources(fixture(), overviewFocusStatuses, 'native')
+  const visible = overviewResources(fixture(), { statuses: overviewFocusStatuses }, 'native')
   assert.deepEqual(
     visible.flatMap((source) =>
       source.spaces.flatMap((space) => space.windows.map((window) => window.id)),
@@ -109,9 +109,9 @@ test('focus preset keeps attention, completed and working windows', () => {
 test('the interacting native window remains visible after done is acknowledged as idle until interaction ends', () => {
   const resources = fixture(),
     interaction = { sourceId: 'a', windowId: 'done-1' }
-  const before = overviewResources(resources, ['done'], 'native', interaction)
+  const before = overviewResources(resources, { statuses: ['done'] }, 'native', interaction)
   resources[0]!.spaces[0]!.windows.find((window) => window.id === 'done-1')!.status = 'idle'
-  const during = overviewResources(resources, ['done'], 'native', interaction)
+  const during = overviewResources(resources, { statuses: ['done'] }, 'native', interaction)
   assert.deepEqual(
     during.map((source) => source.spaces.map((space) => space.windows.map((window) => window.id))),
     before.map((source) => source.spaces.map((space) => space.windows.map((window) => window.id))),
@@ -121,7 +121,7 @@ test('the interacting native window remains visible after done is acknowledged a
     'idle',
   )
   assert.equal(
-    overviewResources(resources, ['done'], 'native')[0]!.spaces[0]!.windows.some(
+    overviewResources(resources, { statuses: ['done'] }, 'native')[0]!.spaces[0]!.windows.some(
       (window) => window.id === 'done-1',
     ),
     false,
@@ -133,7 +133,7 @@ test('interaction exemption matches both source and native window, preserving gr
     selected = ['done'] as const
   resources[1]!.spaces[0]!.windows.push(window('working-1', 'working'))
   const original = structuredClone(resources)
-  const visible = overviewResources(resources, selected, 'status', {
+  const visible = overviewResources(resources, { statuses: selected }, 'status', {
     sourceId: 'a',
     windowId: 'working-1',
   })
@@ -146,7 +146,7 @@ test('interaction exemption matches both source and native window, preserving gr
     ['done-1', 'done-2', 'working-1'],
   )
   assert.deepEqual(
-    overviewResources(resources, [], 'native', { sourceId: 'b', windowId: 'working-1' }).map(
+    overviewResources(resources, { statuses: [] }, 'native', { sourceId: 'b', windowId: 'working-1' }).map(
       (source) => [
         source.id,
         source.spaces.map((space) => space.windows.map((window) => window.id)),
@@ -155,7 +155,7 @@ test('interaction exemption matches both source and native window, preserving gr
     [['b', [['working-1']]]],
   )
   assert.deepEqual(
-    overviewResources(resources, [], 'native', { sourceId: 'a', windowId: 'missing' }),
+    overviewResources(resources, { statuses: [] }, 'native', { sourceId: 'a', windowId: 'missing' }),
     [],
   )
   assert.deepEqual(resources, original)

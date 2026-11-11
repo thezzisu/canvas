@@ -1,13 +1,12 @@
 import { ref } from 'vue'
-import { useToast } from '@nuxt/ui/composables/useToast'
 import { api, apiContext, apiUrl, isCurrentApi } from '../api/api'
 import { t } from '../app/i18n'
+import { notify } from '../lib/notify'
 import { requestTrustedPreview } from './trusted-preview'
 
 /** Open synchronously so an authenticated request cannot consume the browser's user gesture. */
 export function useSourcePreview() {
-  const busy = ref(false),
-    toast = useToast()
+  const busy = ref(false)
   function open(path: string, filename: string) {
     if (/\.html?$/iu.test(filename))
       requestTrustedPreview(filename, () => {
@@ -19,7 +18,7 @@ export function useSourcePreview() {
     if (busy.value) return
     const tab = window.open('about:blank', '_blank')
     if (!tab) {
-      toast.add({ title: t('panels.preview.popupBlocked'), color: 'warning' })
+      notify.warning(t('panels.preview.popupBlocked'))
       return
     }
     tab.opener = null
@@ -51,8 +50,7 @@ export function useSourcePreview() {
       if (!tab.closed) tab.location.replace(url.href)
     } catch {
       tab.close()
-      if (isCurrentApi(context))
-        toast.add({ title: t('panels.preview.siteFailed'), color: 'error' })
+      if (isCurrentApi(context)) notify.error(t('panels.preview.siteFailed'))
     } finally {
       busy.value = false
     }

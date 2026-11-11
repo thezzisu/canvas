@@ -1,6 +1,8 @@
 import { createApp } from 'vue'
+import { createPinia } from 'pinia'
 import ui from '@nuxt/ui/vue-plugin'
 import App from './App.vue'
+import { followInstance, router } from './router'
 import { initializeViewportPolicy } from './developer-mode'
 import { initializePwa } from './pwa'
 import { i18n, watchDocumentLocale } from './i18n'
@@ -23,4 +25,5 @@ initializeUiScale()
 initializePwa()
 initializeStatusPulse()
 watchDocumentLocale()
-createApp(App).use(i18n).use(ui).mount('#app')
+const app = createApp(App).use(createPinia()).use(router).use(i18n).use(ui)
+void followInstance().then(() => app.mount('#app'))

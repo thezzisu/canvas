@@ -10,7 +10,7 @@ import {
   pwaFailure,
   applyPwaUpdate,
 } from './pwa'
-import { toastAction } from '../lib/toast'
+import { toastAction } from '../lib/notify'
 import { frontendBuild } from './build-info'
 import { buildLabel } from '../../../shared/build-info'
 const { t, locale } = useI18n(),

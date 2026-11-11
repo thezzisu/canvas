@@ -274,7 +274,6 @@ const items = computed<DropdownMenuItem[][]>(() =>
     v-if="open"
     v-model:open="open"
     :title="t(draft.id ? 'instances.edit' : 'instances.add')"
-    :close="{ 'aria-label': t('common.close') }"
     :ui="{ content: 'instance-dialog', body: 'instance-dialog-body' }"
   >
     <template #body>

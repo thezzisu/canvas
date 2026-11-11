@@ -31,8 +31,9 @@ import {
 } from './notification-settings'
 import { statusColor } from '../lib/status'
 import { windowLabel } from '../workspace/window-title'
-import { toastAction } from '../lib/toast'
-import { formatCanvasLocation } from '../canvas/canvas-location'
+import { toastAction } from '../lib/notify'
+import { canvasHref } from '../canvas/canvas-location'
+import { useWorkspaceStore } from '../stores/workspace'
 import canvasIcon from '../../public/icons/canvas.svg?raw'
 
 const props = defineProps<{
@@ -216,7 +217,7 @@ function show(event: CanvasNotification, focus?: PaneFocus) {
     })
   if (!important) return
   const url = new URL(location.href)
-  url.hash = formatCanvasLocation({
+  url.hash = canvasHref({
     instance: props.instanceId,
     canvas: 'overview',
     view: 'paged',
@@ -397,7 +398,21 @@ onBeforeUnmount(() => {
   void updateNotificationBadge(owner, 0, false, true)
   releaseOwner()
 })
-defineExpose({ receive, acceptsToast })
+useWorkspaceStore().onNotification(receive)
+// Nuxt UI publishes a queued toast a tick later; one whose notice was read meanwhile is dropped.
+watch(
+  toast.toasts,
+  (items) => {
+    const current = items.filter(
+      (item) =>
+        item.type !== 'foreground' ||
+        !String(item.id).startsWith(toastPrefix) ||
+        acceptsToast(item.id),
+    )
+    if (current.length !== items.length) toast.toasts.value = current
+  },
+  { flush: 'sync' },
+)
 </script>
 
 <template><span hidden /></template>

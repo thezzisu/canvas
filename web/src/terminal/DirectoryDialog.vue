@@ -17,7 +17,6 @@ function openChanged(open: boolean) {
     :key="directoryRequest.id"
     :open="true"
     :title="t('panels.directory.title')"
-    :close="{ 'aria-label': t('common.close') }"
     :ui="{
       content: 'directory-modal max-w-md',
       description: 'whitespace-pre-wrap break-all',

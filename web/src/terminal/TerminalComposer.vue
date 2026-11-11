@@ -18,6 +18,7 @@ import {
 } from './composers'
 import { readStoredHeight, storeHeight, composerHeightBounds } from './composer-height'
 import { useCardContentFocus } from '../canvas/card-content-focus'
+import { notify } from '../lib/notify'
 
 const props = defineProps<{
   target: ComposerTarget
@@ -66,7 +67,7 @@ async function send() {
     const view = await flushComposer(props.target)
     if (view?.id) emit('send', view.id, view.version, sentFiles(view.content, view.attachments))
   } catch (error) {
-    window.dispatchEvent(new CustomEvent('canvas:error', { detail: error }))
+    notify.error(error)
   } finally {
     sending.value = false
     release?.()

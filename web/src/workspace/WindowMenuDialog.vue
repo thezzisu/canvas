@@ -2,15 +2,16 @@
 export interface WindowMenuItem {
   label: string
   icon: string
+  /** What the dialog closes with when this item is chosen. */
+  value: string
   color?: 'error'
   disabled?: boolean
-  keepFocus?: boolean
-  onSelect: () => void
+  /** Takes focus as the dialog closes, instead of returning it to the menu's trigger. */
+  focus?: () => void
 }
 </script>
 
 <script setup lang="ts">
-import { useI18n } from 'vue-i18n'
 import UModal from '../components/CanvasModal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import USeparator from '@nuxt/ui/components/Separator.vue'
@@ -18,52 +19,49 @@ import WindowTitle from './WindowTitle.vue'
 import type { WindowResource } from '../api/types'
 
 // Window actions as one list of stock buttons; groups are separated like menu groups.
-defineProps<{
-  window: Pick<WindowResource, 'name' | 'panes'>
-  items: WindowMenuItem[][]
-  busy: boolean
-}>()
-const emit = defineEmits<{ close: []; closeAutoFocus: [event: Event] }>()
-const { t } = useI18n()
+defineProps<{ window: Pick<WindowResource, 'name' | 'panes'>; items: WindowMenuItem[][] }>()
+const emit = defineEmits<{ close: [value?: string] }>()
+let chosen: WindowMenuItem | undefined
+function choose(item: WindowMenuItem) {
+  chosen = item
+  emit('close', item.value)
+}
+function handFocusOn(event: Event) {
+  if (!chosen?.focus) return
+  event.preventDefault()
+  chosen.focus()
+}
 </script>
 
 <template>
   <UModal
-    :open="true"
-    :dismissible="!busy"
-    :close="{ 'aria-label': t('app.closeDialog'), disabled: busy }"
     :ui="{
       content: 'window-menu [--dialog-width:24rem]',
       wrapper: 'min-w-0 pe-9',
       body: 'flex flex-col gap-0.5 p-2 sm:p-3',
     }"
-    :content="{ onCloseAutoFocus: (event: Event) => emit('closeAutoFocus', event) }"
-    @update:open="
-      (value) => {
-        if (!value) emit('close')
-      }
-    "
+    :content="{ onCloseAutoFocus: handFocusOn }"
   >
     <template #title><WindowTitle :window="window" /></template>
     <template #body>
       <template v-for="(group, index) in items" :key="index">
         <USeparator v-if="index" class="my-1" />
-        <!-- keepFocus: the keyboard action hands focus to the terminal itself. -->
+        <!-- An item that takes focus keeps it away from the button being pressed. -->
         <UButton
           v-for="item in group"
-          :key="item.label"
-          type="button"
+          :key="item.value"
           :color="item.color || 'neutral'"
           variant="ghost"
           size="lg"
           block
           :icon="item.icon"
           class="justify-start"
-          :disabled="busy || item.disabled"
-          @pointerdown="item.keepFocus && $event.preventDefault()"
-          @click="item.onSelect()"
-          >{{ item.label }}</UButton
+          :disabled="item.disabled"
+          @pointerdown="item.focus && $event.preventDefault()"
+          @click="choose(item)"
         >
+          {{ item.label }}
+        </UButton>
       </template>
     </template>
   </UModal>

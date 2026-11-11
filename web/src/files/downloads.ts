@@ -1,5 +1,6 @@
 import { computed, shallowRef } from 'vue'
 import { apiFetch, apiUrl } from '../api/api'
+import { notify } from '../lib/notify'
 import { downloadMedia } from './media'
 import { filePreview, type FilePreview } from './file-preview'
 
@@ -142,6 +143,5 @@ export function clearDownloads() {
 }
 
 export function reportDownloadError(reason: unknown) {
-  if (reason instanceof Error && reason.name === 'AbortError') return
-  window.dispatchEvent(new CustomEvent('canvas:error', { detail: reason }))
+  notify.error(reason)
 }

@@ -22,7 +22,6 @@ function update(value: TerminalOverrides) {
     :open="true"
     :title="t(defaultsMode ? 'terminal.settings.defaults' : 'terminal.settings.title')"
     :description="defaultsMode ? t('settings.thisBrowser') : undefined"
-    :close="{ 'aria-label': t('common.close') }"
     :ui="{ content: 'terminal-settings-dialog [--dialog-width:28rem]' }"
     @update:open="
       (value) => {

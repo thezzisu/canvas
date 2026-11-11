@@ -222,7 +222,6 @@ onBeforeUnmount(() => {
     :transition="false"
     :title="t('panels.scan.title')"
     :content="modalContent"
-    :close="{ 'aria-label': t('common.close') }"
     :ui="{
       content: 'content-scan-modal',
       header: 'content-scan-header',

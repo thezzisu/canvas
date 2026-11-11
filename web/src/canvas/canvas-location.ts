@@ -6,31 +6,28 @@ export interface CanvasCamera {
   y: number
   zoom: number
 }
+/** Overview lists every native window; the working set is a ring of the recently used ones. */
+export const systemCanvases = ['overview', 'working-set'] as const
+export type SystemCanvas = (typeof systemCanvases)[number]
 export interface CanvasLocation {
   instance: string
   canvas: string
   camera?: CanvasCamera
+  /** Overview's window-by-window mode; the working set is always shown this way. */
   view?: 'paged'
   page?: string
-  feature?: never
 }
-export const features = ['working-set'] as const
-export type Feature = (typeof features)[number]
-/** A feature page replaces the canvas; it has no canvas or camera of its own. */
-export interface FeatureLocation {
-  instance: string
-  feature: Feature
-  canvas?: never
-  camera?: never
-  view?: never
-  page?: never
-}
-export type WorkspaceLocation = CanvasLocation | FeatureLocation
 export interface CameraFrame {
   width: number
   height: number
 }
-const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const uuidPattern = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+const uuid = new RegExp(`^${uuidPattern}$`, 'i')
+/** Route parameter patterns: a saved instance, and a system or custom canvas. */
+export const instancePattern = uuidPattern
+export const canvasPattern = `${systemCanvases.join('|')}|${uuidPattern}`
+export const isSystemCanvas = (canvas: string): canvas is SystemCanvas =>
+  (systemCanvases as readonly string[]).includes(canvas)
 const coordinate = (value: number) => Number.isFinite(value) && Math.abs(value) <= 1e8
 const validFrame = (frame: CameraFrame) =>
   Number.isFinite(frame.width) &&
@@ -43,49 +40,56 @@ const validCamera = (camera: CanvasCamera) =>
   Number.isFinite(camera.zoom) &&
   camera.zoom >= 0.08 &&
   camera.zoom <= 2
+const pages = (canvas: string, view?: string) =>
+  canvas === 'working-set' || (canvas === 'overview' && view === 'paged')
 
-/** Fragment values identify saved instances; endpoints and credentials never belong here. */
-export function parseCanvasLocation(hash: string): WorkspaceLocation | undefined {
-  if (!hash.startsWith('#') || hash.length > 4096) return
-  const params = new URLSearchParams(hash.slice(1))
-  const instance = params.get('instance') || '',
-    canvas = params.get('canvas') || '',
-    feature = features.find((value) => value === params.get('feature'))
-  if (!uuid.test(instance)) return
-  if (feature) return { instance: instance.toLowerCase(), feature }
-  if (!(canvas === 'overview' || uuid.test(canvas))) return
+/** The view within a canvas, as URL query values. Identity stays in the route's path. */
+export function locationQuery(location: CanvasLocation): Record<string, string> {
+  const query: Record<string, string> = {}
+  if (location.camera && validCamera(location.camera)) {
+    const { x, y, zoom } = location.camera
+    query.center = `${Math.round(x * 100) / 100},${Math.round(y * 100) / 100}`
+    query.zoom = String(Math.round(zoom * 10000) / 10000)
+  }
+  if (location.canvas === 'overview' && location.view === 'paged') query.view = 'paged'
+  if (location.page && pages(location.canvas, location.view)) query.page = location.page
+  return query
+}
+
+/** The app's hash route for a location; the router's canvas route parses the same shape. */
+export function canvasHref(location: CanvasLocation): string {
+  const query = new URLSearchParams(locationQuery(location)).toString()
+  return `#/i/${location.instance}/${location.canvas}${query ? `?${query}` : ''}`
+}
+
+/** Query values come from a shared or edited URL: anything malformed is ignored. */
+export function parseLocation(
+  instance: string,
+  canvas: string,
+  query: Readonly<Record<string, unknown>> = {},
+): CanvasLocation | undefined {
+  if (!uuid.test(instance) || !(isSystemCanvas(canvas) || uuid.test(canvas))) return
   const location: CanvasLocation = {
     instance: instance.toLowerCase(),
     canvas: canvas.toLowerCase(),
   }
-  const center = params.get('center')?.split(','),
-    zoom = params.get('zoom')
-  if (center?.length === 2 && center.every((value) => value.trim()) && zoom?.trim()) {
+  const text = (key: string) => (typeof query[key] === 'string' ? (query[key] as string) : '')
+  const center = text('center').split(','),
+    zoom = text('zoom')
+  if (center.length === 2 && center.every((value) => value.trim()) && zoom.trim()) {
     const camera = { x: Number(center[0]), y: Number(center[1]), zoom: Number(zoom) }
     if (validCamera(camera)) location.camera = camera
   }
-  if (canvas === 'overview' && params.get('view') === 'paged') {
-    location.view = 'paged'
-    const page = params.get('page')
-    if (page && page.length <= 600 && !/[\x00-\x1f\x7f]/u.test(page)) location.page = page
-  }
+  if (location.canvas === 'overview' && text('view') === 'paged') location.view = 'paged'
+  const page = text('page')
+  if (
+    page &&
+    page.length <= 600 &&
+    !/[\x00-\x1f\x7f]/u.test(page) &&
+    pages(location.canvas, location.view)
+  )
+    location.page = page
   return location
-}
-
-export function formatCanvasLocation(location: WorkspaceLocation): string {
-  if (location.feature)
-    return `#${new URLSearchParams({ instance: location.instance, feature: location.feature })}`
-  const params = new URLSearchParams({ instance: location.instance, canvas: location.canvas })
-  if (location.camera && validCamera(location.camera)) {
-    const { x, y, zoom } = location.camera
-    params.set('center', `${Math.round(x * 100) / 100},${Math.round(y * 100) / 100}`)
-    params.set('zoom', String(Math.round(zoom * 10000) / 10000))
-  }
-  if (location.canvas === 'overview' && location.view === 'paged') {
-    params.set('view', 'paged')
-    if (location.page) params.set('page', location.page)
-  }
-  return `#${params}`
 }
 
 /** Store world coordinates, so opening the URL on a different screen keeps its center. */
@@ -119,15 +123,14 @@ export function viewportFromCamera(
   }
 }
 
-/** Features name no canvas; a missing canvas falls back to Overview. */
+/** A removed canvas falls back to Overview. */
 export function resolveCanvasLocation(
-  location: WorkspaceLocation,
+  location: CanvasLocation,
   canvasIds: readonly string[],
 ): CanvasLocation {
-  return location.feature ||
-    (location.canvas !== 'overview' && !canvasIds.includes(location.canvas))
-    ? { instance: location.instance, canvas: 'overview' }
-    : location
+  return isSystemCanvas(location.canvas) || canvasIds.includes(location.canvas)
+    ? location
+    : { instance: location.instance, canvas: 'overview' }
 }
 
 /** A filtered or removed page falls back near its saved center without changing filters. */
@@ -143,111 +146,59 @@ export function restoreCanvasPage(
   return retainPage(windows.length ? windows : pages, '', undefined, viewport, frame)
 }
 
+type LocationStore = Pick<Storage, 'getItem' | 'setItem'>
 const storageKey = (instance: string, canvas: string) => `canvas:view:${instance}:${canvas}`
 const lastCanvasKey = (instance: string) => `canvas:last-canvas:${instance}`
-export function rememberCanvasLocation(
-  storage: Pick<Storage, 'setItem'>,
-  location: WorkspaceLocation,
-) {
-  if (location.feature) return
+function recall(storage: Pick<Storage, 'getItem'>, key: string, instance: string, canvas: string) {
   try {
-    const hash = formatCanvasLocation(location),
+    const saved: unknown = JSON.parse(storage.getItem(key) || 'null')
+    if (saved && typeof saved === 'object')
+      return parseLocation(instance, canvas, saved as Record<string, unknown>)
+  } catch {
+    /* A neutral view remains usable without browser storage. */
+  }
+}
+
+/** Each canvas keeps its last view; its free camera survives a visit to the paged mode. */
+export function rememberCanvasLocation(
+  storage: Pick<LocationStore, 'setItem'>,
+  location: CanvasLocation,
+) {
+  try {
+    const view = JSON.stringify(locationQuery(location)),
       key = storageKey(location.instance, location.canvas)
-    storage.setItem(key, hash)
-    if (!location.view) storage.setItem(`${key}:free`, hash)
+    storage.setItem(key, view)
+    if (!pages(location.canvas, location.view)) storage.setItem(`${key}:free`, view)
     storage.setItem(lastCanvasKey(location.instance), location.canvas)
   } catch {
     /* Navigation works when browser storage is full or unavailable. */
   }
 }
-export function recallLastCanvasLocation(
-  storage: Pick<Storage, 'getItem'>,
+export function recallCanvasLocation(
+  storage: Pick<LocationStore, 'getItem'>,
   instance: string,
+  canvas: string,
 ): CanvasLocation | undefined {
+  return recall(storage, storageKey(instance, canvas), instance, canvas)
+}
+export function recallFreeCanvasLocation(
+  storage: Pick<LocationStore, 'getItem'>,
+  instance: string,
+  canvas: string,
+): CanvasLocation | undefined {
+  const location = recall(storage, `${storageKey(instance, canvas)}:free`, instance, canvas)
+  return location?.view ? undefined : location
+}
+/** Where this browser last was on an instance; Overview when it has never been there. */
+export function recallLastCanvasLocation(
+  storage: Pick<LocationStore, 'getItem'>,
+  instance: string,
+): CanvasLocation {
+  let canvas = 'overview'
   try {
-    const canvas = storage.getItem(lastCanvasKey(instance))
-    if (canvas && (canvas === 'overview' || uuid.test(canvas)))
-      return recallCanvasLocation(storage, instance, canvas)
+    canvas = storage.getItem(lastCanvasKey(instance)) || canvas
   } catch {
     /* A neutral startup remains usable without browser storage. */
   }
-}
-export function recallCanvasLocation(
-  storage: Pick<Storage, 'getItem'>,
-  instance: string,
-  canvas: string,
-): CanvasLocation | undefined {
-  try {
-    const location = parseCanvasLocation(storage.getItem(storageKey(instance, canvas)) || '')
-    return location &&
-      !location.feature &&
-      location.instance === instance &&
-      location.canvas === canvas
-      ? location
-      : undefined
-  } catch {
-    return undefined
-  }
-}
-export function recallFreeCanvasLocation(
-  storage: Pick<Storage, 'getItem'>,
-  instance: string,
-  canvas: string,
-): CanvasLocation | undefined {
-  try {
-    const location = parseCanvasLocation(
-      storage.getItem(`${storageKey(instance, canvas)}:free`) || '',
-    )
-    return location &&
-      !location.feature &&
-      location.instance === instance &&
-      location.canvas === canvas &&
-      !location.view
-      ? location
-      : undefined
-  } catch {
-    return undefined
-  }
-}
-
-export interface CanvasHistoryBrowser {
-  location: Pick<Location, 'hash'>
-  history: Pick<History, 'state' | 'pushState' | 'replaceState'>
-  addEventListener(type: 'popstate' | 'hashchange', listener: () => void): void
-  removeEventListener(type: 'popstate' | 'hashchange', listener: () => void): void
-}
-/** A camera move replaces its entry; deliberate navigation creates one history step. */
-export function bindCanvasHistory(
-  browser: CanvasHistoryBrowser,
-  changed: (location: WorkspaceLocation | undefined) => void,
-) {
-  let observed: string | undefined
-  const read = () => {
-    const hash = browser.location.hash
-    if (hash === observed) return
-    observed = hash
-    changed(parseCanvasLocation(hash))
-  }
-  browser.addEventListener('popstate', read)
-  browser.addEventListener('hashchange', read)
-  return {
-    read,
-    write(location: WorkspaceLocation, mode: 'push' | 'replace') {
-      const hash = formatCanvasLocation(location)
-      if (hash === browser.location.hash) {
-        observed = hash
-        return
-      }
-      browser.history[mode === 'push' ? 'pushState' : 'replaceState'](
-        browser.history.state,
-        '',
-        hash,
-      )
-      observed = hash
-    },
-    dispose() {
-      browser.removeEventListener('popstate', read)
-      browser.removeEventListener('hashchange', read)
-    },
-  }
+  return recallCanvasLocation(storage, instance, canvas) || { instance, canvas: 'overview' }
 }

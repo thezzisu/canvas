@@ -6,7 +6,7 @@ import UContextMenu, { type ContextMenuItem } from '@nuxt/ui/components/ContextM
 import UButton from '@nuxt/ui/components/Button.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
 import UFormField from '@nuxt/ui/components/FormField.vue'
-import { useToast } from '@nuxt/ui/composables/useToast'
+import { notify } from '../lib/notify'
 import UModal from '../components/CanvasModal.vue'
 import { usePointerDismiss } from '../lib/pointer-dismiss'
 import { apiContext, isCurrentApi } from '../api/api'
@@ -20,7 +20,6 @@ const props = defineProps<{
   action(pane: PaneContext, command: PaneAction): Promise<void>
 }>()
 const { t } = useI18n(),
-  toast = useToast(),
   form = useId()
 const open = ref(false),
   loading = ref(false),
@@ -106,7 +105,7 @@ async function perform(target: PaneContext, command: PaneAction) {
     if (!current()) return
     const message = reason instanceof Error ? reason.message : t('terminal.paneMenu.failed')
     if (dialog.value) error.value = message
-    else toast.add({ title: t('terminal.paneMenu.failed'), description: message, color: 'error' })
+    else notify.error(message)
   } finally {
     if (mounted) busy.value = false
   }
@@ -190,7 +189,7 @@ const content = computed(() => ({
     :open="true"
     :title="t(dialog?.kind === 'rename' ? 'terminal.paneMenu.rename' : 'terminal.paneMenu.close')"
     :dismissible="!busy"
-    :close="{ 'aria-label': t('common.close'), disabled: busy }"
+    :close="{ disabled: busy }"
     :ui="{ content: 'pane-dialog' }"
     @update:open="
       (value) => {

@@ -29,7 +29,7 @@ import {
   ProseTr,
   ProseUl,
 } from '@nuxt/ui/components/prose'
-import { useToast } from '@nuxt/ui/composables/useToast'
+import { notify } from '../lib/notify'
 import { processCodePreview, type CodePreviewResult } from './code-preview'
 import { isMarkdownFile, parseFileMarkdown, type MarkdownResources } from '../notes/markdown'
 import HtmlPreview from './HtmlPreview.vue'
@@ -59,7 +59,6 @@ const { t } = useI18n()
 const markdown = computed(() => isMarkdownFile(props.filename))
 const renderHtml = computed(() => props.rendered && /\.html?$/iu.test(props.filename))
 const renderMarkdown = computed(() => props.rendered && markdown.value)
-const toast = useToast()
 const code = shallowRef<CodePreviewResult>()
 const processing = ref(false)
 watch(
@@ -96,22 +95,16 @@ watch(
       if (result.formatError) emit('update:formatted', false)
       if (result.highlightError) emit('update:highlighted', false)
       if (result.formatError || result.highlightError)
-        toast.add({
-          title: t(
-            result.formatError ? 'panels.preview.formatFailed' : 'panels.preview.highlightFailed',
-          ),
-          color: 'warning',
-        })
+        notify.warning(
+          t(result.formatError ? 'panels.preview.formatFailed' : 'panels.preview.highlightFailed'),
+        )
     } catch {
       // A transient worker or chunk failure shows plain text without changing preferences.
       if (controller.signal.aborted) return
       code.value = undefined
-      toast.add({
-        title: t(
-          props.formatted ? 'panels.preview.formatFailed' : 'panels.preview.highlightFailed',
-        ),
-        color: 'warning',
-      })
+      notify.warning(
+        t(props.formatted ? 'panels.preview.formatFailed' : 'panels.preview.highlightFailed'),
+      )
     } finally {
       if (!controller.signal.aborted) processing.value = false
     }

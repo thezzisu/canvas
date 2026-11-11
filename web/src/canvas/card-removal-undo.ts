@@ -15,7 +15,7 @@ import { filePreferenceKeys } from '../files/file-view'
 import { noteScrollKey } from '../notes/note-scroll'
 import { cardZoomKey } from './card-zoom'
 import type { CanvasNode } from '../api/types'
-import { toastAction } from '../lib/toast'
+import { toastAction } from '../lib/notify'
 
 interface Removal {
   id: string

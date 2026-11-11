@@ -117,7 +117,6 @@ const field = { root: 'items-center gap-4', labelWrapper: 'justify-start', descr
           label: t('common.retry'),
           color: 'error',
           variant: 'link',
-          'aria-label': t('settings.retryFont'),
           onClick: editor.retryPreview,
         },
       ]"

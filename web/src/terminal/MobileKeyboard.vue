@@ -860,7 +860,6 @@ onBeforeUnmount(() => {
       :open="!!sheet"
       :transition="false"
       :title="t('terminal.keyboard.selectText')"
-      :close="{ 'aria-label': t('common.close') }"
       :content="{ onCloseAutoFocus: (event) => event.preventDefault() }"
       :ui="{
         content: 'mobile-text-sheet',

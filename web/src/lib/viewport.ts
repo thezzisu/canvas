@@ -1,4 +1,5 @@
-import { computed, onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
+import { computed, ref, type Ref } from 'vue'
+import { useEventListener, useResizeObserver } from '@vueuse/core'
 import type { CanvasViewport } from './mobile-layout'
 import {
   mobileKeyboardInset,
@@ -66,24 +67,10 @@ export function useMobileViewport(mobile: Ref<boolean>) {
     // CSS keyboard insets can change without a window or VisualViewport event.
     refreshMobileKeyboardViewport()
   }
-  let observer: ResizeObserver | undefined
-  onMounted(() => {
-    observer = new ResizeObserver(update)
-    observer.observe(viewportProbe())
-    window.addEventListener('resize', update)
-    window.addEventListener('orientationchange', update)
-    window.visualViewport?.addEventListener('resize', update)
-    window.visualViewport?.addEventListener('scroll', update)
-    document.addEventListener('fullscreenchange', update)
-  })
-  onBeforeUnmount(() => {
-    observer?.disconnect()
-    window.removeEventListener('resize', update)
-    window.removeEventListener('orientationchange', update)
-    window.visualViewport?.removeEventListener('resize', update)
-    window.visualViewport?.removeEventListener('scroll', update)
-    document.removeEventListener('fullscreenchange', update)
-  })
+  useResizeObserver(viewportProbe(), update)
+  useEventListener(window, ['resize', 'orientationchange'], update)
+  useEventListener(window.visualViewport, ['resize', 'scroll'], update)
+  useEventListener(document, 'fullscreenchange', update)
   const style = computed(() => {
     if (!mobile.value) return {}
     const frame = viewport.value

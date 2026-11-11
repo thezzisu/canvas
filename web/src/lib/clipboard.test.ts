@@ -2,7 +2,12 @@ import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { copyText, TerminalClipboard } from './clipboard'
 import type { Terminal } from '@xterm/xterm'
-import { copyFeedback } from './copy-feedback'
+import { installNotices } from './notify'
+
+// Copy feedback is a notice; the last one shown is what the user sees.
+const shown: Array<'copied' | 'failed'> = []
+installNotices((notice) => shown.push(notice.color === 'error' ? 'failed' : 'copied'))
+const feedback = () => shown.at(-1)
 
 function clipboardEnvironment(
   t: TestContext,
@@ -39,18 +44,18 @@ function clipboardEnvironment(
 test('legacy HTTP copy reports its completed write', async (t) => {
   clipboardEnvironment(t, undefined, true)
   assert.equal(await copyText('selected terminal text'), true)
-  assert.equal(copyFeedback.value?.kind, 'copied')
+  assert.equal(feedback(), 'copied')
 })
 
 test('secure fallback waits for clipboard completion before reporting success', async (t) => {
   const pending = Promise.withResolvers<void>()
   clipboardEnvironment(t, () => pending.promise)
-  const previous = copyFeedback.value
+  const previous = shown.length
   const copying = copyText('selection')
-  assert.equal(copyFeedback.value, previous)
+  assert.equal(shown.length, previous)
   pending.resolve()
   assert.equal(await copying, true)
-  assert.equal(copyFeedback.value?.kind, 'copied')
+  assert.equal(feedback(), 'copied')
 })
 
 test('a rejected clipboard write reports failure rather than early success', async (t) => {
@@ -58,7 +63,7 @@ test('a rejected clipboard write reports failure rather than early success', asy
     throw new Error('Permission denied')
   })
   assert.equal(await copyText('selection'), false)
-  assert.equal(copyFeedback.value?.kind, 'failed')
+  assert.equal(feedback(), 'failed')
 })
 
 test('an older failed write cannot replace feedback from a newer successful copy', async (t) => {
@@ -66,10 +71,10 @@ test('an older failed write cannot replace feedback from a newer successful copy
   clipboardEnvironment(t, (text) => (text === 'older' ? pending.promise : Promise.resolve()))
   const older = copyText('older')
   assert.equal(await copyText('newer'), true)
-  const latest = copyFeedback.value
+  const latest = shown.length
   pending.reject(new Error('Late rejection'))
   assert.equal(await older, false)
-  assert.equal(copyFeedback.value, latest)
+  assert.equal(shown.length, latest)
 })
 
 test('empty and oversized content never attempt a clipboard write', async (t) => {
@@ -80,7 +85,7 @@ test('empty and oversized content never attempt a clipboard write', async (t) =>
   assert.equal(await copyText(''), false)
   assert.equal(await copyText('a'.repeat(1024 * 1024 + 1)), false)
   assert.equal(writes, 0)
-  assert.equal(copyFeedback.value?.kind, 'failed')
+  assert.equal(feedback(), 'failed')
 })
 
 function terminalClipboard(t: TestContext, controlsInput = true) {

@@ -1,3 +1,4 @@
+import { systemCanvases } from '../canvas/canvas-location'
 const objectPrefixes = [
   'canvas:view:',
   'canvas:overview:',
@@ -76,7 +77,7 @@ export function pruneCanvasLocations(
   storage?: Storage,
 ) {
   const prefix = `canvas:view:${instance}:`,
-    valid = new Set(['overview', ...canvases.map((canvas) => canvas.id)])
+    valid = new Set<string>([...systemCanvases, ...canvases.map((canvas) => canvas.id)])
   removeWhere(
     (key) => key.startsWith(prefix) && !valid.has(key.slice(prefix.length).replace(/:free$/, '')),
     storage,

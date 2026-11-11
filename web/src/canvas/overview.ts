@@ -6,21 +6,30 @@ export const overviewStatuses = ['attention', 'done', 'working', 'idle', 'unknow
 export const overviewFocusStatuses = ['attention', 'done', 'working'] as const
 export const overviewPerRowChoices = [0, 1, 2, 3, 4, 6, 8] as const
 export type OverviewOrder = 'native' | 'status'
+/** Every native window, or only those no custom canvas shows yet. */
+export type OverviewScope = 'all' | 'unplaced'
 export type OverviewInteraction = { sourceId: string; windowId: string }
+export interface OverviewFilter {
+  statuses: readonly ProgramStatus[]
+  /** `source/window` keys to leave out, such as windows already placed on a canvas. */
+  excluded?: ReadonlySet<string>
+}
 
-/** Project window aggregates without mutating native order or pane details. */
+/** Project window aggregates without mutating native order or pane details. The window
+ * being interacted with stays listed whatever the filter says. */
 export function overviewResources(
   resources: readonly SourceResource[],
-  statuses: readonly ProgramStatus[],
+  filter: OverviewFilter,
   order: OverviewOrder,
   interacting?: OverviewInteraction,
 ): SourceResource[] {
-  const selected = new Set(statuses)
+  const selected = new Set(filter.statuses)
   return resources.flatMap((source) => {
     const spaces = source.spaces.flatMap((space) => {
       const windows = space.windows.filter(
         (window) =>
-          selected.has(window.status || 'unknown') ||
+          (selected.has(window.status || 'unknown') &&
+            !filter.excluded?.has(`${source.id}/${window.id}`)) ||
           (source.id === interacting?.sourceId && window.id === interacting.windowId),
       )
       if (order === 'status')

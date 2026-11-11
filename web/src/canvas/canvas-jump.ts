@@ -1,5 +1,16 @@
-import type { CanvasAnchor } from './use-canvas-location'
-
+/** The screen position of a window's top-left corner that a canvas jump keeps fixed. */
+export interface CanvasAnchor {
+  sourceId: string
+  windowId: string
+  x: number
+  y: number
+  zoom: number
+}
+/** Explicit targets bypass the saved camera: fit all/one, or retain a window's screen position. */
+export type CanvasTarget =
+  | { fitNodeId: string; anchor?: never; fitAll?: never }
+  | { anchor: CanvasAnchor; fitNodeId?: never; fitAll?: never }
+  | { fitAll: true; anchor?: never; fitNodeId?: never }
 export type CanvasDirection = 'previous' | 'next'
 export interface CanvasEntry {
   id: string

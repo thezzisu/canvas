@@ -133,7 +133,6 @@ onBeforeUnmount(() => {
     v-if="open"
     :open="true"
     :title="t('instances.scanQr')"
-    :close="{ 'aria-label': t('common.close') }"
     :ui="{ content: 'instance-qr-dialog' }"
     @update:open="
       (value) => {

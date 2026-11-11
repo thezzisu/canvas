@@ -210,7 +210,6 @@ defineExpose({ close })
     v-if="open"
     :open="true"
     :title="t('common.settings')"
-    :close="{ 'aria-label': t('settings.close') }"
     :ui="{ content: 'settings-modal [--dialog-width:28rem]', footer: 'justify-between' }"
     @update:open="close"
   >
@@ -475,7 +474,6 @@ defineExpose({ close })
     v-if="open && subdialog === 'font'"
     :open="true"
     :title="t('settings.contentFont')"
-    :close="{ 'aria-label': t('common.close') }"
     :ui="{ content: '[--dialog-width:28rem]' }"
     @update:open="
       (value) => {

@@ -1,7 +1,7 @@
 import { computed, watch } from 'vue'
 import { useLocalStorage } from '@vueuse/core'
 import { normalizeApiBase, parseInstanceLink } from './instance-url'
-import { formatCanvasLocation, parseCanvasLocation } from '../canvas/canvas-location'
+import { canvasHref } from '../canvas/canvas-location'
 import { removeSessionToken } from './instance-session'
 import { instanceConfiguration, type CanvasInstance } from './instance-config'
 import { clearInstancePreferences, pruneInstancePreferences } from '../lib/local-preferences'
@@ -131,10 +131,8 @@ const link = parseInstanceLink(location.href)
 export const invalidInstanceLink = !!link?.invalid
 if (link) {
   if (link.server) {
-    const instance = importInstance(link.server)
-    const previous = parseCanvasLocation(link.url.hash)
-    if (previous && previous.instance !== instance.id)
-      link.url.hash = formatCanvasLocation({ instance: instance.id, canvas: 'overview' })
+    // A shared link names the sender's saved instance; open the imported one instead.
+    link.url.hash = canvasHref({ instance: importInstance(link.server).id, canvas: 'overview' })
   }
   history.replaceState(history.state, '', `${link.url.pathname}${link.url.search}${link.url.hash}`)
 }

@@ -94,7 +94,7 @@ test('live metadata updates every resource consumer while another source holds a
     assert.equal(windowVisualState(current, window, true).status, 'idle')
     assert.equal(window.panes?.[0]?.terminalTitle, 'Live title')
     assert.equal(canvasIndicators([], resources.value).overview?.status, 'idle')
-    assert.deepEqual(overviewResources(resources.value, ['done'], 'native'), [])
+    assert.deepEqual(overviewResources(resources.value, { statuses: ['done'] }, 'native'), [])
   }
   verify()
   finishSlowSource()

@@ -12,7 +12,6 @@ const { t } = useI18n()
     :key="urlRequest.id"
     :open="true"
     :title="t('urls.title')"
-    :close="{ 'aria-label': t('common.close') }"
     :ui="{
       content: 'directory-modal max-w-md',
       description: 'whitespace-pre-wrap break-all',

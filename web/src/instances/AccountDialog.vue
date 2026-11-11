@@ -104,7 +104,7 @@ async function save() {
     :open="true"
     :title="t(sharing ? 'account.shareQr' : 'account.title')"
     :dismissible="!saving"
-    :close="{ 'aria-label': t('common.close'), disabled: saving }"
+    :close="{ disabled: saving }"
     :ui="{ content: 'account-dialog' }"
     @update:open="
       (value) => {

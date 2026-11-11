@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, useId } from 'vue'
+import { computed, reactive, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import UModal from '../components/CanvasModal.vue'
 import UAlert from '@nuxt/ui/components/Alert.vue'
@@ -11,53 +11,130 @@ import UIcon from '@nuxt/ui/components/Icon.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
 import USelect from '@nuxt/ui/components/Select.vue'
 import UTabs from '@nuxt/ui/components/Tabs.vue'
+import { api, apiContext, isCurrentApi, segment, write } from '../api/api'
+import { errorMessage, notify } from '../lib/notify'
+import { useSubmit } from '../lib/use-submit'
+import { sourceConnection, useWorkspaceStore } from '../stores/workspace'
 import type { Source } from '../api/types'
 
-// Presentation only: App owns the draft, its probe and the save.
-const props = defineProps<{
-  probe: { pending: boolean; version?: string; error?: string }
-  ready: boolean
-  busy: boolean
-  error: string
-}>()
-const emit = defineEmits<{ close: []; submit: []; retry: [] }>()
-const draft = defineModel<Source>('draft', { required: true })
+// Adds or edits a connection. It can be saved once herdr has answered at the address.
+const props = defineProps<{ source?: Source }>()
+const emit = defineEmits<{ close: [saved: boolean] }>()
 const { t } = useI18n()
+const workspace = useWorkspaceStore()
 const formId = useId()
+const draft = reactive<Source>({
+  id: '',
+  name: '',
+  runtime: 'tui',
+  transport: 'local',
+  target: '',
+  herdrSession: '',
+  herdrSocket: '',
+  sshIdentityFile: '',
+  sshKnownHostsFile: '',
+  ...props.source,
+})
+const { busy, error, run } = useSubmit()
+
+const PROBE_DELAY_MS = 500
+const probe = ref<{ key: string; pending: boolean; version?: string; error?: string }>({
+  key: '',
+  pending: false,
+})
+const retries = ref(0)
+const connection = computed(() => JSON.stringify(sourceConnection(draft)))
+/** An existing connection whose address was not edited needs no new check. */
+const unchanged = computed(
+  () => !!props.source && JSON.stringify(sourceConnection(props.source)) === connection.value,
+)
+const ready = computed(
+  () => unchanged.value || (probe.value.key === connection.value && !!probe.value.version),
+)
+watch(
+  [connection, retries, unchanged],
+  ([key], _previous, onCleanup) => {
+    probe.value = { key: '', pending: false }
+    if (unchanged.value) {
+      const version = workspace.resources.find((item) => item.id === draft.id)?.serverVersion
+      probe.value = { key, pending: false, version }
+      return
+    }
+    if (draft.transport === 'ssh' && !draft.target?.trim()) return
+    const controller = new AbortController(),
+      context = apiContext(),
+      body = sourceConnection(draft)
+    probe.value = { key: '', pending: true }
+    const timer = setTimeout(async () => {
+      const current = () => !controller.signal.aborted && isCurrentApi(context)
+      try {
+        const result = await api<{ status: string; serverVersion?: string }>(
+          '/api/sources/probe',
+          { method: 'POST', body: JSON.stringify(body), signal: controller.signal },
+          context,
+        )
+        if (!current()) return
+        if (result.status !== 'online' || !result.serverVersion)
+          throw new Error(t('app.connectionVersionMissing'))
+        probe.value = { key, pending: false, version: result.serverVersion }
+      } catch (reason) {
+        if (current()) probe.value = { key: '', pending: false, error: errorMessage(reason) }
+      }
+    }, PROBE_DELAY_MS)
+    onCleanup(() => {
+      clearTimeout(timer)
+      controller.abort()
+    })
+  },
+  { immediate: true },
+)
+async function submit() {
+  if (!ready.value || !draft.name.trim()) return
+  const saved = await run(async () => {
+    const { id, ...body } = {
+      ...draft,
+      name: draft.name.trim(),
+      target: draft.target?.trim(),
+      herdrSession: draft.herdrSession?.trim() || '',
+      herdrSocket: draft.herdrSocket?.trim() || '',
+    }
+    if (body.transport === 'ssh' && !body.target) throw new Error(t('app.sshRequired'))
+    if (id) await write(`/api/sources/${segment(id)}`, 'PATCH', { id, ...body })
+    else await write('/api/sources', 'POST', body)
+    await workspace.reload()
+  })
+  if (!saved) return
+  notify.success(t('app.connectionSaved'))
+  emit('close', true)
+}
 const runtimes = [
   { label: 'Herdr TUI', value: 'tui' },
   { label: 'Herdr Core / App', value: 'core' },
 ]
 const transports = computed(() => [
-  { label: t('app.local'), value: 'local', icon: 'i-lucide-server', disabled: props.busy },
-  { label: t('app.remoteSsh'), value: 'ssh', icon: 'i-lucide-globe', disabled: props.busy },
+  { label: t('app.local'), value: 'local', icon: 'i-lucide-server', disabled: busy.value },
+  { label: t('app.remoteSsh'), value: 'ssh', icon: 'i-lucide-globe', disabled: busy.value },
 ])
 const probeText = computed(() =>
-  props.probe.pending
+  probe.value.pending
     ? t('app.checkingConnection')
-    : props.probe.error
+    : probe.value.error
       ? t('app.connectionProbeFailed')
-      : props.probe.version
-        ? `${draft.value.runtime === 'core' ? 'herdr-core' : 'herdr'} ${props.probe.version}`
+      : probe.value.version
+        ? `${draft.runtime === 'core' ? 'herdr-core' : 'herdr'} ${probe.value.version}`
         : '',
 )
 </script>
 
 <template>
   <UModal
-    :open="true"
     :title="t(draft.id ? 'app.editConnection' : 'app.addConnection')"
     :dismissible="!busy"
-    :close="{ 'aria-label': t('app.closeDialog'), disabled: busy }"
+    :close="{ disabled: busy }"
     :ui="{ content: 'source-modal [--dialog-width:30rem]' }"
-    @update:open="
-      (value) => {
-        if (!value) emit('close')
-      }
-    "
   >
     <template #body>
-      <UForm :id="formId" :disabled="busy" class="flex flex-col gap-4" @submit="emit('submit')">
+      <UForm :id="formId" :disabled="busy" class="flex flex-col gap-4" @submit="submit">
         <UFormField :label="t('app.connectionName')" required
           ><UInput
             v-model="draft.name"
@@ -166,10 +243,10 @@ const probeText = computed(() =>
           :disabled="busy"
           :aria-label="t('common.retry')"
           :title="t('common.retry')"
-          @click="emit('retry')"
+          @click="retries++"
         />
       </div>
-      <UButton color="neutral" variant="outline" :disabled="busy" @click="emit('close')">{{
+      <UButton color="neutral" variant="outline" :disabled="busy" @click="emit('close', false)">{{
         t('common.cancel')
       }}</UButton>
       <UButton
