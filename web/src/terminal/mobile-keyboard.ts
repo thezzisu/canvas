@@ -56,13 +56,14 @@ let owner: ReturnType<typeof bindMobileKeyboard> | undefined
 // The page has one IME policy; only the keyboard owner changes it, so a new owner inherits it.
 let overlaid = false
 function setOverlay(api: VirtualKeyboard, value: boolean) {
-  overlaid = value
   try {
     api.overlaysContent = value
+    overlaid = value
   } catch {
-    /* The page then resizes as without the API. */
+    // The page then resizes as without the API.
+    overlaid = false
   }
-  document.documentElement.toggleAttribute('data-keyboard-overlay', value)
+  document.documentElement.toggleAttribute('data-keyboard-overlay', overlaid)
 }
 export function hideMobileKeyboard() {
   owner?.blur()
@@ -76,9 +77,12 @@ export function refreshMobileKeyboardViewport() {
 
 /**
  * One open intent owns either the system IME or the built-in keys, both in one bottom keyboard area.
- * With the VirtualKeyboard API the IME overlays the page and the area reserves its inset, so the page
- * never relayouts per IME frame. Without it the page resizes and the area only bridges the difference.
- * A handoff never shrinks the area: it is held until the incoming keyboard covers it.
+ * With the VirtualKeyboard API the IME overlays the page and the area reserves its inset, so the browser
+ * does not resize the page for it; the area still follows the inset the IME reports. Without the API
+ * the page resizes and the area only bridges the difference.
+ * A handoff holds the area while the keyboards change places. It is released once the incoming IME
+ * covers it, settles at another height or is refused, and built-in keys outside their bounds take
+ * their own height after the IME they replace has closed.
  */
 export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptions) {
   const visual = window.visualViewport
@@ -99,8 +103,9 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   // `shrink` is the part of it by which the page itself resized.
   let inset = 0,
     shrink = 0
-  // A handoff keeps `hold` reserved until the incoming keyboard covers it (system) or the
-  // replaced IME has closed (built-in); `bridge` keeps the built-in keys shown meanwhile.
+  // A handoff keeps `hold` reserved until the incoming IME covers it, settles or is refused (system)
+  // or the replaced IME has closed or stopped changing (built-in); `bridge` keeps the built-in keys
+  // shown while the system IME rises over them.
   let hold = 0,
     bridge = false,
     switching = false
@@ -146,7 +151,8 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       composer: !!composer,
     }
   }
-  // The IME overlays the page while this terminal owns input, and until the IME it overlays has closed.
+  // The IME overlays the page while this terminal owns input, and after that until the IME it overlays
+  // has closed. Focus in another editor ends the overlay at once, even under an IME still on screen.
   function syncOverlay() {
     if (!api || owner !== controller) return
     const active = document.activeElement
@@ -437,7 +443,19 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       mode === 'system' &&
       resized > threshold() &&
       !(api && api.boundingRect.height > 0)
-    if ((overlaid && !resizingIme) || (!requested && !occluded(resized))) {
+    // A closing IME passes below the threshold before it is gone: its tail is not browser chrome
+    // until it has stopped changing.
+    const tail = !requested && resized > 0 && resized <= inset
+    if (tail && (resized < inset - 0.5 || !settleTimer)) {
+      clearTimeout(settleTimer)
+      settleTimer = setTimeout(() => {
+        settleTimer = undefined
+        if (requested) return
+        inset = 0
+        observe()
+      }, settleDelay)
+    }
+    if ((overlaid && !resizingIme) || (!requested && !tail && !occluded(resized))) {
       baseline.height = Math.max(window.innerHeight, frame.height)
       if (refit) builtinHeight = fitHeight(builtinHeight)
     } else if (refit && frame.height !== baseline.height) {
@@ -767,7 +785,8 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       api?.removeEventListener('geometrychange', observe)
     },
   }
-  // With the API, the IME opens and closes only on explicit requests, never on focus alone.
+  // With the API, focus and blur alone neither open nor close the IME: this controller asks for both.
+  // The user or the platform can still dismiss it, which `lost` handles.
   if (api) textarea.setAttribute('virtualkeyboardpolicy', 'manual')
   textarea.addEventListener('focus', focused)
   textarea.addEventListener('blur', blurred)

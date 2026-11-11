@@ -140,6 +140,7 @@ export default {
     arrowDown: '向下',
     arrowUp: '向上',
     arrowRight: '向右',
+    builtin: '内建键盘',
     full: '完整键盘',
     functions: '功能键',
     numbers: '数字和符号',

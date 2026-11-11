@@ -584,9 +584,6 @@ watch(
     if (!props.keyboardOpen) closeSheet()
   },
 )
-watch(hasDock, () => {
-  void nextTick(measureBounds)
-})
 useResizeObserver([actions, safeArea], measureBounds)
 onMounted(() => {
   window.addEventListener('blur', cancelPress)
@@ -662,7 +659,7 @@ onBeforeUnmount(() => {
       :inert="!hasDock || !deck"
       :aria-hidden="!hasDock || !deck"
       role="region"
-      :aria-label="t('terminal.keyboard.full')"
+      :aria-label="t('terminal.keyboard.builtin')"
       @wheel.stop
     >
       <div
@@ -1047,7 +1044,8 @@ onBeforeUnmount(() => {
   visibility: hidden;
   transition: visibility 0s 400ms;
 }
-/* Rows share the dock height above their minimum, so the keys fill a dock of any height. */
+/* Rows share the dock height above their minimum, so the keys fill a dock of any height. The
+   minimum grows with the deck width, as the key labels do, up to a full touch target. */
 .mobile-key-deck {
   container-type: inline-size;
   flex: 1 1 auto;
@@ -1068,7 +1066,7 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 2px;
   min-width: 0;
-  min-height: 28px;
+  min-height: clamp(28px, 8cqw, 44px);
 }
 .mobile-key-deck button {
   min-width: 0;

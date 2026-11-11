@@ -190,9 +190,12 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
             viewportPolicy.value.interactiveWidget === 'resizes-visual' &&
             app?.classList.contains('mobile-layout')
               ? 'visual-viewport'
-              : viewportPolicy.value.interactiveWidget === 'overlays-content'
-                ? 'css-keyboard-inset'
-                : 'css',
+              : viewportPolicy.value.interactiveWidget !== 'overlays-content'
+                ? 'css'
+                : // A terminal overlaying its own IME reserves the inset in its keyboard area instead.
+                  document.documentElement.hasAttribute('data-keyboard-overlay')
+                  ? 'keyboard-overlay'
+                  : 'css-keyboard-inset',
         }
       : null,
     keyboard: {

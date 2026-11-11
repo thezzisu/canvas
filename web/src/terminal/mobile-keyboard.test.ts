@@ -1661,3 +1661,254 @@ test('disposing the overlay owner restores the page policy', (t) => {
   assert(!f.textarea.attributes.has('virtualkeyboardpolicy'))
   assert.equal(mobileKeyboardInset.value, 0)
 })
+
+test('an overlay request the browser rejects leaves the page resizing as without the API', (t) => {
+  const f = fixture(t, { api: true })
+  Object.defineProperty(f.virtualKeyboard, 'overlaysContent', {
+    get: () => false,
+    set() {
+      throw new Error('rejected')
+    },
+  })
+  f.control.focus(true)
+  assert(!f.root.attributes.has('data-keyboard-overlay'), 'the CSS keyboard inset stays in use')
+  f.keyboard(344)
+  assert.equal(f.control.state.dockHeight, 0, 'the resized page is not reserved twice')
+  assert.equal(mobileKeyboardVisible.value, true)
+  assert.equal(mobileKeyboardInset.value, 0, 'nothing overlays the page')
+  f.keyboard(60)
+  assert.equal(f.terminal(), 500, 'a small inset is no keyboard: the area holds for the reopen')
+  assert.equal(f.virtualKeyboard.shows, 2)
+})
+
+test('a closing IME tail below the threshold keeps the baseline for a keyboard reopened under it', (t) => {
+  const f = fixture(t)
+  f.open()
+  f.control.blur()
+  for (const height of [700, 800, 800]) f.resize(height)
+  assert.equal(mobileKeyboardVisible.value, false)
+  f.open()
+  f.control.switchMode()
+  for (const height of [600, 760, 800, 844]) {
+    f.resize(height)
+    assert.equal(f.terminal(), 500, `the built-in keys replace the whole IME (${height})`)
+  }
+  assert.equal(f.control.state.dockHeight, 344)
+})
+
+test('a closing IME that settles short of the old frame leaves browser chrome behind', (t) => {
+  const f = fixture(t)
+  f.open()
+  f.control.blur()
+  for (const height of [700, 788, 788]) f.resize(height)
+  t.mock.timers.tick(500)
+  f.control.focus(true)
+  f.resize(444)
+  f.control.switchMode()
+  f.resize(788)
+  assert.equal(f.control.state.switching, false, 'the IME closed onto the frame under the chrome')
+  assert.equal(f.control.state.dockHeight, 344)
+  assert.equal(f.terminal(), 444)
+})
+
+test('a frame that shrinks a little while the keyboard is closed is browser chrome', (t) => {
+  const f = fixture(t)
+  f.open()
+  f.control.blur()
+  for (const height of [700, 844, 788]) f.resize(height)
+  f.open()
+  f.control.switchMode()
+  f.resize(788)
+  t.mock.timers.tick(500)
+  f.resize(788)
+  assert.equal(f.control.state.dockHeight, 288, 'the IME was measured under the new chrome')
+  assert.equal(f.terminal(), 500)
+})
+
+test('the text sheet borrows focus from an overlay IME and the area holds until it returns', async (t) => {
+  const f = fixture(t, { api: true })
+  f.control.focus(true)
+  f.keyboard(340)
+  f.control.suspend(true)
+  assert.equal(f.virtualKeyboard.hides, 1)
+  assert.equal(f.textarea.readOnly, true)
+  const sheet = {}
+  f.document.activeElement = sheet
+  f.document.dispatchEvent(new Event('focusin'))
+  await Promise.resolve()
+  assert.equal(f.requested(), true, 'the sheet does not revoke the open intent')
+  assert.equal(f.virtualKeyboard.overlaysContent, false, 'the sheet owns the page meanwhile')
+  assert.equal(mobileKeyboardInset.value, 0)
+  f.virtualKeyboard.boundingRect = { height: 0 }
+  f.virtualKeyboard.dispatchEvent(new Event('geometrychange'))
+  assert.equal(f.control.state.dockHeight, 340)
+  assert.equal(f.control.state.switching, true)
+  t.mock.timers.tick(2000)
+  assert.equal(f.virtualKeyboard.shows, 1, 'no IME request under the sheet')
+  f.document.activeElement = f.document.body
+  f.control.suspend(false)
+  t.mock.timers.tick(0)
+  assert.equal(f.virtualKeyboard.shows, 2)
+  assert.equal(f.virtualKeyboard.overlaysContent, true)
+  assert.equal(f.textarea.readOnly, false)
+  for (const height of [0, 120, 260]) {
+    f.keyboard(height)
+    assert.equal(f.control.state.dockHeight, 340)
+    assert.equal(f.control.state.switching, true)
+  }
+  f.keyboard(340)
+  assert.deepEqual(f.control.state, {
+    mode: 'system',
+    dockHeight: 340,
+    deck: false,
+    switching: false,
+    composer: false,
+  })
+})
+
+test('the text sheet over the overlay built-in keys keeps them and never asks for the IME', async (t) => {
+  const f = fixture(t, { api: true })
+  f.control.setBuiltinMinHeight(258)
+  f.control.focus(true)
+  f.keyboard(340)
+  f.control.switchMode()
+  f.keyboard(0)
+  f.control.suspend(true)
+  f.document.activeElement = {}
+  f.document.dispatchEvent(new Event('focusin'))
+  await Promise.resolve()
+  assert.equal(f.requested(), true)
+  assert.equal(f.control.state.deck, true)
+  assert.equal(f.control.state.dockHeight, 340)
+  assert.equal(f.control.state.switching, true)
+  assert.equal(f.virtualKeyboard.overlaysContent, false)
+  f.document.activeElement = f.document.body
+  f.control.suspend(false)
+  t.mock.timers.tick(0)
+  assert.equal(f.document.activeElement, f.textarea, 'focus returns to the noneditable input')
+  assert.equal(f.textarea.readOnly, true)
+  assert.equal(f.virtualKeyboard.shows, 1)
+  assert.equal(f.virtualKeyboard.overlaysContent, true)
+  assert.deepEqual(f.control.state, {
+    mode: 'builtin',
+    dockHeight: 340,
+    deck: true,
+    switching: false,
+    composer: false,
+  })
+})
+
+test('a hidden page keeps the overlay area and asks for the IME once on return', (t) => {
+  const f = fixture(t, { api: true })
+  f.control.focus(true)
+  f.keyboard(340)
+  f.document.hidden = true
+  f.document.dispatchEvent(new Event('visibilitychange'))
+  assert.equal(mobileKeyboardVisible.value, false)
+  assert.equal(f.control.state.switching, true)
+  f.keyboard(0)
+  t.mock.timers.tick(2000)
+  assert.equal(f.requested(), true)
+  assert.equal(f.control.state.dockHeight, 340, 'the hidden page keeps the area')
+  assert.equal(f.virtualKeyboard.shows, 1, 'no hidden recovery')
+  assert.equal(f.virtualKeyboard.overlaysContent, true)
+  f.document.hidden = false
+  f.document.dispatchEvent(new Event('visibilitychange'))
+  assert.equal(f.virtualKeyboard.shows, 2)
+  assert.equal(f.control.state.dockHeight, 340)
+  f.keyboard(340)
+  assert.equal(f.control.state.switching, false)
+  assert.equal(mobileKeyboardVisible.value, true)
+  t.mock.timers.tick(1000)
+  assert.equal(f.requested(), true)
+  assert.equal(f.virtualKeyboard.shows, 2)
+})
+
+test('an overlay IME refused after a hidden page turns the keyboard and the overlay off', (t) => {
+  const f = fixture(t, { api: true })
+  f.control.focus(true)
+  f.keyboard(340)
+  f.document.hidden = true
+  f.document.dispatchEvent(new Event('visibilitychange'))
+  f.keyboard(0)
+  f.document.hidden = false
+  f.document.dispatchEvent(new Event('visibilitychange'))
+  t.mock.timers.tick(900)
+  assert.equal(f.requested(), false)
+  assert.equal(f.control.state.dockHeight, 0)
+  assert.equal(f.virtualKeyboard.overlaysContent, false)
+  assert.equal(mobileKeyboardInset.value, 0)
+})
+
+test('a hidden page leaves the overlay built-in keys as they are', (t) => {
+  const f = fixture(t, { api: true })
+  f.storage.set('canvas:mobile-keyboard-mode', 'builtin')
+  f.control.setBuiltinMinHeight(258)
+  f.control.focus(true)
+  f.document.hidden = true
+  f.document.dispatchEvent(new Event('visibilitychange'))
+  assert.equal(f.control.state.switching, true, 'terminal resizes wait for the page')
+  f.document.hidden = false
+  f.document.dispatchEvent(new Event('visibilitychange'))
+  assert.deepEqual(f.control.state, {
+    mode: 'builtin',
+    dockHeight: 258,
+    deck: true,
+    switching: false,
+    composer: false,
+  })
+  assert.equal(f.virtualKeyboard.shows, 0)
+})
+
+test('rotation under the overlay drops the portrait hold and follows the landscape IME', (t) => {
+  const f = fixture(t, { api: true })
+  f.control.focus(true)
+  f.keyboard(340)
+  f.keyboard(300)
+  assert.equal(f.control.state.dockHeight, 340, 'a shrinking IME holds the area')
+  f.window.innerWidth = 844
+  f.visual.width = 844
+  f.resize(390)
+  assert.equal(f.control.state.dockHeight, 300, 'the portrait hold is not imposed on landscape')
+  f.keyboard(200)
+  t.mock.timers.tick(1000)
+  assert.equal(f.requested(), true)
+  assert.equal(f.control.state.dockHeight, 200)
+  assert.equal(f.control.state.switching, false)
+  assert.equal(mobileKeyboardInset.value, 200)
+  assert.equal(f.window.innerHeight, 390, 'the page is sized by the rotation alone')
+})
+
+test('rotation that closes the overlay IME turns the stale intent off', (t) => {
+  const f = fixture(t, { api: true })
+  f.control.focus(true)
+  f.keyboard(340)
+  f.virtualKeyboard.boundingRect = { height: 0 }
+  f.window.innerWidth = 844
+  f.visual.width = 844
+  f.resize(390)
+  assert.equal(f.control.state.dockHeight, 0, 'no portrait area in landscape')
+  t.mock.timers.tick(900)
+  assert.equal(f.requested(), false)
+  assert.equal(f.virtualKeyboard.overlaysContent, false)
+})
+
+test('rotation refits the overlay built-in keys to the landscape frame', (t) => {
+  const f = fixture(t, { api: true })
+  f.control.setBuiltinMinHeight(258)
+  f.control.focus(true)
+  f.keyboard(340)
+  f.control.switchMode()
+  f.keyboard(0)
+  assert.equal(f.control.state.dockHeight, 340)
+  f.window.innerWidth = 844
+  f.visual.width = 844
+  f.resize(390)
+  assert.equal(f.control.state.dockHeight, 230, 'the terminal keeps its 160px reserve')
+  assert.equal(f.control.state.deck, true)
+  f.window.innerWidth = 390
+  f.visual.width = 390
+  f.resize(844)
+  assert.equal(f.control.state.dockHeight, 258, 'the portrait IME height is no longer known')
+  assert.equal(f.virtualKeyboard.shows, 1)
+})

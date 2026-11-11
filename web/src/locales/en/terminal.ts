@@ -140,6 +140,7 @@ export default {
     arrowDown: 'Down arrow',
     arrowUp: 'Up arrow',
     arrowRight: 'Right arrow',
+    builtin: 'Built-in keyboard',
     full: 'Full keyboard',
     functions: 'Function keys',
     numbers: 'Numbers and symbols',
