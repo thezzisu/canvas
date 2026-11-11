@@ -36,7 +36,7 @@ import { uiZoom } from './ui-scale'
 import { loadCanvasFile } from './file-transfer'
 import { readNoteClipboard, loadNoteClipboard, terminalNoteClipboard, NOTE_CLIPBOARD_TYPE, type NoteClipboard } from './note-clipboard'
 import type { CanvasFileReference } from './file-reference'
-import { containTerminalScale, fitTerminalGrid, sameTerminalGrid, terminalBox, terminalFrameReady, terminalMetrics, type RenderedTerminalGrid, type TerminalGrid } from './terminal-geometry'
+import { containTerminalScale, fitTerminalGrid, sameTerminalGrid, styledSize, terminalFrameReady, terminalMetrics, type RenderedTerminalGrid, type TerminalGrid } from './terminal-geometry'
 import { TerminalReconnect, terminalInputHasFocus } from './terminal-reconnect'
 import { normalizeContentZoom } from './content-zoom'
 import { fillTerminalBackground } from './terminal-background'
@@ -111,6 +111,8 @@ interface Session {
   connectionProbe?: AbortController
   connectionError?: string
   opened: boolean
+  /** The host's content box from its ResizeObserver; reading it never forces layout. */
+  available?: { width: number; height: number }
   rendered?: RenderedTerminalGrid
   metrics?: RenderedTerminalGrid
   resizing?: boolean
@@ -658,14 +660,17 @@ async function connect(session: Session, probe: boolean) {
             terminalInputHasFocus(session.mobile ? session.mobileInput?.element : session.term.textarea)) claimFocus(session)
         }
         else if (message.type === 'resize' && Number.isInteger(message.cols) && Number.isInteger(message.rows)) {
-          if (session.term.cols !== message.cols || session.term.rows !== message.rows) {
+          const resized = session.term.cols !== message.cols || session.term.rows !== message.rows
+          if (resized) {
             session.parsedGrid = undefined; session.paintedGrid = undefined
             session.parsedCompletion = undefined; session.paintedCompletion = undefined
             session.paintRevision = (session.paintRevision || 0) + 1
             if (session.resumeReset) session.resumePaint = session.paintRevision
           }
           session.term.resize(message.cols, message.rows)
-          if (session.opened) session.term.refresh(0, session.term.rows - 1)
+          // Every replay repeats the current size before its reset bytes; repainting
+          // then would only redraw the screen those bytes are about to replace.
+          if (resized && session.opened) session.term.refresh(0, session.term.rows - 1)
           present(session)
           schedulePresentation(session)
         }
@@ -694,23 +699,16 @@ async function connect(session: Session, probe: boolean) {
     }
   }
 }
-function availableSize(host: HTMLElement) {
-  const box = terminalBox(host)
-  return { width: box.contentWidth, height: box.contentHeight }
-}
 function terminalGeometry(session: Session) {
   const screen = session.term.element?.querySelector<HTMLElement>('.xterm-screen')
-  if (!screen) return
-  const { width, height } = terminalBox(screen)
-  if (width > 0 && height > 0) return { width, height }
+  return screen && styledSize(screen)
 }
 /** A view is a scaled projection of the shared native window, not its size owner. */
 function present(session: Session) {
   if (!session.host?.isConnected || !session.opened) return
   if (session.state.presentation?.maximized && (!session.state.presentation.owned || !session.magnified)) return
-  const geometry = terminalGeometry(session)
-  if (!geometry) return
-  const available = availableSize(session.host)
+  const geometry = terminalGeometry(session), available = session.available
+  if (!geometry || !available) return
   // xterm's scrollbar overlays the grid; it does not reserve a permanent gutter.
   const { width, height } = geometry
   const requested = session.focusResize?.requested, painted = session.paintedGrid
@@ -746,8 +744,8 @@ function setTerminalZoom(session: Session, percent: number) {
 function proposedSize(session: Session) {
   if (!session.host?.isConnected || !session.opened) return
   if (session.editing) return
-  const available = availableSize(session.host)
-  if (!session.metrics) return
+  const available = session.available
+  if (!session.metrics || !available) return
   if (!(available.width > 0 && available.height > 0)) return
   return fitTerminalGrid(available, session.metrics)
 }
@@ -885,8 +883,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       const next = { ...grid, cols: term.cols, rows: term.rows }
       current.metrics = terminalMetrics(current.metrics, previous, next)
       current.rendered = next
-      if (current.host && term.element && (grid.width !== current.host.clientWidth || grid.height !== current.host.clientHeight))
-        fillTerminalBackground(term.element, current.host)
+      if (current.host && term.element) fillTerminalBackground(term.element, current.host)
       if (!current.state.screenReady && current.host?.isConnected && terminalFrameReady(current.parsedGrid, term, event)) {
         setState(current, { ...current.state, screenReady: true, transitioning: true })
       }
@@ -976,7 +973,7 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   // Vue may mount a replacement host before disposing the old component. Only
   // the current host owns its presentation and temporary size request.
   if (session.host !== host || session.mobile !== (options.mobile === true) || session.magnified !== (options.magnified === true)) session.touchpad?.cancel()
-  if (session.host !== host) endFocusSize(session)
+  if (session.host !== host) { endFocusSize(session); session.available = undefined }
   session.mouseDefaults?.dispose()
   session.host = host
   session.viewVisible = true
@@ -1132,7 +1129,12 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     current.pastePreview = dismiss
     return true
   })
-  const observer = new ResizeObserver(() => { if (current.host === host) { present(current); schedulePresentation(current); current.touchpad?.refresh() } })
+  const observer = new ResizeObserver(entries => {
+    const box = entries.at(-1)?.contentRect
+    if (current.host !== host || !box) return
+    current.available = { width: box.width, height: box.height }
+    present(current); schedulePresentation(current); current.touchpad?.refresh()
+  })
   observer.observe(host)
   const intersection = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
     if (current.host !== host) return

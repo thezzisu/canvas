@@ -1,3 +1,13 @@
+/**
+ * The size an element's own inline style assigns, such as xterm's rendered screen.
+ * Unlike computed styles it never forces style or layout, so hot render paths stay
+ * cheap while other cards have pending DOM changes.
+ */
+export function styledSize(element: Pick<HTMLElement, 'style'>) {
+  const width = parseFloat(element.style.width), height = parseFloat(element.style.height)
+  if (width > 0 && height > 0) return { width, height }
+}
+
 /** Untransformed CSS boxes retain the fractional dimensions lost by client/offset sizes. */
 export function terminalBox(element: HTMLElement) {
   const style = getComputedStyle(element)

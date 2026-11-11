@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { containTerminalScale, fitTerminalGrid, terminalFrameReady, terminalMetrics } from './terminal-geometry.ts'
+import { containTerminalScale, fitTerminalGrid, styledSize, terminalFrameReady, terminalMetrics } from './terminal-geometry.ts'
+import { fillTerminalBackground } from './terminal-background.ts'
 
 test('only the complete matching native frame releases a geometry transition', () => {
   const grid = { cols: 80, rows: 24 }
@@ -57,4 +58,20 @@ test('font invalidation and a same-grid size change replace metrics, while an ex
   assert.equal(terminalMetrics(original, external, newFont), newFont)
   assert.equal(terminalMetrics(undefined, undefined, newFont), newFont)
   assert.deepEqual(fitTerminalGrid({ width: 273.6, height: 528.8 }, newFont), { cols: 34, rows: 29 })
+})
+
+test('render-path geometry and margin color come from inline styles, never a forced computed style', t => {
+  const previous = globalThis.getComputedStyle
+  globalThis.getComputedStyle = (() => { throw new Error('forced style recalculation') }) as typeof getComputedStyle
+  t.after(() => { globalThis.getComputedStyle = previous })
+  assert.deepEqual(styledSize({ style: { width: '723.5px', height: '460px' } } as HTMLElement), { width: 723.5, height: 460 })
+  assert.equal(styledSize({ style: { width: '', height: '460px' } } as HTMLElement), undefined, 'an unmeasured screen has no size')
+  assert.equal(styledSize({ style: { width: '0px', height: '0px' } } as HTMLElement), undefined)
+  const renderer = { style: { backgroundColor: 'rgb(17, 19, 23)' } }, host = { style: { backgroundColor: '' } } as HTMLElement
+  const element = { querySelector: (selector: string) => selector === '.xterm-scrollable-element' ? renderer : null } as unknown as HTMLElement
+  fillTerminalBackground(element, host)
+  assert.equal(host.style.backgroundColor, 'rgb(17, 19, 23)', 'the renderer default background fills the margins')
+  renderer.style.backgroundColor = ''
+  fillTerminalBackground(element, host)
+  assert.equal(host.style.backgroundColor, 'rgb(17, 19, 23)', 'an unthemed renderer leaves the margins unchanged')
 })
