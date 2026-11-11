@@ -32,6 +32,7 @@ export default {
   other: 'Other',
   sort: 'Sort',
   nativeOrder: 'Tab order',
+  unplacedOnly: 'Not on a canvas',
   statusOrder: 'Status priority',
   windowsPerRow: 'Windows per row',
   noWrapping: 'No wrapping',

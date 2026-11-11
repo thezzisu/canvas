@@ -52,9 +52,11 @@ test('overview status order stays within each space and retains native order for
   const resources = fixture(),
     original = structuredClone(resources)
   assert.deepEqual(
-    overviewResources(resources, { statuses: overviewStatuses }, 'native')[0]!.spaces[0]!.windows.map(
-      (window) => window.id,
-    ),
+    overviewResources(
+      resources,
+      { statuses: overviewStatuses },
+      'native',
+    )[0]!.spaces[0]!.windows.map((window) => window.id),
     resources[0]!.spaces[0]!.windows.map((window) => window.id),
   )
   const sorted = overviewResources(resources, { statuses: overviewStatuses }, 'status')
@@ -146,16 +148,20 @@ test('interaction exemption matches both source and native window, preserving gr
     ['done-1', 'done-2', 'working-1'],
   )
   assert.deepEqual(
-    overviewResources(resources, { statuses: [] }, 'native', { sourceId: 'b', windowId: 'working-1' }).map(
-      (source) => [
-        source.id,
-        source.spaces.map((space) => space.windows.map((window) => window.id)),
-      ],
-    ),
+    overviewResources(resources, { statuses: [] }, 'native', {
+      sourceId: 'b',
+      windowId: 'working-1',
+    }).map((source) => [
+      source.id,
+      source.spaces.map((space) => space.windows.map((window) => window.id)),
+    ]),
     [['b', [['working-1']]]],
   )
   assert.deepEqual(
-    overviewResources(resources, { statuses: [] }, 'native', { sourceId: 'a', windowId: 'missing' }),
+    overviewResources(resources, { statuses: [] }, 'native', {
+      sourceId: 'a',
+      windowId: 'missing',
+    }),
     [],
   )
   assert.deepEqual(resources, original)

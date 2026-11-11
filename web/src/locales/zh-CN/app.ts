@@ -31,6 +31,7 @@ export default {
   other: '其他',
   sort: '排序',
   nativeOrder: '原始顺序',
+  unplacedOnly: '未加入画布',
   statusOrder: '状态优先',
   windowsPerRow: '每行窗口数',
   noWrapping: '不换行',
