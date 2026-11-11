@@ -4,7 +4,7 @@ import { useEventListener, useFileDialog } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { apiUpload, apiContext, apiRevision, requireCurrentApi, segment } from '../api/api'
 import { hasFileTransfer, readFileTransfer } from '../lib/browser-file-input'
-import Icon from '../components/Icon.vue'
+import UIcon from '@nuxt/ui/components/Icon.vue'
 import UploadProgress from '../components/UploadProgress.vue'
 
 const props = defineProps<{
@@ -203,7 +203,7 @@ onBeforeUnmount(cancel)
 <template>
   <div ref="marker" class="canvas-file-drop-layer">
     <div v-if="dragging" class="canvas-file-drop-mask">
-      <Icon name="file" :size="23" /><span>{{ t('panels.file.dropToAdd') }}</span>
+      <UIcon name="i-lucide-file" class="size-6" /><span>{{ t('panels.file.dropToAdd') }}</span>
     </div>
     <UploadProgress
       v-if="progress || error"

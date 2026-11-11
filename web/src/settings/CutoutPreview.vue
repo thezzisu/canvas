@@ -2,7 +2,6 @@
 import { useI18n } from 'vue-i18n'
 import { computed } from 'vue'
 import { cutoutPosition, cutoutWidth } from '../lib/display-cutout'
-import Icon from '../components/Icon.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import CardHeaderActions from '../canvas/CardHeaderActions.vue'
 
@@ -30,11 +29,11 @@ const shortcuts = computed(() => (props.captured ? [] : ['keyboard', 'zoom']))
         :add-label="t('terminal.action.addToCanvas')"
       >
         <template #keyboard
-          ><UButton aria-hidden="true" tabindex="-1"><Icon name="keyboard" :size="18" /></UButton
-        ></template>
+          ><UButton aria-hidden="true" tabindex="-1" icon="i-lucide-keyboard"
+        /></template>
         <template #zoom
-          ><UButton aria-hidden="true" tabindex="-1"><Icon name="zoom-in" :size="18" /></UButton
-        ></template>
+          ><UButton aria-hidden="true" tabindex="-1" icon="i-lucide-zoom-in"
+        /></template>
       </CardHeaderActions>
     </div>
   </div>

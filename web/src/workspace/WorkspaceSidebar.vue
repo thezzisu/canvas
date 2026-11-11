@@ -77,7 +77,7 @@ function addConnection() {
       <nav class="feature-nav" :aria-label="t('app.features')">
         <CanvasNavItem
           class="feature-nav-item"
-          icon="history"
+          icon="i-lucide-clock-fading"
           :fresh="workspace.freshStatuses"
           :name="t('app.workingSet')"
           :active="current === 'working-set'"
@@ -105,7 +105,7 @@ function addConnection() {
       <nav class="canvas-nav" :aria-label="t('app.canvases')">
         <CanvasNavItem
           class="canvas-nav-item"
-          icon="grid"
+          icon="i-lucide-layout-grid"
           :fresh="workspace.freshStatuses"
           :name="t('app.overview')"
           :active="current === 'overview'"
@@ -124,7 +124,7 @@ function addConnection() {
           <template #default="{ item: canvas, hint }">
             <CanvasNavItem
               class="canvas-nav-item"
-              icon="canvas"
+              icon="i-lucide-panels-top-left"
               :fresh="workspace.freshStatuses"
               :name="canvas.name"
               :active="current === canvas.id"
@@ -162,7 +162,7 @@ function addConnection() {
           <template #default="{ item: source, hint }">
             <CanvasNavItem
               class="source-nav-item"
-              icon="server"
+              icon="i-lucide-server"
               :fresh="workspace.freshStatuses"
               :name="source.name"
               :title="sourceTitle(source)"

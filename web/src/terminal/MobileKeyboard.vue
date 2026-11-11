@@ -5,7 +5,7 @@ import { useRafFn, useResizeObserver } from '@vueuse/core'
 import type { TerminalModifiers } from './terminal-input'
 import type { TerminalTouchMode } from './terminal-touch'
 import type { TouchpadControl } from '../lib/touchpad-gesture'
-import Icon from '../components/Icon.vue'
+import CanvasGlyph from '../components/CanvasGlyph.vue'
 import UModal from '../components/CanvasModal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
@@ -652,7 +652,7 @@ onBeforeUnmount(() => {
         @pointerdown.prevent
         @click="switchKeyboard"
       >
-        <Icon name="keyboard-switch" :size="19" />
+        <CanvasGlyph name="keyboard-switch" :size="19" />
       </button>
     </div>
     <div
@@ -686,7 +686,7 @@ onBeforeUnmount(() => {
             @pointerdown.prevent
             @click="pickFiles"
           >
-            <Icon name="file" :size="18" />
+            <UIcon name="i-lucide-file" class="size-[18px]" />
           </button>
           <button
             key="composer"
@@ -697,7 +697,7 @@ onBeforeUnmount(() => {
             @pointerdown.prevent
             @click="emit('composer')"
           >
-            <Icon name="compose" :size="18" />
+            <UIcon name="i-lucide-square-pen" class="size-[18px]" />
           </button>
           <button
             key="copy"
@@ -707,7 +707,7 @@ onBeforeUnmount(() => {
             @pointerdown.prevent
             @click="openSelection"
           >
-            <Icon name="copy" :size="18" />
+            <UIcon name="i-lucide-copy" class="size-[18px]" />
           </button>
           <button
             v-if="touchMode === 'touchpad'"
@@ -728,7 +728,7 @@ onBeforeUnmount(() => {
               }
             "
           >
-            <Icon name="mouse-left" :size="18" />
+            <UIcon name="i-lucide-mouse-left" class="size-[18px]" />
           </button>
           <button
             v-if="touchMode === 'touchpad'"
@@ -750,7 +750,7 @@ onBeforeUnmount(() => {
               }
             "
           >
-            <Icon name="mouse-middle" :size="18" />
+            <CanvasGlyph name="mouse-middle" :size="18" />
           </button>
           <button
             v-if="touchMode === 'touchpad'"
@@ -762,7 +762,7 @@ onBeforeUnmount(() => {
             @pointerdown.prevent
             @click="emit('pointer', { type: 'click', button: 'right' })"
           >
-            <Icon name="mouse-right" :size="18" />
+            <UIcon name="i-lucide-mouse-right" class="size-[18px]" />
           </button>
           <button
             key="scroll"
@@ -773,7 +773,7 @@ onBeforeUnmount(() => {
             @pointerdown.prevent
             @click="chooseMode('scroll')"
           >
-            <Icon name="scroll" :size="18" />
+            <UIcon name="i-lucide-move-vertical" class="size-[18px]" />
           </button>
           <button
             key="mouse"
@@ -785,7 +785,7 @@ onBeforeUnmount(() => {
             @pointerdown.prevent
             @click="chooseMode('mouse')"
           >
-            <Icon name="pointer" :size="18" />
+            <UIcon name="i-lucide-mouse-pointer-2" class="size-[18px]" />
           </button>
           <button
             key="touchpad"
@@ -797,7 +797,7 @@ onBeforeUnmount(() => {
             @pointerdown.prevent
             @click="chooseMode('touchpad')"
           >
-            <Icon name="touchpad" :size="18" />
+            <UIcon name="i-lucide-touchpad" class="size-[18px]" />
           </button>
         </TransitionGroup>
       </div>

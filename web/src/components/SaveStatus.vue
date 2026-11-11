@@ -29,7 +29,7 @@ const status = computed(() => pendingWrites.status(props.owner))
       @pointerdown.stop.prevent
       @dblclick.stop
       @click.stop="pendingWrites.retry(owner)"
-      ><UIcon name="i-lucide-triangle-alert" class="size-4"
+      ><UIcon name="i-lucide-triangle-exclamation-point" class="size-4"
     /></UButton>
     <Transition
       v-else

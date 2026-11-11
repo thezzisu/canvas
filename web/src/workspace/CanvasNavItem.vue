@@ -5,7 +5,6 @@ import { useI18n } from 'vue-i18n'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
-import Icon from '../components/Icon.vue'
 import WindowTitle from './WindowTitle.vue'
 import { paneName, statusColor, statusLabel } from '../lib/status'
 import { windowLabel } from './window-title'
@@ -158,7 +157,7 @@ const content = computed(() => ({
       v-bind="$attrs"
       @click="emit('select')"
     >
-      <Icon :name="icon" :size="16" />
+      <UIcon :name="icon" class="size-4 shrink-0" />
       <span class="canvas-nav-name"
         ><span>{{ name }}</span
         ><small v-if="indicator" class="canvas-nav-count">{{ n(indicator.count) }}</small></span

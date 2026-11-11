@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import Icon from '../components/Icon.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import NoteEditor from '../notes/NoteEditor.vue'
 import SaveStatus from '../components/SaveStatus.vue'
@@ -178,9 +177,9 @@ defineExpose({ send })
         :aria-label="t('terminal.composer.attach')"
         :disabled="editor?.pending"
         @pointerdown="keepFocus"
+        icon="i-lucide-paperclip"
         @click="editor?.chooseFiles()"
-        ><Icon name="paperclip" :size="16"
-      /></UButton>
+      />
       <SaveStatus :owner="owner.key" :size="mobile ? 'lg' : 'sm'" />
       <UButton
         color="primary"
@@ -193,9 +192,9 @@ defineExpose({ send })
         :disabled="!canSend || !hasText || editor?.pending"
         :loading="sending"
         @pointerdown="keepFocus"
+        icon="i-lucide-send"
         @click="send"
-        ><Icon name="send" :size="16"
-      /></UButton>
+      />
     </div>
     <div
       class="terminal-composer-handle"

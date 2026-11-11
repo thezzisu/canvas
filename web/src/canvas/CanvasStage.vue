@@ -59,7 +59,7 @@ const status = computed(() =>
 const empty = computed(() => {
   if (status.value || nodes.value.length) return
   if (scene.kind.value === 'working-set')
-    return { icon: 'i-lucide-history', title: t('app.noWindows') }
+    return { icon: 'i-lucide-clock-fading', title: t('app.noWindows') }
   if (scene.custom.value)
     return {
       icon: 'i-lucide-layout-dashboard',
