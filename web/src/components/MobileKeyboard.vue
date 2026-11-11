@@ -41,8 +41,7 @@ const emit = defineEmits<{
   switchKeyboard: []
   bounds: [minHeight: number]
 }>()
-const keyboard = ref<HTMLElement>()
-const dock = ref<HTMLElement>(), naturalDeck = ref<HTMLElement>(), actions = ref<HTMLElement>(), safeArea = ref<HTMLElement>()
+const deckElement = ref<HTMLElement>(), actions = ref<HTMLElement>(), safeArea = ref<HTMLElement>()
 const switchLabel = computed(() => t(props.keyboardMode === 'system' ? 'terminal.keyboard.switchToBuiltin' : 'terminal.keyboard.switchToSystem'))
 const hasDock = computed(() => props.dockHeight > 0)
 // Disabled buttons still receive pointer events; presses check this as well.
@@ -290,11 +289,14 @@ function filesChanged(event: Event) {
 function filesCancelled() { const accept = pendingFiles; pendingFiles = undefined; accept?.complete([]) }
 function escape() { if (sheet.value) closeSheet(); else send('Escape'); stopRepeat() }
 function reset(clearFileSelection = true) { cancelPress(); caps.value = false; if (clearFileSelection) { pendingFiles?.dispose(); pendingFiles = undefined }; emit('reading', false); closeSheet(); emit('modifiers', { shift: false, ctrl: false, alt: false, meta: false }) }
+// The smallest dock that fits the tools and every key row at its minimum height. Taller
+// docks, matching the system keyboard they replace, stretch the rows.
 function measureBounds() {
-  if (!naturalDeck.value || !actions.value || !keyboard.value || !dock.value) return
-  const deckStyle = getComputedStyle(naturalDeck.value.parentElement!)
-  emit('bounds', Math.ceil(naturalDeck.value.offsetHeight + actions.value.offsetHeight +
-    parseFloat(deckStyle.paddingTop) + parseFloat(deckStyle.paddingBottom) + (safeArea.value?.offsetHeight || 0) + 1))
+  const deck = deckElement.value
+  if (!deck || !actions.value) return
+  const style = getComputedStyle(deck), rows = [...deck.children]
+  const keys = rows.reduce((sum, row) => sum + parseFloat(getComputedStyle(row).minHeight), 0) + parseFloat(style.rowGap) * Math.max(0, rows.length - 1)
+  emit('bounds', Math.ceil(keys + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + actions.value.offsetHeight + (safeArea.value?.offsetHeight || 0) + 1))
 }
 // Keep leaving flex items at their painted position while the remaining items move.
 function pinLeavingTool(element: Element) {
@@ -311,28 +313,19 @@ watch(() => props.disabled, disabled => { if (disabled) reset(false) })
 watch(() => props.touchMode, () => releasePointer(true))
 watch(() => [props.keyboardOpen, props.keyboardMode], () => { cancelPress(); if (!props.keyboardOpen) closeSheet() })
 watch(hasDock, () => { void nextTick(measureBounds) })
-useResizeObserver([naturalDeck, actions, safeArea], measureBounds)
+useResizeObserver([actions, safeArea], measureBounds)
 onMounted(() => { window.addEventListener('blur', cancelPress); document.addEventListener('visibilitychange', visibilityChanged) })
 onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFiles = undefined; cancelPress(); window.removeEventListener('blur', cancelPress); document.removeEventListener('visibilitychange', visibilityChanged) })
 </script>
 
 <template>
-  <section ref="keyboard" class="mobile-keyboard" :class="{ 'has-dock': hasDock, 'reduced-motion': reducedMotion }" @pointerdown.stop @mousedown.stop @keydown.esc.stop.prevent="escape">
+  <section class="mobile-keyboard" :class="{ 'has-dock': hasDock, 'reduced-motion': reducedMotion }" @pointerdown.stop @mousedown.stop @keydown.esc.stop.prevent="escape">
     <div ref="safeArea" class="mobile-key-safe" aria-hidden="true" />
     <div class="mobile-key-row" role="toolbar" :aria-label="t('terminal.keyboard.helperKeys')" @contextmenu.prevent @pointerdown="composing && $event.preventDefault()" @mousedown="composing && $event.preventDefault()">
       <button v-for="key in keys" :key="key.key" type="button" :disabled="inactive" :aria-label="key.label" :aria-pressed="keyPressed(key.key)" :class="{ 'arrow-key': key.symbol }" @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ key.symbol || key.label }}</button>
       <button type="button" :disabled="composing" :aria-label="switchLabel" :title="switchLabel" :aria-pressed="keyboardMode === 'builtin'" :class="{ active: keyboardOpen && keyboardMode === 'builtin' || modifiers.shift || modifiers.alt || modifiers.meta }" @pointerdown.prevent @click="switchKeyboard"><Icon name="keyboard-switch" :size="19" /></button>
     </div>
-    <div ref="dock" class="mobile-key-dock" :class="{ blank: !deck }" :style="{ height: `${Math.max(0, dockHeight)}px` }" :inert="!hasDock || !deck" :aria-hidden="!hasDock || !deck" role="region" :aria-label="t('terminal.keyboard.full')" @wheel.stop>
-      <div class="mobile-key-deck" role="group" :aria-label="t('terminal.keyboard.full')" @scroll.capture="stopRepeat" @contextmenu.prevent>
-        <div ref="naturalDeck">
-          <div v-for="row in deckRows" :key="row.keys[0]?.key" class="mobile-key-deck-row" :class="row.class" role="group" :aria-label="row.name">
-            <button v-for="key in row.keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :title="key.label" :aria-pressed="keyPressed(key.key)" :style="key.span ? { gridColumn: `span ${key.span}` } : undefined"
-              :class="{ 'letter-key': key.key.length === 1, 'shift-key': key.key.startsWith('Shift'), 'backspace-key': key.key === 'Backspace', 'space-key': key.key === ' ', 'enter-key': key.key === 'Enter', 'symbol-key': ['Meta', 'Home', 'End'].includes(key.key) }"
-              @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ keyLabel(key) }}</button>
-          </div>
-        </div>
-      </div>
+    <div class="mobile-key-dock" :class="{ blank: !deck }" :style="{ height: `${Math.max(0, dockHeight)}px` }" :inert="!hasDock || !deck" :aria-hidden="!hasDock || !deck" role="region" :aria-label="t('terminal.keyboard.full')" @wheel.stop>
       <div ref="actions" class="mobile-key-actions" role="toolbar" :aria-label="t('terminal.keyboard.actions')" @contextmenu.prevent>
         <TransitionGroup name="mobile-tool" @before-leave="pinLeavingTool" @leave-cancelled="unpinTool">
           <button key="file" type="button" :disabled="disabled" :aria-label="t('terminal.upload.file')" :title="t('terminal.upload.file')" @pointerdown.prevent @click="pickFiles"><Icon name="file" :size="18" /></button>
@@ -345,6 +338,13 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
           <button key="mouse" type="button" :disabled="disabled" :aria-pressed="touchMode === 'mouse'" :aria-label="t('terminal.keyboard.touchMouse')" :title="t('terminal.keyboard.touchMouse')" @pointerdown.prevent @click="chooseMode('mouse')"><Icon name="pointer" :size="18" /></button>
           <button key="touchpad" type="button" :disabled="disabled" :aria-pressed="touchMode === 'touchpad'" :aria-label="t('terminal.keyboard.touchpad')" :title="t('terminal.keyboard.touchpad')" @pointerdown.prevent @click="chooseMode('touchpad')"><Icon name="touchpad" :size="18" /></button>
         </TransitionGroup>
+      </div>
+      <div ref="deckElement" class="mobile-key-deck" role="group" :aria-label="t('terminal.keyboard.full')" @scroll.capture="stopRepeat" @contextmenu.prevent>
+        <div v-for="row in deckRows" :key="row.keys[0]?.key" class="mobile-key-deck-row" :class="row.class" role="group" :aria-label="row.name">
+          <button v-for="key in row.keys" :key="key.key" type="button" :disabled="disabled" :aria-label="key.label" :title="key.label" :aria-pressed="keyPressed(key.key)" :style="key.span ? { gridColumn: `span ${key.span}` } : undefined"
+            :class="{ 'letter-key': key.key.length === 1, 'shift-key': key.key.startsWith('Shift'), 'backspace-key': key.key === 'Backspace', 'space-key': key.key === ' ', 'enter-key': key.key === 'Enter', 'symbol-key': ['Meta', 'Home', 'End'].includes(key.key) }"
+            @pointerdown="press($event, key.key)" @pointermove="movePress" @pointerup="releasePress" @pointercancel="cancelPress" @lostpointercapture="cancelPress" @click="keyboardClick($event, key.key)">{{ keyLabel(key) }}</button>
+        </div>
       </div>
     </div>
     <input ref="fileInput" class="mobile-file-input" type="file" multiple tabindex="-1" :aria-label="t('terminal.upload.file')" @change="filesChanged" @cancel="filesCancelled" />
@@ -382,10 +382,10 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
 .mobile-keyboard:not(.has-dock) .mobile-key-dock{visibility:hidden;padding-bottom:0;border-top-width:0}
 /* Under the system keyboard the area stays reserved but shows no built-in keys. */
 .mobile-key-dock.blank>*{visibility:hidden}
-.mobile-key-deck{container-type:inline-size;flex:1 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;padding:6px;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:thin;scrollbar-color:#515c6b transparent}
-.mobile-key-deck-row{display:grid;gap:2px;margin-bottom:4px;min-width:0}
-.mobile-key-deck-row:last-child{margin-bottom:0}
-.mobile-key-deck button{min-width:0;min-height:0;height:clamp(28px,8cqw,44px);padding:0 1px;touch-action:pan-y;font-size:clamp(8px,2.4cqw,12px);border-radius:4px}
+/* Rows share the dock height above their minimum, so the keys fill a dock of any height. */
+.mobile-key-deck{container-type:inline-size;flex:1 1 auto;display:flex;flex-direction:column;gap:4px;min-height:0;overflow-x:hidden;overflow-y:auto;padding:6px;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:thin;scrollbar-color:#515c6b transparent}
+.mobile-key-deck-row{flex:1 0 0;display:grid;gap:2px;min-width:0;min-height:28px}
+.mobile-key-deck button{min-width:0;min-height:0;height:auto;padding:0 1px;touch-action:pan-y;font-size:clamp(8px,2.4cqw,12px);border-radius:4px}
 .mobile-key-deck .letter-key{font-size:clamp(11px,3.3cqw,16px)}
 .mobile-key-standard{grid-template-columns:repeat(14,minmax(0,1fr))}
 .mobile-key-functions{grid-template-columns:repeat(12,minmax(0,1fr))}
@@ -393,7 +393,7 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
 .mobile-key-bottom .symbol-key{font-size:clamp(12px,3.6cqw,18px);font-family:system-ui,sans-serif;letter-spacing:0}
 .mobile-key-deck :is(.shift-key,.backspace-key,.enter-key){font-size:clamp(14px,4cqw,20px)}
 .mobile-key-deck :is(.shift-key,.backspace-key,.enter-key):not([aria-pressed=true]){background:rgb(37 44 54 / var(--key-fill,1))}
-.mobile-key-actions{position:relative;flex:0 0 auto;display:flex;gap:3px;padding:6px;border-top:1px solid #3c4552}
+.mobile-key-actions{position:relative;flex:0 0 auto;display:flex;gap:3px;padding:6px;border-bottom:1px solid #3c4552}
 .mobile-key-actions button:not([aria-pressed=true]){background:rgb(37 45 55 / var(--key-fill,1));border-color:#35414f;color:#b7c3d2}
 .mobile-key-actions button{display:flex;align-items:center;justify-content:center;flex:1 1 0;min-width:0;min-height:44px;padding:0}
 .mobile-key-actions .mobile-mouse-button{touch-action:none}
