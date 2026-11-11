@@ -17,6 +17,7 @@ import { connectionIndicator } from './canvas-status'
 import CanvasNavItem from './CanvasNavItem.vue'
 import { editCanvasName, editSource } from './dialogs'
 import SidebarList from './SidebarList.vue'
+import './sidebar.css'
 
 // Where to go: the working set, every canvas, and the connections behind them.
 const { t } = useI18n()
