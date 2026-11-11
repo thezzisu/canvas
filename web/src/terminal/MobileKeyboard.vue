@@ -1025,8 +1025,8 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  /* Keys replacing a taller system keyboard appear where they stay once its area is released. */
-  justify-content: flex-end;
+  /* Keys in an area an IME still makes taller sit at its top, directly under the tools. */
+  justify-content: flex-start;
   min-height: 0;
   margin: 0 -4px;
   overflow: hidden;
@@ -1039,12 +1039,15 @@ onBeforeUnmount(() => {
   padding-bottom: 0;
   border-top-width: 0;
 }
-/* Under the system keyboard the area stays reserved but shows no built-in keys. A browser may
-   report the final keyboard rectangle as the keyboard starts rising, so replaced keys stay painted
-   under it for its animation; this never changes the area's height. */
+/* Under the system keyboard the area is only reserved space: nothing of it shows above the IME. */
+.mobile-key-dock.blank {
+  border-top-width: 0;
+}
 .mobile-key-dock.blank > * {
   visibility: hidden;
-  transition: visibility 0s 400ms;
+}
+.mobile-keyboard.has-dock:has(.mobile-key-dock.blank) .mobile-key-row {
+  margin-bottom: 0;
 }
 /* The deck has the height of its rows and scrolls where a short frame caps the dock. A row grows
    with the deck width, as the key labels do, up to a full touch target. */
@@ -1068,7 +1071,7 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 2px;
   min-width: 0;
-  height: clamp(28px, 8cqw, 44px);
+  height: clamp(36px, 10.5cqw, 48px);
 }
 .mobile-key-deck button {
   min-width: 0;
@@ -1076,11 +1079,11 @@ onBeforeUnmount(() => {
   height: auto;
   padding: 0 1px;
   touch-action: pan-y;
-  font-size: clamp(8px, 2.4cqw, 12px);
-  border-radius: 4px;
+  font-size: clamp(10px, 3cqw, 13px);
+  border-radius: 5px;
 }
 .mobile-key-deck .letter-key {
-  font-size: clamp(11px, 3.3cqw, 16px);
+  font-size: clamp(14px, 4.3cqw, 18px);
 }
 .mobile-key-standard {
   grid-template-columns: repeat(14, minmax(0, 1fr));
