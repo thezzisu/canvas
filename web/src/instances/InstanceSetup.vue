@@ -71,7 +71,7 @@ function connect() {
 </script>
 
 <template>
-  <form class="instance-setup" @submit.prevent="connect">
+  <form class="instance-setup mt-4 flex flex-col gap-4" @submit.prevent="connect">
     <UFormField
       :label="t('instances.address')"
       name="server"
@@ -90,19 +90,27 @@ function connect() {
     </UFormField>
     <p
       v-if="props.message && !invalid && !probe.base.value"
-      class="instance-setup-message"
+      class="instance-setup-message m-0 text-sm text-muted"
       role="status"
     >
       {{ props.message }}
     </p>
-    <div class="instance-probe-footer">
+    <div class="flex min-w-0 items-center gap-3">
       <UButton type="submit" size="lg" :disabled="!probe.ready.value">{{
         t('instances.connect')
       }}</UButton
-      ><span class="instance-probe-status" role="status"
-        ><span v-if="probe.pending.value">{{ t('instances.probing') }}</span
-        ><button v-else-if="probe.failed.value" type="button" @click="probe.retry">
-          {{ t('instances.probeFailed') }} · {{ t('instances.retry') }}</button
+      ><span
+        class="instance-probe-status min-w-0 flex-1 truncate text-right text-xs text-muted"
+        role="status"
+        ><template v-if="probe.pending.value">{{ t('instances.probing') }}</template
+        ><UButton
+          v-else-if="probe.failed.value"
+          color="neutral"
+          variant="link"
+          size="xs"
+          class="p-0"
+          @click="probe.retry"
+          >{{ t('instances.probeFailed') }} · {{ t('instances.retry') }}</UButton
         ><span
           v-else-if="probe.result.value"
           :title="`${t('instances.serverVersion')}: ${probe.result.value.build.version}${probe.result.value.build.revision ? ` · ${probe.result.value.build.revision}` : ''}`"
@@ -124,18 +132,3 @@ function connect() {
   </form>
   <InstanceQrScanner :open="scanning" :accept="scan" @close="scanning = false" />
 </template>
-
-<style>
-.instance-setup {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  margin-top: 16px;
-}
-.instance-setup-message {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--ui-text-muted);
-}
-</style>

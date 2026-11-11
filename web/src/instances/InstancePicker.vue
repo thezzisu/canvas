@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
+import UAlert from '@nuxt/ui/components/Alert.vue'
 import UModal from '../components/CanvasModal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
@@ -15,7 +16,6 @@ import {
   selectInstance,
 } from './instances'
 import InstanceQrScanner from './InstanceQrScanner.vue'
-import Icon from '../components/Icon.vue'
 import { instanceBuild, observeInstanceBuild } from './instance-builds'
 import { buildLabel } from '../../../shared/build-info'
 import { useInstanceProbe } from './instance-probe'
@@ -40,7 +40,7 @@ function rescan() {
   scanning.value = true
 }
 const menuOpen = defineModel<boolean>('menuOpen', { default: false }),
-  menuTrigger = ref<HTMLButtonElement>()
+  menuTrigger = ref<InstanceType<typeof UButton>>()
 const menuDismiss = usePointerDismiss(menuOpen, menuTrigger, {
   // Reka owns the whole menu tree, including portalled submenus. Only canvas
   // gestures need capture dismissal because they can stop native bubbling.
@@ -220,23 +220,25 @@ const items = computed<DropdownMenuItem[][]>(() =>
     :ui="{ content: username === undefined ? 'instance-menu' : 'instance-menu account-menu' }"
   >
     <template #item-label="{ item }">
-      <span class="instance-menu-label"
-        ><span>{{ item.label }}</span
-        ><small
+      <span class="flex min-w-0 items-center gap-2.5"
+        ><span class="truncate">{{ item.label }}</span
+        ><span
           v-if="item.server"
-          class="instance-version"
-          :class="{ stale: !item.server.fresh }"
+          class="max-w-[60%] flex-none truncate text-xs font-normal"
+          :class="item.server.fresh ? 'text-muted' : 'text-dimmed'"
           :title="`${t('instances.serverVersion')}: ${item.server.build.version}${item.server.build.revision ? ` · ${item.server.build.revision}` : ''}${!item.server.fresh ? ` · ${t('instances.lastSeen')}` : ''}`"
           >{{ buildLabel(item.server.build)
-          }}<span v-if="!item.server.fresh"> · {{ t('instances.lastSeen') }}</span></small
+          }}<span v-if="!item.server.fresh"> · {{ t('instances.lastSeen') }}</span></span
         ></span
       >
     </template>
-    <button
+    <UButton
       v-if="username !== undefined"
       ref="menuTrigger"
-      type="button"
+      color="neutral"
+      variant="ghost"
       class="sidebar-account"
+      :active="menuOpen"
       :disabled="disabled || working"
       :aria-busy="working"
       :title="`${username} · ${activeInstance.name}`"
@@ -246,38 +248,39 @@ const items = computed<DropdownMenuItem[][]>(() =>
       <span
         >{{ username }}<small>{{ activeInstance.name }}</small></span
       >
-    </button>
-    <button
+    </UButton>
+    <UButton
       v-else
       ref="menuTrigger"
-      type="button"
-      class="instance-trigger"
+      color="neutral"
+      variant="outline"
+      size="lg"
+      block
+      icon="i-lucide-server"
+      trailing-icon="i-lucide-chevron-down"
+      class="instance-trigger mb-3 justify-start"
       :disabled="disabled || working"
       :aria-busy="working"
       :title="activeInstance.base"
       :aria-label="`${t('instances.instance')}: ${activeInstance.name}`"
     >
-      <Icon name="server" :size="16" />
-      <span class="instance-trigger-label"
-        ><span class="instance-trigger-name">{{ activeInstance.name }}</span
-        ><small
-          v-if="currentBuild"
-          class="instance-trigger-version"
-          :title="`${t('instances.serverVersion')}: ${currentBuild.build.version}${currentBuild.fresh ? '' : ` · ${t('instances.lastSeen')}`}`"
-          >{{ currentBuild.build.version }}</small
-        ></span
+      <span class="min-w-0 flex-1 truncate text-left">{{ activeInstance.name }}</span
+      ><span
+        v-if="currentBuild"
+        class="max-w-[50%] flex-none truncate text-xs font-normal text-muted tabular-nums"
+        :title="`${t('instances.serverVersion')}: ${currentBuild.build.version}${currentBuild.fresh ? '' : ` · ${t('instances.lastSeen')}`}`"
+        >{{ currentBuild.build.version }}</span
       >
-      <Icon name="down" :size="12" />
-    </button>
+    </UButton>
   </UDropdownMenu>
   <UModal
     v-if="open"
     v-model:open="open"
     :title="t(draft.id ? 'instances.edit' : 'instances.add')"
-    :ui="{ content: 'instance-dialog', body: 'instance-dialog-body' }"
+    :ui="{ content: 'instance-dialog [--dialog-width:420px]' }"
   >
     <template #body>
-      <form id="instance-form" @submit.prevent="submit">
+      <form id="instance-form" class="flex flex-col gap-4" @submit.prevent="submit">
         <UFormField :label="t('instances.name')" name="name" required
           ><UInput
             :model-value="draft.name"
@@ -298,219 +301,66 @@ const items = computed<DropdownMenuItem[][]>(() =>
             :disabled="working"
             @update:model-value="(value: string | number) => editField('base', value)"
         /></UFormField>
-        <dl v-if="draftBuild" class="instance-build-detail">
+        <dl
+          v-if="draftBuild"
+          class="instance-build-detail m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs text-muted"
+        >
           <dt>{{ t('instances.serverVersion') }}</dt>
-          <dd>
+          <dd class="m-0 text-default [overflow-wrap:anywhere]">
             {{ buildLabel(draftBuild.build)
-            }}<small v-if="!draftBuild.fresh">{{ t('instances.lastSeen') }}</small>
+            }}<span v-if="!draftBuild.fresh" class="ms-1.5 text-muted">{{
+              t('instances.lastSeen')
+            }}</span>
           </dd>
           <template v-if="draftBuild.build.revision"
             ><dt>{{ t('instances.revision') }}</dt>
-            <dd class="instance-revision">{{ draftBuild.build.revision }}</dd></template
+            <dd class="instance-revision m-0 font-mono text-default [overflow-wrap:anywhere]">
+              {{ draftBuild.build.revision }}
+            </dd></template
           >
         </dl>
-        <p v-if="error" role="alert" class="instance-error">{{ t(error) }}</p>
+        <UAlert v-if="error" color="error" variant="subtle" :title="t(error)" role="alert" />
       </form>
     </template>
     <template #footer
-      ><div class="instance-probe-footer">
-        <UButton type="submit" form="instance-form" :loading="working" :disabled="!canSubmit">{{
-          t(draft.id ? 'common.save' : 'instances.connect')
-        }}</UButton
-        ><span class="instance-probe-status" role="status"
-          ><span v-if="probe.pending.value">{{ t('instances.probing') }}</span
-          ><button v-else-if="probe.failed.value" type="button" @click="probe.retry">
-            {{ t('instances.probeFailed') }} · {{ t('instances.retry') }}</button
-          ><span
-            v-else-if="displayedBuild"
-            :title="`${t('instances.serverVersion')}: ${displayedBuild.version}${displayedBuild.revision ? ` · ${displayedBuild.revision}` : ''}`"
-            >{{ buildLabel(displayedBuild) }}</span
-          ></span
+      ><span class="instance-probe-status min-w-0 flex-1 truncate text-xs text-muted" role="status"
+        ><template v-if="probe.pending.value">{{ t('instances.probing') }}</template
         ><UButton
-          v-if="!draft.id"
-          type="button"
+          v-else-if="probe.failed.value"
           color="neutral"
-          variant="ghost"
-          icon="i-lucide-scan-qr-code"
-          class="instance-add-scan"
-          :disabled="working"
-          :title="t('instances.scanQr')"
-          :aria-label="t('instances.scanQr')"
-          @click="rescan"
-        /></div
-    ></template>
+          variant="link"
+          size="xs"
+          class="p-0"
+          @click="probe.retry"
+          >{{ t('instances.probeFailed') }} · {{ t('instances.retry') }}</UButton
+        ><span
+          v-else-if="displayedBuild"
+          :title="`${t('instances.serverVersion')}: ${displayedBuild.version}${displayedBuild.revision ? ` · ${displayedBuild.revision}` : ''}`"
+          >{{ buildLabel(displayedBuild) }}</span
+        ></span
+      ><UButton
+        v-if="!draft.id"
+        type="button"
+        color="neutral"
+        variant="ghost"
+        square
+        icon="i-lucide-scan-qr-code"
+        class="instance-add-scan"
+        :disabled="working"
+        :title="t('instances.scanQr')"
+        :aria-label="t('instances.scanQr')"
+        @click="rescan"
+      /><UButton type="submit" form="instance-form" :loading="working" :disabled="!canSubmit">{{
+        t(draft.id ? 'common.save' : 'instances.connect')
+      }}</UButton></template
+    >
   </UModal>
   <InstanceQrScanner :open="open && scanning" :accept="scan" @close="scanning = false" />
 </template>
 
 <style>
-.instance-trigger {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  width: 100%;
-  padding: 8px 3px;
-  color: #aeb9c7;
-  text-align: left;
-  font-size: 11px;
-}
-.instance-trigger > span {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.instance-trigger-label {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  line-height: 1.4;
-}
-.instance-trigger-label > * {
-  text-box: trim-both cap alphabetic;
-  padding-block: 0.3em;
-}
-.instance-trigger-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.instance-trigger-version {
-  flex: none;
-  max-width: 50%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: #7d899a;
-  font-size: 9px;
-  line-height: 1.4;
-  font-variant-numeric: tabular-nums;
-}
-.instance-trigger > svg {
-  flex: none;
-  color: #7f8da0;
-}
-.instance-trigger:hover {
-  color: #e1d1c2;
-}
 .instance-menu {
   min-width: min(200px, calc(var(--mobile-width, var(--ui-viewport-width)) - 24px));
   max-width: min(320px, calc(var(--mobile-width, var(--ui-viewport-width)) - 24px));
-}
-.instance-menu [data-disabled] {
-  cursor: not-allowed;
-}
-.instance-menu-label {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-.instance-menu-label > span {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.instance-version {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 60%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: #7d899a;
-  font-size: 10px;
-  font-weight: 400;
-  white-space: nowrap;
-}
-.instance-version.stale {
-  color: #707b8a;
-}
-.instance-build-detail {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 7px 12px;
-  margin: 0;
-  font-size: 11px;
-  color: #8995a6;
-}
-.instance-build-detail dt {
-  font-weight: 400;
-}
-.instance-build-detail dd {
-  margin: 0;
-  color: #bbc5d2;
-  overflow-wrap: anywhere;
-}
-.instance-build-detail small {
-  margin-left: 7px;
-  color: #7d899a;
-}
-.instance-revision {
-  font-family: monospace;
-  overflow-wrap: anywhere;
-  font-size: 10px;
-}
-.instance-dialog {
-  width: min(420px, calc(var(--mobile-width, var(--ui-viewport-width)) - 28px));
-  max-height: calc(var(--dialog-height) - 32px);
-}
-.instance-add-scan {
-  align-self: stretch;
-  min-width: 32px;
-  justify-content: center;
-}
-.instance-dialog-body {
-  padding: 16px 20px;
-}
-.instance-dialog form {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-.instance-dialog input {
-  font-size: 13px;
-}
-.instance-error {
-  color: #dfaaa5;
-  font-size: 12px;
-}
-.login-content > .instance-trigger {
-  margin: 6px 0 2px;
-}
-.instance-probe-footer {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-  width: 100%;
-}
-.instance-probe-footer > button {
-  flex: none;
-}
-.instance-probe-status {
-  display: block;
-  flex: 1;
-  min-width: 0;
-  margin-left: auto;
-  text-align: right;
-  color: #8391a4;
-  font-size: 11px;
-}
-.instance-probe-status > span,
-.instance-probe-status > button {
-  display: block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.instance-probe-status > button {
-  margin-left: auto;
-  padding: 0;
-  font-size: inherit;
-  color: inherit;
 }
 </style>

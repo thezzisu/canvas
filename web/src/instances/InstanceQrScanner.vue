@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useDocumentVisibility } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
+import UAlert from '@nuxt/ui/components/Alert.vue'
 import UModal from '../components/CanvasModal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
@@ -133,7 +134,7 @@ onBeforeUnmount(() => {
     v-if="open"
     :open="true"
     :title="t('instances.scanQr')"
-    :ui="{ content: 'instance-qr-dialog' }"
+    :ui="{ content: 'instance-qr-dialog [--dialog-width:420px]' }"
     @update:open="
       (value) => {
         if (!value) emit('close')
@@ -141,12 +142,16 @@ onBeforeUnmount(() => {
     "
   >
     <template #body>
-      <div class="instance-qr-body">
-        <div v-if="cameraAvailable" class="instance-qr-camera">
+      <div class="flex flex-col gap-3">
+        <div
+          v-if="cameraAvailable"
+          class="instance-qr-camera relative aspect-square overflow-hidden rounded-md bg-muted ring ring-default"
+        >
           <video
             v-if="cameraVisible"
             :key="attempt"
             ref="video"
+            class="block size-full object-cover"
             autoplay
             muted
             playsinline
@@ -154,10 +159,13 @@ onBeforeUnmount(() => {
           />
           <div
             v-if="camera !== 'active' || reading"
-            class="instance-qr-camera-status"
+            class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-muted text-sm text-muted"
             role="status"
           >
-            <UIcon :name="camera === 'failed' ? 'i-lucide-camera-off' : 'i-lucide-scan-qr-code'" />
+            <UIcon
+              :name="camera === 'failed' ? 'i-lucide-camera-off' : 'i-lucide-scan-qr-code'"
+              class="size-8"
+            />
             <span>{{
               reading
                 ? t('instances.readingQr')
@@ -167,108 +175,44 @@ onBeforeUnmount(() => {
             }}</span>
           </div>
         </div>
-        <p v-else class="instance-qr-hint">
-          {{ t(secureContext ? 'instances.cameraUnavailable' : 'instances.cameraHttps') }}
-        </p>
-        <p v-if="error" class="instance-qr-error" role="alert">{{ t(error) }}</p>
+        <UAlert
+          v-else
+          color="neutral"
+          variant="subtle"
+          icon="i-lucide-camera-off"
+          :title="t(secureContext ? 'instances.cameraUnavailable' : 'instances.cameraHttps')"
+        />
+        <UAlert v-if="error" color="error" variant="subtle" :title="t(error)" role="alert" />
       </div>
     </template>
     <template #footer>
-      <div class="instance-qr-actions">
-        <input
-          ref="fileInput"
-          class="file-input"
-          type="file"
-          accept="image/*"
-          :aria-label="t('instances.chooseQrImage')"
-          @change="readImage"
-        />
-        <UButton
-          type="button"
-          color="neutral"
-          variant="outline"
-          icon="i-lucide-image"
-          :loading="reading"
-          @click="fileInput?.click()"
-          >{{ t('instances.chooseQrImage') }}</UButton
-        >
-        <UButton
-          v-if="cameraAvailable && camera === 'failed'"
-          type="button"
-          color="neutral"
-          variant="ghost"
-          icon="i-lucide-camera"
-          :aria-label="t('instances.useCamera')"
-          @click="retryCamera"
-          >{{ t('common.retry') }}</UButton
-        >
-      </div>
+      <input
+        ref="fileInput"
+        class="hidden"
+        type="file"
+        accept="image/*"
+        :aria-label="t('instances.chooseQrImage')"
+        @change="readImage"
+      />
+      <UButton
+        v-if="cameraAvailable && camera === 'failed'"
+        type="button"
+        color="neutral"
+        variant="ghost"
+        icon="i-lucide-camera"
+        :aria-label="t('instances.useCamera')"
+        @click="retryCamera"
+        >{{ t('common.retry') }}</UButton
+      >
+      <UButton
+        type="button"
+        color="neutral"
+        variant="outline"
+        icon="i-lucide-image"
+        :loading="reading"
+        @click="fileInput?.click()"
+        >{{ t('instances.chooseQrImage') }}</UButton
+      >
     </template>
   </UModal>
 </template>
-
-<style>
-.instance-qr-dialog {
-  --qr-safe-top: max(16px, var(--ui-safe-top));
-  --qr-safe-bottom: max(16px, var(--ui-safe-bottom));
-  top: calc(
-    var(--dialog-top) + (var(--dialog-height) + var(--qr-safe-top) - var(--qr-safe-bottom)) / 2
-  );
-  width: min(420px, calc(var(--mobile-width, var(--ui-viewport-width)) - 28px));
-  max-height: calc(var(--dialog-height) - var(--qr-safe-top) - var(--qr-safe-bottom));
-}
-.instance-qr-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.instance-qr-camera {
-  position: relative;
-  overflow: hidden;
-  aspect-ratio: 1;
-  border: 1px solid var(--ui-border);
-  border-radius: 8px;
-  background: #101216;
-}
-.instance-qr-camera video {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.instance-qr-camera-status {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  color: #96a0af;
-  font-size: 12px;
-  background: #101216;
-}
-.instance-qr-camera-status > span:first-child {
-  width: 30px;
-  height: 30px;
-}
-.instance-qr-hint,
-.instance-qr-error {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-}
-.instance-qr-hint {
-  color: #96a0af;
-}
-.instance-qr-error {
-  color: #e0aaa5;
-}
-.instance-qr-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-}
-</style>

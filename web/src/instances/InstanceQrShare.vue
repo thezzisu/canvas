@@ -41,27 +41,42 @@ function copy() {
 </script>
 
 <template>
-  <div class="instance-qr-share">
-    <div class="instance-qr-image" :aria-busy="!image && !failed">
-      <img v-if="image" :src="image" :alt="t('account.shareQr')" draggable="false" />
-      <div v-else-if="failed" class="instance-qr-status" role="alert">
+  <div class="instance-qr-share flex flex-col items-center gap-4">
+    <div
+      class="instance-qr-image grid aspect-square w-[min(100%,280px)] place-items-center overflow-hidden rounded-md bg-white text-neutral-950"
+      :aria-busy="!image && !failed"
+    >
+      <img
+        v-if="image"
+        class="block size-full object-contain [image-rendering:pixelated]"
+        :src="image"
+        :alt="t('account.shareQr')"
+        draggable="false"
+      />
+      <div
+        v-else-if="failed"
+        class="flex flex-col items-center gap-3 p-5 text-center text-sm"
+        role="alert"
+      >
         <span>{{ t('account.qrFailed') }}</span
         ><UButton color="neutral" variant="outline" @click="retry++">{{
           t('common.retry')
         }}</UButton>
       </div>
-      <span v-else class="instance-qr-status" role="status">{{ t('common.loading') }}</span>
+      <span v-else class="p-5 text-sm" role="status">{{ t('common.loading') }}</span>
     </div>
-    <div class="instance-qr-details">
-      <strong>{{ name }}</strong>
-      <span>{{ username }}</span>
-      <div class="instance-qr-address">
-        <span>{{ base }}</span
+    <div class="flex w-full min-w-0 flex-col items-center gap-1 text-center text-sm">
+      <strong class="max-w-full [overflow-wrap:anywhere]">{{ name }}</strong>
+      <span class="max-w-full text-muted [overflow-wrap:anywhere]">{{ username }}</span>
+      <div class="mt-2 flex w-full items-center gap-1.5 text-left text-muted">
+        <span class="min-w-0 flex-1 [overflow-wrap:anywhere]">{{ base }}</span
         ><UButton
           type="button"
           icon="i-lucide-copy"
           color="neutral"
           variant="ghost"
+          square
+          class="shrink-0"
           :aria-label="t('account.copyLink')"
           :title="t('account.copyLink')"
           @click="copy"
@@ -70,74 +85,3 @@ function copy() {
     </div>
   </div>
 </template>
-
-<style scoped>
-.instance-qr-share {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
-}
-.instance-qr-image {
-  display: grid;
-  place-items: center;
-  aspect-ratio: 1;
-  width: min(100%, 280px);
-  background: #fff;
-  color: #15171a;
-  border-radius: 8px;
-  overflow: hidden;
-}
-.instance-qr-image img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  image-rendering: pixelated;
-}
-.instance-qr-status {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 20px;
-  font-size: 13px;
-  text-align: center;
-}
-.instance-qr-details {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  width: 100%;
-  min-width: 0;
-  text-align: center;
-  font-size: 13px;
-}
-.instance-qr-details > strong,
-.instance-qr-details > span {
-  max-width: 100%;
-  overflow-wrap: anywhere;
-}
-.instance-qr-details > span {
-  color: #a3abb8;
-}
-.instance-qr-address {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  margin-top: 8px;
-  color: #a3abb8;
-  font-size: 12px;
-  text-align: left;
-}
-.instance-qr-address > span {
-  flex: 1;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.instance-qr-address > button {
-  flex-shrink: 0;
-}
-</style>
