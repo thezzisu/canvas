@@ -178,16 +178,19 @@ test('a composer write that a newer one from its page overtook is acknowledged a
   assert.equal(f.changes(), published)
 })
 
-test('ordered writes need their page and sequence number', async (t) => {
+test('a malformed write order is refused; a caller that sends none is simply not ordered', async (t) => {
   const f = fixture(t)
-  for (const mark of [undefined, 'page', 'page.x', '.1', 'page.1.2'])
-    for (const [path, body] of [
-      [`${f.canvas}/notes/note`, { content: 'unordered' }],
-      [`${f.canvas}/layout`, { nodes: [{ id: 'note', x: 5 }] }],
-      [f.composer, { content: 'unordered' }],
-    ] as const)
+  const writes = [
+    [`${f.canvas}/notes/note`, { content: 'unordered' }],
+    [`${f.canvas}/layout`, { nodes: [{ id: 'note', x: 5 }] }],
+    [f.composer, { content: 'unordered' }],
+  ] as const
+  for (const mark of ['page', 'page.x', '.1', 'page.1.2'])
+    for (const [path, body] of writes)
       assert.equal((await f.patch(path, body, mark)).status, 400, `${mark} ${path}`)
   assert.deepEqual([f.note().content, f.note().x], ['A', 0])
+  for (const [path, body] of writes) assert.equal((await f.patch(path, body)).status, 200, path)
+  assert.deepEqual([f.note().content, f.note().x], ['unordered', 5])
 })
 
 test('the order forgets the resources written longest ago', () => {
