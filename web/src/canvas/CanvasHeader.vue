@@ -216,7 +216,7 @@ const menuUi = ref({
       </span>
       <UButton
         v-if="!shell.mobile"
-        class="refresh-button"
+        class="refresh-button @max-[260px]/header:hidden"
         icon="i-lucide-refresh-cw"
         color="neutral"
         variant="ghost"

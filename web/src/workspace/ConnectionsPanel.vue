@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UCollapsible from '@nuxt/ui/components/Collapsible.vue'
@@ -19,31 +19,43 @@ const { t } = useI18n()
 const scene = useCanvasScene()
 const { workspace, shell } = scene
 const expanded = ref('')
+/** A click elsewhere closes the panel and keeps the focus that click gave. */
+let clickedOutside = false
 // Canvas and terminal gestures stop pointer events before the panel's own outside listener.
-const dismiss = usePointerDismiss(
+usePointerDismiss(
   computed({
     get: () => shell.connectionsOpen && !shell.modalOpen,
     set: (open) => {
+      clickedOutside = !open
       shell.connectionsOpen = open
     },
   }),
   () => document.querySelector<HTMLElement>('.connections-panel'),
 )
-/** A click elsewhere closes the panel and keeps the focus that click gave. */
-let clickedOutside = false
 const content = {
-  onInteractOutside: dismiss.onInteractOutside,
   // Focus returning to a menu's trigger is not a reason to close.
   onFocusOutside: (event: Event) => event.preventDefault(),
   onPointerDownOutside() {
     clickedOutside = true
   },
-  onCloseAutoFocus(event: Event) {
-    if (clickedOutside) event.preventDefault()
-    else dismiss.onCloseAutoFocus(event)
-    clickedOutside = false
-  },
 }
+// The panel returns focus to its opener itself: the dialog would also do so after a click
+// on a terminal, whose pointer events it never sees.
+let opener: HTMLElement | undefined
+watch(
+  () => shell.connectionsOpen,
+  (open) => {
+    if (open) {
+      opener = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+      opener?.blur()
+      return
+    }
+    if (!clickedOutside && opener?.isConnected) opener.focus({ preventScroll: true })
+    clickedOutside = false
+    opener = undefined
+  },
+  { flush: 'sync' },
+)
 const resourceOf = (source: Source) => workspace.resources.find((item) => item.id === source.id)
 const runtime = (source: Source) => (source.runtime === 'core' ? 'herdr-core' : 'herdr')
 const online = (resource?: SourceResource) => resource?.status === 'online' && !resource.error

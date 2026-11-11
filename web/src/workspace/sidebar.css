@@ -227,5 +227,7 @@
   justify-self: center;
 }
 .sidebar-open .sidebar-settings {
+  min-width: 40px;
   min-height: 40px;
+  justify-content: center;
 }
