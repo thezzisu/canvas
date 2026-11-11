@@ -492,6 +492,7 @@ defineExpose({ close })
 <style scoped>
 .settings-section {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding-block: 14px;
 }
