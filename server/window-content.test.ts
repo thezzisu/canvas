@@ -1717,3 +1717,73 @@ test('path seed discovery shares the reconstruction budget on delimiter-heavy te
       .some((item) => item.kind === 'file' && item.path === '/tmp/unreached/file.png'),
   )
 })
+
+test('plain file URLs resolve to local paths and join application hard wraps under a hanging indent', async (t) => {
+  const f = await fixture(t),
+    directory = join(f.root, 'tour6', 'agents', 'legacy-dialogs')
+  await mkdir(directory, { recursive: true })
+  const names = [
+    'desktop-settings.png',
+    'mobile-terminal-defaults.png',
+    'mobile-source-advanced.png',
+  ]
+  for (const name of names) await writeFile(join(directory, name), 'synthetic image')
+  const [short, tail, slash] = names.map((name) => `    file://${join(directory, name)}`)
+  const columns = terminalCellWidth(tail!) - 1,
+    middle = slash!.indexOf('legacy-dialogs') + 'legacy-di'.length
+  f.setContent([
+    {
+      ...pane(
+        [
+          '  这些都是新版本截图里我已经看过的几张，点链接直接打开。',
+          '',
+          '  - 桌面版设置：统一行布局，开关已修好',
+          short!,
+          '  - 手机上嵌套的终端默认设置：…',
+          tail!.slice(0, columns),
+          '    ' + tail!.slice(columns),
+          '  - 手机上的添加连接：SSH，高级设置已展开',
+          slash!.slice(0, middle),
+          '    ' + slash!.slice(middle),
+        ],
+        '/elsewhere',
+      ),
+      columns,
+    },
+  ])
+  assert.deepEqual(
+    (await f.scan()).panes.flatMap((group) =>
+      group.items.flatMap((item) => (item.kind === 'file' ? [item.path] : [])),
+    ),
+    names.map((name) => join(directory, name)),
+  )
+})
+
+test('file URL text ignores hosts and fragments, decodes names and sheds surrounding punctuation', async (t) => {
+  const f = await fixture(t)
+  await writeFile(join(f.root, '带 空格.txt'), 'synthetic text')
+  await writeFile(join(f.root, 'code.ts'), 'synthetic code')
+  await writeFile(join(f.root, 'plain.txt'), 'synthetic text')
+  const encoded = `file://${f.root}/${encodeURIComponent('带 空格.txt')}`
+  f.setContent([
+    pane(
+      [
+        `看这里（${encoded}）， 以及 file://localhost${f.root}/code.ts#L10。`,
+        `[report](FILE://${f.root}/report.txt), file://${f.root}/code.ts:12:3 和 ${f.root}/plain.txt。`,
+        `file://${f.root}/missing.txt file://${f.root}/%E0%A4%A file:relative.txt file://`,
+        '链接 https://example.test/docs。',
+      ],
+      '/elsewhere',
+    ),
+  ])
+  assert.deepEqual(
+    (await f.scan()).panes[0]!.items.map((item) => (item.kind === 'file' ? item.path : item.url)),
+    [
+      join(f.root, '带 空格.txt'),
+      join(f.root, 'code.ts'),
+      join(f.root, 'report.txt'),
+      join(f.root, 'plain.txt'),
+      'https://example.test/docs',
+    ],
+  )
+})

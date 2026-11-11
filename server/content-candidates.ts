@@ -21,9 +21,10 @@ function httpUrl(value: string): string | undefined {
 }
 
 function trimPunctuation(value: string): string {
-  value = value.replace(/[.,;:!?]+$/u, '')
+  value = value.replace(/[.,;:!?。，、；：！？]+$/u, '')
   for (const [open, close] of [
     ['(', ')'],
+    ['（', '）'],
     ['[', ']'],
     ['{', '}'],
   ] as const) {
@@ -33,7 +34,24 @@ function trimPunctuation(value: string): string {
   return value
 }
 
+function linkedFile(value: string): string | undefined {
+  if (value.length > 8192 || controls.test(value)) return
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'file:' || url.username || url.password || url.port) return
+    // The terminal's source owns the path. OSC 8 hostnames never create a
+    // separate connection; SSH aliases need not match a machine's own name.
+    const path = decodeURIComponent(url.pathname)
+    if (!path.startsWith('/') || path.startsWith('//') || path.length > 8192 || controls.test(path))
+      return
+    return posix.normalize(path)
+  } catch {
+    return
+  }
+}
+
 function filePath(value: string, cwd?: string, reference = false): string | null | undefined {
+  if (/^file:\/\//iu.test(value)) return linkedFile(value)
   if (
     !value ||
     value.length > 8192 ||
@@ -112,6 +130,11 @@ function* pathSpans(
       if (budget.remaining <= 0 || budget.characters <= 0) break
       const offset = match.index + match[0].length - match[1]!.length
       if (!seeds.has(offset)) seeds.set(offset, undefined)
+    }
+    // A written file URL wraps like the path it names; filePath resolves the joined text.
+    for (const match of line.matchAll(/file:\/\//giu)) {
+      if (budget.remaining <= 0 || budget.characters <= 0) break
+      if (!seeds.has(match.index)) seeds.set(match.index, undefined)
     }
     // A version number may end the visible fragment before the real extension.
     // Seed it after a prose label too; final filePath validation stays unchanged.
@@ -313,22 +336,6 @@ function* tablePathSpans(
   }
 }
 
-function linkedFile(value: string): string | undefined {
-  if (value.length > 8192 || controls.test(value)) return
-  try {
-    const url = new URL(value)
-    if (url.protocol !== 'file:' || url.username || url.password || url.port) return
-    // The terminal's source owns the path. OSC 8 hostnames never create a
-    // separate connection; SSH aliases need not match a machine's own name.
-    const path = decodeURIComponent(url.pathname)
-    if (!path.startsWith('/') || path.startsWith('//') || path.length > 8192 || controls.test(path))
-      return
-    return posix.normalize(path)
-  } catch {
-    return
-  }
-}
-
 /** Parse bounded visible text, never shell syntax or adjacent pane rows. */
 export function contentCandidates(panes: NativeContentPane[]): {
   panes: WindowContentPane[]
@@ -405,7 +412,7 @@ export function contentCandidates(panes: NativeContentPane[]): {
     const lines = [...(pane.coloredText || []), ...pane.lines]
     for (const line of lines) {
       const occupied: Array<[number, number]> = []
-      for (const match of line.matchAll(/https?:\/\/[^\s<>"'`]+/giu)) {
+      for (const match of line.matchAll(/(?:https?|file):\/\/[^\s<>"'`]+/giu)) {
         add(match[0])
         occupied.push([match.index, match.index + match[0].length])
       }
