@@ -945,6 +945,20 @@ test('an overlay built-in deck refits when the window gets shorter at the same w
   assert.equal(f.control.state.dockHeight, 340, 'the terminal keeps its 160px reserve')
 })
 
+test('a page that still resizes under the overlay request is followed as without the API', t => {
+  const f = fixture(t, { api: true }); f.control.focus(true)
+  assert.equal(f.virtualKeyboard.overlaysContent, true)
+  f.resize(500)
+  assert.equal(f.control.state.dockHeight, 0, 'the resized page is not reserved twice')
+  assert.equal(mobileKeyboardVisible.value, true)
+  t.mock.timers.tick(1000)
+  assert.equal(f.requested(), true, 'the resizing IME counts as open')
+  f.control.switchMode()
+  assert.equal(f.control.state.dockHeight, 0, 'the built-in keys replace the IME in its resized frame')
+  f.resize(844)
+  assert.equal(f.control.state.dockHeight, 344)
+})
+
 test('disposing the overlay owner restores the page policy', t => {
   const f = fixture(t, { api: true }); f.control.focus(true); f.keyboard(340)
   f.control.dispose()

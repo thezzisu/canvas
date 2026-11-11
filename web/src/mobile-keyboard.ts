@@ -63,7 +63,8 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   let changingFocus = false, suspended = false
   let picker: { returned: boolean } | undefined
   // `inset` is the IME's height over the page bottom; while `overlaid` the page does not resize for it.
-  let inset = 0
+  // `shrink` is the part of it by which the page itself resized.
+  let inset = 0, shrink = 0
   // A handoff keeps `hold` reserved until the incoming keyboard covers it (system) or the
   // replaced IME has closed (built-in); `bridge` keeps the built-in keys shown meanwhile.
   let hold = 0, bridge = false, switching = false
@@ -78,12 +79,18 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   // `keep` makes a refused IME leave it open with the keyboard off (picker return, explicit reopen).
   let composer: { element: HTMLElement; prior?: MobileKeyboardMode; lost?: () => void; shown?: boolean; keep?: boolean } | undefined
   const input = () => composer?.element || textarea
-  const occluded = (height: number) => overlaid ? height > 0 : height > Math.max(80, baseline.height * .15)
-  const measure = () => overlaid && api ? Math.max(0, api.boundingRect.height) : Math.max(0, baseline.height - read().height)
+  const threshold = () => Math.max(80, baseline.height * .15)
+  const occluded = (height: number) => overlaid ? height > 0 : height > threshold()
+  // A page that still resizes for its IME under the overlay request (no reported rectangle) is followed as without the API.
+  const measure = () => {
+    const resized = Math.max(0, baseline.height - read().height)
+    shrink = !overlaid || resized > threshold() ? resized : 0
+    return Math.max(shrink, overlaid && api ? api.boundingRect.height : 0)
+  }
   const area = () => !requested ? inset : Math.max(inset, hold, mode === 'builtin' ? builtinHeight : 0)
   function state(): MobileKeyboardState {
-    // Without the overlay the page already shrank by the IME; the area only adds what it does not cover.
-    return { mode, dockHeight: Math.max(0, area() - (overlaid ? 0 : inset)), deck: requested && (mode === 'builtin' || bridge),
+    // Where the page already shrank by the IME, the area only adds what it does not cover.
+    return { mode, dockHeight: Math.max(0, area() - shrink), deck: requested && (mode === 'builtin' || bridge),
       switching: switching || suspended || !!picker || requested && document.hidden, composer: !!composer }
   }
   // The IME overlays the page while this terminal owns input, and until the IME it overlays has closed.
@@ -258,8 +265,10 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       builtinHeight = fitHeight(builtinHeight); inset = measure()
       if (requested && mode === 'system' && !picker && !suspended && !document.hidden) confirm()
     }
-    const refit = requested && mode === 'builtin' && !switching && !suspended && !picker
-    if (overlaid || !requested && !occluded(baseline.height - frame.height)) {
+    const refit = requested && mode === 'builtin' && !switching && !suspended && !picker, resized = baseline.height - frame.height
+    // An overlay request the browser does not honour leaves the system IME resizing the page instead.
+    const resizingIme = overlaid && requested && mode === 'system' && resized > threshold() && !(api && api.boundingRect.height > 0)
+    if (overlaid && !resizingIme || !requested && !occluded(resized)) {
       baseline.height = Math.max(window.innerHeight, frame.height)
       if (refit) builtinHeight = fitHeight(builtinHeight)
     } else if (refit && frame.height !== baseline.height) {
