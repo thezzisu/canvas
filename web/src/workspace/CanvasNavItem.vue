@@ -2,7 +2,9 @@
 import { computed, ref, shallowRef, useId, watch } from 'vue'
 import { useTimeoutFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
+import UButton from '@nuxt/ui/components/Button.vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
+import UIcon from '@nuxt/ui/components/Icon.vue'
 import Icon from '../components/Icon.vue'
 import WindowTitle from './WindowTitle.vue'
 import { paneName, statusColor, statusLabel } from '../lib/status'
@@ -39,7 +41,8 @@ const label = computed(() =>
     ? t('canvasUi.canvasStatus', { name: props.name, status: detail.value })
     : props.name,
 )
-const trigger = ref<HTMLButtonElement>(),
+const triggerButton = ref<{ $el: HTMLElement }>(),
+  trigger = computed(() => triggerButton.value?.$el),
   panel = ref<HTMLElement>(),
   pinned = ref(false)
 const open = computed({ get: () => !!props.open, set: (value) => emit('update:open', value) })
@@ -143,8 +146,10 @@ const content = computed(() => ({
 </script>
 
 <template>
-  <div class="canvas-nav-row">
-    <button
+  <div class="canvas-nav-row relative">
+    <UButton
+      color="neutral"
+      variant="ghost"
       class="nav-item"
       :class="{ active }"
       :aria-current="active ? 'page' : undefined"
@@ -160,24 +165,18 @@ const content = computed(() => ({
       >
       <span
         v-if="unavailable !== undefined"
-        class="canvas-nav-status canvas-nav-unavailable"
+        class="canvas-nav-status col-start-3 text-dimmed"
         :title="unavailable"
-        ><svg width="6" height="6" viewBox="0 0 6 6" aria-hidden="true">
-          <circle
-            cx="3"
-            cy="3"
-            r="2.5"
-            fill="none"
-            stroke="currentColor"
-            stroke-dasharray="1.5 1.12"
-          /></svg
-      ></span>
-    </button>
-    <button
+        ><UIcon name="i-lucide-circle-dashed" class="size-2.5"
+      /></span>
+    </UButton>
+    <UButton
       v-if="indicator?.status"
-      ref="trigger"
-      type="button"
-      class="canvas-nav-status canvas-agent-trigger"
+      ref="triggerButton"
+      color="neutral"
+      variant="ghost"
+      class="canvas-nav-status canvas-agent-trigger absolute inset-y-0 right-0 w-(--sidebar-rail) justify-center p-0"
+      :active="open"
       aria-haspopup="dialog"
       data-no-reorder
       :aria-label="t('canvasUi.agentsInCanvas', { name })"
@@ -193,7 +192,7 @@ const content = computed(() => ({
         :data-status-pulse="fresh && needsAttention(indicator.status)"
         :style="{ '--program-color': statusColor(indicator.status) }"
       />
-    </button>
+    </UButton>
     <UPopover
       v-model:open="open"
       :modal="false"
@@ -205,17 +204,18 @@ const content = computed(() => ({
       }"
     >
       <template #content>
-        <div :id="panelId" ref="panel" class="canvas-agents-panel" tabindex="-1">
-          <div class="canvas-agents-heading">
+        <div :id="panelId" ref="panel" class="canvas-agents-panel p-1 outline-none" tabindex="-1">
+          <div class="flex items-baseline justify-between px-2 py-1.5 text-sm">
             <span>{{ t('canvasUi.agents') }}</span
-            ><small>{{ n(agents.length) }}</small>
+            ><span class="text-xs text-muted tabular-nums">{{ n(agents.length) }}</span>
           </div>
-          <p v-if="!agents.length" class="canvas-agents-empty">{{ t('canvasUi.noAgents') }}</p>
-          <button
+          <UButton
             v-for="agent in agents"
             :key="agent.key"
-            type="button"
-            class="canvas-agent-row"
+            color="neutral"
+            variant="ghost"
+            block
+            class="canvas-agent-row justify-start gap-2 p-2 text-left font-normal"
             :data-agent-id="agent.key"
             :data-window-id="agent.windowId"
             :disabled="!agent.available || actionsAvailable === false"
@@ -227,117 +227,21 @@ const content = computed(() => ({
               :data-status-pulse="fresh && agent.available && needsAttention(agent.status)"
               :style="{ '--program-color': statusColor(agent.status) }"
             />
-            <span class="canvas-agent-description"
-              ><strong>{{ agent.pane.agent || paneName(agent.pane) }}</strong
-              ><WindowTitle :window="agent.window" :pane-id="agent.pane.id" /><small>{{
-                agent.context
-              }}</small></span
+            <span class="flex min-w-0 flex-1 flex-col gap-0.5 text-xs"
+              ><span class="truncate text-sm font-medium">{{
+                agent.pane.agent || paneName(agent.pane)
+              }}</span
+              ><WindowTitle :window="agent.window" :pane-id="agent.pane.id" /><span
+                class="truncate text-muted"
+                >{{ agent.context }}</span
+              ></span
             >
-            <span class="canvas-agent-state" :style="{ color: statusColor(agent.status) }">{{
+            <span class="flex-none text-xs" :style="{ color: statusColor(agent.status) }">{{
               agent.available ? statusLabel(agent.status) : t('canvasUi.agentUnavailable')
             }}</span>
-          </button>
+          </UButton>
         </div>
       </template>
     </UPopover>
   </div>
 </template>
-
-<style scoped>
-.canvas-nav-row {
-  position: relative;
-}
-.canvas-agent-trigger {
-  position: absolute;
-  right: 0;
-  inset-block: 0;
-  width: var(--sidebar-rail);
-  padding: 0;
-  border-radius: 5px;
-  -webkit-tap-highlight-color: transparent;
-}
-.canvas-nav-unavailable {
-  grid-column: 3;
-  color: var(--ui-text-dimmed);
-}
-.canvas-agent-trigger:hover,
-.canvas-agent-trigger[aria-expanded='true'] {
-  background: #ffffff0b;
-}
-.canvas-agent-trigger:focus-visible {
-  outline-offset: -2px;
-}
-.canvas-agents-panel {
-  outline: none;
-  padding: 5px;
-}
-.canvas-agents-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: 7px 9px;
-  color: #c7ced8;
-  font-size: 12px;
-}
-.canvas-agents-heading small {
-  color: #818c9b;
-  font-size: 10px;
-}
-.canvas-agents-empty {
-  padding: 12px 9px;
-  color: #8994a4;
-  font-size: 12px;
-}
-.canvas-agent-row {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: 9px;
-  padding: 9px;
-  border-radius: 5px;
-  text-align: left;
-  color: #bdc5d1;
-}
-.canvas-agent-row:hover:not(:disabled) {
-  background: #ffffff08;
-}
-.canvas-agent-row:focus-visible {
-  outline-offset: -2px;
-}
-.canvas-agent-row:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-.canvas-agent-row > .program-dot {
-  flex: none;
-  width: 6px;
-  height: 6px;
-}
-.canvas-agent-description {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  flex-direction: column;
-  gap: 3px;
-  font-size: 11px;
-}
-.canvas-agent-description strong {
-  font-size: 12px;
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.canvas-agent-description > small {
-  font-size: 10px;
-  color: #7f8b9d;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.canvas-agent-state {
-  flex: none;
-  font-size: 10px;
-  white-space: nowrap;
-}
-</style>
