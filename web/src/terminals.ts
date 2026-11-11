@@ -668,7 +668,7 @@ async function connect(session: Session, probe: boolean) {
             if (session.resumeReset) session.resumePaint = session.paintRevision
           }
           session.term.resize(message.cols, message.rows)
-          // Every replay repeats the current size before its reset bytes; repainting
+          // A replay normally repeats the current size before its reset bytes; repainting
           // then would only redraw the screen those bytes are about to replace.
           if (resized && session.opened) session.term.refresh(0, session.term.rows - 1)
           present(session)
@@ -707,8 +707,8 @@ function terminalGeometry(session: Session) {
 function present(session: Session) {
   if (!session.host?.isConnected || !session.opened) return
   if (session.state.presentation?.maximized && (!session.state.presentation.owned || !session.magnified)) return
-  const geometry = terminalGeometry(session), available = session.available
-  if (!geometry || !available) return
+  const geometry = terminalGeometry(session)
+  if (!geometry) return
   // xterm's scrollbar overlays the grid; it does not reserve a permanent gutter.
   const { width, height } = geometry
   const requested = session.focusResize?.requested, painted = session.paintedGrid
@@ -724,6 +724,9 @@ function present(session: Session) {
     desired.cols === requested.cols && desired.rows === requested.rows &&
     painted.cols === requested.cols && painted.rows === requested.rows &&
     session.term.cols === requested.cols && session.term.rows === requested.rows
+  // The host is measured once its ResizeObserver first reports.
+  const available = session.available
+  if (!available) return
   // A card can change aspect ratio while its shared native grid stays unchanged.
   // Keep the whole frame visible until the native grid catches up.
   const scale = containTerminalScale(available, geometry, session.magnified && !native)
@@ -883,7 +886,6 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       const next = { ...grid, cols: term.cols, rows: term.rows }
       current.metrics = terminalMetrics(current.metrics, previous, next)
       current.rendered = next
-      if (current.host && term.element) fillTerminalBackground(term.element, current.host)
       if (!current.state.screenReady && current.host?.isConnected && terminalFrameReady(current.parsedGrid, term, event)) {
         setState(current, { ...current.state, screenReady: true, transitioning: true })
       }
@@ -987,7 +989,6 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
   if (!interactive(session)) { session.keyboard?.blur(); session.keyboardRequested = false; session.term.blur() }
   setModifiers(session)
   host.appendChild(session.surface)
-  if (session.opened && session.term.element) fillTerminalBackground(session.term.element, host)
   if (!session.opened) {
     session.term.open(session.surface); session.opened = true
     session.removeFontFeatures = applyTerminalFontFeatures(session.term, contentFont)
@@ -1029,6 +1030,8 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
       modifiers: () => current.modifiers, copyGesture: () => current.clipboard?.touchSelectionCompleted(),
     })
   }
+  // xterm sets its theme background inline when it opens; the theme never changes.
+  if (session.term.element) fillTerminalBackground(session.term.element, host)
   if (!session.mobile && session.keyboard) {
     session.keyboard.dispose(); session.keyboard = undefined
     session.mobileInput?.dispose(); session.mobileInput = undefined
