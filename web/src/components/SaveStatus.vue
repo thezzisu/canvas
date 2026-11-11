@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import type { ButtonProps } from '@nuxt/ui'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
-import { pendingWrites } from '../pending-writes'
+import { pendingWrites } from '../lib/pending-writes'
 
 const props = defineProps<{ owner: string; size?: ButtonProps['size'] }>()
 const { t } = useI18n()

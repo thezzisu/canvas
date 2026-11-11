@@ -1,0 +1,223 @@
+import { mobileKeyboardVisible } from '../terminal/mobile-keyboard'
+import type { GlobalSettings } from '../../../shared/settings'
+import {
+  developerMode,
+  viewportFit,
+  interactiveWidget,
+  viewportPolicy,
+  viewportReloadRequired,
+} from '../app/developer-mode'
+import { cutoutPosition, cutoutWidth } from '../lib/display-cutout'
+import { languagePreference, locale } from '../app/i18n'
+import { keepScreenAwake, screenWakeLockState } from '../lib/screen-wake-lock'
+import {
+  keyboardLockState,
+  keyboardLockUnavailableReason,
+  keyboardLockError,
+} from '../terminal/terminal-keyboard-lock'
+import { inputMode, isMobileLayout, type MobileCapabilities } from '../lib/mobile-layout'
+import { uiScale } from '../app/ui-scale'
+
+/** Explicit, local-only geometry and viewport policy. No terminal content or identity. */
+export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
+  const number = (value: number) => (Number.isFinite(value) ? Math.round(value * 100) / 100 : null)
+  const rect = (value: DOMRect | DOMRectReadOnly) => ({
+    x: number(value.x),
+    y: number(value.y),
+    width: number(value.width),
+    height: number(value.height),
+  })
+  const query = (selector: string) => document.querySelector<HTMLElement>(selector)
+  const cssNumber = (element: Element, property: string) =>
+    number(parseFloat(getComputedStyle(element).getPropertyValue(property)))
+  const padding = (element: Element) =>
+    Object.fromEntries(
+      ['top', 'right', 'bottom', 'left'].map((side) => [
+        side,
+        cssNumber(element, `padding-${side}`),
+      ]),
+    )
+  const geometry = (element: Element | null) =>
+    element ? { rect: rect(element.getBoundingClientRect()), padding: padding(element) } : null
+  const app = query('.app-shell'),
+    input = query('.focus-overlay .terminal-mobile-input')
+  const xtermInput = query('.focus-overlay .xterm-helper-textarea')
+  const visual = window.visualViewport,
+    active = document.activeElement,
+    fullscreen = document.fullscreenElement
+  const device = navigator as Navigator & Pick<MobileCapabilities, 'userAgentData'>
+  const inputCapabilities = {
+    coarsePointer: matchMedia('(pointer: coarse)').matches,
+    noHover: matchMedia('(hover: none)').matches,
+    touchPoints: device.maxTouchPoints,
+    userAgent: device.userAgent,
+    platform: device.platform,
+    userAgentData: device.userAgentData
+      ? { mobile: device.userAgentData.mobile, platform: device.userAgentData.platform }
+      : undefined,
+  }
+  const keyboard = (
+    navigator as Navigator & {
+      virtualKeyboard?: { boundingRect: DOMRectReadOnly; overlaysContent?: boolean }
+    }
+  ).virtualKeyboard
+  const appBox = app?.getBoundingClientRect()
+  const bounds = query('.viewport-bounds-probe')
+  const boundsSupported = typeof HTMLElement.prototype.showPopover === 'function'
+  const boundsOpen = boundsSupported && bounds?.matches(':popover-open') === true
+  const probe = document.createElement('i')
+  probe.setAttribute('aria-hidden', 'true')
+  probe.style.cssText =
+    'all:initial;position:fixed;inset:0;zoom:calc(1 / var(--ui-zoom,1));visibility:hidden;pointer-events:none;box-sizing:border-box;contain:strict'
+  let probes
+  try {
+    document.body.append(probe)
+    const fixed = rect(probe.getBoundingClientRect())
+    probe.style.bottom = 'auto'
+    probe.style.height = '100dvh'
+    const dynamic = rect(probe.getBoundingClientRect())
+    probe.style.height = '0'
+    probe.style.padding =
+      'env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)'
+    const safeArea = padding(probe)
+    probe.style.padding = '0'
+    const dimensions = ['top', 'right', 'bottom', 'left', 'width', 'height']
+    for (const dimension of dimensions)
+      probe.style.setProperty(dimension, `env(keyboard-inset-${dimension}, 0px)`)
+    const keyboardInsets = Object.fromEntries(
+      dimensions.map((dimension) => [dimension, cssNumber(probe, dimension)]),
+    )
+    probes = {
+      fixed,
+      dynamic,
+      safeArea,
+      keyboardInsets,
+      bounds: {
+        supported: boundsSupported,
+        open: boundsOpen,
+        rect: boundsOpen && bounds ? rect(bounds.getBoundingClientRect()) : null,
+      },
+    }
+  } finally {
+    probe.remove()
+  }
+  return {
+    version: 3,
+    settings: {
+      developerMode: developerMode.value,
+      viewportFit: viewportFit.value,
+      interactiveWidget: interactiveWidget.value,
+      displayCutout: { position: cutoutPosition.value, width: cutoutWidth.value },
+      language: { preference: languagePreference.value, resolved: locale.value },
+      inputMode: {
+        preference: inputMode.value,
+        resolved: isMobileLayout(inputCapabilities, inputMode.value) ? 'touch' : 'keyboard',
+      },
+      uiScale: uiScale.value,
+      keepScreenAwake: keepScreenAwake.value,
+      contentFont: settings?.contentFont || null,
+    },
+    browser: {
+      userAgent: navigator.userAgent,
+      secureContext: window.isSecureContext,
+      platform: inputCapabilities.platform,
+      userAgentData: inputCapabilities.userAgentData || null,
+      inputCapabilities: {
+        coarsePointer: inputCapabilities.coarsePointer,
+        noHover: inputCapabilities.noHover,
+        touchPoints: inputCapabilities.touchPoints,
+      },
+    },
+    screen: {
+      width: number(screen.width),
+      height: number(screen.height),
+      availableWidth: number(screen.availWidth),
+      availableHeight: number(screen.availHeight),
+    },
+    wakeLock: screenWakeLockState.value,
+    keyboardLock: {
+      state: keyboardLockState.value,
+      unavailableReason: keyboardLockUnavailableReason.value || null,
+      error: keyboardLockError.value || null,
+    },
+    viewportPolicy: {
+      ...viewportPolicy.value,
+      reloadRequired: viewportReloadRequired.value,
+      meta: document.querySelector<HTMLMetaElement>('meta[name="viewport"]')?.content || null,
+    },
+    fullscreen: !fullscreen
+      ? 'none'
+      : fullscreen === document.documentElement
+        ? 'document'
+        : fullscreen === app
+          ? 'app'
+          : 'other',
+    viewport: {
+      layout: { width: number(innerWidth), height: number(innerHeight) },
+      client: {
+        width: number(document.documentElement.clientWidth),
+        height: number(document.documentElement.clientHeight),
+      },
+      visual: visual
+        ? {
+            width: number(visual.width),
+            height: number(visual.height),
+            top: number(visual.offsetTop),
+            left: number(visual.offsetLeft),
+            pageTop: number(visual.pageTop),
+            pageLeft: number(visual.pageLeft),
+            scale: number(visual.scale),
+          }
+        : null,
+      scroll: { x: number(scrollX), y: number(scrollY) },
+      dpr: number(devicePixelRatio),
+    },
+    probes,
+    elements: {
+      app: geometry(app),
+      overlay: geometry(query('.focus-overlay')),
+      card: geometry(query('.focus-overlay > .terminal-card')),
+      header: geometry(query('.focus-overlay .terminal-header')),
+      helper: geometry(query('.focus-overlay .mobile-keyboard')),
+    },
+    applied: appBox
+      ? {
+          width: number(appBox.width),
+          height: number(appBox.height),
+          top: number(appBox.top),
+          left: number(appBox.left),
+          sizing:
+            viewportPolicy.value.interactiveWidget === 'resizes-visual' &&
+            app?.classList.contains('mobile-layout')
+              ? 'visual-viewport'
+              : viewportPolicy.value.interactiveWidget === 'overlays-content'
+                ? 'css-keyboard-inset'
+                : 'css',
+        }
+      : null,
+    keyboard: {
+      requested:
+        query('.focus-overlay .terminal-actions button[aria-pressed]')?.getAttribute(
+          'aria-pressed',
+        ) === 'true',
+      visible: mobileKeyboardVisible.value,
+      virtual: keyboard
+        ? { rect: rect(keyboard.boundingRect), overlaysContent: keyboard.overlaysContent === true }
+        : null,
+      dock: geometry(query('.focus-overlay .mobile-key-dock')),
+    },
+    focus: {
+      active:
+        active === input
+          ? 'mobile-input'
+          : active === xtermInput
+            ? 'xterm-input'
+            : active === document.body
+              ? 'body'
+              : 'other',
+      editable: input?.isContentEditable === true,
+      inputMode:
+        input?.inputMode === 'text' ? 'text' : input?.inputMode === 'none' ? 'none' : 'other',
+    },
+  }
+}

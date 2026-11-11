@@ -11,7 +11,7 @@ import {
   type PaneSurfaceFrame,
   type PaneSurfacePane,
 } from './wire.ts'
-import { terminalKey, terminalShortcut } from '../../web/src/terminal-input.ts'
+import { terminalKey, terminalShortcut } from '../../web/src/terminal/terminal-input.ts'
 
 type Parsed = Parameters<ConstructorParameters<typeof VtInputParser>[0]>[0]
 const mouse = (code: number, column: number, row: number, up = false) =>

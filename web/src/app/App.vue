@@ -1,0 +1,6147 @@
+<script setup lang="ts">
+import {
+  computed,
+  defineAsyncComponent,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  provide,
+  reactive,
+  ref,
+  shallowRef,
+  watch,
+} from 'vue'
+import {
+  VueFlow,
+  useVueFlow,
+  type Node,
+  type NodeChange,
+  type NodePositionChange,
+  type NodeMouseEvent,
+} from '@vue-flow/core'
+import {
+  useMediaQuery,
+  useLocalStorage,
+  useMousePressed,
+  useEventListener,
+  useIntervalFn,
+  useNow,
+  useTimeoutFn,
+  useTitle,
+  watchDebounced,
+} from '@vueuse/core'
+import CanvasMiniMap from '../canvas/CanvasMiniMap.vue'
+import UApp from '@nuxt/ui/components/App.vue'
+import UTheme from '@nuxt/ui/components/Theme.vue'
+import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
+import UButton from '@nuxt/ui/components/Button.vue'
+import UAlert from '@nuxt/ui/components/Alert.vue'
+import UFormField from '@nuxt/ui/components/FormField.vue'
+import UInput from '@nuxt/ui/components/Input.vue'
+import UIcon from '@nuxt/ui/components/Icon.vue'
+import UModal from '../components/CanvasModal.vue'
+import { useToast } from '@nuxt/ui/composables/useToast'
+import { useI18n } from 'vue-i18n'
+import { uiLocale } from './i18n'
+import LanguageSelect from './LanguageSelect.vue'
+import InstancePicker from '../instances/InstancePicker.vue'
+import InstanceSetup from '../instances/InstanceSetup.vue'
+import {
+  activeInstance,
+  activeInstanceId,
+  hasActiveInstance,
+  instances,
+  invalidInstanceLink,
+  rememberInstance,
+  rememberInstanceUsername,
+  selectInstance,
+} from '../instances/instances'
+import { isCanvasSession } from '../instances/instance-url'
+import {
+  instanceBuild,
+  observeInstanceBuild,
+  staleInstanceBuild,
+} from '../instances/instance-builds'
+import { buildLabel } from '../../../shared/build-info'
+import { defaultWindowSize } from '../../../shared/window-size'
+import CanvasNavItem from '../workspace/CanvasNavItem.vue'
+import SidebarList from '../workspace/SidebarList.vue'
+import { orderedItems, useSidebarOrder } from '../workspace/sidebar-order'
+import { useOrderTransition } from '../canvas/order-transition'
+import NotificationCenter from '../notifications/NotificationCenter.vue'
+import NotificationHost from '../notifications/NotificationHost.vue'
+import AppFeedback from './AppFeedback.vue'
+import { notificationPortal, notificationSurface } from '../notifications/notification-surface'
+import { lastWindowCanvas, useWindowCanvasHistory } from '../workspace/window-canvas'
+import type { CanvasNotification } from '../../../shared/notification'
+import { notificationTarget } from '../notifications/notification-model'
+import {
+  focusedCompletionStatus,
+  projectFocusedResources,
+  type WindowFocus,
+  type FocusedStatus,
+} from '../workspace/completion-focus'
+import {
+  agentIndicator,
+  canvasIndicators,
+  connectionIndicator,
+  needsAttention,
+  windowVisualState,
+} from '../workspace/canvas-status'
+import { canvasAgents } from '../workspace/canvas-agents'
+import { workingSet } from '../workspace/working-set'
+import { LayoutDraft } from '../canvas/layout-draft'
+import { layoutEditingKey } from '../canvas/layout-editing'
+import { useReducedMotion } from '../lib/reduced-motion'
+import { createLayoutSaves, type LayoutPatch } from '../canvas/layout-saves'
+import {
+  resizeFromDelta,
+  snapCardPosition,
+  snapCardResize,
+  type CardBounds,
+} from '../canvas/card-alignment'
+import {
+  createPendingEdits,
+  mergeNoteEdits,
+  retargetNoteEdit,
+  type NoteEdit,
+} from '../canvas/pending-edits'
+import { createAutosave } from '../lib/autosave'
+import { guardPageExit, pendingWrites } from '../lib/pending-writes'
+import {
+  cameraFromViewport,
+  parseCanvasLocation,
+  recallFreeCanvasLocation,
+  rememberCanvasLocation,
+  resolveCanvasLocation,
+  restoreCanvasPage,
+  viewportFromCamera,
+  type Feature,
+  type WorkspaceLocation,
+} from '../canvas/canvas-location'
+import {
+  useCanvasLocation,
+  type CanvasAnchor,
+  type CanvasTarget,
+  type CanvasNavigation,
+} from '../canvas/use-canvas-location'
+import {
+  adjacentCanvas,
+  anchoredViewport,
+  canvasAnchor,
+  type CanvasDirection,
+} from '../canvas/canvas-jump'
+import { usePointerDismiss } from '../lib/pointer-dismiss'
+import { useDocumentFocus } from '../lib/document-focus'
+import { useTerminalOverlays } from '../canvas/terminal-overlays'
+import { subscribeState } from '../api/state-events'
+import { retainBackgrounds, useBackgroundUrl } from '../workspace/backgrounds'
+import { pruneFileViews } from '../files/file-view'
+import { cardZoomKey, pruneCardZooms } from '../canvas/card-zoom'
+import { noteScrollKey, pruneNoteScrolls } from '../notes/note-scroll'
+import { pruneCanvasLocations } from '../lib/local-preferences'
+import CardRemovalFeedback from '../canvas/CardRemovalFeedback.vue'
+import type { CardRemovalResponse } from '../../../shared/card-removal'
+import { pruneTerminalPreferences, terminalIdentityKey } from '../terminal/terminal-identity'
+import Icon from '../components/Icon.vue'
+import SaveStatus from '../components/SaveStatus.vue'
+import TerminalNode from '../terminal/TerminalNode.vue'
+import NoteNode from '../notes/NoteNode.vue'
+import FileNode from '../files/FileNode.vue'
+import { downloadPreview, setDownloadContext } from '../files/downloads'
+import { isTerminalNode } from '../api/types'
+import GroupNode from '../canvas/GroupNode.vue'
+import OverviewCreateNode from '../canvas/OverviewCreateNode.vue'
+import BackgroundDialog from '../workspace/BackgroundDialog.vue'
+import RichPasteDialog from '../terminal/RichPasteDialog.vue'
+import { richPasteRequest } from '../terminal/rich-paste-dialog'
+import DirectoryDialog from '../terminal/DirectoryDialog.vue'
+import UrlDialog from '../terminal/UrlDialog.vue'
+import DownloadPreviewDialog from '../files/DownloadPreviewDialog.vue'
+import TrustedPreviewDialog from '../files/TrustedPreviewDialog.vue'
+import { closeTrustedPreview, trustedPreviewRequest } from '../files/trusted-preview'
+import { clearCaptureTrust } from '../terminal/capture-trust'
+import { capturedApp, pruneCaptureViews } from '../terminal/capture'
+import WindowContentDialog from '../terminal/WindowContentDialog.vue'
+import CanvasFileDrop from '../canvas/CanvasFileDrop.vue'
+import SourceDialog from '../workspace/SourceDialog.vue'
+import CanvasNameDialog from '../workspace/CanvasNameDialog.vue'
+import ActionDialog from '../components/ActionDialog.vue'
+import AddWindowsDialog from '../workspace/AddWindowsDialog.vue'
+import ShareCardDialog from '../workspace/ShareCardDialog.vue'
+import WindowMenuDialog, { type WindowMenuItem } from '../workspace/WindowMenuDialog.vue'
+import WindowTitle from '../workspace/WindowTitle.vue'
+import { windowLabel } from '../workspace/window-title'
+import SettingsDialog from '../settings/SettingsDialog.vue'
+import AccountDialog from '../instances/AccountDialog.vue'
+import PwaUpdatePrompt from './PwaUpdatePrompt.vue'
+import CutoutPreview from '../settings/CutoutPreview.vue'
+import { directoryRequest } from '../terminal/directories'
+import { applyComposers } from '../terminal/composers'
+import { urlRequest } from '../terminal/urls'
+import {
+  api,
+  apiContext,
+  apiRevision,
+  apiUrl,
+  isCurrentApi,
+  requireCurrentApi,
+  resetApiRequests,
+  setSessionToken,
+  ApiError,
+  segment,
+  uuid,
+  write,
+} from '../api/api'
+import {
+  acknowledgeTerminalMetadata,
+  cachedTerminalView,
+  clearTerminals,
+  focusWindow,
+  hasLiveTerminal,
+  liveTerminalMetadata,
+  retainTerminalMetadata,
+  setContentFont,
+  setTerminalReadFocus,
+  prepareTerminalReadFocus,
+  terminalReadFocus,
+} from '../terminal/terminals'
+import { mergeLiveResources, windowIsClosed } from '../workspace/live-resources'
+import { buildFontPresentation, ensureContentFont } from '../settings/fonts'
+import type { GlobalSettings } from '../../../shared/settings'
+import { useCanvasNavigation } from '../canvas/canvas-navigation'
+import { cardMenuOpen } from '../canvas/card-menu'
+import { inputMode, useMobileLayout } from '../lib/mobile-layout'
+import { uiZoom } from './ui-scale'
+import { dismissMobileKeyboard, hideMobileKeyboard } from '../terminal/mobile-keyboard'
+import { useDisplayCutout } from '../lib/display-cutout'
+import { developerMode } from './developer-mode'
+import { useScreenWakeLock } from '../lib/screen-wake-lock'
+import {
+  canvasFrame,
+  preserveCanvasCenter,
+  useMobileViewport,
+  type CanvasFrame,
+} from '../lib/viewport'
+import { noteColor, statusColor, statusLabel } from '../lib/status'
+import {
+  overviewResources,
+  overviewPerRowChoices,
+  overviewSpaceLayout,
+  overviewFocusStatuses,
+  overviewStatuses,
+  type OverviewInteraction,
+  type OverviewOrder,
+} from '../canvas/overview'
+import {
+  adjacentPage,
+  pageViewport,
+  retainPage,
+  type OverviewPage,
+  type PageDirection,
+} from '../canvas/overview-paging'
+import type { ProgramStatus } from '../../../shared/status'
+import { insertNoteContent } from '../notes/note-document'
+import type {
+  Canvas,
+  CanvasNode,
+  FileCanvasNode,
+  FileData,
+  NoteCanvasNode,
+  NoteData,
+  NotePatch,
+  SharedState,
+  Source,
+  SourceResource,
+  TerminalCanvasNode,
+  TerminalData,
+  WindowSize,
+} from '../api/types'
+
+const { t, n, locale } = useI18n()
+const {
+  fitView,
+  zoomIn,
+  zoomOut,
+  setViewport,
+  getViewport,
+  getNodesInitialized,
+  findNode,
+  ariaLiveMessage,
+  applyNodeChanges,
+  nodes,
+  setNodes,
+} = useVueFlow()
+const { hasSafeTop } = useDisplayCutout()
+const ViewportDiagnostics = defineAsyncComponent(
+  () => import('../settings/ViewportDiagnostics.vue'),
+)
+const mobile = useMobileLayout()
+// Touch layouts: 44px menu rows; text entry uses 16px so focusing a field never zooms the page.
+const mobileTheme = {
+  dropdownMenu: { item: 'min-h-[44px] items-center' },
+  contextMenu: { item: 'min-h-[44px] items-center' },
+  input: { base: 'text-[16px]' },
+  inputMenu: { base: 'text-[16px]' },
+  inputNumber: { base: 'text-[16px]' },
+}
+const narrowNavigation = useMediaQuery('(max-width: 620px)')
+const reducedMotion = useReducedMotion()
+const { viewport: visibleViewport, style: mobileViewportStyle } = useMobileViewport(mobile)
+const sidebarOpen = ref(false)
+const focusViewportElement = ref<HTMLElement>()
+let cameraObserver: ResizeObserver | undefined
+let cameraFrame: CanvasFrame | undefined
+let cameraResize = 0
+const ready = ref(false)
+const authenticated = ref(false)
+const checkingInstance = ref(false)
+const serverBuild = computed(() => instanceBuild(activeInstance.value))
+const instanceUnavailable = ref(invalidInstanceLink)
+const instanceSetupMessage = ref(invalidInstanceLink ? 'instances.invalidUrl' : '')
+let instanceActivation = 0
+let authorizationCheck: Promise<void> | undefined
+let instanceBooted = false
+useScreenWakeLock(authenticated)
+const username = ref('')
+const password = ref('')
+watch([authenticated, username], ([signedIn, name]) => {
+  if (signedIn && name) rememberInstanceUsername(name)
+})
+const busy = ref(false)
+const loginFailure = shallowRef<unknown>()
+const loginError = computed(() => {
+  const reason = loginFailure.value
+  if (!reason) return ''
+  if (reason instanceof ApiError && reason.status === 401) return t('common.invalidCredentials')
+  if (reason instanceof ApiError && reason.status === 429) return t('common.tooManyAttempts')
+  return reason instanceof Error ? reason.message : t('app.loginFailed')
+})
+const error = ref('')
+const success = ref('')
+const { order: sidebarOrder, remember: rememberSidebarOrder } = useSidebarOrder(
+  () => latestState.value?.navigationOrder,
+  apiRevision,
+  async (kind, ids) => {
+    const context = apiContext()
+    await api(
+      `/api/navigation-order/${kind}`,
+      { method: 'PATCH', body: JSON.stringify({ ids }) },
+      context,
+    )
+    if (isCurrentApi(context)) await syncState()
+  },
+  showError,
+)
+const sources = ref<Source[]>([])
+const orderedSources = computed(() => orderedItems(sources.value, sidebarOrder.value.sources))
+const polledResources = ref<SourceResource[]>([])
+const rawResources = computed(() =>
+  mergeLiveResources(polledResources.value, liveTerminalMetadata.value),
+)
+const focusedStatus = computed<FocusedStatus | undefined>((previous) =>
+  focusedCompletionStatus(rawResources.value, terminalReadFocus.value, previous),
+)
+const resources = computed(() =>
+  orderedItems(
+    projectFocusedResources(rawResources.value, focusedStatus.value),
+    sidebarOrder.value.sources,
+  ),
+)
+const resourcesFresh = ref(false)
+const resourcesLoaded = ref(false)
+const loadFailure = shallowRef<unknown>()
+const undiscoveredSources = computed(() =>
+  sources.value.filter((source) => !resources.value.some((resource) => resource.id === source.id)),
+)
+const pageVisible = ref(!document.hidden)
+const freshStatuses = computed(() => resourcesFresh.value && pageVisible.value)
+const canvases = ref<Canvas[]>([])
+const orderedCanvases = computed(() => orderedItems(canvases.value, sidebarOrder.value?.canvases))
+const windowSizes = ref<Record<string, WindowSize>>({})
+const overviewBackground = ref<Canvas['background']>(null)
+const activeId = ref('overview')
+// A feature page replaces the canvas view; activeId keeps the canvas underneath.
+const featurePage = ref<Feature>()
+const layoutDraft = shallowRef<LayoutDraft>()
+const layoutEditing = computed(() => !!layoutDraft.value)
+const layoutBusy = ref(false),
+  layoutSelected = ref(''),
+  layoutError = ref('')
+const layoutExitOpen = ref(false)
+let resolveLayoutExit: ((value: boolean) => void) | undefined
+let layoutExit: Promise<boolean> | undefined
+provide(layoutEditingKey, {
+  active: layoutEditing,
+  busy: layoutBusy,
+  selected: layoutSelected,
+  start: resizeStarted,
+  end: resizeNode,
+})
+
+const navigation = useCanvasLocation({
+  instanceId: activeInstanceId,
+  hasInstance: (id) =>
+    activeInstance.value.id === id || instances.value.some((instance) => instance.id === id),
+  selectInstance: selectHashInstance,
+  canRemember: () => pageVisible.value,
+})
+const { unknownInstance } = navigation
+const indicators = computed(() =>
+  resourcesLoaded.value && !undiscoveredSources.value.length
+    ? canvasIndicators(canvases.value, resources.value)
+    : {},
+)
+// Recent settled windows age out of the working set without any other change.
+const workingSetClock = useNow({ scheduler: (callback) => useIntervalFn(callback, 30_000) })
+const workingSetEntries = computed(() =>
+  resourcesLoaded.value && !undiscoveredSources.value.length
+    ? workingSet(
+        resources.value,
+        latestState.value?.windowReads || {},
+        workingSetClock.value.getTime(),
+      )
+    : [],
+)
+const workingSetIndicator = computed(() => agentIndicator(workingSetEntries.value))
+const graphKey = ref(0)
+const refreshedAt = ref(0)
+const refreshedTime = computed(() =>
+  refreshedAt.value
+    ? new Date(refreshedAt.value).toLocaleTimeString(locale.value, {
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : '',
+)
+const loading = ref(false)
+const sourcePanel = ref(false)
+const sourcePanelElement = ref<HTMLElement>()
+const expandedSource = ref('')
+const sourceDialog = ref(false)
+let sourceDialogRevision = 0
+const sourceDraft = reactive<Source>({
+  id: '',
+  name: '',
+  runtime: 'tui',
+  transport: 'local',
+  target: '',
+  herdrSession: '',
+  herdrSocket: '',
+  sshIdentityFile: '',
+  sshKnownHostsFile: '',
+})
+const sourceProbe = ref<{ key: string; pending: boolean; version?: string; error?: string }>({
+  key: '',
+  pending: false,
+})
+const sourceProbeRetry = ref(0)
+function sourceConnection(source: Source) {
+  return {
+    runtime: source.runtime || 'tui',
+    transport: source.transport,
+    herdrSession: source.herdrSession?.trim() || '',
+    herdrSocket: source.herdrSocket?.trim() || '',
+    ...(source.transport === 'ssh'
+      ? {
+          target: source.target?.trim() || '',
+          sshIdentityFile: source.sshIdentityFile || '',
+          sshKnownHostsFile: source.sshKnownHostsFile || '',
+        }
+      : {}),
+  }
+}
+const sourceProbeKey = computed(() => JSON.stringify(sourceConnection(sourceDraft)))
+const sourceConfigUnchanged = computed(() => {
+  const original = sources.value.find((source) => source.id === sourceDraft.id)
+  return !!original && JSON.stringify(sourceConnection(original)) === sourceProbeKey.value
+})
+const sourceProbeReady = computed(
+  () =>
+    sourceConfigUnchanged.value ||
+    (sourceProbe.value.key === sourceProbeKey.value && !!sourceProbe.value.version),
+)
+const canvasDialog = ref(false)
+let canvasDialogRevision = 0
+const backgroundCanvas = ref<Canvas | null>(null)
+const settingsDialog = ref(false)
+const settingsDialogComponent = ref<InstanceType<typeof SettingsDialog>>()
+const accountDialog = ref(false)
+const accountMenuOpen = ref(false)
+const openCanvasAgents = ref('')
+watch([activeId, featurePage, apiRevision], () => {
+  openCanvasAgents.value = ''
+})
+/** One sidebar agent list is open at a time. */
+function agentPopover(key: string) {
+  return {
+    open: openCanvasAgents.value === key,
+    'onUpdate:open': (value: boolean) => {
+      if (value) openCanvasAgents.value = key
+      else if (openCanvasAgents.value === key) openCanvasAgents.value = ''
+    },
+  }
+}
+function sourceTitle(source: Source) {
+  const version = resources.value.find((item) => item.id === source.id)?.serverVersion
+  return `${source.name} · ${source.transport === 'local' ? t('app.local') : source.target?.replace(/^ssh:\/\//, '')}${version ? ` · herdr ${version}` : ''}`
+}
+const settings = ref<GlobalSettings | null>(null)
+const contentFontStyle = ref<Record<string, string>>({})
+const appliedContentFont = ref('')
+const contentFontReady = ref(false)
+let fontSignature = ''
+let fontRevision = 0
+const canvasMenu = ref(false)
+const canvasMenuTrigger = ref<HTMLButtonElement>()
+const canvasMenuDismiss = usePointerDismiss(canvasMenu, canvasMenuTrigger)
+const canvasMenuItems = computed<DropdownMenuItem[][]>(() => [
+  [
+    ...(mobile.value
+      ? [
+          {
+            label: t('app.refresh'),
+            icon: 'i-lucide-refresh-cw',
+            onSelect: () => {
+              void refreshResources()
+            },
+          },
+          {
+            label: t('app.connections'),
+            icon: 'i-lucide-server',
+            onSelect: () => {
+              sourcePanel.value = true
+            },
+          },
+          ...(!isOverview.value
+            ? [{ label: t('app.addWindows'), icon: 'i-lucide-plus', onSelect: () => openAdd() }]
+            : []),
+        ]
+      : []),
+    ...(mobile.value && !isOverview.value && !layoutEditing.value
+      ? [
+          {
+            label: t('app.layoutEdit'),
+            icon: 'i-lucide-pencil',
+            onSelect: () => {
+              void startLayout()
+            },
+          },
+        ]
+      : []),
+    { label: t('app.background'), icon: 'i-lucide-image', onSelect: openBackground },
+  ],
+  [
+    {
+      type: 'checkbox',
+      label: t('app.minimap'),
+      icon: 'i-lucide-map',
+      checked: showMinimap.value,
+      onSelect: (event) => event.preventDefault(),
+      onUpdateChecked: (value) => {
+        showMinimap.value = value
+      },
+    },
+    {
+      type: 'checkbox',
+      label: t('app.navigation'),
+      icon: 'i-lucide-panel-bottom',
+      checked: showNavigation.value,
+      onSelect: (event) => event.preventDefault(),
+      onUpdateChecked: (value) => {
+        showNavigation.value = value
+      },
+    },
+    {
+      type: 'checkbox',
+      label: t('app.autoYieldControls'),
+      icon: 'i-lucide-mouse-pointer-2',
+      checked: autoYieldControls.value,
+      onSelect: (event) => event.preventDefault(),
+      onUpdateChecked: (value) => {
+        autoYieldControls.value = value
+      },
+    },
+  ],
+  ...(!isOverview.value
+    ? [
+        [
+          {
+            label: t('app.renameCanvas'),
+            icon: 'i-lucide-pencil',
+            onSelect: () => openCanvasDialog(currentCanvas.value),
+          },
+          {
+            label: t('app.deleteCanvas'),
+            icon: 'i-lucide-trash',
+            color: 'error' as const,
+            onSelect: () => {
+              void deleteCanvas()
+            },
+          },
+        ],
+      ]
+    : []),
+])
+const createMenuOpen = ref(false)
+const canvasFileDrop = ref<InstanceType<typeof CanvasFileDrop>>()
+const createMenu = computed<DropdownMenuItem[]>(() => [
+  {
+    label: t('app.addNote'),
+    icon: 'i-lucide-sticky-note',
+    onSelect: () => {
+      void addNote()
+    },
+  },
+  {
+    label: t('app.uploadFile'),
+    icon: 'i-lucide-upload',
+    disabled: canvasFileDrop.value?.uploading,
+    onSelect: () => canvasFileDrop.value?.chooseFiles(),
+  },
+])
+watch([activeId, apiRevision], () => {
+  createMenuOpen.value = false
+})
+const canvasDraft = reactive({ id: '', name: '' })
+const dialogError = ref('')
+const actionDialog = ref<{
+  title: string
+  description: string
+  label?: string
+  optional?: boolean
+  value: string
+  danger?: boolean
+  button: string
+  submit: (value: string) => Promise<void>
+} | null>(null)
+const addDialog = ref(false)
+let addDialogRevision = 0
+const addTarget = ref('')
+const addSearch = ref('')
+const selectedWindows = ref<string[]>([])
+const shareCard = ref<{ canvasId: string; node: NoteCanvasNode | FileCanvasNode }>()
+const shareTarget = ref('')
+const shareTargets = computed(() =>
+  canvases.value
+    .filter((canvas) => canvas.id !== shareCard.value?.canvasId)
+    .map((canvas) => ({
+      ...canvas,
+      disabled: canvas.nodes.some(
+        (node) =>
+          node.id === shareCard.value?.node.id ||
+          (node.type === 'file' &&
+            shareCard.value?.node.type === 'file' &&
+            node.assetId === shareCard.value.node.assetId),
+      ),
+    })),
+)
+const windowMenu = ref<{ node: TerminalCanvasNode; name: string } | null>(null)
+const windowMenuWindow = computed(() =>
+  windowMenu.value
+    ? resourceFor(windowMenu.value.node).window || { name: windowMenu.value.name }
+    : undefined,
+)
+const appDialogOpen = computed(
+  () =>
+    sourceDialog.value ||
+    canvasDialog.value ||
+    !!actionDialog.value ||
+    addDialog.value ||
+    !!shareCard.value ||
+    !!windowMenu.value,
+)
+const overlayRoot = ref<HTMLElement>()
+let pendingKeyboard: TerminalCanvasNode | undefined
+function closeAppDialog() {
+  if (busy.value) return
+  sourceDialog.value = false
+  canvasDialog.value = false
+  actionDialog.value = null
+  addDialog.value = false
+  shareCard.value = undefined
+  windowMenu.value = null
+}
+/** The window menu's keyboard action hands focus to its terminal instead of the menu trigger. */
+function restoreDialogFocus(event: Event) {
+  if (!pendingKeyboard) return
+  event.preventDefault()
+  const node = pendingKeyboard
+  pendingKeyboard = undefined
+  focusWindow(node.sourceId, node.spaceId, node.windowId, true)
+}
+function showWindowKeyboard() {
+  pendingKeyboard = windowMenu.value?.node
+  windowMenu.value = null
+}
+/** Evaluated on render: live terminal availability is not reactive state. */
+function windowMenuItems(menu: { node: TerminalCanvasNode; name: string }): WindowMenuItem[][] {
+  const { node } = menu,
+    live = windowMenuWindow.value
+  return [
+    [
+      ...(mobile.value && focused.value?.id === node.id
+        ? [
+            {
+              label: t('terminal.action.showKeyboard'),
+              icon: 'i-lucide-keyboard',
+              keepFocus: true,
+              onSelect: showWindowKeyboard,
+            },
+          ]
+        : []),
+      ...(mobile.value
+        ? [
+            {
+              label: t('common.settings'),
+              icon: 'i-lucide-settings',
+              onSelect: () => {
+                windowMenu.value = null
+                openSettings()
+              },
+            },
+          ]
+        : []),
+      ...(mobile.value && !isOverview.value && node.id
+        ? [
+            {
+              label: t('app.newTab'),
+              icon: 'i-lucide-square-plus',
+              disabled: !terminalData(node).available,
+              onSelect: () => {
+                terminalData(node).newTab?.create()
+                windowMenu.value = null
+              },
+            },
+          ]
+        : []),
+      {
+        label: t('panels.scan.title'),
+        icon: 'i-lucide-scan-text',
+        disabled: !hasLiveTerminal(node.sourceId, node.windowId),
+        onSelect: () => scanWindowContent(node, live ? windowLabel(live) : menu.name),
+      },
+      {
+        label: t('app.addToOtherCanvas'),
+        icon: 'i-lucide-layers',
+        onSelect: () => {
+          openAdd(node)
+          windowMenu.value = null
+        },
+      },
+      {
+        label: t('app.renameWindow'),
+        icon: 'i-lucide-pencil',
+        onSelect: () => windowAction(node, 'rename'),
+      },
+    ],
+    [
+      {
+        label: t('app.closeWindow'),
+        icon: 'i-lucide-trash',
+        color: 'error',
+        onSelect: () => windowAction(node, 'close'),
+      },
+    ],
+  ]
+}
+const scanTarget = shallowRef<{
+  sourceId: string
+  spaceId: string
+  windowId: string
+  name: string
+} | null>(null)
+const notificationCenter = ref<InstanceType<typeof NotificationCenter>>()
+const focused = ref<TerminalCanvasNode | null>(null)
+const selectedTerminal = shallowRef<WindowFocus>()
+const focusedCardId = ref('')
+const hasFocus = computed(() => !!focused.value || !!focusedCardId.value)
+const creating = reactive(new Set<string>())
+const pendingCreatedWindow = shallowRef<{
+  canvasId: string
+  sourceId: string
+  spaceId: string
+  windowId: string
+}>()
+interface CanvasTabDestination {
+  canvasId: string
+  anchor: TerminalCanvasNode
+  focusedId?: string
+  created?: TerminalCanvasNode
+}
+let createdCameraReady = false
+let creationIntent = 0
+let lastOverviewInteraction: OverviewInteraction | undefined
+const notificationReveal = shallowRef<{
+  canvasId: string
+  target: OverviewInteraction
+  request?: typeof navigation.requested.value
+  pending: boolean
+}>()
+const notificationFocus = shallowRef<{
+  canvasId: string
+  sourceId: string
+  spaceId: string
+  windowId: string
+}>()
+let notificationIntent = 0
+function cancelNotificationReveal() {
+  notificationIntent++
+  notificationReveal.value = undefined
+  notificationFocus.value = undefined
+}
+// A window's canvas jump keeps that window fixed on screen while the remaining
+// content leaves and enters in sidebar order.
+type JumpFocus = 'terminal' | 'button' | undefined
+const windowJump = shallowRef<{
+  canvasId: string
+  anchor: CanvasAnchor
+  focus: JumpFocus
+  direction: CanvasDirection
+}>()
+// Canvas switches move content along sidebar order; a jumping window stays still.
+const canvasMorph = shallowRef<{
+  request: CanvasNavigation
+  phase: 'leave' | 'wait' | 'enter'
+  shift: number
+  anchor?: { sourceId: string; windowId: string }
+}>()
+let canvasPresented = false
+let morphAnimations: Animation[] = []
+function cancelCreatedReveal() {
+  creationIntent++
+  pendingCreatedWindow.value = undefined
+}
+function creationNavigation(event: Event) {
+  if (actionDialog.value && busy.value) return
+  navigationFit.value = undefined
+  const control =
+    event.target instanceof Element ? event.target.closest<HTMLElement>('.overview-create') : null
+  if (
+    control?.dataset.sourceId &&
+    creating.has(creationId(control.dataset.sourceId, control.dataset.spaceId)) &&
+    (event.type === 'pointerdown' ||
+      (event instanceof KeyboardEvent && ['Enter', ' '].includes(event.key)))
+  )
+    return
+  cancelCreatedReveal()
+  const card =
+    event.target instanceof Element
+      ? event.target.closest<HTMLElement>('.terminal-card')
+      : undefined
+  const target = notificationReveal.value?.target
+  if (
+    !target ||
+    card?.dataset.sourceId !== target.sourceId ||
+    card?.dataset.windowId !== target.windowId
+  )
+    cancelNotificationReveal()
+}
+let refreshTimer: ReturnType<typeof setInterval>
+const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const layoutSaves = createLayoutSaves()
+const layoutOwner = (canvasId: string) => `layout:${canvasId}`
+let stopPageGuard = () => {},
+  stopEditFlush = () => {}
+const pendingLayouts = layoutSaves.pending
+const pendingNotes = new Map<string, NoteEdit>()
+const savingNotes = new Map<string, NoteEdit>()
+const noteTimers = createAutosave()
+let noteSave: Promise<boolean> | undefined
+const pendingEdits = createPendingEdits({
+  getItem: (key) => sessionStorage.getItem(key),
+  setItem: (key, value) => sessionStorage.setItem(key, value),
+  removeItem: (key) => sessionStorage.removeItem(key),
+})
+let draftBase = ''
+function checkpointEdits() {
+  pendingEdits.save(draftBase, pendingLayouts, [...savingNotes.values(), ...pendingNotes.values()])
+}
+let layoutGesture = ''
+const latestState = shallowRef<SharedState>()
+let stateInstance = ''
+const removalUndo = ref<InstanceType<typeof CardRemovalFeedback>>()
+function removalReleased(context: ReturnType<typeof apiContext>) {
+  if (isCurrentApi(context)) pruneReadingPreferences()
+}
+function pruneReadingPreferences() {
+  const state = latestState.value
+  if (!state || stateInstance !== activeInstance.value.id) return
+  pruneFileViews(
+    activeInstance.value.id,
+    state.canvases,
+    undefined,
+    removalUndo.value?.preferences(),
+  )
+  pruneCardZooms(
+    activeInstance.value.id,
+    state.canvases,
+    undefined,
+    removalUndo.value?.preferences(),
+  )
+  pruneNoteScrolls(
+    activeInstance.value.id,
+    state.canvases,
+    undefined,
+    removalUndo.value?.preferences(),
+  )
+  pruneCanvasLocations(activeInstance.value.id, state.canvases)
+}
+// Cleanup follows authoritative object membership, never note edits, view filters
+// or a transient source outage. Undo keeps its affected keys until its deadline.
+watch(
+  () =>
+    latestState.value &&
+    JSON.stringify([
+      activeInstance.value.id,
+      latestState.value.canvases.map((canvas) => [
+        canvas.id,
+        canvas.nodes.map((node) => [node.id, node.type]),
+      ]),
+    ]),
+  () => pruneReadingPreferences(),
+  { flush: 'sync' },
+)
+watch(
+  () =>
+    latestState.value &&
+    JSON.stringify([
+      activeInstance.value.id,
+      latestState.value.sources.map((source) =>
+        terminalIdentityKey(activeInstance.value.id, source, ''),
+      ),
+      polledResources.value.map((source) => [
+        source.id,
+        source.status,
+        !!source.error,
+        source.spaces.flatMap((space) => space.windows.map((window) => window.id)),
+      ]),
+    ]),
+  () => {
+    if (!latestState.value || stateInstance !== activeInstance.value.id) return
+    pruneTerminalPreferences(
+      activeInstance.value.id,
+      latestState.value.sources,
+      polledResources.value,
+    )
+    pruneCaptureViews(activeInstance.value.id, latestState.value.sources, polledResources.value)
+  },
+)
+const { toasts: notificationToasts, add: addToast } = useToast()
+// Nuxt UI can enqueue after nextTick; reject stale account notices when published.
+watch(
+  [notificationToasts, apiRevision, authenticated, () => latestState.value?.instanceId],
+  ([items, revision, signedIn, backend]) => {
+    const prefix = `notification:${revision}:${backend}:`
+    const current = items.filter(
+      (item) =>
+        !String(item.id).startsWith('notification:') ||
+        (signedIn &&
+          String(item.id).startsWith(prefix) &&
+          (item.type !== 'foreground' || notificationCenter.value?.acceptsToast(item.id))),
+    )
+    if (current.length !== items.length) notificationToasts.value = current
+  },
+  { flush: 'sync' },
+)
+const workspacePending = computed(() => !latestState.value || !resourcesLoaded.value)
+let stateEvents: ReturnType<typeof subscribeState> | undefined
+let resourceSignature = ''
+let resourceLayoutSignature = ''
+let resourceRequest: Promise<void> | undefined
+let pendingViewport = ''
+let viewportRequest = 0
+const currentCanvas = computed(() => canvases.value.find((canvas) => canvas.id === activeId.value))
+const focusedCard = computed(() =>
+  currentCanvas.value?.nodes.find(
+    (node): node is NoteCanvasNode | FileCanvasNode =>
+      node.id === focusedCardId.value && node.type !== 'terminal',
+  ),
+)
+const isOverview = computed(() => activeId.value === 'overview')
+const overviewPaged = ref(false)
+const paging = computed(() => isOverview.value && overviewPaged.value && !featurePage.value)
+const currentPage = shallowRef<OverviewPage>()
+// Vertical navigation keeps its intended column even when a short row clamps it.
+const preferredPageX = ref<number>()
+function selectPage(page: OverviewPage | undefined) {
+  currentPage.value = page
+  preferredPageX.value = page ? page.x + page.width / 2 : undefined
+}
+const pages = computed<OverviewPage[]>(() =>
+  nodes.value
+    .filter((node) => node.type === 'terminal' || (node.type === 'create' && node.data.spaceId))
+    .map((node) => ({
+      // A space may wrap into several visual rows; cards in one row share their y.
+      id: node.type === 'terminal' ? `${node.data.sourceId}/${node.data.windowId}` : node.id,
+      row: `${node.data.sourceId}/${node.data.spaceId}/${node.position.y}`,
+      ...node.position,
+      width: node.data.width,
+      height: node.data.height,
+    })),
+)
+const pageDirections = computed(
+  () =>
+    [
+      {
+        direction: 'left',
+        key: 'ArrowLeft',
+        label: t('app.previousWindow'),
+        icon: 'chevron',
+        rotation: 'rotate(180deg)',
+      },
+      {
+        direction: 'up',
+        key: 'ArrowUp',
+        label: t('app.previousSpace'),
+        icon: 'down',
+        rotation: 'rotate(180deg)',
+      },
+      {
+        direction: 'down',
+        key: 'ArrowDown',
+        label: t('app.nextSpace'),
+        icon: 'down',
+        rotation: '',
+      },
+      {
+        direction: 'right',
+        key: 'ArrowRight',
+        label: t('app.nextWindow'),
+        icon: 'chevron',
+        rotation: '',
+      },
+    ] as const,
+)
+function pageNeighbor(direction: PageDirection) {
+  return adjacentPage(pages.value, currentPage.value?.id || '', direction, preferredPageX.value)
+}
+async function fitPage(animate = false) {
+  resetPagingFeedback()
+  const frame = graphSurface.value
+  if (!paging.value || focused.value || !frame?.clientWidth || !frame.clientHeight) return
+  const initial = currentPage.value
+    ? pages.value
+    : pages.value.filter((page) => !page.id.startsWith('create-'))
+  const page = retainPage(
+    initial.length ? initial : pages.value,
+    currentPage.value?.id || '',
+    currentPage.value,
+    getViewport(),
+    { width: frame.clientWidth, height: frame.clientHeight },
+  )
+  if (page?.id !== currentPage.value?.id || preferredPageX.value === undefined) selectPage(page)
+  else currentPage.value = page
+  if (!page) return
+  const duration = animate && !reducedMotion.value ? 200 : 0
+  const transition = setViewport(
+    pageViewport(page, { width: frame.clientWidth, height: frame.clientHeight }),
+    {
+      duration,
+      interpolate: 'linear',
+      ease: (value) => 1 - (1 - value) ** 3,
+    },
+  )
+  // VueFlow does not resolve an interrupted animation. Only immediate camera
+  // writes can be awaited by mode/fullscreen lifecycle code.
+  if (!duration) await transition
+  if (!pendingViewport) saveViewport()
+}
+function movePage(direction: PageDirection) {
+  if (!paging.value || focused.value) return
+  const horizontal = direction === 'left' || direction === 'right'
+  if (horizontal || preferredPageX.value === undefined) selectPage(currentPage.value)
+  const page = pageNeighbor(direction)
+  if (!page) return
+  clearContentFocus()
+  pendingCreatedWindow.value = undefined
+  if (horizontal) selectPage(page)
+  else currentPage.value = page
+  void fitPage(true)
+}
+async function togglePaging() {
+  clearContentFocus()
+  resetPagingFeedback()
+  preferredPageX.value = undefined
+  if (!overviewPaged.value) saveViewport()
+  overviewPaged.value = !overviewPaged.value
+  await nextTick()
+  if (paging.value) await fitPage(true)
+  else await restoreViewport()
+  saveViewport()
+}
+function guardPageDrag(event: MouseEvent) {
+  if (paging.value && event.button === 1 && !(event.target as Element)?.closest('.terminal-host')) {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+}
+function fitViewport() {
+  if (!nodes.value.length) return
+  navigationFit.value = undefined
+  if (paging.value) {
+    void fitPage(true)
+    return
+  }
+  const target = fitTarget.value,
+    frame = graphSurface.value
+  const duration = reducedMotion.value ? 0 : 200
+  if (target && !fittedFocusedCard.value && frame?.clientWidth && frame.clientHeight) {
+    fittedFocusedCard.value = true
+    void setViewport(
+      pageViewport(
+        { ...target.position, width: target.data.width, height: target.data.height },
+        { width: frame.clientWidth, height: frame.clientHeight },
+      ),
+      { duration, interpolate: 'linear', ease: (value) => 1 - (1 - value) ** 3 },
+    )
+  } else {
+    fittedFocusedCard.value = false
+    void fitView({ padding: 0.14, maxZoom: 1, duration })
+  }
+}
+function navigateMinimap({ event, node }: NodeMouseEvent) {
+  event.stopPropagation()
+  void navigateCard(node)
+}
+async function navigateCard(node: Node) {
+  if (!['terminal', 'note', 'file'].includes(node.type || '') || hasFocus.value) return
+  clearFitContext()
+  clearContentFocus()
+  const canvasId = activeId.value,
+    context = apiContext()
+  resetPagingFeedback()
+  cancelCreatedReveal()
+  // Blurring can remove a focus-exempt window from the filtered overview.
+  const fit = (navigationFit.value = { canvasId, id: node.id, pending: true })
+  await nextTick()
+  if (
+    !isCurrentApi(context) ||
+    activeId.value !== canvasId ||
+    hasFocus.value ||
+    navigationFit.value !== fit
+  )
+    return
+  const target = nodes.value.find((item) => item.id === node.id && item.type === node.type)
+  const frame = graphSurface.value
+  if (!target || !frame?.clientWidth || !frame.clientHeight) return
+  if (paging.value) {
+    if (target.type !== 'terminal') return
+    selectPage(
+      pages.value.find((page) => page.id === `${target.data.sourceId}/${target.data.windowId}`),
+    )
+    void fitPage(true)
+  } else navigationFit.value = { ...fit, pending: false }
+}
+
+// Keep a navigation fit aligned while the terminal's first native grid settles.
+// Explicit user interaction releases it; ordinary output never moves the camera.
+const navigationFit = shallowRef<{ canvasId: string; id: string; pending: boolean }>()
+const navigationFitNode = computed(() => {
+  const fit = navigationFit.value
+  return fit && !fit.pending && fit.canvasId === activeId.value && !hasFocus.value && !paging.value
+    ? nodes.value.find((node) => node.id === fit.id)
+    : undefined
+})
+watch(
+  () => {
+    const node = navigationFitNode.value
+    return node
+      ? `${node.position.x}/${node.position.y}/${node.data.width}/${node.data.height}`
+      : ''
+  },
+  () => {
+    const target = navigationFitNode.value,
+      frame = graphSurface.value
+    if (!target || !frame?.clientWidth || !frame.clientHeight) return
+    void setViewport(
+      pageViewport(
+        { ...target.position, width: target.data.width, height: target.data.height },
+        { width: frame.clientWidth, height: frame.clientHeight },
+      ),
+      {
+        duration: reducedMotion.value ? 0 : 200,
+        interpolate: 'linear',
+        ease: (value) => 1 - (1 - value) ** 3,
+      },
+    )
+  },
+  { flush: 'post' },
+)
+
+const overviewSelected = useLocalStorage<ProgramStatus[]>(
+  () => `canvas:overview:${activeInstance.value.id}:statuses`,
+  [...overviewStatuses],
+  { listenToStorageChanges: false, writeDefaults: false },
+)
+const overviewOrder = useLocalStorage<OverviewOrder>(
+  () => `canvas:overview:${activeInstance.value.id}:order`,
+  'native',
+  { listenToStorageChanges: false, writeDefaults: false },
+)
+const overviewPerRow = useLocalStorage(
+  () => `canvas:overview:${activeInstance.value.id}:per-row`,
+  0,
+  { listenToStorageChanges: false, writeDefaults: false },
+)
+const overviewCreation = computed(() => overviewSelected.value.includes('unknown'))
+const showMinimap = useLocalStorage('canvas:view:minimap', true, {
+  listenToStorageChanges: false,
+  writeDefaults: false,
+})
+const showNavigation = useLocalStorage('canvas:view:navigation', true, {
+  listenToStorageChanges: false,
+  writeDefaults: false,
+})
+const autoYieldControls = useLocalStorage('canvas:view:auto-yield-controls', true, {
+  listenToStorageChanges: false,
+  writeDefaults: false,
+})
+const overviewMenuOpen = ref(false)
+const overviewTrigger = ref<HTMLElement>()
+const overviewDismiss = usePointerDismiss(overviewMenuOpen, overviewTrigger, {
+  // Reka owns the portalled submenu; only canvas gestures can stop its outside listener.
+  outside: (event) =>
+    event.target instanceof Element && !!event.target.closest('.graph-wrap, .focus-overlay'),
+})
+const overviewFiltered = computed(() => overviewSelected.value.length !== overviewStatuses.length)
+const overviewFocused = computed(
+  () =>
+    overviewSelected.value.length === overviewFocusStatuses.length &&
+    overviewFocusStatuses.every((status) => overviewSelected.value.includes(status)),
+)
+const overviewChanged = computed(
+  () => overviewFiltered.value || overviewOrder.value !== 'native' || overviewPerRow.value !== 0,
+)
+const { activeElement, windowFocused } = useDocumentFocus()
+const fittedFocusedCard = ref(false)
+const fitToolbar = ref<HTMLDivElement>()
+const fitToolbarTarget = ref<string>()
+function cardForFocusedBody(active?: Element | null) {
+  if (!active) return
+  const body = active.closest('.card-content')
+  if (!body || body.closest('[inert]') || active.closest('.card-content-activate')) return
+  const id = body.closest<HTMLElement>('.vue-flow__node')?.dataset.id
+  return nodes.value.find(
+    (node) => node.id === id && ['terminal', 'note', 'file'].includes(node.type || ''),
+  )
+}
+function dismissFeedback() {
+  error.value = ''
+  success.value = ''
+}
+function openUnknownInstance() {
+  navigation.visit(activeInstance.value.id, 'overview')
+  void activateInstance()
+}
+function showSource(id: string) {
+  sourcePanel.value = false
+  navigateCanvas('overview', { fitNodeId: `source:${id}` })
+}
+function stepZoom(zoom: typeof zoomIn) {
+  clearFitContext()
+  void zoom({ duration: reducedMotion.value ? 0 : 150 })
+}
+function clearFitContext() {
+  fittedFocusedCard.value = false
+  fitToolbarTarget.value = undefined
+  navigationFit.value = undefined
+}
+function preserveFitTarget(event: FocusEvent) {
+  const toolbar = fitToolbar.value
+  if (
+    !toolbar ||
+    !(event.relatedTarget instanceof Node) ||
+    !toolbar.contains(event.relatedTarget)
+  ) {
+    clearFitContext()
+    return
+  }
+  if (event.target instanceof Element && !toolbar.contains(event.target)) {
+    fitToolbarTarget.value = cardForFocusedBody(event.target)?.id
+  }
+}
+const fitTarget = computed(() => {
+  const active = activeElement.value
+  if (hasFocus.value || !active || (!windowFocused.value && !(active instanceof HTMLIFrameElement)))
+    return
+  return fitToolbar.value?.contains(active)
+    ? nodes.value.find((node) => node.id === fitToolbarTarget.value)
+    : cardForFocusedBody(active)
+})
+const fitFocusedCard = computed(
+  () => !paging.value && !!fitTarget.value && !fittedFocusedCard.value,
+)
+watch(
+  [() => fitTarget.value?.id, activeId, paging],
+  () => {
+    fittedFocusedCard.value = false
+  },
+  { flush: 'sync' },
+)
+watch([activeId, activeInstanceId, paging, apiRevision], clearFitContext, { flush: 'sync' })
+const overviewInteraction = computed<OverviewInteraction | undefined>(() => {
+  if (!isOverview.value) return
+  if (pendingCreatedWindow.value) return pendingCreatedWindow.value
+  if (selectedTerminal.value) return selectedTerminal.value
+  if (notificationReveal.value?.canvasId === 'overview') return notificationReveal.value.target
+  if (windowJump.value?.canvasId === 'overview') return windowJump.value.anchor
+  if (focused.value) return { sourceId: focused.value.sourceId, windowId: focused.value.windowId }
+  const card = activeElement.value?.closest<HTMLElement>('.terminal-card')
+  if (card?.dataset.sourceId && card.dataset.windowId)
+    return { sourceId: card.dataset.sourceId, windowId: card.dataset.windowId }
+})
+useWindowCanvasHistory(
+  () => {
+    const element = activeElement.value
+    if (
+      layoutEditing.value ||
+      !authenticated.value ||
+      !pageVisible.value ||
+      !windowFocused.value ||
+      !element?.matches('.xterm-helper-textarea, .terminal-mobile-input')
+    )
+      return
+    const card = element.closest<HTMLElement>('.terminal-card'),
+      sourceId = card?.dataset.sourceId,
+      windowId = card?.dataset.windowId
+    const source = sources.value.find((item) => item.id === sourceId)
+    if (!source || !windowId || !latestState.value) return
+    // A notification may open an overlay on a canvas that has no reference to it.
+    if (
+      !isOverview.value &&
+      !currentCanvas.value?.nodes.some(
+        (node) =>
+          node.type === 'terminal' && node.sourceId === sourceId && node.windowId === windowId,
+      )
+    )
+      return
+    return terminalIdentityKey(activeInstance.value.id, source, windowId)
+  },
+  () => activeId.value,
+  activeElement,
+)
+const visibleOverview = computed(() =>
+  overviewResources(
+    resources.value,
+    overviewSelected.value,
+    overviewOrder.value,
+    overviewInteraction.value,
+  ),
+)
+const visibleOverviewCount = computed(() =>
+  visibleOverview.value.reduce(
+    (total, source) => total + source.spaces.reduce((sum, space) => sum + space.windows.length, 0),
+    0,
+  ),
+)
+function resetOverview() {
+  overviewSelected.value = [...overviewStatuses]
+  overviewOrder.value = 'native'
+  overviewPerRow.value = 0
+}
+const overviewMenu = computed<DropdownMenuItem[][]>(() => [
+  [
+    { type: 'label', label: t('app.status') },
+    {
+      type: 'checkbox',
+      label: t('app.allStatuses'),
+      checked: !overviewFiltered.value,
+      onSelect: (event) => event.preventDefault(),
+      onUpdateChecked: (checked) => {
+        overviewSelected.value = checked ? [...overviewStatuses] : []
+      },
+    },
+    {
+      type: 'checkbox',
+      label: t('app.focus'),
+      checked: overviewFocused.value,
+      onSelect: (event) => event.preventDefault(),
+      onUpdateChecked: (checked) => {
+        overviewSelected.value = checked ? [...overviewFocusStatuses] : []
+      },
+    },
+    ...overviewStatuses.map((status) => ({
+      type: 'checkbox' as const,
+      label: status === 'unknown' ? t('app.other') : statusLabel(status),
+      status,
+      checked: overviewSelected.value.includes(status),
+      onSelect: (event: Event) => event.preventDefault(),
+      onUpdateChecked: (checked: boolean) => {
+        overviewSelected.value = checked
+          ? [...overviewSelected.value, status]
+          : overviewSelected.value.filter((value) => value !== status)
+      },
+    })),
+  ],
+  [
+    { type: 'label', label: t('app.sort') },
+    ...(['native', 'status'] as const).map((order) => ({
+      type: 'checkbox' as const,
+      label: order === 'native' ? t('app.nativeOrder') : t('app.statusOrder'),
+      checked: overviewOrder.value === order,
+      onSelect: (event: Event) => event.preventDefault(),
+      onUpdateChecked: () => {
+        overviewOrder.value = order
+      },
+    })),
+  ],
+  [
+    {
+      label: t('app.windowsPerRow'),
+      children: [
+        overviewPerRowChoices.map((count) => ({
+          type: 'checkbox' as const,
+          label: count ? String(count) : t('app.noWrapping'),
+          checked: overviewPerRow.value === count,
+          onSelect: (event: Event) => event.preventDefault(),
+          onUpdateChecked: () => {
+            overviewPerRow.value = count
+          },
+        })),
+      ],
+    },
+  ],
+  [{ label: t('app.reset'), disabled: !overviewChanged.value, onSelect: resetOverview }],
+])
+const currentName = computed(() =>
+  featurePage.value
+    ? t('app.workingSet')
+    : isOverview.value
+      ? t('app.overview')
+      : currentCanvas.value?.name || t('app.canvas'),
+)
+useTitle(
+  computed(() =>
+    authenticated.value && latestState.value && !unknownInstance.value
+      ? `${currentName.value} - Canvas`
+      : 'Canvas',
+  ),
+)
+const allWindows = computed(() =>
+  resources.value.flatMap((source) =>
+    source.spaces.flatMap((space) =>
+      space.windows.map((window) => ({
+        source,
+        space,
+        window,
+        key: `${source.id}/${space.id}/${window.id}`,
+      })),
+    ),
+  ),
+)
+const windowCount = computed(() => allWindows.value.length)
+const existingAddWindows = computed(
+  () =>
+    new Set(
+      canvases.value
+        .find((canvas) => canvas.id === addTarget.value)
+        ?.nodes.filter(isTerminalNode)
+        .map((node) => `${node.sourceId}/${node.windowId}`) || [],
+    ),
+)
+const selectedAddWindows = computed(() =>
+  allWindows.value.filter(
+    (item) =>
+      selectedWindows.value.includes(item.key) &&
+      !existingAddWindows.value.has(`${item.source.id}/${item.window.id}`),
+  ),
+)
+watch([allWindows, existingAddWindows], () => {
+  const next = selectedAddWindows.value.map((item) => item.key)
+  if (
+    next.length !== selectedWindows.value.length ||
+    next.some((key, index) => selectedWindows.value[index] !== key)
+  )
+    selectedWindows.value = next
+})
+const modalOpen = computed(
+  () =>
+    trustedPreviewRequest.value ||
+    notificationSurface.value ||
+    richPasteRequest.value ||
+    sourceDialog.value ||
+    canvasDialog.value ||
+    actionDialog.value ||
+    addDialog.value ||
+    shareCard.value ||
+    windowMenu.value ||
+    backgroundCanvas.value ||
+    settingsDialog.value ||
+    accountDialog.value ||
+    accountMenuOpen.value ||
+    scanTarget.value,
+)
+const logicalWindowFocus = computed<WindowFocus | undefined>(() => {
+  if (
+    !authenticated.value ||
+    !pageVisible.value ||
+    !windowFocused.value ||
+    modalOpen.value ||
+    cardMenuOpen.value ||
+    activeElement.value?.closest('[role="menu"]') ||
+    directoryRequest.value ||
+    urlRequest.value ||
+    downloadPreview.value ||
+    sidebarOpen.value ||
+    sourcePanel.value ||
+    focusedCardId.value
+  )
+    return
+  return focused.value || selectedTerminal.value
+})
+watch(logicalWindowFocus, (value) => setTerminalReadFocus(value), { flush: 'sync' })
+function clearContentFocus() {
+  selectedTerminal.value = undefined
+  pendingNoteFocus = ''
+  pendingKeyboard = undefined
+  const active = document.activeElement
+  if (active instanceof HTMLElement && active.closest('.card-content')) active.blur()
+  hideMobileKeyboard()
+}
+watch([activeId, apiRevision], clearContentFocus, { flush: 'sync' })
+watch(
+  navigation.requested,
+  (request) => {
+    if (request) {
+      // Stop the previous graph's animation before navigation can detach it.
+      // An immediate public viewport write interrupts VueFlow's D3 transition.
+      void setViewport(getViewport())
+      clearContentFocus()
+      cancelCreatedReveal()
+      if (!request.anchor) windowJump.value = undefined
+      cancelCanvasMorph()
+    }
+  },
+  { flush: 'sync' },
+)
+function selectLogicalTerminal(event: Event) {
+  if (layoutEditing.value) return
+  if (!(event.target instanceof Element) || (event instanceof PointerEvent && event.button !== 0))
+    return
+  if (event.target.closest('.card-header-actions, [role="menu"]')) return
+  const card =
+    event.target.closest<HTMLElement>('.terminal-card') ||
+    (event instanceof KeyboardEvent &&
+    ['Enter', ' '].includes(event.key) &&
+    event.target.matches('.vue-flow__node')
+      ? event.target.querySelector<HTMLElement>('.terminal-card')
+      : undefined)
+  if (card?.dataset.sourceId && card.dataset.windowId) {
+    if (
+      card.classList.contains('terminal-mobile-preview') ||
+      card.dataset.presentation === 'paused' ||
+      card.dataset.connectionStatus === 'closed'
+    )
+      return
+    const target = { sourceId: card.dataset.sourceId, windowId: card.dataset.windowId }
+    if (event instanceof PointerEvent && event.target.closest('.terminal-host'))
+      prepareTerminalReadFocus(target)
+    selectedTerminal.value = target
+  } else if (
+    event.target.closest('.note-card, .file-card, .vue-flow__pane, .empty-state') &&
+    !event.target.closest('.canvas-toolbar, .vue-flow__minimap')
+  ) {
+    selectedTerminal.value = undefined
+  }
+}
+
+usePointerDismiss(
+  computed({
+    get: () =>
+      sourcePanel.value &&
+      !modalOpen.value &&
+      !directoryRequest.value &&
+      !urlRequest.value &&
+      !downloadPreview.value,
+    set: (value) => {
+      sourcePanel.value = value
+    },
+  }),
+  sourcePanelElement,
+)
+const {
+  surface: graphSurface,
+  fullscreen: canvasFullscreen,
+  resetPagingFeedback,
+  wheel: canvasWheel,
+  touchStart: canvasTouchStart,
+  touchMove: canvasTouchMove,
+  touchEnd: canvasTouchEnd,
+  touchCancel: canvasTouchCancel,
+  click: canvasClick,
+  toggleFullscreen,
+  exitFullscreen,
+} = useCanvasNavigation({
+  getCanvasId: () => `${activeInstance.value.id}/${activeId.value}`,
+  getViewport,
+  setViewport,
+  saveViewport,
+  onError: showError,
+  blocked: () =>
+    workspacePending.value ||
+    overviewMenuOpen.value ||
+    !!modalOpen.value ||
+    !!directoryRequest.value ||
+    !!urlRequest.value ||
+    !!downloadPreview.value ||
+    hasFocus.value ||
+    sidebarOpen.value ||
+    (mobile.value && sourcePanel.value),
+  mobile: () => mobile.value,
+  editing: () => layoutEditing.value,
+  gestureCancelled: cancelLayoutGesture,
+  onNavigate: clearFitContext,
+  paging: {
+    enabled: () => paging.value,
+    canMove: (direction) => !!pageNeighbor(direction),
+    move: movePage,
+    recenter: fitPage,
+  },
+  beforeFullscreen: () => {
+    clearFitContext()
+    sourcePanel.value = false
+    sidebarOpen.value = false
+    canvasMenu.value = false
+  },
+})
+const sidebarDrawer = computed(
+  () => mobile.value || narrowNavigation.value || canvasFullscreen.value,
+)
+const minimap = ref<InstanceType<typeof CanvasMiniMap>>()
+const [toolbarOverlap, minimapOverlap] = useTerminalOverlays({
+  enabled: () => autoYieldControls.value,
+  surface: graphSurface,
+  controls: [fitToolbar, () => minimap.value?.$el as HTMLElement | undefined],
+  geometry: () => {
+    const viewport = getViewport(),
+      id = activeElement.value?.closest<HTMLElement>('.vue-flow__node')?.dataset.id
+    const node = id ? findNode(id) : undefined
+    return [
+      uiZoom.value,
+      viewport.x,
+      viewport.y,
+      viewport.zoom,
+      node?.computedPosition.x,
+      node?.computedPosition.y,
+      node?.dimensions.width,
+      node?.dimensions.height,
+    ].join(',')
+  },
+})
+const { pressed: overviewPointerDown } = useMousePressed({ target: graphSurface, capture: true })
+const { isPending: overviewWheelActive, start: overviewWheel } = useTimeoutFn(() => {}, 200, {
+  immediate: false,
+})
+// Keep a short quiet period through wheel tails and toolbar zoom animations.
+useEventListener(graphSurface, ['wheel', 'pointerup', 'keyup'], () => overviewWheel(), {
+  passive: true,
+  capture: true,
+})
+const overviewMotion = useOrderTransition<Node>({
+  current: () => nodes.value,
+  target: overviewNodes,
+  commit: commitNodes,
+  refresh: refreshNodeData,
+  enabled: () => isOverview.value && resourcesLoaded.value,
+  active: () =>
+    isOverview.value &&
+    pageVisible.value &&
+    !hasFocus.value &&
+    !navigation.requested.value &&
+    canvasPresented,
+  blocked: () =>
+    overviewPointerDown.value ||
+    overviewWheelActive.value ||
+    !!activeElement.value?.closest('.card-content'),
+  scope: () => `${apiRevision.value}/${activeId.value}`,
+  reduced: () => reducedMotion.value,
+  host: () => graphSurface.value,
+  settled: async (manual) => {
+    if (hasFocus.value || navigation.requested.value) return
+    if (paging.value) await fitPage()
+    else if (manual && nodes.value.length) {
+      preferredPageX.value = undefined
+      await fitView({ padding: 0.14, maxZoom: 1, duration: 0 })
+    }
+  },
+})
+const currentBackground = computed(() =>
+  isOverview.value ? overviewBackground.value : currentCanvas.value?.background,
+)
+const { url: backgroundUrl, material: backgroundMaterial } = useBackgroundUrl(
+  () => currentBackground.value?.url,
+  { material: true },
+)
+const terminalMaterialStyle = computed(() => {
+  const tint = `rgb(27 31 38 / ${1 - (currentBackground.value?.opacity ?? 0)})`
+  return {
+    '--terminal-transition-background': backgroundMaterial.value
+      ? `linear-gradient(${tint}, ${tint}), url("${backgroundMaterial.value}") center / cover #1b1f26`
+      : '#1b1f26',
+  }
+})
+const canvasCounts = computed(() => {
+  if (isOverview.value)
+    return overviewFiltered.value
+      ? t('app.filteredWindows', { visible: visibleOverviewCount.value, total: windowCount.value })
+      : t('app.overviewCount', {
+          connections: t('app.connectionCount', sources.value.length),
+          windows: t('app.windowCount', windowCount.value),
+        })
+  const items = currentCanvas.value?.nodes || []
+  const notes = items.filter((node) => node.type === 'note').length
+  const files = items.filter((node) => node.type === 'file').length
+  const windows = items.filter(isTerminalNode).length
+  return (
+    [
+      windows && t('app.windowCount', windows),
+      notes && t('app.noteCount', notes),
+      files && t('app.fileCount', files),
+    ]
+      .filter(Boolean)
+      .join(' · ') || t('app.emptyCanvas')
+  )
+})
+
+function windowSize(node: Pick<TerminalCanvasNode, 'sourceId' | 'windowId'>): WindowSize {
+  return windowSizes.value[`${node.sourceId}/${node.windowId}`] || defaultWindowSize
+}
+
+function notify(message: string) {
+  success.value = message
+}
+function showError(reason: unknown) {
+  if (reason instanceof Error && reason.name === 'AbortError') return
+  error.value = reason instanceof Error ? reason.message : String(reason)
+}
+function requestError(event: Event) {
+  showError((event as CustomEvent).detail)
+}
+function resourceFor(node: TerminalCanvasNode) {
+  const source = resources.value.find((item) => item.id === node.sourceId)
+  const space = source?.spaces.find((item) => item.id === node.spaceId)
+  const window = space?.windows.find((item) => item.id === node.windowId)
+  // A window can move to another space while remaining on this canvas.
+  const linked =
+    window ||
+    source?.spaces.flatMap((item) => item.windows).find((item) => item.id === node.windowId)
+  return { source, space, window: linked }
+}
+function terminalData(node: TerminalCanvasNode, overview = false): TerminalData {
+  const found = resourceFor(node)
+  const sourceConfig = sources.value.find((source) => source.id === node.sourceId)
+  const canvasId = currentCanvas.value?.id
+  const spaceId =
+    found.source?.spaces.find((space) =>
+      space.windows.some((window) => window.id === node.windowId),
+    )?.id || node.spaceId
+  const newTab = canvasId
+    ? {
+        pending: () => creating.has(creationId(node.sourceId, spaceId)),
+        create: () =>
+          windowAction(node, 'create', {
+            canvasId,
+            anchor: { ...node },
+            focusedId: focused.value?.id,
+          }),
+      }
+    : undefined
+  const canvasJump = {
+    neighbor: (direction: CanvasDirection) =>
+      adjacentCanvas(windowCanvases(node.sourceId, node.windowId), activeId.value, direction),
+    go: (direction: CanvasDirection, focus: JumpFocus) => {
+      void jumpWindowCanvas(node.id, direction, focus)
+    },
+  }
+  const visual = windowVisualState(found.source, found.window, freshStatuses.value)
+  const closed = windowIsClosed(
+    found.source,
+    node.windowId,
+    liveTerminalMetadata.value.get(`${node.sourceId}/${node.windowId}`),
+  )
+  return {
+    ...node,
+    preferenceKey: sourceConfig
+      ? terminalIdentityKey(activeInstance.value.id, sourceConfig, node.windowId)
+      : '',
+    newTab,
+    canvasJump,
+    status: visual.status,
+    statusFresh: visual.fresh,
+    name:
+      found.window?.name ||
+      cachedTerminalView(node.sourceId, node.windowId)?.name ||
+      t(closed ? 'app.closedWindow' : 'app.window'),
+    subtitle: `${found.source?.name || sourceConfig?.name || t('app.unknownConnection')} / ${found.space?.name || t('app.space')}`,
+    available: !!found.window && !found.source?.error,
+    closed,
+    sourceOffline: !!found.source?.error,
+    panes: found.window?.panes || [],
+    overview,
+    focus: false,
+    mobile: mobile.value,
+    onAction: terminalAction,
+    onResize: resizeNode,
+    onResizeStart: resizeStarted,
+  }
+}
+function terminalFlowNode(node: TerminalCanvasNode, overview = false): Node {
+  node = { ...node, ...windowSize(node), ...layoutDraft.value?.geometry(node.id) }
+  return {
+    id: node.id,
+    type: 'terminal',
+    position: { x: node.x, y: node.y },
+    data: terminalData(node, overview),
+    style: { width: `${node.width}px`, height: `${node.height}px` },
+    draggable: !overview && (!mobile.value || layoutEditing.value),
+    selectable: !mobile.value,
+    dragHandle: layoutEditing.value ? '.card-layout-mask' : '.drag-handle',
+  }
+}
+function noteData(node: NoteCanvasNode, focus = false): NoteData {
+  const canvasId = activeId.value
+  const instance = activeInstance.value.id,
+    base = activeInstance.value.base
+  return {
+    ...node,
+    canvasId,
+    zoomKey: cardZoomKey(instance, node.id),
+    scrollKey: noteScrollKey(instance, canvasId, node.id),
+    mobile: mobile.value,
+    focus,
+    onResize: resizeNode,
+    onResizeStart: resizeStarted,
+    canPersistView: () =>
+      activeInstance.value.id === instance &&
+      activeInstance.value.base === base &&
+      !!latestState.value?.canvases
+        .find((canvas) => canvas.id === canvasId)
+        ?.nodes.some((candidate) => candidate.id === node.id && candidate.type === 'note'),
+    onAttachment: (value) => {
+      const canvas = canvases.value.find((canvas) =>
+        canvas.nodes.some((item) => item.type === 'note' && item.id === node.id),
+      )
+      const latest = canvas?.nodes.find(
+        (item): item is NoteCanvasNode => item.type === 'note' && item.id === node.id,
+      )
+      if (!canvas || !latest) return
+      const content = insertNoteContent(latest.content, value)
+      if (content.length > 200_000) {
+        reportError(t('panels.note.tooLong'))
+        return
+      }
+      editNote(canvas.id, node.id, { content })
+    },
+    onChange: (id, patch) => editNote(canvasId, id, patch),
+    onFlush: () => void flushNotes(canvasId),
+    onAction: (action, id) => {
+      if (action === 'remove') void removeNode(id)
+      else cardAction(action, id)
+    },
+  }
+}
+function fileData(node: FileCanvasNode, focus = false): FileData {
+  const { id: instanceId, base } = activeInstance.value,
+    canvasId = activeId.value
+  return {
+    ...node,
+    zoomKey: cardZoomKey(instanceId, node.id),
+    instanceId,
+    canvasId,
+    mobile: mobile.value,
+    focus,
+    onResize: resizeNode,
+    onResizeStart: resizeStarted,
+    onRemove: (id) => {
+      void removeNode(id)
+    },
+    onAction: cardAction,
+    canPersistView: () =>
+      activeInstance.value.id === instanceId &&
+      activeInstance.value.base === base &&
+      !!latestState.value?.canvases
+        .find((canvas) => canvas.id === canvasId)
+        ?.nodes.some((candidate) => candidate.id === node.id && candidate.type === 'file'),
+  }
+}
+function flowNode(node: CanvasNode): Node {
+  node = { ...node, ...layoutDraft.value?.geometry(node.id) }
+  if (isTerminalNode(node)) return terminalFlowNode(node)
+  if (node.type === 'file') {
+    const data = fileData(node)
+    return {
+      id: node.id,
+      type: 'file',
+      position: { x: node.x, y: node.y },
+      data,
+      style: { width: `${node.width}px`, height: `${node.height}px` },
+      draggable: !mobile.value || layoutEditing.value,
+      selectable: !mobile.value,
+      dragHandle: layoutEditing.value ? '.card-layout-mask' : '.drag-handle',
+    }
+  }
+  const data = noteData(node)
+  return {
+    id: node.id,
+    type: 'note',
+    position: { x: node.x, y: node.y },
+    data,
+    style: { width: `${node.width}px`, height: `${node.height}px` },
+    draggable: !mobile.value || layoutEditing.value,
+    selectable: !mobile.value,
+    dragHandle: layoutEditing.value ? '.card-layout-mask' : '.drag-handle',
+  }
+}
+function creationId(sourceId: string, spaceId?: string) {
+  return spaceId ? `create-tab:${sourceId}:${spaceId}` : `create-space:${sourceId}`
+}
+function overviewCreateNode(
+  source: SourceResource,
+  spaceId: string | undefined,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): Node {
+  const id = creationId(source.id, spaceId)
+  return {
+    id,
+    type: 'create',
+    position: { x, y },
+    draggable: false,
+    selectable: false,
+    style: { width: `${width}px`, height: `${height}px` },
+    data: {
+      sourceId: source.id,
+      spaceId,
+      width,
+      height,
+      context: [source.name, source.spaces.find((space) => space.id === spaceId)?.name]
+        .filter(Boolean)
+        .join(' / '),
+      available: !source.error && !['offline', 'error', 'disconnected'].includes(source.status),
+      pending: () => creating.has(id),
+      create: () =>
+        spaceId ? createTab(source.id, spaceId) : void createResource(source.id).catch(showError),
+    },
+  }
+}
+function overviewNodes(): Node[] {
+  const result: Node[] = []
+  let y = 0
+  for (const config of orderedItems(sources.value, sidebarOrder.value.sources)) {
+    const source = resources.value.find((item) => item.id === config.id)
+    if (!source) continue
+    const visible = visibleOverview.value.find((item) => item.id === config.id)
+    const rows = source.spaces.flatMap((space) => {
+      const windows = visible?.spaces.find((item) => item.id === space.id)?.windows || []
+      if (!windows.length && !overviewCreation.value) return []
+      const layout = overviewSpaceLayout(
+        windows.map((window) => windowSize({ sourceId: source.id, windowId: window.id })),
+        overviewPerRow.value,
+        overviewCreation.value,
+        defaultWindowSize,
+        { x: 24, y: 34 },
+      )
+      return [{ space: { ...space, windows }, layout, height: 54 + layout.height }]
+    })
+    if (!rows.length && !overviewCreation.value) continue
+    const width = Math.max(
+      defaultWindowSize.width + 48,
+      ...rows.map((row) => 48 + row.layout.width),
+    )
+    const count = rows.reduce((sum, row) => sum + row.space.windows.length, 0)
+    const height =
+      (overviewCreation.value ? 132 : 78) + rows.reduce((sum, row) => sum + row.height, 0)
+    result.push({
+      id: `source:${source.id}`,
+      type: 'group',
+      position: { x: 0, y },
+      data: {
+        kind: 'source',
+        name: config.name,
+        subtitle: config.transport === 'local' ? t('app.local') : 'SSH',
+        count,
+        width,
+        height,
+      },
+      draggable: false,
+      selectable: false,
+      style: { width: `${width}px`, height: `${height}px`, zIndex: '-1', pointerEvents: 'none' },
+    })
+    let rowY = y + 68
+    for (const { space, height: rowHeight, layout } of rows) {
+      result.push({
+        id: `space:${source.id}:${space.id}`,
+        type: 'group',
+        position: { x: 24, y: rowY },
+        data: { kind: 'space', name: space.name, count: space.windows.length },
+        draggable: false,
+        selectable: false,
+        style: { width: `${width - 48}px`, pointerEvents: 'none' },
+      })
+      space.windows.forEach((window, index) => {
+        const { x, y: cardY, width: cardWidth, height: cardHeight } = layout.cards[index]!
+        result.push(
+          terminalFlowNode(
+            {
+              type: 'terminal',
+              id: `window:${source.id}:${space.id}:${window.id}`,
+              sourceId: source.id,
+              windowId: window.id,
+              spaceId: space.id,
+              x,
+              y: rowY + cardY,
+              width: cardWidth,
+              height: cardHeight,
+            },
+            true,
+          ),
+        )
+      })
+      const create = layout.cards[space.windows.length]
+      if (create)
+        result.push(
+          overviewCreateNode(
+            source,
+            space.id,
+            create.x,
+            rowY + create.y,
+            create.width,
+            create.height,
+          ),
+        )
+      rowY += rowHeight
+    }
+    if (overviewCreation.value)
+      result.push(overviewCreateNode(source, undefined, 24, rowY + 4, width - 48, 32))
+    y += height + 48
+  }
+  return result
+}
+// VueFlow has no locale API; its public attributes and live-message state
+// let Canvas describe the existing keyboard behavior without replacing it.
+function accessibleNode<T extends Node>(node: T): T {
+  const card = ['terminal', 'note', 'file'].includes(node.type || '')
+  return {
+    ...node,
+    domAttributes: {
+      ...node.domAttributes,
+      'aria-roledescription': card ? t('app.card') : undefined,
+      'aria-describedby':
+        card && node.selectable !== false
+          ? node.draggable
+            ? 'canvas-card-move-help'
+            : 'canvas-card-select-help'
+          : undefined,
+    },
+  }
+}
+function announceNodeMove(changes: NodeChange[]) {
+  const active = document.activeElement
+  if (
+    !(active instanceof HTMLElement) ||
+    !graphSurface.value?.contains(active) ||
+    !active.matches('.vue-flow__node, .vue-flow__nodesselection-rect')
+  )
+    return
+  const moved = changes.filter(
+    (change): change is NodePositionChange =>
+      change.type === 'position' &&
+      change.dragging === false &&
+      !!change.position &&
+      !!change.from &&
+      (change.position.x !== change.from.x || change.position.y !== change.from.y),
+  )
+  const change = active.matches('.vue-flow__nodesselection-rect')
+    ? moved[0]
+    : moved.find((item) => item.id === active.dataset.id)
+  if (!change) return
+  if (moved.length > 1) {
+    ariaLiveMessage.value = t('app.cardsMoved', moved.length)
+    return
+  }
+  const node = nodes.value.find((item) => item.id === change.id)
+  const name =
+    node?.type === 'terminal'
+      ? node.data.name
+      : node?.type === 'note'
+        ? node.data.title || t('app.note')
+        : node?.data.asset?.filename || t('app.card')
+  ariaLiveMessage.value = t('app.cardMoved', {
+    name,
+    x: n(Math.round(change.position.x)),
+    y: n(Math.round(change.position.y)),
+  })
+}
+function commitNodes(next: Node[]) {
+  const previous = new Map(
+    nodes.value.map((node) => [node.id, node as Node & { selected?: boolean }]),
+  )
+  setNodes(
+    next.map((node) =>
+      accessibleNode({
+        ...node,
+        selected: previous.get(node.id)?.selected,
+        ...(morphAnchor(node) ? { class: 'canvas-morph-anchor' } : {}),
+      }),
+    ),
+  )
+}
+function refreshNodeData(next: Node[]) {
+  const updated = new Map(next.map((node) => [node.id, node.data]))
+  setNodes(
+    nodes.value.map((node) => ({
+      ...node,
+      data: updated.has(node.id)
+        ? { ...updated.get(node.id), width: node.data.width, height: node.data.height }
+        : node.data,
+    })),
+  )
+}
+function rebuildNodes(change: 'auto' | 'order' | 'manual' = 'auto') {
+  if (!resourcesLoaded.value) return
+  if (isOverview.value) overviewMotion.request(change)
+  else commitNodes((currentCanvas.value?.nodes || []).map(flowNode))
+}
+function applySettings(value: GlobalSettings) {
+  settings.value = value
+  const signature = JSON.stringify(value.contentFont)
+  if (signature === fontSignature) return
+  fontSignature = signature
+  const revision = ++fontRevision
+  const config = {
+    ...value.contentFont,
+    stack: value.contentFont.stack.map((entry) => ({ ...entry })),
+  }
+  const apply = () => {
+    if (revision !== fontRevision) return
+    const presentation = buildFontPresentation(config)
+    contentFontStyle.value = {
+      '--content-font-family': presentation.family,
+      '--content-font-features': presentation.features,
+    }
+    appliedContentFont.value = config.stack[0]?.family || ''
+    setContentFont(config, presentation)
+    contentFontReady.value = true
+  }
+  void (async () => {
+    try {
+      await ensureContentFont(config, apply)
+      apply()
+    } catch (reason) {
+      if (revision === fontRevision) {
+        // Initial failure still opens the workspace with the available fallback.
+        // Later font changes keep the already usable presentation until retry.
+        if (!contentFontReady.value) apply()
+        fontSignature = ''
+        showError(reason)
+      }
+    }
+  })()
+}
+function applySharedState(state: SharedState) {
+  if (
+    latestState.value?.instanceId === state.instanceId &&
+    state.revision < latestState.value.revision
+  )
+    return
+  const restoring = !draftBase
+  if (restoring) {
+    draftBase = apiContext().base
+    const drafts = pendingEdits.read(draftBase, state.canvases)
+    for (const [canvasId, nodes] of drafts.layouts)
+      for (const [id, patch] of nodes) layoutSaves.set(canvasId, id, patch)
+    for (const edit of drafts.notes) pendingNotes.set(noteKey(edit.canvasId, edit.id), edit)
+  }
+  reconcileNoteEdits(state.canvases)
+  stateInstance = activeInstance.value.id
+  latestState.value = state
+  applyComposers(state.composers)
+  retainBackgrounds(
+    [state.overviewBackground, ...state.canvases.map((canvas) => canvas.background)].flatMap(
+      (background) => (background ? [background.url] : []),
+    ),
+  )
+  applySettings(state.settings)
+  const changedConnections = sources.value
+    .filter((previous) => {
+      const next = state.sources.find((source) => source.id === previous.id)
+      return (
+        next &&
+        JSON.stringify(sourceConnection(next)) !== JSON.stringify(sourceConnection(previous))
+      )
+    })
+    .map((source) => source.id)
+  const sourceChanged = JSON.stringify(sources.value) !== JSON.stringify(state.sources)
+  const previousNodes = JSON.stringify(currentCanvas.value?.nodes)
+  const focusedReference = currentCanvas.value?.nodes.some((node) => node.id === focused.value?.id)
+  const nextSizes = { ...state.windowSizes }
+  for (const canvas of state.canvases)
+    for (const [id, patch] of pendingLayouts.get(canvas.id) || []) {
+      const node = canvas.nodes.find((item) => item.id === id)
+      if (
+        node &&
+        isTerminalNode(node) &&
+        (patch.width !== undefined || patch.height !== undefined)
+      ) {
+        const key = `${node.sourceId}/${node.windowId}`
+        nextSizes[key] = {
+          ...(nextSizes[key] || windowSize(node)),
+          ...(patch.width === undefined ? {} : { width: patch.width }),
+          ...(patch.height === undefined ? {} : { height: patch.height }),
+        }
+      }
+    }
+  const sizesChanged = JSON.stringify(windowSizes.value) !== JSON.stringify(nextSizes)
+  windowSizes.value = nextSizes
+  sources.value = state.sources
+  retainTerminalMetadata(
+    state.sources.map((source) => source.id),
+    changedConnections,
+  )
+  overviewBackground.value = state.overviewBackground
+  const sharedNoteDrafts = new Map<string, NotePatch>()
+  for (const edit of [...savingNotes.values(), ...pendingNotes.values()]) {
+    if (
+      !state.canvases.some(
+        (canvas) =>
+          canvas.id === edit.canvasId &&
+          canvas.nodes.some((node) => node.id === edit.id && node.type === 'note'),
+      )
+    )
+      continue
+    sharedNoteDrafts.set(edit.id, { ...sharedNoteDrafts.get(edit.id), ...edit.patch })
+  }
+  canvases.value = state.canvases.map((canvas) => ({
+    ...canvas,
+    nodes: (canvas.nodes || []).map((node) => {
+      return {
+        ...node,
+        ...pendingLayouts.get(canvas.id)?.get(node.id),
+        ...(node.type === 'note' ? sharedNoteDrafts.get(node.id) : {}),
+      }
+    }),
+  }))
+  for (const id of new Set([...saveTimers.keys(), ...pendingLayouts.keys()]))
+    if (!canvases.value.some((canvas) => canvas.id === id)) dropLayout(id)
+  for (const edit of [...pendingNotes.values(), ...savingNotes.values()])
+    if (
+      !canvases.value
+        .find((canvas) => canvas.id === edit.canvasId)
+        ?.nodes.some((node) => node.id === edit.id)
+    )
+      clearNoteEdits(edit.canvasId, edit.id)
+  checkpointEdits()
+  if (restoring && (pendingLayouts.size || pendingNotes.size)) queueMicrotask(() => saveEdits())
+  if (!isOverview.value && !currentCanvas.value) {
+    if (featurePage.value) activeId.value = 'overview'
+    else navigation.fallback(activeInstance.value.id)
+  } else {
+    if (
+      !isOverview.value &&
+      focusedReference &&
+      focused.value &&
+      !currentCanvas.value?.nodes.some((node) => node.id === focused.value?.id)
+    )
+      void closeFocus()
+    if (
+      !layoutGesture &&
+      (sizesChanged || previousNodes !== JSON.stringify(currentCanvas.value?.nodes))
+    )
+      rebuildNodes()
+  }
+  if (
+    backgroundCanvas.value &&
+    backgroundCanvas.value.id !== 'overview' &&
+    !canvases.value.some((canvas) => canvas.id === backgroundCanvas.value?.id)
+  )
+    backgroundCanvas.value = null
+  if (sourceChanged) {
+    resourcesFresh.value = false
+    polledResources.value = polledResources.value.filter(
+      (resource) =>
+        !changedConnections.includes(resource.id) &&
+        sources.value.some((source) => source.id === resource.id),
+    )
+    if (focused.value && !sources.value.some((source) => source.id === focused.value?.sourceId))
+      focused.value = null
+    resourceSignature = ''
+    resourceLayoutSignature = ''
+    if (isOverview.value && !layoutGesture) rebuildNodes()
+    if (resourcesLoaded.value) void refreshResources(true)
+  }
+}
+async function syncState() {
+  const previous = latestState.value
+  const state = await api<SharedState>('/api/state')
+  if (latestState.value !== previous && latestState.value?.instanceId !== state.instanceId) return
+  applySharedState(state)
+}
+function stopStateEvents() {
+  stateEvents?.close()
+  stateEvents = undefined
+}
+function startStateEvents() {
+  stopStateEvents()
+  stateEvents = subscribeState(
+    (state) => applySharedState(state as SharedState),
+    (value) => {
+      username.value = value
+    },
+    (value) => notificationCenter.value?.receive(value),
+  )
+}
+
+function currentLocation(): WorkspaceLocation {
+  if (featurePage.value) return { instance: activeInstance.value.id, feature: featurePage.value }
+  const frame = graphSurface.value
+  const bounds = frame ? { width: frame.clientWidth, height: frame.clientHeight } : undefined
+  const viewport =
+    bounds && paging.value && currentPage.value
+      ? pageViewport(currentPage.value, bounds)
+      : getViewport()
+  const ownLocation = parseCanvasLocation(window.location.hash)
+  const camera =
+    bounds && !hasFocus.value
+      ? cameraFromViewport(viewport, bounds)
+      : ownLocation?.instance === activeInstance.value.id && ownLocation.canvas === activeId.value
+        ? ownLocation.camera
+        : undefined
+  return {
+    instance: activeInstance.value.id,
+    canvas: activeId.value,
+    ...(camera ? { camera } : {}),
+    ...(paging.value
+      ? { view: 'paged' as const, ...(currentPage.value ? { page: currentPage.value.id } : {}) }
+      : {}),
+  }
+}
+function rememberCurrentLocation() {
+  const location = currentLocation()
+  if (
+    hasFocus.value ||
+    !pageVisible.value ||
+    !authenticated.value ||
+    !resourcesLoaded.value ||
+    pendingViewport
+  )
+    return
+  rememberCanvasLocation(localStorage, location)
+  return location
+}
+async function selectHashInstance(id: string) {
+  if (!(await leaveLayout())) {
+    navigation.cancel(currentLocation())
+    return
+  }
+  if (!instanceBooted) {
+    selectInstance(id)
+    return
+  }
+  const actual = currentLocation()
+  if (!(await flushInstanceEdits())) {
+    navigation.cancel(actual)
+    return
+  }
+  if (navigation.requested.value?.location.instance !== id) return
+  rememberCurrentLocation()
+  selectInstance(id)
+}
+async function applyRequestedLocation() {
+  const requested = navigation.requested.value
+  if (
+    !requested ||
+    unknownInstance.value ||
+    requested.location.instance !== activeInstance.value.id ||
+    !authenticated.value ||
+    !latestState.value
+  )
+    return
+  if (canvasMorph.value?.request === requested && canvasMorph.value.phase === 'leave') return
+  if (layoutEditing.value && !(await leaveLayout())) {
+    navigation.cancel(currentLocation())
+    return
+  }
+  if (navigation.requested.value !== requested) return
+  if (
+    notificationFocus.value ||
+    (notificationReveal.value && requested !== notificationReveal.value.request)
+  )
+    cancelNotificationReveal()
+  if (focusedCardId.value) void flushNotes(activeId.value)
+  if (requested.location.feature) {
+    // Fullscreen presents a canvas; a feature page keeps the regular shell.
+    if (canvasFullscreen.value) await exitFullscreen()
+    if (navigation.requested.value !== requested) return
+    focused.value = null
+    focusedCardId.value = ''
+    featurePage.value = requested.location.feature
+    navigation.restored(requested, requested.location)
+    return
+  }
+  const location = resolveCanvasLocation(
+    requested.location,
+    canvases.value.map((canvas) => canvas.id),
+  )
+  // The canvas returns whole from a feature page, without a leaving animation.
+  const fromFeature = !!featurePage.value
+  featurePage.value = undefined
+  if (
+    !fromFeature &&
+    activeId.value !== location.canvas &&
+    canvasPresented &&
+    resourcesLoaded.value &&
+    pageVisible.value &&
+    !reducedMotion.value &&
+    (isOverview.value || currentCanvas.value) &&
+    location.canvas === requested.location.canvas &&
+    (nodes.value.length || hasFocus.value)
+  ) {
+    const order = ['overview', ...orderedCanvases.value.map((canvas) => canvas.id)]
+    const anchor = requested.anchor && {
+      sourceId: requested.anchor.sourceId,
+      windowId: requested.anchor.windowId,
+    }
+    const morph = (canvasMorph.value = {
+      request: requested,
+      phase: 'leave',
+      shift: order.indexOf(location.canvas) < order.indexOf(activeId.value) ? -48 : 48,
+      anchor,
+    })
+    if (anchor) rebuildNodes()
+    await waitCanvasMorph()
+    if (navigation.requested.value !== requested) return
+    if (canvasMorph.value === morph) canvasMorph.value = { ...morph, phase: 'wait' }
+  }
+  if (navigation.requested.value !== requested) return
+  // A cross-canvas request exits directly into its destination, never briefly
+  // rebuilding the old graph beneath a maximized view.
+  focused.value = null
+  focusedCardId.value = ''
+  if (activeId.value !== location.canvas) {
+    activeId.value = location.canvas
+    overviewPaged.value = location.view === 'paged'
+    currentPage.value = undefined
+    return
+  }
+  overviewPaged.value = location.view === 'paged'
+  currentPage.value = undefined
+  await restoreViewport()
+}
+async function restoreViewport() {
+  clearFitContext()
+  const requested = navigation.requested.value
+  if (
+    !authenticated.value ||
+    !resourcesLoaded.value ||
+    unknownInstance.value ||
+    featurePage.value ||
+    requested?.location.feature
+  )
+    return
+  const id = activeId.value,
+    instance = activeInstance.value.id
+  const request = ++viewportRequest
+  pendingViewport = id
+  await nextTick()
+  if (
+    request !== viewportRequest ||
+    id !== activeId.value ||
+    instance !== activeInstance.value.id ||
+    requested !== navigation.requested.value
+  )
+    return
+  const frame = graphSurface.value
+  if (!frame?.clientWidth || !frame.clientHeight) return
+  if (
+    requested &&
+    (requested.location.instance !== instance ||
+      (requested.location.canvas !== id &&
+        canvases.value.some((canvas) => canvas.id === requested.location.canvas)))
+  )
+    return
+  const anchor = requested?.anchor
+  const anchored =
+    anchor &&
+    nodes.value.find(
+      (node) =>
+        node.type === 'terminal' &&
+        node.data.sourceId === anchor.sourceId &&
+        node.data.windowId === anchor.windowId,
+    )
+  // Node positions are known before measurement, so the jump never paints the
+  // destination at another camera. Restoration completes once nodes are ready.
+  if (anchored) await setViewport(anchoredViewport(anchor, anchored.position))
+  else if (anchor) windowJump.value = undefined
+  const initialized = new Set(getNodesInitialized.value.map((node) => node.id))
+  if (nodes.value.some((node) => !initialized.has(node.id))) return
+  if (anchored) {
+    if (
+      request !== viewportRequest ||
+      id !== activeId.value ||
+      instance !== activeInstance.value.id
+    )
+      return
+    pendingViewport = ''
+    cameraFrame = canvasFrame(frame)
+    navigation.restored(requested, currentLocation())
+    completeCanvasMorph(requested)
+    finishWindowJump(anchored)
+    return
+  }
+  const reveal = notificationReveal.value?.canvasId === id ? notificationReveal.value : undefined
+  const target = requested?.fitNodeId
+    ? nodes.value.find((node) => node.id === requested.fitNodeId)
+    : reveal
+      ? nodes.value.find(
+          (node) =>
+            node.type === 'terminal' &&
+            node.data.sourceId === reveal.target.sourceId &&
+            node.data.windowId === reveal.target.windowId,
+        )
+      : undefined
+  if (target) {
+    const viewport = pageViewport(
+      { ...target.position, width: target.data.width, height: target.data.height },
+      { width: frame.clientWidth, height: frame.clientHeight },
+    )
+    await setViewport(viewport)
+    if (request !== viewportRequest || navigation.requested.value !== requested) return
+    pendingViewport = ''
+    cameraFrame = canvasFrame(frame)
+    navigation.restored(requested, {
+      instance,
+      canvas: id,
+      camera: cameraFromViewport(viewport, {
+        width: frame.clientWidth,
+        height: frame.clientHeight,
+      }),
+    })
+    completeCanvasMorph(requested)
+    navigationFit.value = { canvasId: id, id: target.id, pending: false }
+    if (reveal) void revealNotificationWindow()
+    return
+  }
+  if (requested?.fitNodeId)
+    addToast({
+      title: t('app.connectionNotVisible'),
+      color: 'neutral',
+      duration: 3500,
+      type: 'background',
+    })
+  const ownLocation = parseCanvasLocation(window.location.hash)
+  const saved = requested
+    ? resolveCanvasLocation(
+        requested.location,
+        canvases.value.map((canvas) => canvas.id),
+      )
+    : ownLocation &&
+        !ownLocation.feature &&
+        ownLocation.instance === instance &&
+        ownLocation.canvas === id &&
+        !!ownLocation.view === overviewPaged.value
+      ? ownLocation
+      : overviewPaged.value
+        ? navigation.saved(instance, id)
+        : recallFreeCanvasLocation(localStorage, instance, id)
+  if (requested && saved) overviewPaged.value = saved.view === 'paged'
+  if (paging.value) {
+    if (requested && saved)
+      selectPage(
+        restoreCanvasPage(saved, pages.value, {
+          width: frame.clientWidth,
+          height: frame.clientHeight,
+        }),
+      )
+    await fitPage()
+  } else {
+    const viewport = saved?.camera
+      ? viewportFromCamera(saved.camera, { width: frame.clientWidth, height: frame.clientHeight })
+      : undefined
+    if (viewport) await setViewport(viewport)
+    else if (nodes.value.length) await fitView({ padding: 0.14, maxZoom: 1, duration: 0 })
+    else await setViewport({ x: frame.clientWidth / 2, y: frame.clientHeight / 2, zoom: 1 })
+  }
+  if (request !== viewportRequest || id !== activeId.value || instance !== activeInstance.value.id)
+    return
+  pendingViewport = ''
+  cameraFrame = canvasFrame(frame)
+  navigation.restored(requested, currentLocation())
+  completeCanvasMorph(requested)
+  revealNotificationWindow()
+}
+let pendingNoteFocus = ''
+function focusNewNote(attempt = 0) {
+  if (!pendingNoteFocus) return
+  if (!currentCanvas.value?.nodes.some((node) => node.id === pendingNoteFocus)) {
+    pendingNoteFocus = ''
+    return
+  }
+  const editor = document.querySelector<HTMLTextAreaElement>(
+    `[data-note-id="${pendingNoteFocus}"] textarea`,
+  )
+  if (editor?.checkVisibility()) {
+    editor.focus()
+    if (document.activeElement === editor) {
+      pendingNoteFocus = ''
+      return
+    }
+  }
+  if (attempt < 30) requestAnimationFrame(() => focusNewNote(attempt + 1))
+}
+function focusCreatedWindow(attempt = 0, target = pendingCreatedWindow.value) {
+  if (
+    !target ||
+    target !== pendingCreatedWindow.value ||
+    target.canvasId !== activeId.value ||
+    !createdCameraReady
+  )
+    return
+  const maximized =
+    focused.value?.sourceId === target.sourceId && focused.value.windowId === target.windowId
+  if (!modalOpen.value) {
+    if (!maximized) {
+      const page = pages.value.find((page) => page.id === `${target.sourceId}/${target.windowId}`)
+      if (!page || Math.abs(page.height - windowSize(target).height) > 0.02) {
+        if (attempt < 30) requestAnimationFrame(() => focusCreatedWindow(attempt + 1, target))
+        return
+      }
+      if (!paging.value && graphSurface.value) {
+        void setViewport(
+          pageViewport(page, {
+            width: graphSurface.value.clientWidth,
+            height: graphSurface.value.clientHeight,
+          }),
+        )
+      }
+    }
+    const card = document.querySelector<HTMLElement>(
+      `[data-source-id="${target.sourceId}"][data-window-id="${target.windowId}"].terminal-card`,
+    )
+    if (
+      card?.checkVisibility() &&
+      (mobile.value || focusWindow(target.sourceId, target.spaceId, target.windowId))
+    ) {
+      if (mobile.value) card.focus({ preventScroll: true })
+      void nextTick().then(() => {
+        if (pendingCreatedWindow.value !== target) return
+        if (card.contains(document.activeElement)) pendingCreatedWindow.value = undefined
+        else if (attempt < 30) requestAnimationFrame(() => focusCreatedWindow(attempt + 1, target))
+      })
+      return
+    }
+  }
+  if (attempt < 30) requestAnimationFrame(() => focusCreatedWindow(attempt + 1, target))
+}
+function nodesInitialized() {
+  if (pendingViewport === activeId.value) void restoreViewport()
+  // VueFlow mounts new node components after its own node-store update.
+  // Waiting for that mount keeps focus from falling back to the document body.
+  void nextTick().then(() => {
+    focusNewNote()
+    focusCreatedWindow()
+    revealNotificationWindow()
+  })
+}
+function saveViewport() {
+  if (pendingViewport || !authenticated.value || !resourcesLoaded.value) return
+  if (hasFocus.value) {
+    navigation.save(currentLocation())
+    return
+  }
+  const frame = canvasFrame(graphSurface.value)
+  if (
+    mobile.value &&
+    (!frame || (cameraFrame && Math.abs(cameraFrame.layoutWidth - frame.layoutWidth) >= 1))
+  ) {
+    queueCameraResize()
+    return
+  }
+  if (frame) cameraFrame = frame
+  navigation.save(currentLocation())
+}
+
+watch(resources, (next) => {
+  if (!authenticated.value) return
+  if (
+    focused.value &&
+    liveTerminalMetadata.value.get(`${focused.value.sourceId}/${focused.value.windowId}`) === null
+  )
+    void closeFocus()
+  const signature = JSON.stringify(next)
+  if (signature === resourceSignature) return
+  const layoutSignature = JSON.stringify(
+    next.map((source) => {
+      const config = sources.value.find((item) => item.id === source.id)
+      return [
+        source.id,
+        config?.transport,
+        config?.target,
+        source.spaces.map((space) => [space.id, space.windows.map((window) => window.id)]),
+      ]
+    }),
+  )
+  resourceSignature = signature
+  if (isOverview.value) {
+    if (!layoutGesture) rebuildNodes(layoutSignature !== resourceLayoutSignature ? 'order' : 'auto')
+  } else if (layoutSignature !== resourceLayoutSignature) {
+    if (!layoutGesture) rebuildNodes()
+  } else refreshNodeData((currentCanvas.value?.nodes || []).map(flowNode))
+  resourceLayoutSignature = layoutSignature
+})
+
+async function refreshResources(silent = false): Promise<void> {
+  if (resourceRequest) {
+    if (silent) return
+    await resourceRequest
+    return refreshResources()
+  }
+  if (!authenticated.value || unknownInstance.value || !latestState.value) return
+  loading.value = !silent
+  const context = apiContext()
+  const sourceConfiguration = JSON.stringify(sources.value)
+  const metadataAtStart = liveTerminalMetadata.value
+  resourceRequest = (async () => {
+    try {
+      const body = await api<{ sources: SourceResource[] }>('/api/resources')
+      if (sourceConfiguration !== JSON.stringify(sources.value)) return
+      body.sources = body.sources.map((source) =>
+        source.error
+          ? {
+              ...source,
+              spaces: (
+                resources.value.find((previous) => previous.id === source.id)?.spaces || []
+              ).flatMap((space) => {
+                const windows = space.windows.filter((window) =>
+                  hasLiveTerminal(source.id, window.id),
+                )
+                return windows.length ? [{ ...space, windows }] : []
+              }),
+            }
+          : source,
+      )
+      resourcesFresh.value = true
+      resourcesLoaded.value = true
+      loadFailure.value = undefined
+      polledResources.value = body.sources
+      acknowledgeTerminalMetadata(metadataAtStart, body.sources)
+      refreshedAt.value = Date.now()
+    } catch (reason) {
+      if (isCurrentApi(context)) {
+        resourcesFresh.value = false
+        if (!resourcesLoaded.value || undiscoveredSources.value.length) loadFailure.value = reason
+        else if (!silent) showError(reason)
+      }
+    } finally {
+      if (isCurrentApi(context)) {
+        loading.value = false
+        resourceRequest = undefined
+        if (sourceConfiguration !== JSON.stringify(sources.value)) void refreshResources(true)
+      }
+    }
+  })()
+  return resourceRequest
+}
+async function load() {
+  const context = apiContext()
+  loadFailure.value = undefined
+  try {
+    await syncState()
+    requireCurrentApi(context)
+    await refreshResources()
+    requireCurrentApi(context)
+    rebuildNodes()
+    if (navigation.requested.value) await applyRequestedLocation()
+    else await restoreViewport()
+    requireCurrentApi(context)
+    startStateEvents()
+  } catch (reason) {
+    if (isCurrentApi(context)) loadFailure.value = reason
+  }
+}
+async function login() {
+  const context = apiContext()
+  busy.value = true
+  loginFailure.value = undefined
+  try {
+    const session = await api<{ token: string; username: string; server: unknown }>(
+      '/api/login',
+      {
+        method: 'POST',
+        body: JSON.stringify({ username: username.value, password: password.value }),
+      },
+      context,
+    )
+    requireCurrentApi(context)
+    observeInstanceBuild(context, session.server)
+    setSessionToken(session.token)
+    username.value = session.username
+    password.value = ''
+    authenticated.value = true
+    await load()
+  } catch (reason) {
+    if (
+      context.id === activeInstance.value.id &&
+      !(reason instanceof Error && reason.name === 'AbortError')
+    )
+      loginFailure.value = reason
+  } finally {
+    if (context.id === activeInstance.value.id) busy.value = false
+  }
+}
+async function flushInstanceEdits() {
+  if (!authenticated.value) return true
+  const context = apiContext()
+  try {
+    do {
+      if (!(await flushNotes()) || !isCurrentApi(context)) return false
+      await Promise.all([...pendingLayouts.keys()].map((id) => flushLayout(id)))
+      if (!isCurrentApi(context)) return false
+    } while (pendingLayouts.size || pendingNotes.size || savingNotes.size || layoutSaves.saving)
+    return true
+  } catch (reason) {
+    if (isCurrentApi(context)) showError(reason)
+    return false
+  }
+}
+async function beforeInstanceChange() {
+  if (!(await leaveLayout())) return false
+  if (!(await flushInstanceEdits())) return false
+  rememberCurrentLocation()
+  return true
+}
+async function logout() {
+  if (!(await leaveLayout())) return
+  if (!(await flushInstanceEdits())) return
+  const context = apiContext()
+  await exitFullscreen()
+  requireCurrentApi(context)
+  await write('/api/logout', 'POST')
+  if (isCurrentApi(context)) clearAuthentication()
+}
+function clearInstanceRuntime() {
+  cancelCanvasMorph()
+  canvasPresented = false
+  closeTrustedPreview()
+  clearCaptureTrust()
+  layoutDraft.value = undefined
+  layoutSelected.value = ''
+  layoutExitOpen.value = false
+  resolveLayoutExit?.(false)
+  removalUndo.value?.clear()
+  checkpointEdits()
+  draftBase = ''
+  stopStateEvents()
+  resetApiRequests()
+  clearTerminals()
+  hideMobileKeyboard()
+  void exitFullscreen()
+  for (const timer of saveTimers.values()) clearTimeout(timer)
+  saveTimers.clear()
+  layoutSaves.reset()
+  clearNoteEdits()
+  noteSave = undefined
+  authenticated.value = false
+  focused.value = null
+  focusedCardId.value = ''
+  scanTarget.value = null
+  sourceDialog.value = false
+  sourcePanel.value = false
+  canvasDialog.value = false
+  actionDialog.value = null
+  sourceDialogRevision++
+  canvasDialogRevision++
+  addDialogRevision++
+  pendingKeyboard = undefined
+  addDialog.value = false
+  shareCard.value = undefined
+  windowMenu.value = null
+  backgroundCanvas.value = null
+  settingsDialog.value = false
+  accountDialog.value = false
+  sidebarOpen.value = false
+  overviewMenuOpen.value = false
+  canvasMenu.value = false
+  accountMenuOpen.value = false
+  settings.value = null
+  fontRevision++
+  fontSignature = ''
+  contentFontReady.value = false
+  stateInstance = ''
+  latestState.value = undefined
+  sources.value = []
+  polledResources.value = []
+  canvases.value = []
+  setNodes([])
+  windowSizes.value = {}
+  resourcesFresh.value = false
+  resourcesLoaded.value = false
+  loadFailure.value = undefined
+  overviewBackground.value = null
+  resourceSignature = ''
+  resourceLayoutSignature = ''
+  resourceRequest = undefined
+  currentPage.value = undefined
+  overviewPaged.value = false
+  preferredPageX.value = undefined
+  pendingViewport = ''
+  viewportRequest++
+  cancelCreatedReveal()
+  cancelNotificationReveal()
+  lastOverviewInteraction = undefined
+  layoutGesture = ''
+  activeId.value = 'overview'
+  featurePage.value = undefined
+  graphKey.value++
+  refreshedAt.value = 0
+  loading.value = false
+  error.value = ''
+  success.value = ''
+  busy.value = false
+  username.value = activeInstance.value.username || ''
+  password.value = ''
+  loginFailure.value = undefined
+}
+function visibilityChanged() {
+  if (document.hidden) saveViewport()
+  pageVisible.value = !document.hidden
+  if (!document.hidden) {
+    saveViewport()
+    void refreshResources(true)
+  }
+}
+function clearAuthentication() {
+  setSessionToken('')
+  clearInstanceRuntime()
+  checkingInstance.value = false
+  void exitFullscreen()
+}
+async function unauthorized() {
+  const context = apiContext()
+  if (!context.token || authorizationCheck) return authorizationCheck
+  authorizationCheck = (async () => {
+    try {
+      const headers = new Headers({ Authorization: `Bearer ${context.token}` })
+      const response = await fetch(apiUrl('/api/session', context), {
+        headers,
+        credentials: 'omit',
+        cache: 'no-store',
+        signal: AbortSignal.any([context.signal, AbortSignal.timeout(10_000)]),
+      })
+      if (!isCurrentApi(context)) return
+      if (response.status === 401) {
+        clearAuthentication()
+        return
+      }
+      if (!response.ok) return
+      const session: unknown = await response.json()
+      if (isCurrentApi(context) && isCanvasSession(session) && session.authenticated === false)
+        clearAuthentication()
+    } catch {
+      /* A transient transport failure must not sign out a valid session. */
+    } finally {
+      authorizationCheck = undefined
+    }
+  })()
+  return authorizationCheck
+}
+async function activateInstance() {
+  const activation = ++instanceActivation
+  clearInstanceRuntime()
+  ready.value = true
+  checkingInstance.value = true
+  instanceUnavailable.value = false
+  instanceSetupMessage.value = ''
+  if (!hasActiveInstance.value) {
+    checkingInstance.value = false
+    instanceUnavailable.value = true
+    return
+  }
+  const context = apiContext()
+  staleInstanceBuild(context)
+  try {
+    const session = await api<{ authenticated: boolean; username?: string; server: unknown }>(
+      '/api/session',
+      { signal: AbortSignal.timeout(15_000) },
+      context,
+    )
+    requireCurrentApi(context)
+    if (!isCanvasSession(session)) throw new Error('Invalid Canvas session')
+    observeInstanceBuild(context, session.server)
+    rememberInstance()
+    if (!session.authenticated && context.token) setSessionToken('')
+    authenticated.value = session.authenticated
+    username.value = session.username || activeInstance.value.username || ''
+    if (authenticated.value) await load()
+  } catch (reason) {
+    if (activation === instanceActivation && isCurrentApi(context)) {
+      if (!authenticated.value) instanceUnavailable.value = true
+      else loginFailure.value = reason
+    }
+  } finally {
+    if (activation === instanceActivation) checkingInstance.value = false
+  }
+}
+function connectInstance() {
+  if (!checkingInstance.value) void activateInstance()
+}
+function sessionChanged() {
+  if (authenticated.value) {
+    rememberCurrentLocation()
+    if (featurePage.value) navigation.openFeature(activeInstance.value.id, featurePage.value)
+    else navigation.visit(activeInstance.value.id, activeId.value)
+  }
+  void activateInstance()
+}
+watch(
+  () => `${activeInstance.value.id}:${activeInstance.value.base}`,
+  () => {
+    if (!instanceBooted) return
+    if (navigation.requested.value?.location.instance !== activeInstance.value.id)
+      navigation.visit(activeInstance.value.id)
+    void activateInstance()
+  },
+  { flush: 'sync' },
+)
+
+watch(locale, () => {
+  ariaLiveMessage.value = ''
+  setNodes(
+    nodes.value.map((node) => {
+      if (node.type === 'terminal')
+        return accessibleNode({ ...node, data: terminalData(node.data, isOverview.value) })
+      if (node.type === 'group' && node.data.kind === 'source') {
+        const source = sources.value.find((source) => `source:${source.id}` === node.id)
+        return accessibleNode({
+          ...node,
+          data: { ...node.data, subtitle: source?.transport === 'local' ? t('app.local') : 'SSH' },
+        })
+      }
+      return accessibleNode(node)
+    }),
+  )
+  if (backgroundCanvas.value?.id === 'overview')
+    backgroundCanvas.value = { ...backgroundCanvas.value, name: t('app.overview') }
+})
+watch(
+  [navigation.requested, resourcesLoaded, latestState],
+  ([requested, loaded], [, wasLoaded]) => {
+    if (requested) void applyRequestedLocation()
+    else if (loaded && !wasLoaded) void restoreViewport()
+  },
+)
+watchDebounced(getViewport, saveViewport, { debounce: 160 })
+watch(unknownInstance, async (value) => {
+  if (!value) return
+  const actual = currentLocation()
+  if (!(await flushInstanceEdits())) {
+    navigation.cancel(actual)
+    return
+  }
+  if (unknownInstance.value !== value) return
+  clearInstanceRuntime()
+  checkingInstance.value = false
+  ready.value = true
+})
+watch(freshStatuses, () => {
+  setNodes(
+    nodes.value.map((node) =>
+      node.type === 'terminal'
+        ? { ...node, data: terminalData(node.data, isOverview.value) }
+        : node,
+    ),
+  )
+})
+
+watch(overviewInteraction, (value) => {
+  if (value) lastOverviewInteraction = value
+  if (isOverview.value) rebuildNodes()
+})
+watch([overviewSelected, overviewOrder, overviewPerRow], () => {
+  if (isOverview.value) rebuildNodes('manual')
+})
+watch(featurePage, () => {
+  overviewMenuOpen.value = false
+  canvasMenu.value = false
+  createMenuOpen.value = false
+  sourcePanel.value = false
+})
+watch(activeId, async () => {
+  if (!authenticated.value) return
+  scanTarget.value = null
+  preferredPageX.value = undefined
+  cancelCreatedReveal()
+  lastOverviewInteraction = undefined
+  overviewMenuOpen.value = false
+  layoutGesture = ''
+  resizingCard = undefined
+  focused.value = null
+  focusedCardId.value = ''
+  canvasMenu.value = false
+  rebuildNodes()
+  await restoreViewport()
+})
+function switchCanvas(id: string, target?: CanvasTarget) {
+  if (notificationReveal.value?.canvasId !== id) cancelNotificationReveal()
+  clearContentFocus()
+  cancelCreatedReveal()
+  if (id === activeId.value) {
+    if (focused.value) void closeFocus()
+    if (focusedCardId.value) void closeCardFocus()
+  }
+  sidebarOpen.value = false
+  if (
+    id === activeId.value &&
+    !featurePage.value &&
+    !unknownInstance.value &&
+    !navigation.requested.value &&
+    !target
+  )
+    return
+  void flushNotes(activeId.value)
+  saveViewport()
+  navigation.visit(activeInstance.value.id, id, target)
+}
+async function openFeature(feature: Feature) {
+  if (!(await leaveLayout())) return
+  cancelNotificationReveal()
+  clearContentFocus()
+  cancelCreatedReveal()
+  sidebarOpen.value = false
+  if (featurePage.value === feature && !navigation.requested.value) return
+  void flushNotes(activeId.value)
+  saveViewport()
+  navigation.openFeature(activeInstance.value.id, feature)
+}
+function backgroundSaved(_updated: Canvas) {
+  void syncState().catch(showError)
+}
+function openSettings() {
+  settingsDialog.value = true
+  sidebarOpen.value = false
+  canvasMenu.value = false
+  sourcePanel.value = false
+}
+function settingsSaved(_settings: GlobalSettings) {
+  void syncState().catch(showError)
+}
+function openBackground() {
+  canvasMenu.value = false
+  backgroundCanvas.value = isOverview.value
+    ? { id: 'overview', name: t('app.overview'), nodes: [], background: overviewBackground.value }
+    : currentCanvas.value || null
+}
+function closeBackgroundDialog() {
+  backgroundCanvas.value = null
+  void nextTick(() => canvasMenuTrigger.value?.focus())
+}
+function openCanvasDialog(canvas?: Canvas) {
+  canvasDialogRevision++
+  canvasDraft.id = canvas?.id || ''
+  canvasDraft.name = canvas?.name || ''
+  dialogError.value = ''
+  canvasDialog.value = true
+  sidebarOpen.value = false
+}
+async function submitCanvas() {
+  if (!canvasDraft.name.trim() || busy.value) return
+  const context = apiContext(),
+    revision = canvasDialogRevision,
+    draft = { ...canvasDraft, name: canvasDraft.name.trim() }
+  const current = () => isCurrentApi(context) && revision === canvasDialogRevision
+  busy.value = true
+  dialogError.value = ''
+  try {
+    if (draft.id) {
+      await api(
+        `/api/canvases/${segment(draft.id)}`,
+        { method: 'PATCH', body: JSON.stringify({ name: draft.name }) },
+        context,
+      )
+      if (!current()) return
+      await syncState()
+    } else {
+      const canvas = await api<Canvas>(
+        '/api/canvases',
+        { method: 'POST', body: JSON.stringify({ name: draft.name, nodes: [] }) },
+        context,
+      )
+      if (!current()) return
+      await syncState()
+      if (!current()) return
+      switchCanvas(canvas.id)
+    }
+    if (current()) canvasDialog.value = false
+  } catch (reason) {
+    if (current()) dialogError.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    if (current()) busy.value = false
+  }
+}
+function deleteCanvas() {
+  if (layoutEditing.value) {
+    void leaveLayout().then((allowed) => {
+      if (allowed) deleteCanvas()
+    })
+    return
+  }
+  const canvas = currentCanvas.value
+  if (!canvas) return
+  actionDialog.value = {
+    get title() {
+      return t('app.deleteNamed', { name: canvas.name })
+    },
+    get description() {
+      return t('app.deleteCanvasDescription')
+    },
+    value: '',
+    danger: true,
+    get button() {
+      return t('app.deleteCanvas')
+    },
+    submit: async () => {
+      const context = apiContext()
+      if (
+        !(await flushNotes(canvas.id)) ||
+        !isCurrentApi(context) ||
+        !canvases.value.some((item) => item.id === canvas.id)
+      )
+        return
+      await api(`/api/canvases/${segment(canvas.id)}`, { method: 'DELETE' }, context)
+      if (!isCurrentApi(context)) return
+      dropLayout(canvas.id)
+      clearNoteEdits(canvas.id)
+      await syncState()
+      if (isCurrentApi(context) && activeId.value === canvas.id) switchCanvas('overview')
+    },
+  }
+}
+function openSource(source?: Source) {
+  sourceDialogRevision++
+  Object.assign(
+    sourceDraft,
+    {
+      id: '',
+      name: '',
+      runtime: 'tui',
+      transport: 'local',
+      target: '',
+      herdrSession: '',
+      herdrSocket: '',
+      sshIdentityFile: '',
+      sshKnownHostsFile: '',
+    },
+    source || {},
+  )
+  dialogError.value = ''
+  sourceDialog.value = true
+  sidebarOpen.value = false
+}
+watch(
+  [sourceDialog, sourceProbeKey, apiRevision, sourceProbeRetry, sourceConfigUnchanged],
+  ([open, key], _previous, onCleanup) => {
+    sourceProbe.value = { key: '', pending: false }
+    if (!open) return
+    if (sourceConfigUnchanged.value) {
+      sourceProbe.value = {
+        key,
+        pending: false,
+        version: resources.value.find((source) => source.id === sourceDraft.id)?.serverVersion,
+      }
+      return
+    }
+    if (sourceDraft.transport === 'ssh' && !sourceDraft.target?.trim()) return
+    const controller = new AbortController(),
+      context = apiContext(),
+      body = sourceConnection(sourceDraft)
+    sourceProbe.value = { key: '', pending: true }
+    const timer = setTimeout(async () => {
+      try {
+        const result = await api<{ status: string; serverVersion?: string }>(
+          '/api/sources/probe',
+          { method: 'POST', body: JSON.stringify(body), signal: controller.signal },
+          context,
+        )
+        if (
+          controller.signal.aborted ||
+          !isCurrentApi(context) ||
+          !sourceDialog.value ||
+          sourceProbeKey.value !== key
+        )
+          return
+        if (result.status !== 'online' || !result.serverVersion)
+          throw new Error(t('app.connectionVersionMissing'))
+        sourceProbe.value = { key, pending: false, version: result.serverVersion }
+      } catch (reason) {
+        if (
+          !controller.signal.aborted &&
+          isCurrentApi(context) &&
+          sourceDialog.value &&
+          sourceProbeKey.value === key
+        )
+          sourceProbe.value = {
+            key: '',
+            pending: false,
+            error: reason instanceof Error ? reason.message : String(reason),
+          }
+      }
+    }, 500)
+    onCleanup(() => {
+      clearTimeout(timer)
+      controller.abort()
+    })
+  },
+  { flush: 'sync' },
+)
+async function submitSource() {
+  if (!sourceProbeReady.value || !sourceDraft.name.trim() || busy.value) return
+  const context = apiContext(),
+    revision = sourceDialogRevision
+  const current = () => isCurrentApi(context) && revision === sourceDialogRevision
+  busy.value = true
+  dialogError.value = ''
+  try {
+    const body = {
+      ...sourceDraft,
+      name: sourceDraft.name.trim(),
+      target: sourceDraft.target?.trim(),
+    }
+    body.herdrSession = body.herdrSession?.trim() || ''
+    body.herdrSocket = body.herdrSocket?.trim() || ''
+    if (body.transport === 'ssh' && !body.target) throw new Error(t('app.sshRequired'))
+    if (body.id) {
+      await api<Source>(
+        `/api/sources/${segment(body.id)}`,
+        { method: 'PATCH', body: JSON.stringify(body) },
+        context,
+      )
+    } else {
+      const { id, ...newSource } = body
+      await api<Source>(
+        '/api/sources',
+        { method: 'POST', body: JSON.stringify(newSource) },
+        context,
+      )
+    }
+    if (!current()) return
+    await syncState()
+    if (!current()) return
+    resourceSignature = ''
+    await refreshResources()
+    if (!current()) return
+    await restoreViewport()
+    if (current()) {
+      sourceDialog.value = false
+      notify(t('app.connectionSaved'))
+    }
+  } catch (reason) {
+    if (current()) dialogError.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    if (current()) busy.value = false
+  }
+}
+function deleteSource(source: Source) {
+  actionDialog.value = {
+    get title() {
+      return t('app.removeNamed', { name: source.name })
+    },
+    get description() {
+      return t('app.removeConnectionDescription')
+    },
+    value: '',
+    danger: true,
+    get button() {
+      return t('app.removeConnection')
+    },
+    submit: async () => {
+      await write(`/api/sources/${segment(source.id)}`, 'DELETE')
+      await syncState()
+      await refreshResources()
+    },
+  }
+}
+function basePath(sourceId: string) {
+  return `/api/sources/${segment(sourceId)}`
+}
+async function createResource(
+  sourceId: string,
+  spaceId?: string,
+  name?: string,
+  destination?: CanvasTabDestination,
+) {
+  const id = creationId(sourceId, spaceId)
+  if (creating.has(id)) return
+  creating.add(id)
+  cancelCreatedReveal()
+  const intent = creationIntent
+  const origin = destination?.canvasId || activeId.value,
+    pageBefore = currentPage.value?.id
+  const context = overviewInteraction.value || lastOverviewInteraction
+  const reference =
+    context?.sourceId === sourceId
+      ? context.windowId
+      : nodes.value.find(
+          (node) =>
+            `${node.data.sourceId}/${node.data.windowId}` === currentPage.value?.id &&
+            node.data.sourceId === sourceId,
+        )?.data.windowId
+  const sourceSpaceId = reference
+    ? resources.value
+        .find((source) => source.id === sourceId)
+        ?.spaces.find((space) => space.windows.some((window) => window.id === reference))?.id
+    : undefined
+  try {
+    const created =
+      destination?.created ||
+      (await write<{ spaceId: string; windowId: string }>(
+        `${basePath(sourceId)}/spaces${spaceId ? `/${segment(spaceId)}/windows` : ''}`,
+        'POST',
+        {
+          ...(name?.trim() ? { name: name.trim() } : {}),
+          ...(!spaceId && sourceSpaceId ? { sourceSpaceId } : {}),
+        },
+      ))
+    if (destination) {
+      if (!destination.created) {
+        const { anchor } = destination
+        let x = anchor.x + anchor.width + 24
+        const occupied = canvases.value.find((canvas) => canvas.id === origin)?.nodes || []
+        for (const node of [...occupied].sort((a, b) => a.x - b.x)) {
+          if (
+            node.y < anchor.y + anchor.height &&
+            node.y + node.height > anchor.y &&
+            node.x < x + anchor.width + 24 &&
+            node.x + node.width + 24 > x
+          )
+            x = node.x + node.width + 24
+        }
+        // Retain the native result so retrying a failed canvas write cannot create another tab.
+        destination.created = {
+          type: 'terminal',
+          id: uuid(),
+          sourceId,
+          spaceId: created.spaceId,
+          windowId: created.windowId,
+          x,
+          y: anchor.y,
+          width: anchor.width,
+          height: anchor.height,
+        }
+      }
+      await write(`/api/canvases/${segment(origin)}/nodes`, 'POST', {
+        nodes: [destination.created],
+      })
+      await syncState()
+    }
+    const target = {
+      canvasId: origin,
+      sourceId,
+      spaceId: created.spaceId,
+      windowId: created.windowId,
+    }
+    const reveal = () =>
+      intent === creationIntent &&
+      origin === activeId.value &&
+      (destination
+        ? focused.value?.id === destination.focusedId
+        : origin === 'overview' && currentPage.value?.id === pageBefore && !focused.value)
+    if (reveal()) {
+      createdCameraReady = false
+      pendingCreatedWindow.value = target
+    }
+    await refreshResources()
+    if (!reveal() || pendingCreatedWindow.value !== target) return
+    rebuildNodes()
+    if (destination?.focusedId && destination.created) focused.value = destination.created
+    await nextTick()
+    const page = pages.value.find((page) => page.id === `${sourceId}/${created.windowId}`)
+    if (!focused.value && page && graphSurface.value) {
+      if (isOverview.value) selectPage(page)
+      if (paging.value) await fitPage(true)
+      else
+        void setViewport(
+          pageViewport(page, {
+            width: graphSurface.value.clientWidth,
+            height: graphSurface.value.clientHeight,
+          }),
+          { duration: reducedMotion.value ? 0 : 200, interpolate: 'linear' },
+        )
+    }
+    createdCameraReady = true
+    focusCreatedWindow()
+  } finally {
+    creating.delete(id)
+  }
+}
+function createTab(sourceId: string, spaceId: string, destination?: CanvasTabDestination) {
+  if (creating.has(creationId(sourceId, spaceId))) return
+  const source = resources.value.find((item) => item.id === sourceId)
+  actionDialog.value = {
+    get title() {
+      return t('app.newTab')
+    },
+    description: [source?.name, source?.spaces.find((space) => space.id === spaceId)?.name]
+      .filter(Boolean)
+      .join(' / '),
+    get label() {
+      return t('app.name')
+    },
+    optional: true,
+    value: '',
+    get button() {
+      return t('app.newTab')
+    },
+    submit: (name) => createResource(sourceId, spaceId, name, destination),
+  }
+}
+function spaceAction(
+  source: SourceResource,
+  spaceId: string | undefined,
+  operation: 'create' | 'rename' | 'close',
+) {
+  if (operation === 'create') {
+    void createResource(source.id).catch(showError)
+    return
+  }
+  const space = source.spaces.find((item) => item.id === spaceId)
+  actionDialog.value = {
+    get title() {
+      return t(operation === 'rename' ? 'app.renameSpace' : 'app.closeSpace')
+    },
+    get description() {
+      return operation === 'close'
+        ? t('app.closeSpaceDescription', { name: space?.name || '' })
+        : source.name
+    },
+    get label() {
+      return operation === 'close' ? undefined : t('app.name')
+    },
+    value: operation === 'rename' ? space?.name || '' : '',
+    danger: operation === 'close',
+    get button() {
+      return t(operation === 'rename' ? 'app.renameSpace' : 'app.closeSpace')
+    },
+    submit: async (name) => {
+      await write(
+        `${basePath(source.id)}/spaces${spaceId ? `/${segment(spaceId)}` : ''}`,
+        operation === 'rename' ? 'PATCH' : 'DELETE',
+        operation === 'close' ? undefined : { name },
+      )
+      await refreshResources()
+    },
+  }
+}
+function windowAction(
+  node: TerminalCanvasNode,
+  operation: 'create' | 'rename' | 'close',
+  destination?: CanvasTabDestination,
+) {
+  if (operation === 'create') {
+    const source = resources.value.find((source) => source.id === node.sourceId)
+    const spaceId =
+      source?.spaces.find((space) => space.windows.some((window) => window.id === node.windowId))
+        ?.id || node.spaceId
+    createTab(node.sourceId, spaceId, destination)
+    return
+  }
+  const { source, space, window } = resourceFor(node)
+  windowMenu.value = null
+  actionDialog.value = {
+    get title() {
+      return t(operation === 'rename' ? 'app.renameWindow' : 'app.closeWindow')
+    },
+    get description() {
+      return operation === 'close'
+        ? t('app.closeWindowDescription', { name: window?.name || '' })
+        : `${source?.name || ''} / ${space?.name || ''}`
+    },
+    get label() {
+      return operation === 'close' ? undefined : t('app.windowName')
+    },
+    value: operation === 'rename' ? window?.name || '' : '',
+    danger: operation === 'close',
+    get button() {
+      return t(operation === 'rename' ? 'app.renameWindow' : 'app.closeWindow')
+    },
+    submit: async (name) => {
+      await write(
+        `${basePath(node.sourceId)}/spaces/${segment(node.spaceId)}/windows/${segment(node.windowId)}`,
+        operation === 'rename' ? 'PATCH' : 'DELETE',
+        operation === 'close' ? undefined : { name },
+      )
+      await refreshResources()
+    },
+  }
+}
+function scanWindowContent(node: TerminalCanvasNode, name: string) {
+  const source = resources.value.find((item) => item.id === node.sourceId)
+  const spaceId =
+    source?.spaces.find((space) => space.windows.some((window) => window.id === node.windowId))
+      ?.id || node.spaceId
+  scanTarget.value = { sourceId: node.sourceId, spaceId, windowId: node.windowId, name }
+  windowMenu.value = null
+  sourcePanel.value = false
+}
+async function submitAction() {
+  const dialog = actionDialog.value
+  if (!dialog || busy.value) return
+  const context = apiContext()
+  busy.value = true
+  dialogError.value = ''
+  try {
+    await dialog.submit(dialog.value.trim())
+    if (actionDialog.value === dialog) actionDialog.value = null
+  } catch (reason) {
+    if (actionDialog.value === dialog)
+      dialogError.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    if (isCurrentApi(context)) busy.value = false
+  }
+}
+watch(actionDialog, () => {
+  dialogError.value = ''
+})
+function getCanvasNode(id: string): TerminalCanvasNode | undefined {
+  const node = nodes.value.find((item) => item.id === id)
+  return node?.type === 'terminal'
+    ? {
+        type: 'terminal',
+        id,
+        sourceId: node.data.sourceId,
+        spaceId: node.data.spaceId,
+        windowId: node.data.windowId,
+        x: node.position.x,
+        y: node.position.y,
+        width: node.data.width,
+        height: node.data.height,
+      }
+    : undefined
+}
+const notificationActionsAvailable = computed(
+  () =>
+    !layoutBusy.value &&
+    !busy.value &&
+    (!notificationSurface.value ||
+      (!!notificationSurface.value.closest('.overlay-root') &&
+        settingsDialog.value &&
+        !appDialogOpen.value)),
+)
+function prepareNotificationAction() {
+  if (!notificationActionsAvailable.value) return false
+  clearContentFocus()
+  if (settingsDialog.value) settingsDialogComponent.value?.close()
+  return true
+}
+// Logical focus already accounts for connection and visibility. Reuse its
+// readiness for delayed mounts; automatic reads still wait for painted output.
+watch(
+  [notificationFocus, terminalReadFocus],
+  ([target, ready]) => {
+    if (
+      !target ||
+      target.canvasId !== activeId.value ||
+      !ready ||
+      ready.sourceId !== target.sourceId ||
+      ready.windowId !== target.windowId
+    )
+      return
+    if (focusWindow(target.sourceId, target.spaceId, target.windowId, false))
+      notificationFocus.value = undefined
+  },
+  { flush: 'post' },
+)
+async function goToNotification(event: CanvasNotification) {
+  const target = notificationTarget(event, resources.value)
+  if (target) await goToWindow({ sourceId: event.sourceId, windowId: target.window.id })
+}
+/** Opens a native window on the canvas where this browser last used it. */
+async function goToWindow(target: WindowFocus) {
+  const source = sources.value.find((item) => item.id === target.sourceId)
+  if (!source || !latestState.value) return
+  await goToCanvasWindow(
+    lastWindowCanvas(
+      terminalIdentityKey(activeInstance.value.id, source, target.windowId),
+      target.sourceId,
+      target.windowId,
+      canvases.value,
+    ),
+    target,
+  )
+}
+async function goToCanvasWindow(canvasId: string, target: WindowFocus) {
+  const context = apiContext()
+  if (!(await leaveLayout()) || !isCurrentApi(context) || !prepareNotificationAction()) return
+  cancelNotificationReveal()
+  const intent = notificationIntent
+  if (canvasId === activeId.value) {
+    if (focusedCardId.value) await closeCardFocus()
+    if (focused.value) await closeFocus()
+  }
+  if (!isCurrentApi(context) || intent !== notificationIntent) return
+  const source = resources.value.find(
+    (source) => source.id === target.sourceId && source.status === 'online' && !source.error,
+  )
+  if (
+    !source?.spaces.some((space) => space.windows.some((window) => window.id === target.windowId))
+  )
+    return
+  if (
+    canvasId !== 'overview' &&
+    !canvases.value
+      .find((canvas) => canvas.id === canvasId)
+      ?.nodes.some(
+        (node) =>
+          isTerminalNode(node) &&
+          node.sourceId === target.sourceId &&
+          node.windowId === target.windowId,
+      )
+  )
+    return
+  notificationReveal.value = { canvasId, target, pending: true }
+  sourcePanel.value = false
+  sidebarOpen.value = false
+  switchCanvas(canvasId)
+  if (notificationReveal.value) notificationReveal.value.request = navigation.requested.value
+  if (activeId.value === canvasId && !navigation.requested.value) {
+    rebuildNodes()
+    await nextTick()
+    if (!isCurrentApi(context) || intent !== notificationIntent) return
+    revealNotificationWindow()
+  }
+}
+async function revealNotificationWindow() {
+  const reveal = notificationReveal.value
+  if (
+    !reveal?.pending ||
+    reveal.canvasId !== activeId.value ||
+    pendingViewport ||
+    navigation.requested.value ||
+    hasFocus.value
+  )
+    return
+  const target = nodes.value.find(
+    (node) =>
+      node.type === 'terminal' &&
+      node.data.sourceId === reveal.target.sourceId &&
+      node.data.windowId === reveal.target.windowId,
+  )
+  if (!target) {
+    cancelNotificationReveal()
+    return
+  }
+  if (!getNodesInitialized.value.some((node) => node.id === target.id)) return
+  const settled = (notificationReveal.value = { ...reveal, pending: false })
+  if (mobile.value) {
+    const frame = graphSurface.value
+    if (!frame) return
+    // Save the final framing before maximization removes the canvas viewport.
+    await setViewport(
+      pageViewport(
+        { ...target.position, width: target.data.width, height: target.data.height },
+        { width: frame.clientWidth, height: frame.clientHeight },
+      ),
+    )
+  } else await navigateCard(target)
+  if (notificationReveal.value !== settled) return
+  selectedTerminal.value = reveal.target
+  notificationFocus.value = {
+    canvasId: activeId.value,
+    ...reveal.target,
+    spaceId: target.data.spaceId,
+  }
+  // Touch cards stay read-only; the existing maximized view owns interaction.
+  if (mobile.value) terminalAction('focus', target.id)
+}
+async function openNotification(event: CanvasNotification) {
+  if (!(await leaveLayout())) return
+  if (!prepareNotificationAction()) return
+  cancelNotificationReveal()
+  const target = notificationTarget(event, resources.value)
+  if (!target) return
+  const context = apiContext(),
+    intent = notificationIntent
+  if (focusedCardId.value) await closeCardFocus()
+  if (focused.value) await closeFocus()
+  if (!isCurrentApi(context) || intent !== notificationIntent) return
+  const placed = currentCanvas.value?.nodes.find(
+    (node) =>
+      isTerminalNode(node) &&
+      node.sourceId === event.sourceId &&
+      node.windowId === target.window.id,
+  )
+  const size = windowSize({ sourceId: event.sourceId, windowId: target.window.id })
+  const node: TerminalCanvasNode =
+    placed && isTerminalNode(placed)
+      ? placed
+      : {
+          type: 'terminal',
+          id: `notification:${event.sourceId}/${target.window.id}`,
+          sourceId: event.sourceId,
+          spaceId: target.space.id,
+          windowId: target.window.id,
+          x: 0,
+          y: 0,
+          ...size,
+        }
+  sidebarOpen.value = false
+  sourcePanel.value = false
+  saveViewport()
+  selectedTerminal.value = { sourceId: node.sourceId, windowId: node.windowId }
+  focused.value = node
+  notificationFocus.value = {
+    canvasId: activeId.value,
+    sourceId: node.sourceId,
+    spaceId: node.spaceId,
+    windowId: node.windowId,
+  }
+}
+// Canvases holding each window, in sidebar order; live windows are also in Overview.
+const canvasesByWindow = computed(() => {
+  const result = new Map<string, { id: string; name: string }[]>(),
+    overview = { id: 'overview', name: t('app.overview') }
+  for (const source of resources.value)
+    for (const space of source.spaces)
+      for (const window of space.windows) result.set(`${source.id}/${window.id}`, [overview])
+  for (const canvas of orderedCanvases.value)
+    for (const key of new Set(
+      canvas.nodes.filter(isTerminalNode).map((node) => `${node.sourceId}/${node.windowId}`),
+    )) {
+      const list = result.get(key)
+      if (list) list.push(canvas)
+      else result.set(key, [canvas])
+    }
+  return result
+})
+function windowCanvases(sourceId: string, windowId: string) {
+  return canvasesByWindow.value.get(`${sourceId}/${windowId}`) || []
+}
+function morphAnchor(node: Node) {
+  const anchor = canvasMorph.value?.anchor
+  return (
+    !!anchor &&
+    node.type === 'terminal' &&
+    node.data.sourceId === anchor.sourceId &&
+    node.data.windowId === anchor.windowId
+  )
+}
+function cancelCanvasMorph() {
+  for (const animation of morphAnimations) animation.cancel()
+  morphAnimations = []
+  canvasMorph.value = undefined
+}
+async function waitCanvasMorph() {
+  await nextTick()
+  // Native animation completion follows reduced motion and cancellation. There
+  // is no independent timer racing node initialization or a newer navigation.
+  const roots = [graphSurface.value, focusViewportElement.value].filter(Boolean) as HTMLElement[]
+  const animations = roots
+    .flatMap((root) => root.getAnimations({ subtree: true }))
+    .filter(
+      (animation) =>
+        animation instanceof CSSAnimation && animation.animationName.startsWith('canvas-morph-'),
+    )
+  morphAnimations = animations
+  await Promise.allSettled(animations.map((animation) => animation.finished))
+  if (morphAnimations === animations) morphAnimations = []
+}
+function completeCanvasMorph(request?: CanvasNavigation) {
+  canvasPresented = true
+  const morph = canvasMorph.value
+  if (!morph || morph.request !== request || morph.phase !== 'wait') return
+  if (reducedMotion.value || !pageVisible.value) {
+    cancelCanvasMorph()
+    return
+  }
+  const entering = (canvasMorph.value = { ...morph, phase: 'enter' })
+  void waitCanvasMorph().then(() => {
+    if (canvasMorph.value === entering) canvasMorph.value = undefined
+  })
+}
+watch([reducedMotion, pageVisible], () => {
+  if (reducedMotion.value || !pageVisible.value) cancelCanvasMorph()
+})
+/** Every explicit same-instance canvas request receives the same presentation. */
+async function navigateCanvas(id: string, target?: CanvasTarget) {
+  if (await leaveLayout()) switchCanvas(id, target)
+}
+async function jumpWindowCanvas(nodeId: string, direction: CanvasDirection, focus: JumpFocus) {
+  const node = getCanvasNode(nodeId),
+    flow = nodes.value.find((item) => item.id === nodeId)
+  if (!node || !flow || hasFocus.value) return
+  const target = adjacentCanvas(
+    windowCanvases(node.sourceId, node.windowId),
+    activeId.value,
+    direction,
+  )
+  if (!target) return
+  const anchor = canvasAnchor(node, flow.position, getViewport())
+  windowJump.value = { canvasId: target.id, anchor, focus, direction }
+  switchCanvas(target.id, { anchor })
+}
+function finishWindowJump(target: Node) {
+  const jump = windowJump.value
+  windowJump.value = undefined
+  if (!jump || jump.canvasId !== activeId.value) return
+  const { sourceId, windowId } = jump.anchor
+  selectedTerminal.value = { sourceId, windowId }
+  if (!jump.focus) return
+  // The cached terminal moves into the destination card; keep keyboard context there.
+  const restore = (attempt = 0) => {
+    if (windowJump.value || activeId.value !== jump.canvasId || hasFocus.value) return
+    const button = document.querySelector<HTMLButtonElement>(
+      `.vue-flow__node[data-id="${CSS.escape(target.id)}"] .card-${jump.direction}-canvas`,
+    )
+    const done =
+      jump.focus === 'terminal'
+        ? focusWindow(sourceId, target.data.spaceId, windowId)
+        : !!button &&
+          (button.disabled
+            ? button.closest<HTMLElement>('.vue-flow__node')?.focus({ preventScroll: true })
+            : button.focus({ preventScroll: true }),
+          true)
+    if (!done && attempt < 30) requestAnimationFrame(() => restore(attempt + 1))
+  }
+  restore()
+}
+function terminalAction(action: string, id: string) {
+  const node = getCanvasNode(id) || focused.value
+  if (!node) return
+  if (action === 'add') openAdd(node)
+  else if (action === 'remove') void removeNode(id)
+  else if (action === 'rename' || action === 'close') windowAction(node, action)
+  else if (action === 'scan')
+    scanWindowContent(node, windowLabel(resourceFor(node).window || { name: t('app.window') }))
+  else if (action === 'focus') {
+    if (paging.value)
+      selectPage(pages.value.find((page) => page.id === `${node.sourceId}/${node.windowId}`))
+    sidebarOpen.value = false
+    sourcePanel.value = false
+    windowResize()
+    saveViewport()
+    selectedTerminal.value = { sourceId: node.sourceId, windowId: node.windowId }
+    focused.value = node
+  } else if (action === 'unfocus') void closeFocus()
+  else if (action === 'menu')
+    windowMenu.value = { node, name: resourceFor(node).window?.name || t('app.window') }
+}
+async function closeFocus() {
+  const context = apiContext(),
+    canvasId = activeId.value
+  focused.value = null
+  clearContentFocus()
+  if (
+    document.activeElement instanceof HTMLElement &&
+    focusViewportElement.value?.contains(document.activeElement)
+  )
+    document.activeElement.blur()
+  graphKey.value++
+  await nextTick()
+  if (!isCurrentApi(context) || activeId.value !== canvasId || hasFocus.value) return
+  await restoreViewport()
+}
+function cardAction(action: string, id: string) {
+  if (action === 'settings') {
+    openSettings()
+    return
+  }
+  if (action === 'add') {
+    const canvas = currentCanvas.value,
+      node = canvas?.nodes.find((item) => item.id === id)
+    if (!canvas || !node || node.type === 'terminal') return
+    shareCard.value = { canvasId: canvas.id, node }
+    shareTarget.value =
+      shareTargets.value.find((target) => !target.disabled)?.id || shareTargets.value[0]?.id || ''
+    dialogError.value = ''
+    return
+  }
+  if (action === 'unfocus') {
+    void closeCardFocus()
+    return
+  }
+  if (
+    action !== 'focus' ||
+    !currentCanvas.value?.nodes.some((node) => node.id === id && node.type !== 'terminal')
+  )
+    return
+  sidebarOpen.value = false
+  sourcePanel.value = false
+  canvasMenu.value = false
+  hideMobileKeyboard()
+  saveViewport()
+  focusedCardId.value = id
+}
+async function closeCardFocus() {
+  const context = apiContext(),
+    canvasId = activeId.value
+  clearContentFocus()
+  if (
+    document.activeElement instanceof HTMLElement &&
+    focusViewportElement.value?.contains(document.activeElement)
+  )
+    document.activeElement.blur()
+  void flushNotes(canvasId)
+  focusedCardId.value = ''
+  graphKey.value++
+  await nextTick()
+  if (!isCurrentApi(context) || activeId.value !== canvasId || hasFocus.value) return
+  await restoreViewport()
+}
+watch(focusedCard, (card) => {
+  if (focusedCardId.value && !card) void closeCardFocus()
+})
+async function submitCardReference() {
+  const chosen = shareCard.value,
+    target = shareTargets.value.find(
+      (canvas) => canvas.id === shareTarget.value && !canvas.disabled,
+    )
+  if (!chosen || !target || busy.value) return
+  const context = apiContext(),
+    current = () =>
+      isCurrentApi(context) && shareCard.value === chosen && shareTarget.value === target.id
+  busy.value = true
+  dialogError.value = ''
+  try {
+    if (!(await flushInstanceEdits()) || !current()) return
+    const x = Math.max(80, ...target.nodes.map((node) => node.x + node.width + 24))
+    await api(
+      `/api/canvases/${segment(target.id)}/references`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ sourceCanvasId: chosen.canvasId, nodeId: chosen.node.id, x, y: 80 }),
+      },
+      context,
+    )
+    if (!current()) return
+    await syncState()
+    if (!current()) return
+    shareCard.value = undefined
+    notify(t('app.addedToCanvas', { name: target.name }))
+  } catch (reason) {
+    if (current()) dialogError.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    if (isCurrentApi(context)) busy.value = false
+  }
+}
+async function removeNode(id: string) {
+  const canvas = currentCanvas.value
+  const node = canvas?.nodes.find((node) => node.id === id)
+  if (!canvas || !node) return
+  const context = apiContext()
+  const feedback = removalUndo.value
+  if (!feedback) return
+  const removal = feedback.begin(canvas.id, node, context)
+  if (!removal) return
+  let offered = false
+  try {
+    if (!(await flushNotes(canvas.id)) || !isCurrentApi(context)) return
+    await flushLayout(canvas.id)
+    const saved = canvases.value
+      .find((item) => item.id === canvas.id)
+      ?.nodes.find((node) => node.id === id)
+    if (!isCurrentApi(context) || !saved) return
+    const name =
+      saved.type === 'terminal'
+        ? resourceFor(saved).window?.name || t('app.window')
+        : saved.type === 'file'
+          ? saved.asset.filename
+          : saved.title || t('app.note')
+    const started = performance.now()
+    const result = await api<CardRemovalResponse<Canvas>>(
+      `/api/canvases/${segment(canvas.id)}/nodes/${segment(id)}`,
+      { method: 'DELETE' },
+      context,
+    )
+    if (!isCurrentApi(context)) return
+    pendingLayouts.get(canvas.id)?.delete(id)
+    clearNoteEdits(canvas.id, id)
+    feedback.offer(removal, result.undo, started, name, result.lastReference)
+    offered = true
+    await syncState()
+  } catch (reason) {
+    if (isCurrentApi(context)) showError(reason)
+  } finally {
+    if (!offered) feedback.release(removal)
+  }
+}
+function openAdd(node?: TerminalCanvasNode) {
+  if (layoutEditing.value) {
+    void leaveLayout().then((allowed) => {
+      if (allowed) openAdd(node)
+    })
+    return
+  }
+  addDialogRevision++
+  const candidates = node
+    ? canvases.value.filter(
+        (canvas) =>
+          !canvas.nodes.some(
+            (item) =>
+              isTerminalNode(item) &&
+              item.sourceId === node.sourceId &&
+              item.windowId === node.windowId,
+          ),
+      )
+    : canvases.value
+  addTarget.value =
+    candidates.find((canvas) => canvas.id === currentCanvas.value?.id)?.id ||
+    candidates[0]?.id ||
+    ''
+  selectedWindows.value = node ? [`${node.sourceId}/${node.spaceId}/${node.windowId}`] : []
+  addSearch.value = ''
+  addDialog.value = true
+  dialogError.value = ''
+}
+async function submitAdd() {
+  const chosen = selectedAddWindows.value
+  if (!chosen.length || busy.value) return
+  const context = apiContext(),
+    revision = addDialogRevision
+  const current = () => isCurrentApi(context) && revision === addDialogRevision
+  busy.value = true
+  dialogError.value = ''
+  try {
+    let canvas = canvases.value.find((item) => item.id === addTarget.value)
+    if (!canvas) {
+      canvas = await api<Canvas>(
+        '/api/canvases',
+        { method: 'POST', body: JSON.stringify({ name: t('app.myCanvas'), nodes: [] }) },
+        context,
+      )
+      canvas.nodes ||= []
+    }
+    if (!current()) return
+    let x = 0,
+      y = canvas.nodes.length
+        ? Math.max(...canvas.nodes.map((node) => node.y + node.height)) + 24
+        : 0
+    let column = 0,
+      rowHeight = 0
+    const additions: CanvasNode[] = []
+    for (const item of chosen) {
+      if (
+        canvas.nodes.some(
+          (node) =>
+            isTerminalNode(node) &&
+            node.sourceId === item.source.id &&
+            node.windowId === item.window.id,
+        )
+      )
+        continue
+      const size = windowSize({ sourceId: item.source.id, windowId: item.window.id })
+      additions.push({
+        type: 'terminal',
+        id: uuid(),
+        sourceId: item.source.id,
+        spaceId: item.space.id,
+        windowId: item.window.id,
+        x,
+        y,
+        ...size,
+      })
+      x += size.width + 24
+      rowHeight = Math.max(rowHeight, size.height)
+      if (++column === 3) {
+        x = 0
+        y += rowHeight + 24
+        column = 0
+        rowHeight = 0
+      }
+    }
+    await api(
+      `/api/canvases/${segment(canvas.id)}/nodes`,
+      { method: 'POST', body: JSON.stringify({ nodes: additions }) },
+      context,
+    )
+    if (!current()) return
+    await syncState()
+    if (!current()) return
+    addDialog.value = false
+    switchCanvas(canvas.id, { fitAll: true })
+    notify(t('app.addedToCanvas', { name: canvas.name }))
+  } catch (reason) {
+    if (current()) dialogError.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    if (current()) busy.value = false
+  }
+}
+function noteKey(canvasId: string, id: string) {
+  return `${canvasId}/${id}`
+}
+function reconcileNoteEdits(next: Canvas[]) {
+  let moved = false
+  for (const key of new Set([...savingNotes.keys(), ...pendingNotes.keys()])) {
+    const saving = savingNotes.get(key),
+      pending = pendingNotes.get(key),
+      previous = pending || saving
+    if (!previous) continue
+    const edit = { ...previous, patch: { ...saving?.patch, ...pending?.patch } }
+    const target = retargetNoteEdit(edit, next)
+    if (target?.canvasId === edit.canvasId) continue
+    clearNoteEdits(edit.canvasId, edit.id)
+    if (!target) continue
+    const nextKey = noteKey(target.canvasId, target.id)
+    pendingNotes.set(nextKey, {
+      ...target,
+      patch: { ...target.patch, ...pendingNotes.get(nextKey)?.patch },
+    })
+    pendingWrites.start(target.id)
+    moved = true
+  }
+  if (moved)
+    queueMicrotask(() => {
+      void flushNotes()
+    })
+}
+function noteEdited(id: string) {
+  return [...savingNotes.values(), ...pendingNotes.values()].some((edit) => edit.id === id)
+}
+function clearNoteEdits(canvasId?: string, id?: string) {
+  const cleared = new Set<string>()
+  for (const [key, edit] of pendingNotes)
+    if ((!canvasId || edit.canvasId === canvasId) && (!id || edit.id === id)) {
+      noteTimers.cancel(key)
+      pendingNotes.delete(key)
+      cleared.add(edit.id)
+    }
+  for (const [key, edit] of savingNotes)
+    if ((!canvasId || edit.canvasId === canvasId) && (!id || edit.id === id)) {
+      savingNotes.delete(key)
+      cleared.add(edit.id)
+    }
+  for (const note of cleared) if (!noteEdited(note)) pendingWrites.discard(note)
+}
+function editNote(canvasId: string, id: string, patch: NotePatch) {
+  const node = canvases.value
+    .find((canvas) => canvas.id === canvasId)
+    ?.nodes.find((node) => node.id === id)
+  if (!node || node.type !== 'note') return
+  const changed = Object.fromEntries(
+    Object.entries(patch).filter(([key, value]) => node[key as keyof NotePatch] !== value),
+  ) as NotePatch
+  if (!Object.keys(changed).length) return
+  for (const canvas of canvases.value)
+    for (const reference of canvas.nodes)
+      if (reference.type === 'note' && reference.id === id) Object.assign(reference, changed)
+  // Queued writes from another canvas must not replay an older shared field.
+  for (const edit of [...savingNotes.values(), ...pendingNotes.values()])
+    if (edit.id === id)
+      for (const [field, value] of Object.entries(changed))
+        if (Object.hasOwn(edit.patch, field)) Object.assign(edit.patch, { [field]: value })
+  Object.assign(node, changed)
+  const key = noteKey(canvasId, id)
+  pendingNotes.set(key, { canvasId, id, patch: { ...pendingNotes.get(key)?.patch, ...changed } })
+  checkpointEdits()
+  pendingWrites.start(id)
+  noteTimers.schedule(key, () => {
+    void flushNotes(canvasId, { force: false })
+  })
+  const visible = currentCanvas.value?.nodes.find(
+    (item): item is NoteCanvasNode => item.id === id && item.type === 'note',
+  )
+  if (visible)
+    setNodes(
+      nodes.value.map((flow) =>
+        flow.id === id
+          ? {
+              ...flow,
+              data: { ...flow.data, ...visible },
+              style: { ...flow.style, height: `${visible.height}px` },
+            }
+          : flow,
+      ),
+    )
+}
+function retryNotes() {
+  void flushNotes()
+}
+async function flushNotes(
+  canvasId?: string,
+  options: { force?: boolean; keepalive?: boolean } = {},
+): Promise<boolean> {
+  const context = apiContext(),
+    { force = true, keepalive = false } = options
+  // A failed earlier batch leaves its edits pending; this flush sends them again with its own.
+  if (noteSave) {
+    // A closing page may cancel the save in flight, so keepalive copies of every unsaved note go out now.
+    // That save and the flush after it still store and confirm them.
+    if (keepalive)
+      for (const edit of mergeNoteEdits([...savingNotes.values(), ...pendingNotes.values()]))
+        if (!canvasId || edit.canvasId === canvasId)
+          void api(
+            `/api/canvases/${segment(edit.canvasId)}/notes/${segment(edit.id)}`,
+            { method: 'PATCH', body: JSON.stringify(edit.patch), keepalive },
+            context,
+          ).catch(() => {})
+    await noteSave
+    return isCurrentApi(context) && flushNotes(canvasId, options)
+  }
+  const batch = [...pendingNotes.entries()].filter(
+    ([key, edit]) => (!canvasId || edit.canvasId === canvasId) && (force || !noteTimers.has(key)),
+  )
+  if (!batch.length) return true
+  for (const [key, edit] of batch) {
+    noteTimers.cancel(key)
+    pendingNotes.delete(key)
+    savingNotes.set(key, edit)
+    pendingWrites.start(edit.id)
+  }
+  // Notes are independent, so a page being discarded sends all of them at once.
+  noteSave = (async () => {
+    const stored = await Promise.all(
+      batch.map(async ([key, edit]) => {
+        try {
+          await api(
+            `/api/canvases/${segment(edit.canvasId)}/notes/${segment(edit.id)}`,
+            { method: 'PATCH', body: JSON.stringify(edit.patch), keepalive },
+            context,
+          )
+          if (savingNotes.get(key) !== edit) return true
+          savingNotes.delete(key)
+          if (!noteEdited(edit.id)) pendingWrites.saved(edit.id)
+          return true
+        } catch (reason) {
+          if (!isCurrentApi(context) || savingNotes.get(key) !== edit) return true
+          savingNotes.delete(key)
+          if (
+            canvases.value
+              .find((canvas) => canvas.id === edit.canvasId)
+              ?.nodes.some((node) => node.id === edit.id)
+          ) {
+            pendingNotes.set(key, {
+              ...edit,
+              patch: { ...edit.patch, ...pendingNotes.get(key)?.patch },
+            })
+            pendingWrites.failed(edit.id, retryNotes)
+          } else if (!noteEdited(edit.id)) pendingWrites.discard(edit.id)
+          showError(reason)
+          return false
+        }
+      }),
+    )
+    if (!isCurrentApi(context)) return false
+    checkpointEdits()
+    await syncState().catch(showError)
+    return isCurrentApi(context) && stored.every(Boolean)
+  })()
+  let saved = false
+  try {
+    saved = await noteSave
+  } finally {
+    if (isCurrentApi(context)) noteSave = undefined
+  }
+  if (!saved || !isCurrentApi(context)) return false
+  return force ? flushNotes(canvasId, options) : true
+}
+function dropLayout(canvasId: string) {
+  clearTimeout(saveTimers.get(canvasId))
+  saveTimers.delete(canvasId)
+  pendingLayouts.delete(canvasId)
+  pendingWrites.discard(layoutOwner(canvasId))
+}
+async function flushLayout(canvasId: string, keepalive = false) {
+  const context = apiContext(),
+    owner = layoutOwner(canvasId),
+    tracked = pendingLayouts.has(canvasId)
+  clearTimeout(saveTimers.get(canvasId))
+  saveTimers.delete(canvasId)
+  if (tracked) pendingWrites.start(owner)
+  try {
+    await layoutSaves.flush(
+      canvasId,
+      (batch) =>
+        api(
+          `/api/canvases/${segment(canvasId)}/layout`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify({ nodes: [...batch].map(([id, patch]) => ({ id, ...patch })) }),
+            keepalive,
+          },
+          context,
+        ),
+      checkpointEdits,
+      keepalive,
+    )
+  } catch (reason) {
+    if (isCurrentApi(context)) {
+      checkpointEdits()
+      pendingWrites.failed(owner, () => {
+        void flushLayout(canvasId).catch(showError)
+      })
+    }
+    throw reason
+  }
+  requireCurrentApi(context)
+  if (tracked && !pendingLayouts.has(canvasId)) pendingWrites.saved(owner)
+  await syncState()
+}
+/** Send every pending note and layout without waiting on one another. */
+function saveEdits(keepalive = false) {
+  void flushNotes(undefined, { keepalive })
+  for (const id of pendingLayouts.keys()) void flushLayout(id, keepalive).catch(showError)
+}
+function scheduleSave() {
+  const canvas = currentCanvas.value
+  if (!canvas) return
+  clearTimeout(saveTimers.get(canvas.id))
+  pendingWrites.start(layoutOwner(canvas.id))
+  saveTimers.set(
+    canvas.id,
+    setTimeout(() => {
+      void flushLayout(canvas.id).catch(showError)
+    }, 450),
+  )
+}
+async function addNote() {
+  if (!(await leaveLayout())) return
+  const canvas = currentCanvas.value
+  if (!canvas || busy.value) return
+  busy.value = true
+  const viewport = getViewport(),
+    area = document.querySelector('.graph-wrap')?.getBoundingClientRect()
+  const x = Math.round(((area?.width || 800) / 2 - viewport.x) / viewport.zoom - 160)
+  const y = Math.round(((area?.height || 600) / 2 - viewport.y) / viewport.zoom - 120)
+  try {
+    const previous = new Set(canvas.nodes.map((node) => node.id))
+    const result = await write<Canvas>(`/api/canvases/${segment(canvas.id)}/notes`, 'POST', {
+      x,
+      y,
+      title: t('panels.note.name'),
+    })
+    await syncState()
+    const added = result.nodes.find((node) => !previous.has(node.id))
+    if (added && activeId.value === canvas.id) {
+      if (mobile.value) {
+        cardAction('focus', added.id)
+        return
+      }
+      pendingNoteFocus = added.id
+      await nextTick()
+      setNodes(nodes.value.map((node) => ({ ...node, selected: node.id === added.id })))
+      await nextTick()
+      requestAnimationFrame(() => focusNewNote())
+    }
+  } catch (reason) {
+    showError(reason)
+  } finally {
+    busy.value = false
+  }
+}
+async function toggleSnap() {
+  const canvas = currentCanvas.value
+  if (!canvas) return
+  try {
+    await write(`/api/canvases/${segment(canvas.id)}`, 'PATCH', { snapToGrid: !canvas.snapToGrid })
+    await syncState()
+  } catch (reason) {
+    showError(reason)
+  }
+}
+let resizingCard:
+  { origin: CardBounds; rawOrigin: CardBounds; raw: CardBounds; snapped: CardBounds } | undefined
+let layoutGestureBefore:
+  Array<{ id: string; x: number; y: number; width: number; height: number }> | undefined
+function layoutStarted(event?: { node: Node }) {
+  if (mobile.value && !layoutEditing.value) return
+  layoutGesture = activeId.value
+  if (layoutEditing.value) {
+    layoutGestureBefore = nodes.value.map(cardBounds)
+    for (const { id, ...geometry } of layoutGestureBefore) layoutDraft.value?.capture(id, geometry)
+    if (event?.node) layoutSelected.value = event.node.id
+  }
+}
+function cancelLayoutGesture() {
+  if (!layoutEditing.value || !layoutGestureBefore) return
+  for (const rect of layoutGestureBefore) {
+    const node = nodes.value.find((node) => node.id === rect.id)
+    if (node) {
+      node.position = { x: rect.x, y: rect.y }
+      node.data.width = rect.width
+      node.data.height = rect.height
+      node.style = { ...node.style, width: `${rect.width}px`, height: `${rect.height}px` }
+    }
+  }
+  layoutGestureBefore = undefined
+  layoutGesture = ''
+  resizingCard = undefined
+}
+async function startLayout() {
+  canvasMenu.value = false
+  if (!mobile.value || isOverview.value || layoutBusy.value || !currentCanvas.value) return
+  const canvasId = activeId.value,
+    context = apiContext()
+  if (
+    !(await flushInstanceEdits()) ||
+    !isCurrentApi(context) ||
+    activeId.value !== canvasId ||
+    !mobile.value ||
+    isOverview.value ||
+    !currentCanvas.value
+  )
+    return
+  clearContentFocus()
+  layoutSelected.value = ''
+  layoutError.value = ''
+  layoutDraft.value = new LayoutDraft(canvasId, nodes.value.map(cardBounds))
+  rebuildNodes()
+}
+function discardLayout() {
+  if (layoutBusy.value) return
+  layoutDraft.value = undefined
+  layoutSelected.value = ''
+  layoutError.value = ''
+  layoutGestureBefore = undefined
+  layoutGesture = ''
+  resizingCard = undefined
+  rebuildNodes()
+}
+async function applyLayout(): Promise<boolean> {
+  const draft = layoutDraft.value
+  if (!draft || layoutBusy.value) return !draft
+  if (!draft.changes.size) {
+    discardLayout()
+    return true
+  }
+  layoutBusy.value = true
+  layoutError.value = ''
+  const context = apiContext()
+  try {
+    await api(
+      `/api/canvases/${segment(draft.canvasId)}/layout`,
+      { method: 'PATCH', body: JSON.stringify({ nodes: [...draft.changes.values()] }) },
+      context,
+    )
+    await syncState()
+    requireCurrentApi(context)
+    layoutBusy.value = false
+    discardLayout()
+    return true
+  } catch (reason) {
+    if (isCurrentApi(context)) {
+      // Keep the draft after an ambiguous network failure; idempotent expectations allow a safe retry.
+      await syncState().catch(() => {})
+      layoutError.value =
+        reason instanceof ApiError && reason.status === 409
+          ? t('app.layoutConflict')
+          : t('app.layoutFailed')
+    }
+    return false
+  } finally {
+    layoutBusy.value = false
+  }
+}
+function leaveLayout(): Promise<boolean> {
+  if (!layoutDraft.value) return Promise.resolve(true)
+  if (layoutBusy.value) return Promise.resolve(false)
+  if (!layoutDraft.value.changes.size) {
+    discardLayout()
+    return Promise.resolve(true)
+  }
+  if (layoutExit) return layoutExit
+  layoutExitOpen.value = true
+  layoutExit = new Promise<boolean>((resolve) => {
+    resolveLayoutExit = resolve
+  }).finally(() => {
+    layoutExit = undefined
+    resolveLayoutExit = undefined
+    layoutExitOpen.value = false
+  })
+  return layoutExit
+}
+async function chooseLayoutExit(action: 'apply' | 'discard' | 'stay') {
+  if (action === 'apply' && !(await applyLayout())) return
+  if (action === 'discard') discardLayout()
+  resolveLayoutExit?.(action !== 'stay')
+}
+let restoringInputMode = false
+function restoreInputMode(value: typeof inputMode.value) {
+  restoringInputMode = true
+  inputMode.value = value
+  restoringInputMode = false
+}
+watch(
+  inputMode,
+  (value, previous) => {
+    if (!layoutEditing.value || restoringInputMode || value === previous) return
+    restoreInputMode(previous)
+    void leaveLayout().then((allowed) => {
+      if (allowed) restoreInputMode(value)
+    })
+  },
+  { flush: 'sync' },
+)
+watch(
+  mobile,
+  (value) => {
+    if (value || !layoutEditing.value || restoringInputMode) return
+    const preference = inputMode.value
+    restoreInputMode('touch')
+    void leaveLayout().then((allowed) => {
+      if (allowed) restoreInputMode(preference)
+    })
+  },
+  { flush: 'sync' },
+)
+function resizeStarted(id: string, bounds: Omit<CardBounds, 'id'>) {
+  layoutStarted()
+  const node = nodes.value.find((node) => node.id === id)
+  const origin = node ? cardBounds(node) : undefined
+  resizingCard = origin
+    ? { origin, rawOrigin: { id, ...bounds }, raw: { id, ...bounds }, snapped: origin }
+    : undefined
+}
+function changeNodes(changes: NodeChange[]) {
+  if (resizingCard) {
+    const { origin, rawOrigin } = resizingCard
+    const dimensions = changes.find(
+      (change) =>
+        change.type === 'dimensions' &&
+        change.id === origin.id &&
+        change.resizing &&
+        change.dimensions,
+    )
+    if (dimensions?.type === 'dimensions' && dimensions.dimensions) {
+      const position = changes.find(
+        (change) => change.type === 'position' && change.id === origin.id,
+      )
+      const raw = (resizingCard.raw = {
+        ...resizingCard.raw,
+        ...dimensions.dimensions,
+        ...(position?.type === 'position' ? position.position : {}),
+      })
+      const current = resizeFromDelta(origin, rawOrigin, raw)
+      const node = nodes.value.find((node) => node.id === origin.id)
+      const rect = (resizingCard.snapped = currentCanvas.value?.snapToGrid
+        ? snapCardResize(
+            origin,
+            current,
+            nodes.value.map(cardBounds),
+            getViewport().zoom,
+            node?.type === 'terminal' ? { width: 360, height: 220 } : { width: 240, height: 160 },
+          )
+        : current)
+      changes = changes
+        .filter((change) => !(change.type === 'position' && change.id === origin.id))
+        .map((change) =>
+          change === dimensions
+            ? { ...dimensions, dimensions: { width: rect.width, height: rect.height } }
+            : change,
+        )
+      changes.push({
+        id: origin.id,
+        type: 'position',
+        from: origin,
+        position: { x: rect.x, y: rect.y },
+      })
+    }
+  }
+  applyNodeChanges(changes)
+  if (layoutEditing.value)
+    for (const change of changes)
+      if (change.type === 'dimensions' && change.dimensions && change.resizing) {
+        const node = nodes.value.find((node) => node.id === change.id)
+        if (node) {
+          node.data.width = change.dimensions.width
+          node.data.height = change.dimensions.height
+        }
+      }
+  announceNodeMove(changes)
+}
+function editLayout(id: string, patch: LayoutPatch) {
+  const canvas = currentCanvas.value
+  const node = canvas?.nodes.find((item) => item.id === id)
+  if (!canvas || !node) return
+  layoutSaves.set(canvas.id, id, patch)
+  checkpointEdits()
+  Object.assign(node, patch)
+  scheduleSave()
+}
+function cardBounds(node: Node): CardBounds {
+  return { id: node.id, ...node.position, width: node.data.width, height: node.data.height }
+}
+function snapDraggedCards(event: { node: Node; nodes?: Node[] }) {
+  if (
+    (mobile.value && !layoutEditing.value) ||
+    isOverview.value ||
+    !currentCanvas.value?.snapToGrid
+  )
+    return
+  const moving = event.nodes?.length ? event.nodes : [event.node]
+  const ids = new Set(moving.map((node) => node.id))
+  const bounds = moving.map(cardBounds)
+  const x = Math.min(...bounds.map((node) => node.x)),
+    y = Math.min(...bounds.map((node) => node.y))
+  const group = {
+    id: event.node.id,
+    x,
+    y,
+    width: Math.max(...bounds.map((node) => node.x + node.width)) - x,
+    height: Math.max(...bounds.map((node) => node.y + node.height)) - y,
+  }
+  const peers = nodes.value
+    .filter((node) => !ids.has(node.id) && ['terminal', 'note', 'file'].includes(node.type || ''))
+    .map(cardBounds)
+  const position = snapCardPosition(group, peers, getViewport().zoom)
+  for (const node of moving)
+    node.position = { x: node.position.x + position.x - x, y: node.position.y + position.y - y }
+}
+function dragStopped(event: { node: Node; nodes?: Node[]; event?: Event }) {
+  if (mobile.value && !layoutEditing.value) return
+  if (layoutEditing.value && (!layoutGestureBefore || event.event?.type === 'touchcancel')) {
+    cancelLayoutGesture()
+    return
+  }
+  snapDraggedCards(event)
+  layoutGesture = ''
+  for (const node of event.nodes?.length ? event.nodes : [event.node]) {
+    const patch = { x: node.position.x, y: node.position.y }
+    if (layoutDraft.value) layoutDraft.value.update(node.id, patch)
+    else editLayout(node.id, patch)
+  }
+  layoutGestureBefore = undefined
+  rebuildNodes()
+}
+function resizeNode(id: string, width: number, height: number, x?: number, y?: number) {
+  if (mobile.value && !layoutEditing.value) return
+  if (layoutEditing.value && !layoutGestureBefore) return
+  const node = currentCanvas.value?.nodes.find((item) => item.id === id)
+  if (resizingCard?.origin.id === id) {
+    const rect = resizingCard.snapped
+    width = rect.width
+    height = rect.height
+    x = rect.x
+    y = rect.y
+  }
+  resizingCard = undefined
+  layoutGesture = ''
+  if (node) {
+    const size = { width, height: Math.max(160, Math.min(3000, height)) }
+    if (layoutDraft.value) {
+      layoutDraft.value.update(id, {
+        ...size,
+        ...(x === undefined ? {} : { x }),
+        ...(y === undefined ? {} : { y }),
+      })
+      layoutGestureBefore = undefined
+      rebuildNodes()
+      return
+    }
+    if (isTerminalNode(node)) windowSizes.value[`${node.sourceId}/${node.windowId}`] = size
+    editLayout(id, {
+      ...size,
+      ...(x === undefined ? {} : { x }),
+      ...(y === undefined ? {} : { y }),
+    })
+  }
+  rebuildNodes()
+}
+function keydown(event: KeyboardEvent) {
+  if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
+  if (notificationSurface.value || appDialogOpen.value) return
+  if (
+    event.key === 'Escape' &&
+    event
+      .composedPath()
+      .some((target) => target instanceof Element && target.getAttribute('role') === 'menu')
+  )
+    return
+  if (richPasteRequest.value || directoryRequest.value || urlRequest.value) return
+  if (downloadPreview.value) return
+  if (backgroundCanvas.value) return
+  if (settingsDialog.value || accountDialog.value) return
+  if (scanTarget.value) return
+  if (
+    layoutEditing.value &&
+    event.key === 'Escape' &&
+    !sidebarOpen.value &&
+    !canvasMenu.value &&
+    !sourcePanel.value
+  ) {
+    event.preventDefault()
+    void leaveLayout()
+    return
+  }
+  const target = event.target instanceof Element ? event.target : undefined
+  if (
+    !modalOpen.value &&
+    (target?.closest('.xterm') ||
+      (target?.closest('.note-card input, .note-card [contenteditable="true"]') &&
+        !(focusedCardId.value && event.key === 'Escape')))
+  )
+    return
+  if (
+    paging.value &&
+    !focused.value &&
+    !modalOpen.value &&
+    !overviewMenuOpen.value &&
+    !canvasMenu.value &&
+    !sidebarOpen.value &&
+    !sourcePanel.value &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    !(event.target as HTMLElement)?.closest(
+      'input, textarea, select, button, a, [contenteditable="true"]',
+    )
+  ) {
+    const direction = pageDirections.value.find((item) => item.key === event.key)?.direction
+    if (direction) {
+      event.preventDefault()
+      if (!event.repeat) movePage(direction)
+      return
+    }
+  }
+  if (event.key === 'Escape') {
+    if (sidebarOpen.value) sidebarOpen.value = false
+    else if (overviewMenuOpen.value) overviewMenuOpen.value = false
+    else if (focused.value) void closeFocus()
+    else if (focusedCardId.value) {
+      event.preventDefault()
+      void closeCardFocus()
+    } else sourcePanel.value = false
+  }
+}
+function windowResize() {
+  queueCameraResize()
+}
+function queueCameraResize() {
+  cancelAnimationFrame(cameraResize)
+  cameraResize = requestAnimationFrame(() => {
+    if (paging.value) {
+      void fitPage()
+      return
+    }
+    if (!mobile.value || hasFocus.value || pendingViewport) return
+    const frame = canvasFrame(graphSurface.value)
+    if (!frame) return
+    const previous = cameraFrame
+    cameraFrame = frame
+    const current = getViewport()
+    const next = preserveCanvasCenter(current, previous, frame)
+    if (next !== current) {
+      const id = activeId.value
+      void setViewport(next).then(() => {
+        if (id === activeId.value && !hasFocus.value) saveViewport()
+      })
+    }
+  })
+}
+watch(
+  [modalOpen, directoryRequest, downloadPreview, urlRequest],
+  ([modal, directory, preview, url]) => {
+    if (modal || directory || preview || url) dismissMobileKeyboard()
+  },
+)
+watch(graphSurface, (element) => {
+  cameraObserver?.disconnect()
+  if (element) {
+    cameraObserver = new ResizeObserver(queueCameraResize)
+    cameraObserver.observe(element)
+  }
+})
+watch(visibleViewport, () => {
+  if (mobile.value) void nextTick(windowResize)
+})
+watch(uiZoom, () => {
+  void nextTick(windowResize)
+})
+watch(mobile, () => {
+  if (layoutEditing.value) return
+  sidebarOpen.value = false
+  canvasTouchCancel()
+  rebuildNodes()
+})
+watch(sidebarDrawer, (drawer) => {
+  openCanvasAgents.value = ''
+  if (!drawer) sidebarOpen.value = false
+})
+watch(sourcePanel, (value) => {
+  if (value && sidebarDrawer.value) sidebarOpen.value = false
+})
+watch(sidebarOpen, (value) => {
+  if (!value) openCanvasAgents.value = ''
+  if (value) {
+    canvasMenu.value = false
+    overviewMenuOpen.value = false
+    createMenuOpen.value = false
+  }
+})
+watch([canvasMenu, overviewMenuOpen, createMenuOpen], (values) => {
+  if (values.some(Boolean)) sidebarOpen.value = false
+})
+watch(canvasFullscreen, async () => {
+  sidebarOpen.value = false
+  await nextTick()
+  cameraFrame = canvasFrame(graphSurface.value)
+})
+setDownloadContext((resource) => {
+  if (isOverview.value) return undefined
+  const canvas = currentCanvas.value
+  const anchor = canvas?.nodes.find(
+    (node) =>
+      isTerminalNode(node) &&
+      node.sourceId === resource.sourceId &&
+      node.windowId === resource.windowId,
+  )
+  return canvas && anchor ? { canvasId: canvas.id, anchorId: anchor.id } : undefined
+})
+onMounted(async () => {
+  window.addEventListener('pointerdown', selectLogicalTerminal, { capture: true, passive: true })
+  window.addEventListener('keydown', selectLogicalTerminal, { capture: true, passive: true })
+  for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove'])
+    window.addEventListener(event, creationNavigation, { capture: true, passive: true })
+  window.addEventListener('canvas:unauthorized', unauthorized)
+  window.addEventListener('canvas:session-changed', sessionChanged)
+  window.addEventListener('canvas:error', requestError)
+  window.addEventListener('keydown', keydown)
+  window.addEventListener('resize', windowResize)
+  window.addEventListener('beforeunload', saveViewport)
+  document.addEventListener('visibilitychange', visibilityChanged)
+  stopPageGuard = guardPageExit(pendingWrites, () => !!layoutDraft.value?.changes.size)
+  stopEditFlush = pendingWrites.onFlush(saveEdits)
+  navigation.read()
+  instanceBooted = true
+  if (unknownInstance.value || invalidInstanceLink) ready.value = true
+  else await activateInstance()
+  refreshTimer = setInterval(() => {
+    if (!document.hidden) void refreshResources(true)
+  }, 2000)
+})
+onBeforeUnmount(() => {
+  cancelCanvasMorph()
+  setTerminalReadFocus()
+  window.removeEventListener('pointerdown', selectLogicalTerminal, true)
+  window.removeEventListener('keydown', selectLogicalTerminal, true)
+  document.removeEventListener('visibilitychange', visibilityChanged)
+  for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove'])
+    window.removeEventListener(event, creationNavigation, true)
+  fontRevision++
+  cameraObserver?.disconnect()
+  cancelAnimationFrame(cameraResize)
+  setDownloadContext()
+  stopStateEvents()
+  clearInterval(refreshTimer)
+  for (const timer of saveTimers.values()) clearTimeout(timer)
+  noteTimers.clear()
+  clearTerminals()
+  window.removeEventListener('canvas:unauthorized', unauthorized)
+  window.removeEventListener('canvas:session-changed', sessionChanged)
+  window.removeEventListener('canvas:error', requestError)
+  window.removeEventListener('keydown', keydown)
+  window.removeEventListener('resize', windowResize)
+  window.removeEventListener('beforeunload', saveViewport)
+  stopPageGuard()
+  stopEditFlush()
+})
+</script>
+
+<template>
+  <UTheme :ui="mobile ? mobileTheme : undefined">
+    <UApp
+      :locale="uiLocale"
+      :portal="overlayRoot || false"
+      :toaster="{
+        portal: notificationPortal || false,
+        position: 'bottom-right',
+        max: 4 + (removalUndo?.count || 0),
+        progress: false,
+        ui: { viewport: 'canvas-notifications' },
+      }"
+    >
+      <CardRemovalFeedback
+        ref="removalUndo"
+        :sync="syncState"
+        :released="removalReleased"
+        :error="showError"
+      />
+      <NotificationCenter
+        v-if="authenticated && latestState"
+        :key="`${activeInstance.id}:${latestState.instanceId}`"
+        ref="notificationCenter"
+        :instance-id="activeInstance.id"
+        :backend-id="latestState.instanceId"
+        :resources="rawResources"
+        :display-resources="resources"
+        :focus="terminalReadFocus"
+        :refresh="() => refreshResources(true)"
+        :actions-available="notificationActionsAvailable"
+        @open="openNotification"
+        @go="goToNotification"
+      />
+      <NotificationHost :portal="overlayRoot" />
+      <AppFeedback :error="error" :success="success" @dismiss="dismissFeedback" />
+      <PwaUpdatePrompt />
+      <div v-if="!ready" class="boot-screen">
+        <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" />{{ t('common.loading') }}
+      </div>
+      <div
+        v-else-if="!authenticated || unknownInstance"
+        class="login-screen"
+        :class="{ 'mobile-layout': mobile }"
+        :style="mobileViewportStyle"
+      >
+        <main class="login-content">
+          <header class="login-header">
+            <div class="brand login-brand">
+              <span class="brand-symbol"><Icon name="canvas" :size="27" /></span
+              ><span class="brand-name">canvas</span>
+            </div>
+            <LanguageSelect />
+          </header>
+          <InstancePicker v-if="instances.length" :disabled="busy" @connect="connectInstance" />
+          <InstanceSetup
+            v-if="!hasActiveInstance"
+            :message="instanceSetupMessage ? t(instanceSetupMessage) : ''"
+            @connect="connectInstance"
+          />
+          <div v-else-if="unknownInstance" class="login-form">
+            <UAlert
+              color="warning"
+              variant="subtle"
+              :title="t('canvasUi.unknownInstance')"
+              role="status"
+            /><UButton size="lg" block class="login-button" @click="openUnknownInstance">{{
+              t('canvasUi.openInstance')
+            }}</UButton>
+          </div>
+          <div v-else-if="checkingInstance" class="instance-checking" role="status">
+            <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" />{{
+              t('common.loading')
+            }}
+          </div>
+          <InstanceSetup
+            v-else-if="instanceUnavailable"
+            :message="instanceSetupMessage ? t(instanceSetupMessage) : ''"
+            @connect="connectInstance"
+          />
+          <form v-else class="login-form" @submit.prevent="login">
+            <div class="login-endpoint">
+              <p class="login-address" :title="activeInstance.base">{{ activeInstance.base }}</p>
+              <span
+                v-if="serverBuild"
+                class="login-version"
+                :title="`${t('instances.serverVersion')}: ${serverBuild.build.version}${serverBuild.build.revision ? ` · ${serverBuild.build.revision}` : ''}`"
+                >{{ buildLabel(serverBuild.build) }}</span
+              >
+            </div>
+            <UFormField :label="t('app.username')" required
+              ><UInput
+                v-model="username"
+                name="username"
+                autocomplete="username"
+                required
+                :autofocus="!username"
+                size="lg"
+                class="w-full"
+            /></UFormField>
+            <UFormField :label="t('app.passwordLabel')" required
+              ><UInput
+                v-model="password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                required
+                :autofocus="!!username"
+                size="lg"
+                class="w-full"
+            /></UFormField>
+            <UAlert
+              v-if="loginError"
+              color="error"
+              variant="subtle"
+              :title="loginError"
+              role="alert"
+            />
+            <UButton
+              type="submit"
+              size="lg"
+              block
+              class="login-button"
+              :loading="busy || checkingInstance"
+              :disabled="busy || checkingInstance"
+              >{{ busy ? t('app.signingIn') : t('app.signIn') }}</UButton
+            >
+          </form>
+        </main>
+        <div ref="overlayRoot" class="overlay-root" />
+      </div>
+      <div
+        v-else
+        class="app-shell"
+        :class="{
+          'canvas-fullscreen': canvasFullscreen,
+          'mobile-layout': mobile,
+          'sidebar-drawer': sidebarDrawer,
+          'has-display-cutout': hasSafeTop,
+          'cutout-preview-active': settingsDialog && mobile && hasSafeTop,
+        }"
+        :style="[mobileViewportStyle, contentFontStyle, terminalMaterialStyle]"
+        :data-content-font="appliedContentFont"
+      >
+        <header
+          class="workspace-header"
+          :inert="(contentFontReady && !!focusedCard) || undefined"
+          :aria-hidden="(contentFontReady && !!focusedCard) || undefined"
+        >
+          <div v-if="!sidebarDrawer" class="brand header-brand">
+            <span class="brand-symbol"><Icon name="canvas" :size="21" /></span
+            ><span class="brand-name">canvas</span>
+          </div>
+          <div class="header-context">
+            <button
+              v-if="sidebarDrawer"
+              class="icon-button mobile-menu-trigger"
+              :aria-label="t('app.openCanvasList')"
+              aria-controls="canvas-sidebar"
+              :aria-expanded="sidebarOpen"
+              @click="sidebarOpen = !sidebarOpen"
+            >
+              <Icon name="menu" :size="21" />
+            </button>
+            <div class="header-text">
+              <div class="breadcrumb">
+                <h1 v-if="latestState" :title="currentName">{{ currentName }}</h1>
+              </div>
+              <span
+                v-if="!featurePage && !workspacePending && !undiscoveredSources.length"
+                class="header-counts"
+                >{{ canvasCounts }}</span
+              >
+            </div>
+            <button
+              class="icon-button refresh-button"
+              :title="
+                refreshedAt ? t('app.refreshUpdated', { time: refreshedTime }) : t('app.refresh')
+              "
+              :aria-label="t('app.refresh')"
+              :disabled="loading || workspacePending"
+              @click="refreshResources()"
+            >
+              <Icon name="refresh" :size="14" :class="{ spinning: loading }" />
+            </button>
+          </div>
+          <div
+            v-if="!featurePage"
+            class="header-actions"
+            :inert="workspacePending || layoutEditing || undefined"
+          >
+            <UDropdownMenu
+              v-if="isOverview"
+              v-model:open="overviewMenuOpen"
+              :modal="false"
+              :items="overviewMenu"
+              :content="{ align: 'end', ...overviewDismiss }"
+              :ui="{ content: 'overview-display-menu w-[180px]' }"
+            >
+              <button
+                ref="overviewTrigger"
+                class="icon-button overview-display-trigger"
+                :class="{ active: overviewChanged }"
+                :title="t('app.filterSort')"
+                :aria-label="t('app.overviewFilterSort')"
+              >
+                <svg
+                  width="17"
+                  height="17"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.65"
+                  stroke-linecap="round"
+                  aria-hidden="true"
+                >
+                  <path d="M4 6h16M7 12h10M10 18h4" /></svg
+                ><i v-if="overviewChanged" />
+              </button>
+              <template #item-leading="{ item }"
+                ><span class="overview-display-leading" aria-hidden="true"
+                  ><i
+                    v-if="item.status"
+                    class="program-dot"
+                    :style="{ '--program-color': statusColor(item.status) }" /></span
+              ></template>
+            </UDropdownMenu>
+            <UDropdownMenu
+              v-if="!isOverview"
+              v-model:open="createMenuOpen"
+              :items="createMenu"
+              :content="{ align: 'end' }"
+              :ui="{}"
+            >
+              <button
+                class="icon-button canvas-create-trigger"
+                :title="t('app.addContent')"
+                :aria-label="t('app.addContent')"
+                :disabled="busy"
+              >
+                <Icon name="plus" :size="17" />
+              </button>
+            </UDropdownMenu>
+            <SaveStatus v-if="!isOverview" :owner="layoutOwner(activeId)" size="xs" />
+            <UDropdownMenu
+              v-model:open="canvasMenu"
+              :modal="false"
+              :items="canvasMenuItems"
+              :content="{ align: 'end', ...canvasMenuDismiss }"
+              :ui="{
+                content:
+                  'canvas-menu min-w-[200px] w-max max-w-[calc(var(--ui-viewport-width)-16px)]',
+                group: 'space-y-0.5',
+                itemLabel: 'whitespace-nowrap',
+              }"
+            >
+              <button
+                ref="canvasMenuTrigger"
+                class="icon-button canvas-menu-trigger"
+                :title="t('app.canvasSettings')"
+                :aria-label="t('app.canvasSettings')"
+              >
+                <Icon name="more" :size="17" />
+              </button>
+            </UDropdownMenu>
+            <button
+              class="button subtle"
+              :title="t('app.connections')"
+              :aria-label="t('app.connections')"
+              @click="sourcePanel = true"
+            >
+              <Icon name="server" :size="15" />{{ t('app.connections') }}
+            </button>
+            <button
+              v-if="isOverview"
+              class="button primary"
+              :title="t('app.addConnection')"
+              :aria-label="t('app.addConnection')"
+              @click="openSource()"
+            >
+              <Icon name="plus" :size="15" />{{ t('app.addConnection') }}</button
+            ><button
+              v-else
+              class="button primary"
+              :title="t('app.addWindows')"
+              :aria-label="t('app.addWindows')"
+              @click="openAdd()"
+            >
+              <Icon name="layers" :size="15" />{{ t('app.addWindows') }}
+            </button>
+          </div>
+        </header>
+        <button
+          v-if="sidebarDrawer && sidebarOpen"
+          class="sidebar-backdrop"
+          :aria-label="t('app.closeCanvasList')"
+          @click="sidebarOpen = false"
+        />
+        <aside
+          v-show="!sidebarDrawer || sidebarOpen"
+          :inert="(contentFontReady && !!focusedCard) || undefined"
+          :aria-hidden="(contentFontReady && !!focusedCard) || undefined"
+          id="canvas-sidebar"
+          class="sidebar"
+          :class="{ 'sidebar-open': sidebarOpen }"
+        >
+          <div v-if="sidebarDrawer" class="brand">
+            <span class="brand-symbol"><Icon name="canvas" :size="24" /></span
+            ><span class="brand-name">canvas</span
+            ><button
+              class="icon-button sidebar-close"
+              :aria-label="t('app.closeCanvasList')"
+              @click="sidebarOpen = false"
+            >
+              <Icon name="close" :size="19" />
+            </button>
+          </div>
+          <div class="sidebar-navigation">
+            <div class="nav-section-label">
+              <span>{{ t('app.features') }}</span>
+            </div>
+            <nav class="feature-nav" :aria-label="t('app.features')">
+              <CanvasNavItem
+                class="feature-nav-item"
+                icon="history"
+                :fresh="freshStatuses"
+                :name="t('app.workingSet')"
+                :active="featurePage === 'working-set'"
+                :indicator="workingSetIndicator"
+                v-bind="agentPopover('working-set')"
+                :agents="() => workingSetEntries"
+                :actions-available="notificationActionsAvailable"
+                @go="goToWindow"
+                @select="openFeature('working-set')"
+              />
+            </nav>
+            <div class="sidebar-divider" role="separator" />
+            <div class="nav-section-label">
+              <span>{{ t('app.canvases') }}</span
+              ><UButton
+                class="nav-section-add"
+                color="neutral"
+                variant="ghost"
+                square
+                :title="t('app.newCanvas')"
+                :aria-label="t('app.newCanvas')"
+                @click="openCanvasDialog()"
+                ><Icon name="plus" :size="16"
+              /></UButton>
+            </div>
+            <nav class="canvas-nav" :aria-label="t('app.canvases')">
+              <CanvasNavItem
+                class="canvas-nav-item"
+                icon="grid"
+                :fresh="freshStatuses"
+                :name="t('app.overview')"
+                :active="!featurePage && isOverview"
+                :indicator="indicators.overview"
+                v-bind="agentPopover('overview')"
+                :agents="() => canvasAgents(undefined, resources, overviewOrder)"
+                :actions-available="notificationActionsAvailable"
+                @go="(target) => goToCanvasWindow('overview', target)"
+                @select="navigateCanvas('overview')"
+              />
+              <SidebarList
+                :key="activeInstanceId"
+                :items="orderedCanvases"
+                @reorder="(ids) => rememberSidebarOrder('canvases', ids)"
+              >
+                <template #default="{ item: canvas, hint }"
+                  ><CanvasNavItem
+                    class="canvas-nav-item"
+                    icon="canvas"
+                    :fresh="freshStatuses"
+                    :name="canvas.name"
+                    :active="!featurePage && activeId === canvas.id"
+                    :indicator="indicators[canvas.id]"
+                    v-bind="agentPopover(canvas.id)"
+                    :agents="() => canvasAgents(canvas, resources, overviewOrder)"
+                    :actions-available="notificationActionsAvailable"
+                    @go="(target) => goToCanvasWindow(canvas.id, target)"
+                    :aria-description="hint"
+                    aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                    @select="navigateCanvas(canvas.id)"
+                /></template>
+              </SidebarList>
+            </nav>
+            <div class="sidebar-divider" role="separator" />
+            <div class="nav-section-label">
+              <span>{{ t('app.connections') }}</span
+              ><UButton
+                class="nav-section-add"
+                color="neutral"
+                variant="ghost"
+                square
+                :title="t('app.addConnection')"
+                :aria-label="t('app.addConnection')"
+                @click="openSource()"
+                ><Icon name="plus" :size="16"
+              /></UButton>
+            </div>
+            <div class="source-nav">
+              <SidebarList
+                :key="activeInstanceId"
+                :items="orderedSources"
+                @reorder="(ids) => rememberSidebarOrder('sources', ids)"
+                ><template #default="{ item: source, hint }"
+                  ><CanvasNavItem
+                    class="source-nav-item"
+                    icon="server"
+                    :fresh="freshStatuses"
+                    :name="source.name"
+                    :title="sourceTitle(source)"
+                    v-bind="{
+                      ...connectionIndicator(
+                        resources.find((item) => item.id === source.id),
+                        t('terminal.connection.connecting'),
+                      ),
+                      ...agentPopover(`source:${source.id}`),
+                    }"
+                    :agents="
+                      () =>
+                        canvasAgents(
+                          undefined,
+                          resources.filter((item) => item.id === source.id),
+                          overviewOrder,
+                        )
+                    "
+                    :actions-available="notificationActionsAvailable"
+                    @go="(target) => goToCanvasWindow('overview', target)"
+                    :aria-description="hint"
+                    aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                    @select="showSource(source.id)" /></template></SidebarList
+              ><button
+                v-if="latestState && !sources.length"
+                class="source-empty"
+                @click="openSource()"
+              >
+                <Icon name="plus" :size="16" /><span class="source-empty-label">{{
+                  t('app.addConnection')
+                }}</span>
+              </button>
+            </div>
+          </div>
+          <div class="sidebar-footer">
+            <InstancePicker
+              v-model:menu-open="accountMenuOpen"
+              :username="username"
+              :before-change="beforeInstanceChange"
+              :disabled="busy"
+              @account="accountDialog = true"
+              @sign-out="void logout().catch(showError)"
+            />
+            <button
+              class="icon-button sidebar-settings"
+              :title="t('common.settings')"
+              :aria-label="t('common.settings')"
+              :disabled="!settings"
+              @click="openSettings"
+            >
+              <Icon name="settings" :size="17" />
+            </button>
+          </div>
+        </aside>
+        <main
+          class="workspace"
+          :inert="(contentFontReady && !!focusedCard) || undefined"
+          :aria-hidden="(contentFontReady && !!focusedCard) || undefined"
+        >
+          <div v-if="featurePage" class="feature-page">WIP</div>
+          <!-- Hidden, not unmounted: uploads and live cards survive a feature page. -->
+          <div
+            v-show="!featurePage"
+            ref="graphSurface"
+            :inert="createMenuOpen || layoutBusy || undefined"
+            class="graph-wrap"
+            :class="[
+              {
+                'has-background': currentBackground,
+                paged: paging,
+                'layout-editing': layoutEditing,
+              },
+              canvasMorph && `canvas-morph-${canvasMorph.phase}`,
+            ]"
+            :style="canvasMorph && { '--canvas-morph-shift': `${canvasMorph.shift}px` }"
+            :data-page-window="paging ? currentPage?.id : undefined"
+            @focusout.capture="preserveFitTarget"
+            @mousedown.capture="guardPageDrag"
+            @wheel.capture="canvasWheel"
+            @touchstart.capture="canvasTouchStart"
+            @touchmove.capture="canvasTouchMove"
+            @touchend.capture="canvasTouchEnd"
+            @touchcancel.capture="canvasTouchCancel"
+            @click.capture="canvasClick"
+          >
+            <CanvasFileDrop
+              v-if="!layoutEditing"
+              ref="canvasFileDrop"
+              :canvas-id="currentCanvas?.id"
+              :canvas-name="currentCanvas?.name"
+              :get-viewport="getViewport"
+            />
+            <img
+              v-if="currentBackground && backgroundUrl"
+              class="canvas-background"
+              :src="backgroundUrl"
+              :style="{ opacity: currentBackground.opacity }"
+              alt=""
+              aria-hidden="true"
+            />
+            <span id="canvas-card-select-help" hidden>{{ t('app.cardSelectHelp') }}</span>
+            <span id="canvas-card-move-help" hidden>{{ t('app.cardMoveHelp') }}</span>
+            <div
+              v-if="layoutEditing"
+              class="layout-edit-bar"
+              role="toolbar"
+              :aria-label="t('app.layoutEdit')"
+            >
+              <span>{{ t('app.layoutEdit') }}</span
+              ><span v-if="layoutError" role="alert">{{ layoutError }}</span
+              ><button
+                type="button"
+                class="button subtle"
+                :disabled="layoutBusy"
+                @click="discardLayout"
+              >
+                {{ t('common.cancel') }}</button
+              ><button
+                type="button"
+                class="button primary"
+                :disabled="layoutBusy"
+                @click="applyLayout"
+              >
+                {{ t(layoutBusy ? 'app.saving' : 'app.layoutApply') }}
+              </button>
+            </div>
+            <div class="canvas-layout-layer" style="position: absolute; inset: 0">
+              <VueFlow
+                :style="{ '--card-resize-hit': `${8 / Math.min(getViewport().zoom, 1)}px` }"
+                :snap-to-grid="false"
+                :apply-default="false"
+                v-if="contentFontReady && nodes.length && !hasFocus"
+                :key="graphKey"
+                :min-zoom="0.08"
+                :max-zoom="2"
+                :nodes-connectable="false"
+                :nodes-draggable="!isOverview && (!mobile || layoutEditing)"
+                :elements-selectable="!mobile"
+                :zoom-on-double-click="false"
+                :zoom-on-scroll="false"
+                :zoom-on-pinch="false"
+                :pan-on-scroll="false"
+                :delete-key-code="null"
+                :selection-key-code="null"
+                :pan-on-drag="!mobile && !paging"
+                :pan-activation-key-code="paging ? null : 'Space'"
+                :prevent-scrolling="true"
+                @pane-click="layoutSelected = ''"
+                @node-drag-start="layoutStarted"
+                @node-drag="snapDraggedCards"
+                @node-drag-stop="dragStopped"
+                @move-end="saveViewport"
+                @init="restoreViewport"
+                @nodes-initialized="nodesInitialized"
+                @nodes-change="changeNodes"
+                ><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template
+                ><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template
+                ><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template
+                ><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template
+                ><template #node-create="nodeProps"
+                  ><OverviewCreateNode v-bind="nodeProps" /></template
+                ><CanvasMiniMap
+                  v-if="showMinimap"
+                  ref="minimap"
+                  :data-terminal-overlap="minimapOverlap"
+                  :aria-label="t('app.windowNavigation')"
+                  :width="mobile ? 96 : 150"
+                  :height="mobile ? 64 : 98"
+                  :position="mobile ? 'top-right' : 'bottom-right'"
+                  @node-click="navigateMinimap"
+                  :node-class-name="
+                    (node) =>
+                      node.type === 'terminal'
+                        ? `minimap-card minimap-window${node.data.statusFresh && needsAttention(node.data.status) ? ' minimap-pulse' : ''}${paging && currentPage?.id === `${node.data.sourceId}/${node.data.windowId}` ? ' minimap-current' : ''}`
+                        : node.type === 'note' || node.type === 'file'
+                          ? 'minimap-card'
+                          : 'minimap-decoration'
+                  "
+                  :pannable="!paging"
+                  :zoomable="!mobile && !paging"
+                  :node-color="
+                    (node) =>
+                      node.type === 'terminal'
+                        ? statusColor(node.data.status)
+                        : node.type === 'note'
+                          ? noteColor(node.data.color)
+                          : node.type === 'file'
+                            ? '#8796b3'
+                            : 'transparent'
+                  "
+                  :node-stroke-width="0"
+                  :mask-color="'rgba(17,19,23,.7)'"
+              /></VueFlow>
+              <div
+                v-if="
+                  workspacePending ||
+                  (!contentFontReady && (nodes.length || hasFocus)) ||
+                  (!nodes.length && undiscoveredSources.length)
+                "
+                class="workspace-status"
+                :class="loadFailure ? 'workspace-error' : 'workspace-loading'"
+                role="status"
+              >
+                <template v-if="loadFailure"
+                  ><span :title="loadFailure instanceof Error ? loadFailure.message : undefined">{{
+                    t('app.loadFailed')
+                  }}</span
+                  ><button class="button subtle" @click="load">
+                    {{ t('common.retry') }}
+                  </button></template
+                >
+                <template v-else
+                  ><UIcon
+                    name="i-lucide-loader-circle"
+                    class="spinner size-3.5 shrink-0 motion-safe:animate-spin"
+                  />{{ t('common.loading') }}</template
+                >
+              </div>
+              <div v-else-if="!nodes.length && isOverview" class="empty-state">
+                <Icon name="server" :size="32" />
+                <h2>
+                  {{
+                    windowCount && overviewFiltered
+                      ? t('app.noMatchingWindows')
+                      : sources.length
+                        ? t('app.noWindows')
+                        : t('app.noConnections')
+                  }}
+                </h2>
+                <button
+                  v-if="windowCount && overviewFiltered"
+                  class="button subtle"
+                  @click="overviewSelected = [...overviewStatuses]"
+                >
+                  {{ t('app.clearFilters') }}</button
+                ><button
+                  v-else
+                  class="button primary"
+                  @click="sources.length ? (sourcePanel = true) : openSource()"
+                >
+                  <Icon :name="sources.length ? 'server' : 'plus'" :size="17" />{{
+                    sources.length ? t('app.connections') : t('app.addConnection')
+                  }}
+                </button>
+              </div>
+              <div v-else-if="!nodes.length && !isOverview" class="empty-state">
+                <Icon name="canvas" :size="32" />
+                <h2>{{ t('app.emptyCanvas') }}</h2>
+                <button class="button primary" @click="openAdd()">
+                  <Icon name="layers" :size="17" />{{ t('app.addWindows') }}
+                </button>
+              </div>
+            </div>
+            <button
+              v-if="canvasFullscreen && !showNavigation && !focused"
+              class="icon-button canvas-fullscreen-exit"
+              :title="t('app.exitFullscreen')"
+              :aria-label="t('app.exitFullscreen')"
+              @click="exitFullscreen"
+            >
+              <Icon name="collapse" :size="19" />
+            </button>
+            <div
+              v-if="!workspacePending && showNavigation && !focused && !layoutEditing"
+              ref="fitToolbar"
+              class="canvas-toolbar"
+              :data-terminal-overlap="toolbarOverlap"
+            >
+              <button
+                v-if="canvasFullscreen"
+                :title="t('app.openCanvasList')"
+                :aria-label="t('app.openCanvasList')"
+                aria-controls="canvas-sidebar"
+                :aria-expanded="sidebarOpen"
+                @click="sidebarOpen = !sidebarOpen"
+              >
+                <Icon name="menu" :size="17" /></button
+              ><button
+                :title="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')"
+                :aria-label="canvasFullscreen ? t('app.exitFullscreen') : t('app.fullscreen')"
+                :aria-pressed="canvasFullscreen"
+                @click="toggleFullscreen"
+              >
+                <Icon :name="canvasFullscreen ? 'collapse' : 'expand'" :size="17" /></button
+              ><button
+                v-if="isOverview"
+                :title="t('app.pagedBrowsing')"
+                :aria-label="t('app.pagedBrowsing')"
+                :aria-pressed="overviewPaged"
+                @click="togglePaging"
+              >
+                <Icon name="pages" :size="17" /></button
+              ><button
+                v-if="!isOverview"
+                :title="t('app.snapToGrid')"
+                :aria-label="t('app.snapToGrid')"
+                :aria-pressed="!!currentCanvas?.snapToGrid"
+                @click="toggleSnap"
+              >
+                <Icon name="grid" :size="15" /></button
+              ><template v-if="paging"
+                ><button
+                  v-for="item in pageDirections"
+                  :key="item.direction"
+                  :title="item.label"
+                  :aria-label="item.label"
+                  :disabled="!pageNeighbor(item.direction)"
+                  @pointerdown.prevent
+                  @click="movePage(item.direction)"
+                >
+                  <Icon
+                    :name="item.icon"
+                    :size="16"
+                    :style="{ transform: item.rotation }"
+                  /></button></template
+              ><button
+                v-if="!paging"
+                :title="t('app.zoomOut')"
+                :aria-label="t('app.zoomOut')"
+                @click="stepZoom(zoomOut)"
+              >
+                <Icon name="minus" :size="17" /></button
+              ><button
+                class="canvas-fit"
+                :disabled="!nodes.length"
+                data-preserve-content-focus
+                :title="
+                  t(
+                    paging
+                      ? 'app.centerWindow'
+                      : fitFocusedCard
+                        ? 'app.fitWindow'
+                        : 'app.fitCanvas',
+                  )
+                "
+                :aria-label="
+                  t(
+                    paging
+                      ? 'app.centerWindow'
+                      : fitFocusedCard
+                        ? 'app.fitWindow'
+                        : 'app.fitCanvas',
+                  )
+                "
+                @pointerdown.prevent
+                @click="fitViewport"
+              >
+                <Icon :name="fitFocusedCard ? 'fit-window' : 'fit'" :size="17" /></button
+              ><button
+                v-if="!paging"
+                :title="t('app.zoomIn')"
+                :aria-label="t('app.zoomIn')"
+                @click="stepZoom(zoomIn)"
+              >
+                <Icon name="plus" :size="17" />
+              </button>
+            </div>
+          </div>
+        </main>
+        <Transition name="slide"
+          ><aside v-if="sourcePanel" ref="sourcePanelElement" class="source-panel">
+            <header>
+              <div>
+                <h2>{{ t('app.connectionsWindows') }}</h2>
+              </div>
+              <button
+                class="icon-button"
+                :aria-label="t('app.closeConnections')"
+                @click="sourcePanel = false"
+              >
+                <Icon name="close" />
+              </button>
+            </header>
+            <button class="button primary full-width" @click="openSource()">
+              <Icon name="plus" :size="16" />{{ t('app.addConnection') }}
+            </button>
+            <div class="source-panel-content">
+              <p v-if="!latestState" class="panel-empty" role="status">
+                {{ loadFailure ? t('app.loadFailed') : t('common.loading') }}
+              </p>
+              <div v-for="source in orderedSources" :key="source.id" class="source-detail">
+                <div class="source-detail-header">
+                  <button
+                    class="source-expand"
+                    @click="expandedSource = expandedSource === source.id ? '' : source.id"
+                  >
+                    <Icon
+                      name="chevron"
+                      :size="15"
+                      :class="{ rotated: expandedSource === source.id }"
+                    /><span
+                      >{{ source.name
+                      }}<small
+                        ><span class="source-address">{{
+                          source.transport === 'local' ? t('app.local') : source.target
+                        }}</span
+                        ><span
+                          v-if="resources.find((item) => item.id === source.id)?.serverVersion"
+                          class="source-version"
+                          :title="`${source.runtime === 'core' ? 'herdr-core' : 'herdr'} ${resources.find((item) => item.id === source.id)!.serverVersion}`"
+                          >{{ source.runtime === 'core' ? 'herdr-core' : 'herdr' }}
+                          {{ resources.find((item) => item.id === source.id)!.serverVersion }}</span
+                        ></small
+                      ></span
+                    ></button
+                  ><button
+                    class="icon-button"
+                    :title="t('app.editConnection')"
+                    :aria-label="t('app.editConnection')"
+                    @click="openSource(source)"
+                  >
+                    <Icon name="edit" :size="14" /></button
+                  ><button
+                    class="icon-button"
+                    :title="t('app.removeConnection')"
+                    :aria-label="t('app.removeConnection')"
+                    @click="deleteSource(source)"
+                  >
+                    <Icon name="trash" :size="14" />
+                  </button>
+                </div>
+                <template v-if="expandedSource === source.id"
+                  ><p
+                    v-if="undiscoveredSources.some((item) => item.id === source.id)"
+                    class="panel-empty"
+                    role="status"
+                  >
+                    {{ loadFailure ? t('app.loadFailed') : t('common.loading') }}
+                  </p>
+                  <div
+                    v-else-if="resources.find((item) => item.id === source.id)?.error"
+                    class="source-error"
+                  >
+                    {{ resources.find((item) => item.id === source.id)?.error }}
+                  </div>
+                  <div
+                    v-for="space in resources.find((item) => item.id === source.id)?.spaces || []"
+                    :key="space.id"
+                    class="space-detail"
+                  >
+                    <div class="space-detail-header">
+                      <Icon name="layers" :size="14" /><strong>{{ space.name }}</strong
+                      ><button
+                        class="icon-button"
+                        :title="t('app.newWindow')"
+                        :aria-label="t('app.newWindow')"
+                        @click="
+                          windowAction(
+                            {
+                              type: 'terminal',
+                              id: '',
+                              sourceId: source.id,
+                              spaceId: space.id,
+                              windowId: '',
+                              x: 0,
+                              y: 0,
+                              width: 0,
+                              height: 0,
+                            },
+                            'create',
+                          )
+                        "
+                      >
+                        <Icon name="tab-plus" :size="14" /></button
+                      ><button
+                        class="icon-button"
+                        :title="t('app.renameSpace')"
+                        :aria-label="t('app.renameSpace')"
+                        @click="
+                          spaceAction(
+                            resources.find((item) => item.id === source.id)!,
+                            space.id,
+                            'rename',
+                          )
+                        "
+                      >
+                        <Icon name="edit" :size="13" /></button
+                      ><button
+                        class="icon-button danger-hover"
+                        :title="t('app.closeSpace')"
+                        :aria-label="t('app.closeSpace')"
+                        @click="
+                          spaceAction(
+                            resources.find((item) => item.id === source.id)!,
+                            space.id,
+                            'close',
+                          )
+                        "
+                      >
+                        <Icon name="close" :size="14" />
+                      </button>
+                    </div>
+                    <div v-for="window in space.windows" :key="window.id" class="window-detail">
+                      <span
+                        class="program-dot"
+                        :data-status-pulse="
+                          freshStatuses &&
+                          resources.some(
+                            (item) =>
+                              item.id === source.id && item.status === 'online' && !item.error,
+                          ) &&
+                          needsAttention(window.status)
+                        "
+                        :style="{ '--program-color': statusColor(window.status) }"
+                        :title="statusLabel(window.status)"
+                      /><WindowTitle :window="window" /><button
+                        class="icon-button"
+                        :title="t('app.addToCanvas')"
+                        :aria-label="t('app.addToCanvas')"
+                        @click="
+                          openAdd({
+                            type: 'terminal',
+                            id: '',
+                            sourceId: source.id,
+                            spaceId: space.id,
+                            windowId: window.id,
+                            x: 0,
+                            y: 0,
+                            ...windowSize({ sourceId: source.id, windowId: window.id }),
+                          })
+                        "
+                      >
+                        <Icon name="layers" :size="14" /></button
+                      ><button
+                        class="icon-button"
+                        :title="t('app.windowActions')"
+                        :aria-label="t('app.windowActions')"
+                        @click="
+                          windowMenu = {
+                            name: window.name,
+                            node: {
+                              type: 'terminal',
+                              id: '',
+                              sourceId: source.id,
+                              spaceId: space.id,
+                              windowId: window.id,
+                              x: 0,
+                              y: 0,
+                              ...windowSize({ sourceId: source.id, windowId: window.id }),
+                            },
+                          }
+                        "
+                      >
+                        <Icon name="more" :size="15" />
+                      </button>
+                    </div>
+                  </div>
+                  <button
+                    class="source-new-space"
+                    :disabled="!resources.some((item) => item.id === source.id && !item.error)"
+                    @click="
+                      spaceAction(
+                        resources.find((item) => item.id === source.id)!,
+                        undefined,
+                        'create',
+                      )
+                    "
+                  >
+                    <Icon name="plus" :size="14" />{{ t('app.newSpace') }}
+                  </button></template
+                >
+              </div>
+              <p v-if="latestState && !sources.length" class="panel-empty">
+                {{ t('app.noConnections') }}
+              </p>
+            </div>
+          </aside></Transition
+        >
+        <div
+          v-if="contentFontReady && (focused || focusedCard)"
+          ref="focusViewportElement"
+          class="focus-overlay"
+          :class="[
+            { 'card-focus-overlay': focusedCard },
+            canvasMorph && `canvas-morph-${canvasMorph.phase}`,
+          ]"
+          :style="canvasMorph && { '--canvas-morph-shift': `${canvasMorph.shift}px` }"
+        >
+          <TerminalNode
+            v-if="focused"
+            :key="focused.id"
+            :id="focused.id"
+            :data="{ ...terminalData(focused, isOverview), overview: isOverview, focus: true }"
+          />
+          <NoteNode
+            v-else-if="focusedCard?.type === 'note'"
+            :key="focusedCard.id"
+            :id="focusedCard.id"
+            :selected="false"
+            :data="noteData(focusedCard, true)"
+          />
+          <FileNode
+            v-else-if="focusedCard?.type === 'file'"
+            :key="focusedCard.id"
+            :id="focusedCard.id"
+            :selected="false"
+            :data="fileData(focusedCard, true)"
+          />
+        </div>
+        <BackgroundDialog
+          v-if="backgroundCanvas"
+          :canvas="backgroundCanvas"
+          @close="closeBackgroundDialog"
+          @saved="backgroundSaved"
+        />
+        <RichPasteDialog />
+        <DirectoryDialog />
+        <UrlDialog />
+        <DownloadPreviewDialog />
+        <WindowContentDialog :target="scanTarget" :canvases="canvases" @close="scanTarget = null" />
+        <SettingsDialog
+          ref="settingsDialogComponent"
+          v-if="settings"
+          :open="settingsDialog"
+          :settings="settings"
+          :has-display-cutout="hasSafeTop"
+          @close="settingsDialog = false"
+          @saved="settingsSaved"
+          @error="showError"
+        />
+        <AccountDialog
+          :open="accountDialog"
+          :username="username"
+          @close="accountDialog = false"
+          @saved="
+            (value) => {
+              username = value
+            }
+          "
+        />
+        <SourceDialog
+          v-if="sourceDialog"
+          v-model:draft="sourceDraft"
+          :probe="sourceProbe"
+          :ready="sourceProbeReady"
+          :busy="busy"
+          :error="dialogError"
+          @close="closeAppDialog"
+          @submit="submitSource"
+          @retry="sourceProbeRetry++"
+        />
+        <CanvasNameDialog
+          v-else-if="canvasDialog"
+          v-model:draft="canvasDraft"
+          :busy="busy"
+          :error="dialogError"
+          @close="closeAppDialog"
+          @submit="submitCanvas"
+        />
+        <ActionDialog
+          v-else-if="actionDialog"
+          v-model="actionDialog.value"
+          :title="actionDialog.title"
+          :description="actionDialog.description"
+          :label="actionDialog.label"
+          :optional="actionDialog.optional"
+          :danger="actionDialog.danger"
+          :button="actionDialog.button"
+          :busy="busy"
+          :error="dialogError"
+          @close="closeAppDialog"
+          @submit="submitAction"
+        />
+        <AddWindowsDialog
+          v-else-if="addDialog"
+          v-model:target="addTarget"
+          v-model:search="addSearch"
+          v-model:selected="selectedWindows"
+          :canvases="canvases"
+          :sources="sources"
+          :resources="resources"
+          :existing="existingAddWindows"
+          :count="selectedAddWindows.length"
+          :loading="!resourcesLoaded || !!undiscoveredSources.length"
+          :load-failed="!!loadFailure"
+          :loaded="resourcesLoaded"
+          :fresh="freshStatuses"
+          :busy="busy"
+          :error="dialogError"
+          @close="closeAppDialog"
+          @submit="submitAdd"
+        />
+        <ShareCardDialog
+          v-else-if="shareCard"
+          v-model="shareTarget"
+          :targets="shareTargets"
+          :busy="busy"
+          :error="dialogError"
+          @close="closeAppDialog"
+          @submit="submitCardReference"
+        />
+        <WindowMenuDialog
+          v-else-if="windowMenu"
+          :window="windowMenuWindow!"
+          :items="windowMenuItems(windowMenu)"
+          :busy="busy"
+          @close="closeAppDialog"
+          @close-auto-focus="restoreDialogFocus"
+        />
+        <!-- Single portal root for every overlay: one stacking layer above the shell, nested by open order. -->
+        <div ref="overlayRoot" class="overlay-root" />
+        <!-- Same layer, later in document order: previews and developer tools paint above dialogs. -->
+        <div class="overlay-root">
+          <CutoutPreview
+            v-if="settingsDialog && mobile && hasSafeTop"
+            :overview="isOverview"
+            :captured="!!focused && !!capturedApp(focused.sourceId, focused.windowId)?.visible"
+          />
+          <ViewportDiagnostics
+            v-if="developerMode"
+            :settings="settings"
+            :reload-blocked="!!modalOpen"
+          />
+        </div>
+      </div>
+      <UModal
+        v-if="layoutExitOpen"
+        :open="true"
+        :title="t('app.layoutUnsaved')"
+        :description="t('app.layoutLeave')"
+        :dismissible="!layoutBusy"
+        :close="{ 'aria-label': t('app.closeDialog'), disabled: layoutBusy }"
+        :ui="{ content: '[--dialog-width:28rem]', footer: 'flex-wrap' }"
+        @update:open="
+          (value) => {
+            if (!value) chooseLayoutExit('stay')
+          }
+        "
+      >
+        <template v-if="layoutError" #body
+          ><UAlert
+            color="error"
+            variant="subtle"
+            :title="layoutError"
+            role="alert"
+            class="[overflow-wrap:anywhere]"
+        /></template>
+        <template #footer>
+          <UButton
+            color="neutral"
+            variant="outline"
+            :disabled="layoutBusy"
+            @click="chooseLayoutExit('stay')"
+            >{{ t('app.layoutStay') }}</UButton
+          >
+          <UButton
+            color="neutral"
+            variant="outline"
+            :disabled="layoutBusy"
+            @click="chooseLayoutExit('discard')"
+            >{{ t('app.layoutDiscard') }}</UButton
+          >
+          <UButton :loading="layoutBusy" @click="chooseLayoutExit('apply')">{{
+            t('app.layoutApply')
+          }}</UButton>
+        </template>
+      </UModal>
+      <TrustedPreviewDialog />
+    </UApp>
+  </UTheme>
+</template>
+
+<style scoped>
+.layout-edit-bar {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #23272ef5;
+  border: 1px solid #46505e;
+  border-radius: 9px;
+  zoom: var(--ui-zoom);
+}
+.layout-edit-bar > span:first-child {
+  margin-right: auto;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+.layout-edit-bar > [role='alert'] {
+  font-size: 11px;
+  color: #f38ba8;
+  max-width: 45%;
+}
+.layout-edit-bar button {
+  min-height: 44px;
+}
+.feature-page {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--ui-text-muted);
+  font-size: 13px;
+}
+</style>

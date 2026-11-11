@@ -1,7 +1,7 @@
 import type { VitePWAOptions } from 'vite-plugin-pwa'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { cachedCodePreview, cachedFont, shellNavigation } from './web/src/pwa-routes.ts'
+import { cachedCodePreview, cachedFont, shellNavigation } from './web/src/app/pwa-routes.ts'
 
 const notificationSource = readFileSync(
   new URL('./web/notification-worker.js', import.meta.url),

@@ -1,5 +1,5 @@
 import type { Plugin } from 'vite'
-import { contentFontCss } from './web/src/font-catalog.ts'
+import { contentFontCss } from './web/src/settings/font-catalog.ts'
 
 /** Let Vite resolve, hash and publish font URLs just like other imported assets. */
 export function contentFontsPlugin(): Plugin {

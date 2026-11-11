@@ -12,7 +12,7 @@ import UModal, {
   type ModalEmits,
   type ModalSlots,
 } from '@nuxt/ui/components/Modal.vue'
-import { registerNotificationSurface } from '../notification-surface'
+import { registerNotificationSurface } from '../notifications/notification-surface'
 
 defineOptions({ inheritAttrs: false })
 const props = defineProps<ModalProps>()
