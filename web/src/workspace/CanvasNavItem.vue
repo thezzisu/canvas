@@ -164,7 +164,7 @@ const content = computed(() => ({
       >
       <span
         v-if="unavailable !== undefined"
-        class="canvas-nav-status col-start-3 text-dimmed"
+        class="canvas-nav-status canvas-nav-unavailable col-start-3 text-dimmed"
         :title="unavailable"
         ><UIcon name="i-lucide-circle-dashed" class="size-2.5"
       /></span>
