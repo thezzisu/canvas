@@ -375,7 +375,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     else if (
       smaller < 0 ||
       // Browser chrome coming and going; an IME may instead be resizing the page in steps.
-      ((!open || overlaid) && smaller <= threshold()) ||
+      (!open && smaller <= threshold()) ||
       // Under the built-in keys there is no IME to resize the page.
       (open && mode === 'builtin' && !pending)
     )
