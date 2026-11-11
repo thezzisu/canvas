@@ -17,7 +17,7 @@ const items = computed(() => [
     v-model="languagePreference"
     :items="items"
     color="neutral"
-    class="w-36"
+    class="w-36 max-w-full"
     :aria-label="t('common.language')"
   />
 </template>

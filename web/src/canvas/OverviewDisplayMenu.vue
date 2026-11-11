@@ -117,7 +117,7 @@ const items = computed<DropdownMenuItem[][]>(() => [
       </template>
     </UButton>
     <template #item-leading="{ item }">
-      <span class="flex h-[1em] w-3 flex-none items-center justify-center" aria-hidden="true">
+      <span class="flex w-3 flex-none items-center justify-center self-center" aria-hidden="true">
         <i
           v-if="'status' in item"
           class="program-dot"

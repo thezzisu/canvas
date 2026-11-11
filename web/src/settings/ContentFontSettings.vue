@@ -21,7 +21,7 @@ const field = { root: 'items-center gap-4', labelWrapper: 'justify-start', descr
       <li
         v-for="(entry, index) in editor.draft.stack"
         :key="editor.entryIds[index]"
-        class="font-stack-entry flex min-w-0 items-center gap-2"
+        class="font-stack-entry flex min-w-0 flex-wrap items-center justify-end gap-2"
       >
         <span
           class="w-3 shrink-0 text-center text-xs tabular-nums text-dimmed"
@@ -34,7 +34,7 @@ const field = { root: 'items-center gap-4', labelWrapper: 'justify-start', descr
           :items="editor.families"
           :open-on-focus="false"
           color="neutral"
-          class="min-w-0 flex-1"
+          class="min-w-[min(100%,15rem)] flex-1"
           :aria-label="t('settings.font', { index: n(index + 1) })"
           :title="entry.family"
           :placeholder="t('settings.fontPlaceholder')"

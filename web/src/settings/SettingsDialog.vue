@@ -147,6 +147,7 @@ const subdialog = ref<'terminal' | 'font'>()
 // One row layout for every setting; status text sits under the label.
 const field = {
   root: 'items-center gap-4',
+  container: 'min-w-0 shrink',
   labelWrapper: 'justify-start',
   description: 'text-xs',
   error: 'mt-0.5 text-xs',
@@ -225,7 +226,7 @@ defineExpose({ close })
             v-model="inputMode"
             :items="inputModes"
             color="neutral"
-            class="w-36"
+            class="w-36 max-w-full"
             :aria-label="t('settings.inputMode')"
         /></UFormField>
         <UFormField :label="t('settings.uiScale')" orientation="horizontal" :ui="field"
@@ -233,7 +234,7 @@ defineExpose({ close })
             v-model="uiScale"
             :items="uiScales"
             color="neutral"
-            class="w-36"
+            class="w-36 max-w-full"
             :aria-label="t('settings.uiScale')"
         /></UFormField>
         <UFormField
@@ -404,7 +405,7 @@ defineExpose({ close })
               v-model="viewportFit"
               :items="viewportFits"
               color="neutral"
-              class="w-36"
+              class="w-36 max-w-full"
               aria-label="viewport-fit"
           /></UFormField>
           <UFormField
@@ -415,7 +416,7 @@ defineExpose({ close })
               v-model="interactiveWidget"
               :items="interactiveWidgets"
               color="neutral"
-              class="w-36"
+              class="w-36 max-w-full"
               aria-label="interactive-widget"
           /></UFormField>
         </template>
