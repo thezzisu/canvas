@@ -142,7 +142,10 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   }
   // The built-in keys leave part of a short frame to the terminal.
   const deck = () => Math.max(0, Math.min(deckHeight, baseline.height - 160 * scale()))
-  const area = () => (!requested ? inset : Math.max(inset, hold, mode === 'builtin' ? deck() : 0))
+  // An IME replacing the built-in keys may report its rise in steps; the keys' area stays as it is
+  // until the IME has settled, so the terminal changes once.
+  const area = () =>
+    !requested ? inset : bridge ? hold : Math.max(inset, hold, mode === 'builtin' ? deck() : 0)
   function state(): MobileKeyboardState {
     // Where the page already shrank by the IME, the area only adds what it does not cover.
     return {
@@ -359,7 +362,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       return
     }
     appeared()
-    if (inset >= hold - 1) release()
+    if (!bridge && inset >= hold - 1) release()
     else {
       switching = true
       settle()
@@ -474,7 +477,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
           switching = true
         }
         if (visible) {
-          if (inset >= hold - 1) release()
+          if (!bridge && inset >= hold - 1) release()
           else if (changed || !settleTimer) settle()
         } else if (occluded(previous)) lost()
       }

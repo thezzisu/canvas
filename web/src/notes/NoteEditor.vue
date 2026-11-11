@@ -235,6 +235,11 @@ function fail(key: string) {
 function editor() {
   return input.value?.editor
 }
+// Tiptap reads `editable` only when it is created.
+watch(
+  () => props.readOnly,
+  (readOnly) => editor()?.setEditable(!readOnly),
+)
 function insert(value: NoteInsertion) {
   const current = editor()
   if (!current || current.isDestroyed) return false

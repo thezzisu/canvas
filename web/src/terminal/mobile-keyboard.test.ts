@@ -634,11 +634,9 @@ test('without the API each switch between the keyboards moves the terminal once'
   assert.equal(f.control.state.deck, true, 'the built-in keys stay until the IME covers them')
   assert.equal(f.terminal(), 584)
   f.resize(500)
-  assert.equal(
-    f.control.state.switching,
-    false,
-    'covering the area ends the switch without a timer',
-  )
+  assert.equal(f.terminal(), 500, 'the page resize already moved the terminal')
+  t.mock.timers.tick(500)
+  assert.equal(f.control.state.switching, false, 'the switch ends once the IME has settled')
   assert.equal(f.control.state.dockHeight, 0)
   assert.equal(f.control.state.deck, false)
   assert.equal(f.textarea.readOnly, false)
@@ -936,6 +934,7 @@ test('composer opened over the builtin dock hands off to the system IME and rest
   assert.equal(f.terminal(), 584, 'the dock stays until the IME covers it')
   f.resize(500)
   assert.equal(f.terminal(), 500)
+  t.mock.timers.tick(500)
   assert.equal(f.control.state.switching, false)
   assert.equal(f.control.state.dockHeight, 0)
   f.control.composer()
@@ -1366,8 +1365,12 @@ test('a system keyboard of another height is simply followed', (t) => {
   f.control.switchMode()
   f.keyboard(0)
   f.control.switchMode()
-  f.keyboard(420)
-  assert.equal(f.control.state.dockHeight, 420, 'a taller keyboard than before')
+  for (const rising of [120, 300, 420]) {
+    f.keyboard(rising)
+    assert.equal(f.control.state.dockHeight, 258, `the keys' area waits for the IME (${rising})`)
+  }
+  t.mock.timers.tick(500)
+  assert.equal(f.control.state.dockHeight, 420, 'a taller keyboard than before, in one change')
   assert.equal(f.control.state.switching, false)
   f.keyboard(280)
   t.mock.timers.tick(500)

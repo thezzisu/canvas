@@ -256,9 +256,12 @@ export function createCanvasScene(): CanvasScene {
   onScopeDispose(() => setDownloadContext())
 
   useEventListener(window, 'keydown', (event) => {
-    if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
-    if (shell.modalOpen) return
+    if (event.isComposing || event.keyCode === 229 || shell.modalOpen) return
     const target = event.target instanceof Element ? event.target : undefined
+    // ProseMirror consumes Escape; from a maximized note's body it still leaves the note.
+    const noteEscape =
+      event.key === 'Escape' && !!scene.focus.cardId.value && !!target?.closest('.note-card')
+    if (event.defaultPrevented && !noteEscape) return
     if (
       event.key === 'Escape' &&
       event.composedPath().some((item) => item instanceof Element && item.role === 'menu')

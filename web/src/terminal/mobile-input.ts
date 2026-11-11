@@ -158,8 +158,7 @@ export function bindMobileInput(parent: HTMLElement, options: MobileInputOptions
     // File paste is captured by the existing host upload handler before this.
     event.preventDefault()
     event.stopPropagation()
-    if (editable && options.active())
-      options.paste(event.clipboardData?.getData('text/plain') || '')
+    if (options.active()) options.paste(event.clipboardData?.getData('text/plain') || '')
   }
   const focus = () => {
     if (!composing && commitTimer === undefined) clear()

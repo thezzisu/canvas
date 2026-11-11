@@ -4,6 +4,7 @@ import UInput from '@nuxt/ui/components/Input.vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
 import { useI18n } from 'vue-i18n'
 import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
+import { useEventListener } from '@vueuse/core'
 import type { NodeProps } from '@vue-flow/core'
 import { NodeResizer } from '@vue-flow/node-resizer'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
@@ -94,6 +95,17 @@ const colorContent = {
     computed(() => colorTrigger.value?.$el),
   ),
 }
+useEventListener(
+  computed(() => (colorOpen.value ? document : undefined)),
+  'keydown',
+  (event: KeyboardEvent) => {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    event.stopPropagation()
+    colorOpen.value = false
+  },
+  { capture: true },
+)
 const touchTarget = computed(() =>
   props.data.mobile && props.data.focus ? 'min-w-[44px] min-h-[44px] justify-center' : '',
 )
