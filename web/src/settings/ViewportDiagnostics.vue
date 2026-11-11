@@ -3,16 +3,18 @@ import { useI18n } from 'vue-i18n'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
+import UFieldGroup from '@nuxt/ui/components/FieldGroup.vue'
 import type { GlobalSettings } from '../../../shared/settings'
 import { copyText } from '../lib/clipboard'
 import { collectViewportDiagnostics } from './viewport-diagnostics'
 import { viewportFit, interactiveWidget, viewportReloadRequired } from '../app/developer-mode'
-import Icon from '../components/Icon.vue'
+import { useMobileLayout } from '../lib/mobile-layout'
 
 const props = defineProps<{ settings?: GlobalSettings | null; reloadBlocked?: boolean }>()
 const { t } = useI18n()
 const open = ref(false)
-const toolbar = ref<HTMLElement>()
+const toolbar = ref<{ $el: HTMLElement }>()
+const touch = useMobileLayout()
 const panel = ref<HTMLElement>()
 const bounds = ref<HTMLElement>()
 const boundsVisible = ref(false)
@@ -42,7 +44,7 @@ watch(open, (value, _, cleanup) => {
     const target = event.target
     if (
       target instanceof Node &&
-      !toolbar.value?.contains(target) &&
+      !toolbar.value?.$el.contains(target) &&
       !panel.value?.contains(target)
     )
       open.value = false
@@ -88,73 +90,88 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="toolbar" class="debug-toolbar" @pointerdown.stop @click.stop>
-    <button
+  <UFieldGroup
+    ref="toolbar"
+    :size="touch ? 'xl' : 'sm'"
+    class="debug-toolbar"
+    @pointerdown.stop
+    @click.stop
+  >
+    <UButton
+      color="neutral"
+      variant="outline"
       class="viewport-diagnostics"
-      type="button"
-      :aria-label="t('terminal.copyDiagnostics')"
+      :label="t('terminal.copyDiagnostics')"
       @pointerdown.prevent
       @click="copy"
-    >
-      {{ t('terminal.copyDiagnostics') }}
-    </button>
+    />
     <UPopover
       v-model:open="open"
       :modal="false"
       :content="popoverContent"
-      :ui="{ content: 'debug-settings-popover' }"
+      :ui="{
+        content:
+          'debug-settings-popover w-[264px] max-w-[calc(var(--mobile-width,var(--ui-viewport-width))-16px)] max-h-(--reka-popover-content-available-height) overflow-auto overscroll-contain',
+      }"
     >
       <UButton
-        type="button"
         color="neutral"
-        variant="ghost"
+        variant="outline"
+        square
+        icon="i-lucide-settings"
         class="debug-settings-trigger"
+        :active="open"
         :aria-label="t('settings.adjustAdvanced')"
         :title="t('settings.adjustAdvanced')"
         @pointerdown.prevent
-        ><Icon name="settings" :size="15"
-      /></UButton>
+      />
       <template #content>
-        <div ref="panel" class="debug-settings" @pointerdown.prevent @click.stop>
-          <div class="debug-setting" role="group" aria-label="viewport-fit">
-            <code>viewport-fit</code>
-            <div class="debug-setting-options">
+        <div ref="panel" class="debug-settings grid gap-3.5 p-3" @pointerdown.prevent @click.stop>
+          <div class="grid gap-2" role="group" aria-label="viewport-fit">
+            <code class="text-xs text-muted">viewport-fit</code>
+            <!-- Buttons, not tabs: the panel cancels pointerdown to keep the terminal focused. -->
+            <UFieldGroup :size="touch ? 'xl' : 'sm'" class="w-full">
               <UButton
                 v-for="value in ['cover', 'contain'] as const"
                 :key="value"
-                type="button"
                 color="neutral"
-                :variant="viewportFit === value ? 'solid' : 'outline'"
+                variant="outline"
+                active-color="primary"
+                active-variant="subtle"
+                class="flex-1 justify-center"
+                :label="value"
+                :active="viewportFit === value"
                 :aria-pressed="viewportFit === value"
                 @click="viewportFit = value"
-                >{{ value }}</UButton
-              >
-            </div>
+              />
+            </UFieldGroup>
           </div>
-          <div class="debug-setting" role="group" aria-label="interactive-widget">
-            <code>interactive-widget</code>
-            <div class="debug-setting-options debug-widget-options">
+          <div class="grid gap-2" role="group" aria-label="interactive-widget">
+            <code class="text-xs text-muted">interactive-widget</code>
+            <UFieldGroup :size="touch ? 'xl' : 'sm'" orientation="vertical" class="w-full">
               <UButton
                 v-for="value in ['resizes-content', 'resizes-visual', 'overlays-content'] as const"
                 :key="value"
-                type="button"
                 color="neutral"
-                :variant="interactiveWidget === value ? 'solid' : 'outline'"
+                variant="outline"
+                active-color="primary"
+                active-variant="subtle"
+                class="justify-center"
+                :label="value"
+                :active="interactiveWidget === value"
                 :aria-pressed="interactiveWidget === value"
                 @click="interactiveWidget = value"
-                >{{ value }}</UButton
-              >
-            </div>
+              />
+            </UFieldGroup>
           </div>
-          <div class="debug-reload-row">
-            <span v-if="viewportReloadRequired" role="status">{{
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span v-if="viewportReloadRequired" class="text-xs text-warning" role="status">{{
               t('settings.reloadRequired')
             }}</span>
             <UButton
-              type="button"
               color="neutral"
               variant="outline"
-              size="sm"
+              :size="touch ? 'xl' : 'sm'"
               class="debug-reload"
               :disabled="reloadBlocked"
               @click="reloadPage"
@@ -162,11 +179,13 @@ onBeforeUnmount(() => {
             >
           </div>
           <UButton
-            type="button"
             color="neutral"
             variant="outline"
-            size="sm"
-            class="debug-reload debug-bounds-toggle"
+            active-color="primary"
+            active-variant="subtle"
+            :size="touch ? 'xl' : 'sm'"
+            class="debug-bounds-toggle justify-self-start"
+            :active="boundsVisible"
             :aria-pressed="boundsVisible"
             :disabled="!boundsSupported"
             @click="toggleBounds"
@@ -175,7 +194,7 @@ onBeforeUnmount(() => {
         </div>
       </template>
     </UPopover>
-  </div>
+  </UFieldGroup>
   <div
     ref="bounds"
     class="viewport-bounds-probe"
@@ -191,112 +210,7 @@ onBeforeUnmount(() => {
   top: calc(max(8px, var(--mobile-safe-top, var(--ui-safe-top))) + 44px);
   left: 50%;
   transform: translateX(-50%);
-  display: flex;
   max-width: calc(var(--mobile-width, var(--ui-viewport-width)) - 16px);
-  border: 1px solid #46505b;
-  border-radius: 6px;
-  background: #23272ef2;
-  color: #c6ced8;
-  font-size: 11px;
-  box-shadow: 0 3px 12px #0003;
-}
-.viewport-diagnostics {
-  position: relative;
-  min-height: 32px;
-  padding: 4px 10px;
-  white-space: nowrap;
-}
-.debug-settings-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 32px;
-  width: 32px;
-  min-height: 32px;
-  padding: 0;
-  border: 0;
-  border-left: 1px solid #46505b;
-  border-radius: 0 5px 5px 0;
-  color: #9ba8b9;
-  background: transparent;
-}
-.viewport-diagnostics:hover,
-.debug-settings-trigger:hover,
-.debug-settings-trigger[data-state='open'] {
-  background: #ffffff08;
-  color: #e1e7ef;
-}
-.debug-settings {
-  display: grid;
-  gap: 14px;
-  padding: 12px;
-}
-.debug-setting {
-  display: grid;
-  gap: 8px;
-}
-.debug-setting > code {
-  font-size: 11px;
-  color: #929fb0;
-}
-.debug-setting-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 5px;
-}
-.debug-widget-options {
-  grid-template-columns: minmax(0, 1fr);
-}
-.debug-setting-options button {
-  justify-content: center;
-  min-height: 36px;
-  padding: 6px 4px;
-  border: 1px solid #414b59;
-  border-radius: 5px;
-  background: #1c222a;
-  color: #aeb9c9;
-  font-size: 11px;
-  white-space: nowrap;
-}
-.debug-setting-options button[aria-pressed='true'] {
-  border-color: #a78770;
-  background: color-mix(in srgb, var(--ui-primary) 7%, transparent);
-  color: #e9c9b0;
-}
-.debug-setting-options button:hover {
-  background: #ffffff08;
-}
-.debug-reload-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-}
-.debug-reload-row > span {
-  color: #ac9988;
-  font-size: 11px;
-}
-.debug-reload {
-  justify-content: center;
-  min-height: 36px;
-  padding: 0 10px;
-  border: 1px solid #414b59;
-  border-radius: 5px;
-  background: #1c222a;
-  color: #aeb9c9;
-  font-size: 11px;
-}
-.debug-reload:hover {
-  background: #ffffff08;
-  color: #e1e7ef;
-}
-.debug-bounds-toggle {
-  justify-self: start;
-}
-.debug-bounds-toggle[aria-pressed='true'] {
-  border-color: #a78770;
-  background: color-mix(in srgb, var(--ui-primary) 7%, transparent);
-  color: #e9c9b0;
 }
 /* Native top layer escapes ancestor clipping. Eight pixels inside the CSS
    viewport are the positive control; the remaining stripe tests its boundary. */
@@ -327,17 +241,5 @@ onBeforeUnmount(() => {
 }
 .viewport-bounds-probe::backdrop {
   display: none;
-}
-.mobile-layout .debug-toolbar > button,
-.mobile-layout .debug-settings-trigger {
-  min-height: 40px;
-}
-.mobile-layout .debug-settings-trigger {
-  width: 40px;
-  flex-basis: 40px;
-}
-.mobile-layout .debug-setting-options button,
-.mobile-layout .debug-reload {
-  min-height: 44px;
 }
 </style>
