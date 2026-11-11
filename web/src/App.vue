@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, shallowRef, watch } from 'vue'
 import { VueFlow, useVueFlow, type Node, type NodeChange, type NodePositionChange, type NodeMouseEvent } from '@vue-flow/core'
-import { useMediaQuery, useLocalStorage, useMousePressed, useEventListener, useTimeoutFn, useTitle, watchDebounced } from '@vueuse/core'
+import { useMediaQuery, useLocalStorage, useMousePressed, useEventListener, useIntervalFn, useNow, useTimeoutFn, useTitle, watchDebounced } from '@vueuse/core'
 import CanvasMiniMap from './components/CanvasMiniMap.vue'
 import UApp from '@nuxt/ui/components/App.vue'
 import UTheme from '@nuxt/ui/components/Theme.vue'
@@ -41,6 +41,7 @@ import { useReducedMotion } from './reduced-motion'
 import { createLayoutSaves, type LayoutPatch } from './layout-saves'
 import { resizeFromDelta, snapCardPosition, snapCardResize, type CardBounds } from './card-alignment'
 import { createPendingEdits, mergeNoteEdits, retargetNoteEdit, type NoteEdit } from './pending-edits'
+import { createAutosave } from './autosave'
 import { guardPageExit, pendingWrites } from './pending-writes'
 import { cameraFromViewport, parseCanvasLocation, recallFreeCanvasLocation, rememberCanvasLocation, resolveCanvasLocation, restoreCanvasPage, viewportFromCamera, type Feature, type WorkspaceLocation } from './canvas-location'
 import { useCanvasLocation, type CanvasAnchor, type CanvasTarget, type CanvasNavigation } from './use-canvas-location'
@@ -190,7 +191,9 @@ const navigation = useCanvasLocation({ instanceId: activeInstanceId, hasInstance
   canRemember: () => pageVisible.value })
 const { unknownInstance } = navigation
 const indicators = computed(() => resourcesLoaded.value && !undiscoveredSources.value.length ? canvasIndicators(canvases.value, resources.value) : {})
-const workingSetEntries = computed(() => resourcesLoaded.value && !undiscoveredSources.value.length ? workingSet(resources.value, latestState.value?.windowReads || {}) : [])
+// Recent settled windows age out of the working set without any other change.
+const workingSetClock = useNow({ scheduler: callback => useIntervalFn(callback, 30_000) })
+const workingSetEntries = computed(() => resourcesLoaded.value && !undiscoveredSources.value.length ? workingSet(resources.value, latestState.value?.windowReads || {}, workingSetClock.value.getTime()) : [])
 const workingSetIndicator = computed(() => agentIndicator(workingSetEntries.value))
 const graphKey = ref(0)
 const refreshedAt = ref(0)
@@ -360,7 +363,7 @@ let stopPageGuard = () => {}, stopEditFlush = () => {}
 const pendingLayouts = layoutSaves.pending
 const pendingNotes = new Map<string, NoteEdit>()
 const savingNotes = new Map<string, NoteEdit>()
-const noteTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const noteTimers = createAutosave()
 let noteSave: Promise<boolean> | undefined
 const pendingEdits = createPendingEdits({ getItem: key => sessionStorage.getItem(key), setItem: (key, value) => sessionStorage.setItem(key, value), removeItem: key => sessionStorage.removeItem(key) })
 let draftBase = ''
@@ -1920,7 +1923,7 @@ function noteEdited(id: string) { return [...savingNotes.values(), ...pendingNot
 function clearNoteEdits(canvasId?: string, id?: string) {
   const cleared = new Set<string>()
   for (const [key, edit] of pendingNotes) if ((!canvasId || edit.canvasId === canvasId) && (!id || edit.id === id)) {
-    clearTimeout(noteTimers.get(key)); noteTimers.delete(key); pendingNotes.delete(key); cleared.add(edit.id)
+    noteTimers.cancel(key); pendingNotes.delete(key); cleared.add(edit.id)
   }
   for (const [key, edit] of savingNotes) if ((!canvasId || edit.canvasId === canvasId) && (!id || edit.id === id)) { savingNotes.delete(key); cleared.add(edit.id) }
   for (const note of cleared) if (!noteEdited(note)) pendingWrites.discard(note)
@@ -1940,8 +1943,7 @@ function editNote(canvasId: string, id: string, patch: NotePatch) {
   pendingNotes.set(key, { canvasId, id, patch: { ...pendingNotes.get(key)?.patch, ...changed } })
   checkpointEdits()
   pendingWrites.start(id)
-  clearTimeout(noteTimers.get(key))
-  noteTimers.set(key, setTimeout(() => { noteTimers.delete(key); void flushNotes(canvasId, { force: false }) }, 400))
+  noteTimers.schedule(key, () => { void flushNotes(canvasId, { force: false }) })
   const visible = currentCanvas.value?.nodes.find((item): item is NoteCanvasNode => item.id === id && item.type === 'note')
   if (visible) setNodes(nodes.value.map(flow => flow.id === id ? { ...flow, data: { ...flow.data, ...visible },
     style: { ...flow.style, height: `${visible.height}px` } } : flow))
@@ -1960,7 +1962,7 @@ async function flushNotes(canvasId?: string, options: { force?: boolean; keepali
   const batch = [...pendingNotes.entries()].filter(([key, edit]) => (!canvasId || edit.canvasId === canvasId) && (force || !noteTimers.has(key)))
   if (!batch.length) return true
   for (const [key, edit] of batch) {
-    clearTimeout(noteTimers.get(key)); noteTimers.delete(key); pendingNotes.delete(key); savingNotes.set(key, edit); pendingWrites.start(edit.id)
+    noteTimers.cancel(key); pendingNotes.delete(key); savingNotes.set(key, edit); pendingWrites.start(edit.id)
   }
   // Notes are independent, so a page being discarded sends all of them at once.
   noteSave = (async () => {
@@ -2311,7 +2313,7 @@ onMounted(async () => {
   else await activateInstance()
   refreshTimer = setInterval(() => { if (!document.hidden) void refreshResources(true) }, 2000)
 })
-onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.removeEventListener('pointerdown', selectLogicalTerminal, true); window.removeEventListener('keydown', selectLogicalTerminal, true); document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); for (const timer of noteTimers.values()) clearTimeout(timer); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', saveViewport); stopPageGuard(); stopEditFlush() })
+onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.removeEventListener('pointerdown', selectLogicalTerminal, true); window.removeEventListener('keydown', selectLogicalTerminal, true); document.removeEventListener('visibilitychange', visibilityChanged); for (const event of ['pointerdown', 'keydown', 'wheel', 'touchmove']) window.removeEventListener(event, creationNavigation, true); fontRevision++; cameraObserver?.disconnect(); cancelAnimationFrame(cameraResize); setDownloadContext(); stopStateEvents(); clearInterval(refreshTimer); for (const timer of saveTimers.values()) clearTimeout(timer); noteTimers.clear(); clearTerminals(); window.removeEventListener('canvas:unauthorized', unauthorized); window.removeEventListener('canvas:session-changed', sessionChanged); window.removeEventListener('canvas:error', requestError); window.removeEventListener('keydown', keydown); window.removeEventListener('resize', windowResize); window.removeEventListener('beforeunload', saveViewport); stopPageGuard(); stopEditFlush() })
 </script>
 
 <template>

@@ -4,6 +4,7 @@ import { insertNoteContent } from './note-document'
 import { pendingWrites } from './pending-writes'
 import type { NoteInsertion, NoteOwner } from './note-uploads'
 import type { ComposerView } from './types'
+import { createAutosave } from './autosave'
 export { composerHasContent, sentFiles } from './composer-content'
 
 export interface ComposerTarget { sourceId: string; windowId: string }
@@ -14,11 +15,10 @@ export const composerOwner = (target: ComposerTarget): NoteOwner =>
 const remote = shallowRef<Record<string, ComposerView>>({})
 // Unsaved local text wins over peer snapshots until its own write settles.
 const drafts = shallowReactive(new Map<string, { target: ComposerTarget; content: string }>())
-const timers = new Map<string, ReturnType<typeof setTimeout>>()
+const timers = createAutosave()
 const saving = new Map<string, Promise<ComposerView | undefined>>()
 
 export function resetComposers() {
-  for (const timer of timers.values()) clearTimeout(timer)
   timers.clear(); saving.clear(); drafts.clear(); remote.value = {}
 }
 watch(apiRevision, resetComposers)
@@ -30,7 +30,7 @@ export function applyComposers(value: Record<string, ComposerView>) { remote.val
 /** A closed window's unsaved text has nowhere to go. */
 export function discardComposerDraft(target: ComposerTarget) {
   const current = key(target)
-  clearTimeout(timers.get(current)); timers.delete(current); drafts.delete(current)
+  timers.cancel(current); drafts.delete(current)
   pendingWrites.discard(composerOwner(target).key)
 }
 function reportSaveFailure(error: unknown) { window.dispatchEvent(new CustomEvent('canvas:error', { detail: error })) }
@@ -48,8 +48,7 @@ export function editComposer(target: ComposerTarget, content: string) {
   const current = key(target)
   drafts.set(current, { target, content })
   pendingWrites.start(composerOwner(target).key)
-  clearTimeout(timers.get(current))
-  timers.set(current, setTimeout(() => { timers.delete(current); saveComposer(target) }, 400))
+  timers.schedule(current, () => saveComposer(target))
 }
 
 /** A file finishing after its editor closed still lands at its recorded position. */
@@ -69,7 +68,7 @@ export async function flushComposer(target: ComposerTarget, keepalive = false): 
     if (content !== undefined) void api(owner.path, { method: 'PATCH', body: JSON.stringify({ content }), keepalive }, context).catch(() => {})
     return
   }
-  clearTimeout(timers.get(current)); timers.delete(current)
+  timers.cancel(current)
   if (previous) await previous.catch(() => undefined)
   if (!isCurrentApi(context)) return
   const content = drafts.get(current)?.content

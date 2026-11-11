@@ -2,9 +2,10 @@
 import { computed } from 'vue'
 import { computedAsync } from '@vueuse/core'
 
-const props = withDefaults(defineProps<{ name: string; size?: number }>(), { size: 16 })
+const props = withDefaults(defineProps<{ name: string; size?: number | string }>(), { size: 16 })
 const url = computedAsync(async () => (await import('../file-icons')).fileIconUrl(props.name))
-const style = computed(() => ({ width: `${props.size}px`, height: `${props.size}px`, backgroundImage: url.value && `url("${url.value}")` }))
+const dimension = computed(() => typeof props.size === 'number' ? `${props.size}px` : props.size)
+const style = computed(() => ({ width: dimension.value, height: dimension.value, backgroundImage: url.value && `url("${url.value}")` }))
 </script>
 
 <template>

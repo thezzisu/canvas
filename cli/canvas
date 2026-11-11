@@ -760,6 +760,21 @@ def serve_preview(directory, managed_path=None):
                 return None
             return super().send_head()
 
+        def guess_type(self, path):
+            # Without a declared charset browsers fall back to their locale (GBK on Chinese
+            # Windows) and mis-decode UTF-8 pages. Declare UTF-8 for text unless the file
+            # names its own charset within the first 1024 bytes, which the header would override.
+            kind = super().guess_type(path)
+            if not (kind.startswith("text/") or kind in ("application/javascript", "application/json", "application/xml", "image/svg+xml")):
+                return kind
+            try:
+                with open(path, "rb") as source:
+                    if b"charset" in source.read(1024).lower():
+                        return kind
+            except OSError:
+                pass
+            return kind + "; charset=utf-8"
+
         def end_headers(self):
             self.send_header("Cache-Control", "no-store")
             super().end_headers()
