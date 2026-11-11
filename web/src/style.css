@@ -217,6 +217,7 @@ html {
   flex-direction: column;
 }
 .workspace-header {
+  user-select: none;
   container: workspace-header / inline-size;
   grid-area: header;
   min-width: 0;
@@ -1047,6 +1048,7 @@ html {
   cursor: grabbing;
 }
 .note-title {
+  user-select: none;
   flex: 1;
   min-width: 0;
   margin: 0;
@@ -1132,6 +1134,7 @@ html {
   white-space: nowrap;
 }
 .note-header input.note-title {
+  user-select: text;
   cursor: text;
   outline: none;
 }
@@ -1207,7 +1210,7 @@ html {
 .mobile-layout .header-counts,
 .mobile-layout .refresh-button,
 .mobile-layout .header-actions > .button,
-.mobile-layout .header-actions > .save-status {
+.mobile-layout .header-actions > .save-status-slot {
   display: none;
 }
 .mobile-layout .breadcrumb h1 {
@@ -1215,7 +1218,9 @@ html {
   max-width: none;
 }
 .mobile-layout .mobile-menu-trigger,
-.mobile-layout .canvas-menu-trigger {
+.mobile-layout .canvas-menu-trigger,
+.mobile-layout .canvas-create-trigger,
+.mobile-layout .overview-display-trigger {
   width: 40px;
   height: 40px;
   flex: 0 0 40px;

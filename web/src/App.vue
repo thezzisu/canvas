@@ -269,8 +269,8 @@ const canvasMenuItems = computed<DropdownMenuItem[][]>(() => [
 const createMenuOpen = ref(false)
 const canvasFileDrop = ref<InstanceType<typeof CanvasFileDrop>>()
 const createMenu = computed<DropdownMenuItem[]>(() => [
-  { label: t('app.addNote'), onSelect: () => { void addNote() } },
-  { label: t('app.uploadFile'), disabled: canvasFileDrop.value?.uploading, onSelect: () => canvasFileDrop.value?.chooseFiles() },
+  { label: t('app.addNote'), icon: 'i-lucide-sticky-note', onSelect: () => { void addNote() } },
+  { label: t('app.uploadFile'), icon: 'i-lucide-upload', disabled: canvasFileDrop.value?.uploading, onSelect: () => canvasFileDrop.value?.chooseFiles() },
 ])
 watch([activeId, apiRevision], () => { createMenuOpen.value = false })
 const canvasDraft = reactive({ id: '', name: '' })
