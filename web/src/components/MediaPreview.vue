@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UButton from '@nuxt/ui/components/Button.vue'
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { useDocumentVisibility, useIntersectionObserver } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
@@ -49,7 +50,7 @@ onBeforeUnmount(() => {
 <template>
   <div ref="root" class="media-preview nowheel nopan" :class="`media-preview-${kind}`" @keydown="keydown" @wheel.stop>
     <component :is="kind" v-if="!failed" ref="player" :src="src" :controls="!readOnly" preload="metadata" playsinline :aria-label="title" @loadedmetadata="loaded" @error="loadFailed" />
-    <div v-else class="media-preview-error" role="status"><span>{{ t('panels.preview.mediaUnavailable') }}</span><button v-if="!readOnly" type="button" @click="emit('download')">{{ t('panels.file.downloadOriginal') }}</button></div>
+    <div v-else class="media-preview-error" role="status"><span>{{ t('panels.preview.mediaUnavailable') }}</span><UButton v-if="!readOnly" color="primary" variant="link" size="xs" @click="emit('download')">{{ t('panels.file.downloadOriginal') }}</UButton></div>
   </div>
 </template>
 
@@ -59,5 +60,5 @@ onBeforeUnmount(() => {
 .media-preview audio{width:min(100%,560px);max-width:100%}
 
 .media-preview-error{display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px;text-align:center;font-size:12px;color:#96a0af}
-.media-preview-error button{color:#d4ac8e}
+
 </style>

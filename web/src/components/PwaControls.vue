@@ -16,7 +16,8 @@ const failed = computed(() => pwaFailure.value || updateCheck.value === 'failed'
 </script>
 
 <template>
-  <UFormField v-if="canInstall || canCheckUpdate || updateAvailable" :label="t('settings.app')" :description="failed ? undefined : status" :error="failed ? status : undefined" orientation="horizontal" :ui="field" class="pwa-settings">
+  <UFormField v-if="canInstall || canCheckUpdate || updateAvailable" :label="t('settings.app')" orientation="horizontal" :ui="field" class="pwa-settings">
+    <template v-if="status" #description><span :role="failed ? 'alert' : 'status'" :class="{ 'text-error': failed }">{{ status }}</span></template>
     <div class="flex items-center gap-2">
       <UButton v-if="canInstall" color="neutral" variant="outline" size="sm" :loading="pwaBusy" @click="installPwa">{{ t('settings.installApp') }}</UButton>
       <UButton v-if="updateAvailable" color="primary" variant="soft" size="sm" :loading="pwaBusy" :disabled="props.canReload === false" @click="applyPwaUpdate">{{ t('settings.updateApp') }}</UButton>

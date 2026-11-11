@@ -548,10 +548,9 @@ html {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.terminal-disconnected button {
+.terminal-disconnected .terminal-reconnect {
   color: #e0c2b2;
   white-space: nowrap;
-  font-size: 10px;
 }
 .terminal-loading {
   position: absolute;
@@ -637,6 +636,7 @@ html {
 }
 .source-panel h2 {
   font-size: 20px;
+  font-weight: 600;
 }
 .source-panel-content {
   margin: 23px -7px 0;
@@ -1653,7 +1653,6 @@ html {
   font-size: 10px;
   color: #7d899a;
 }
-
 
 .workspace-status {
   position: absolute;

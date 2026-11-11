@@ -119,6 +119,9 @@ const { fitView, zoomIn, zoomOut, setViewport, getViewport, getNodesInitialized,
 const { hasSafeTop } = useDisplayCutout()
 const ViewportDiagnostics = defineAsyncComponent(() => import('./components/ViewportDiagnostics.vue'))
 const mobile = useMobileLayout()
+// Touch layouts: 44px menu rows; text entry uses 16px so focusing a field never zooms the page.
+const mobileTheme = { dropdownMenu: { item: 'min-h-[44px] items-center' }, contextMenu: { item: 'min-h-[44px] items-center' },
+  input: { base: 'text-[16px]' }, inputMenu: { base: 'text-[16px]' }, inputNumber: { base: 'text-[16px]' } }
 const narrowNavigation = useMediaQuery('(max-width: 620px)')
 const reducedMotion = useReducedMotion()
 const { viewport: visibleViewport, style: mobileViewportStyle } = useMobileViewport(mobile)
@@ -2312,7 +2315,7 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
 </script>
 
 <template>
-  <UTheme :ui="mobile ? { dropdownMenu: { item: 'min-h-[44px] items-center' }, contextMenu: { item: 'min-h-[44px] items-center' } } : undefined">
+  <UTheme :ui="mobile ? mobileTheme : undefined">
   <UApp :locale="uiLocale" :portal="overlayRoot || false" :toaster="{ portal: notificationPortal || false, position: 'bottom-right', max: 4 + (removalUndo?.count || 0), progress: false, ui: { viewport: 'canvas-notifications' } }">
     <CardRemovalFeedback ref="removalUndo" :sync="syncState" :released="removalReleased" :error="showError" />
   <NotificationCenter v-if="authenticated && latestState" :key="`${activeInstance.id}:${latestState.instanceId}`" ref="notificationCenter"

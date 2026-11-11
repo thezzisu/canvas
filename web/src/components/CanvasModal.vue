@@ -1,5 +1,11 @@
+<script lang="ts">
+// A dialog opened from another dialog (window menu → rename) mounts after its opener's
+// DOM is gone, so focus would return to <body>. The closing dialog hands its trigger on.
+let inheritedTrigger: HTMLElement | undefined
+</script>
+
 <script setup lang="ts">
-import { computed, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useForwardPropsEmits } from 'reka-ui'
 import UModal, { type ModalProps, type ModalEmits, type ModalSlots } from '@nuxt/ui/components/Modal.vue'
 import { registerNotificationSurface } from '../notification-surface'
@@ -12,6 +18,12 @@ const forwarded = useForwardPropsEmits(props, emit)
 const uncontrolledOpen = ref(!!props.defaultOpen)
 const element = shallowRef<HTMLElement>()
 const open = computed(() => forwarded.value.open ?? uncontrolledOpen.value)
+const active = document.activeElement
+const trigger = active instanceof HTMLElement && active !== document.body && active.isConnected ? active : inheritedTrigger
+onBeforeUnmount(() => {
+  inheritedTrigger = trigger
+  setTimeout(() => { if (inheritedTrigger === trigger) inheritedTrigger = undefined }, 0)
+})
 const content = computed(() => ({ ...props.content,
   onOpenAutoFocus(event: Event) {
     if (event.target instanceof HTMLElement) element.value = event.target
@@ -20,6 +32,8 @@ const content = computed(() => ({ ...props.content,
   onCloseAutoFocus(event: Event) {
     element.value = undefined
     props.content?.onCloseAutoFocus?.(event)
+    if (event.defaultPrevented || !trigger?.isConnected) return
+    event.preventDefault(); trigger.focus({ preventScroll: true })
   },
 }))
 

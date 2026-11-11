@@ -39,16 +39,11 @@
   --ui-primary: var(--ui-color-primary-300);
   --ui-bg: var(--ui-color-neutral-950);
   --ui-bg-muted: var(--ui-color-neutral-900);
-  --ui-bg-elevated: var(--ui-color-neutral-900);
-  --ui-bg-accented: var(--ui-color-neutral-800);
-  --ui-border: var(--ui-color-neutral-800);
-  --ui-border-muted: var(--ui-color-neutral-800);
-  --ui-border-accented: var(--ui-color-neutral-700);
 }
 /* Native buttons not yet migrated to UButton keep their old base; Nuxt UI controls carry data-slot. */
 @layer base {
   button:not(:disabled),
-  [role="button"]:not(:disabled) {
+  [role="button"]:not([aria-disabled="true"]) {
     cursor: pointer;
   }
   button:not([data-slot]) {

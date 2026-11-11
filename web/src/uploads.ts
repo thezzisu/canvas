@@ -21,7 +21,7 @@ export interface TerminalUploadState {
 }
 interface Batch { context: ApiContext; id: string; files: File[]; parts?: PastePart[]; total: number; request?: AbortController; running: boolean; cancelling?: boolean
   /** Files already held by Canvas: the server streams them and reports progress. */
-  stored?: { message: Record<string, unknown>; name: string; fileCount: number; done(error?: string): void } }
+  stored?: { message: Record<string, unknown>; name: string; fileCount: number; started?(): void; done(error?: string): void } }
 interface UploadOptions {
   readiness(): 'ready' | 'waiting' | 'unavailable'
   unavailableReason(): string
@@ -71,7 +71,7 @@ export class TerminalUploads {
   }
 
   /** Queue a server-held delivery behind browser uploads; `done` reports its outcome to the sender. */
-  enqueueStored(message: Record<string, unknown>, stored: { name: string; fileCount: number; done(error?: string): void }, context = apiContext()) {
+  enqueueStored(message: Record<string, unknown>, stored: { name: string; fileCount: number; started?(): void; done(error?: string): void }, context = apiContext()) {
     const refuse = (error: string) => stored.done(error)
     if (!isCurrentApi(context)) { refuse(t('terminal.upload.targetChanged')); return }
     if (this.options.readiness() === 'unavailable') { refuse(this.options.unavailableReason()); return }
@@ -101,6 +101,7 @@ export class TerminalUploads {
     if (readiness === 'unavailable') { this.invalidate(this.options.unavailableReason()); return }
     this.pending.shift()
     this.current = batch
+    batch.stored?.started?.()
     this.state = { ...batchView(batch), transferred: 0, total: batch.total, state: 'preparing', queued: this.pending.length }
     this.options.changed(this.state)
     this.options.focus()

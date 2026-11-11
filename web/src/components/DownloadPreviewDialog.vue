@@ -154,9 +154,9 @@ onBeforeUnmount(() => request?.abort())
     </template>
     <template #body>
       <div class="download-preview-content" :inert="preparing || undefined" :aria-hidden="preparing || undefined" :data-download-id="downloadPreview.id" :data-preview-kind="downloadPreview.preview">
-        <div v-if="ticketError && !previewUrl" class="download-preview-status" role="alert"><span>{{ t('panels.preview.unavailable') }}</span><button type="button" @click="retryTicket">{{ t('common.retry') }}</button></div>
+        <div v-if="ticketError && !previewUrl" class="download-preview-status" role="alert"><span>{{ t('panels.preview.unavailable') }}</span><UButton color="primary" variant="link" size="xs" @click="retryTicket">{{ t('common.retry') }}</UButton></div>
         <div v-else-if="loading || (downloadPreview.preview !== 'text' && !previewUrl)" class="download-preview-status" role="status"><span class="spinner" /> {{ t('common.loading') }}</div>
-        <div v-if="error && downloadPreview.preview !== 'audio' && downloadPreview.preview !== 'video'" class="download-preview-status" role="alert"><span>{{ error instanceof Error ? error.message : t(error) }}</span><button v-if="downloadPreview.preview === 'text'" type="button" @click="loadText">{{ t('common.retry') }}</button></div>
+        <div v-if="error && downloadPreview.preview !== 'audio' && downloadPreview.preview !== 'video'" class="download-preview-status" role="alert"><span>{{ error instanceof Error ? error.message : t(error) }}</span><UButton v-if="downloadPreview.preview === 'text'" color="primary" variant="link" size="xs" @click="loadText">{{ t('common.retry') }}</UButton></div>
         <ImagePreview v-if="downloadPreview.preview === 'image' && previewUrl && !error" :key="downloadPreview.id" :id="downloadPreview.id" :src="previewUrl" :alt="downloadPreview.filename" @loaded="imageLoaded" @failed="imageFailed" />
         <MediaPreview v-else-if="(downloadPreview.preview === 'audio' || downloadPreview.preview === 'video') && previewUrl" :key="downloadPreview.id" :kind="downloadPreview.preview" :src="previewUrl" :title="downloadPreview.filename" @download="download" @loaded="mediaLoaded" @failed="loading = false; error = 'panels.preview.mediaUnavailable'" />
         <template v-else-if="downloadPreview.preview === 'pdf'">
@@ -196,7 +196,7 @@ onBeforeUnmount(() => request?.abort())
 .download-preview-body{display:flex;min-width:0;min-height:0;padding:0;overflow:hidden}
 .download-preview-content{position:relative;display:flex;flex:1;flex-direction:column;width:100%;min-width:0;min-height:0;background:#11161c}
 .download-preview-status{display:flex;align-items:center;justify-content:center;gap:8px;position:absolute;inset:0;padding:16px;color:#8d9aaa;font-size:12px;text-align:center;z-index:1}
-.download-preview-status button{color:#d4ac8e}
+
 .download-preview-pdf{display:block;flex:1;width:100%;height:100%;border:0;background:#fff;color-scheme:light}
 
 .download-preview-truncated{padding:7px 12px;border-top:1px solid #303947;flex:none;font-size:10px;color:#8190a3}

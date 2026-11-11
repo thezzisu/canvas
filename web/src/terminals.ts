@@ -139,6 +139,8 @@ interface Session {
   pickerPing?: { id: string; timer: ReturnType<typeof setTimeout> }
 }
 const sessions = new Map<string, Session>()
+/** A composer send holds terminal input at most this long, so a stalled delivery never freezes typing. */
+const COMPOSER_INPUT_HOLD_MS = 5000
 let logicalFocus: WindowFocus | undefined
 let readObserver: IntersectionObserver | undefined, readHost: HTMLElement | undefined, readVisible = false
 export const terminalReadFocus = shallowRef<PaneFocus>()
@@ -1239,10 +1241,13 @@ export function mountTerminal(host: HTMLElement, resource: Session['resource'], 
     /** Deliver the stored draft version the user saw; Canvas streams its files to the native inbox. */
     sendComposer(composer: string, version: number, files: string[], done: (error?: string) => void) {
       const name = files.length === 1 ? files[0]! : files.length ? t('terminal.upload.files', { count: files.length }) : ''
-      // The server answers once the paste is written or the send failed; keystrokes typed until then follow it.
-      const release = current.input.hold()
+      // Keystrokes typed while the send runs follow its paste. The hold starts only when the send
+      // itself starts (not while it waits behind another upload) and never outlasts a few seconds.
+      let release: (() => void) | undefined, limit: ReturnType<typeof setTimeout> | undefined
+      const settle = () => { clearTimeout(limit); release?.(); release = undefined }
       current.uploads.enqueueStored({ type: 'composer-send', composer, version }, { name, fileCount: files.length,
-        done: error => { release(); done(error) } }, mountingContext)
+        started: () => { release = current.input.hold(); limit = setTimeout(settle, COMPOSER_INPUT_HOLD_MS) },
+        done: error => { settle(); done(error) } }, mountingContext)
     },
     reconnect() {
       disconnect(current)

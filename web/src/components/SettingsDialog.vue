@@ -81,6 +81,11 @@ const wakeStatus = computed(() => screenWakeLockUnavailable.value || (!keepScree
   : screenWakeLockState.value === 'active' ? t('settings.active') : screenWakeLockState.value === 'pending' ? t('settings.requesting')
   : screenWakeLockState.value === 'denied' ? t('settings.wakeDenied') : screenWakeLockState.value === 'released' ? t('settings.wakePaused') : undefined))
 const wakeRetry = computed(() => !screenWakeLockUnavailable.value && keepScreenAwake.value && (screenWakeLockState.value === 'denied' || screenWakeLockState.value === 'released'))
+// Notification failures belong to the row whose action failed; status text is announced.
+const soundError = computed(() => notificationSettingsError.value === 'settings.notificationSoundFailed')
+const soundStatus = computed(() => soundError.value ? t(notificationSettingsError.value) : notificationSoundSupported.value ? undefined : t('common.unsupportedBrowser'))
+const systemError = computed(() => !!notificationSettingsError.value && !soundError.value)
+const systemStatus = computed(() => systemError.value ? t(notificationSettingsError.value) : systemNotificationStatus.value ? t(systemNotificationStatus.value) : undefined)
 function close(open = false) {
   if (open) return
   fontEditor.settle()
@@ -115,13 +120,15 @@ defineExpose({ close })
       </template>
       <USeparator :label="`${t('settings.notifications')} · ${t('settings.thisBrowser')}`" :ui="separator" />
       <section class="settings-section" :aria-label="t('settings.notifications')">
-        <UFormField :label="t('settings.notificationSound')" :description="notificationSoundSupported ? undefined : t('common.unsupportedBrowser')" orientation="horizontal" :ui="field" class="notification-setting-row">
+        <UFormField :label="t('settings.notificationSound')" orientation="horizontal" :ui="field" class="notification-setting-row">
+          <template v-if="soundStatus" #description><span :role="soundError ? 'alert' : 'status'" :class="{ 'text-error': soundError }">{{ soundStatus }}</span></template>
           <div class="settings-controls">
             <UButton type="button" color="neutral" variant="ghost" size="xs" :loading="testingNotification === 'sound'" :disabled="!notificationSoundSupported || !!testingNotification || systemNotificationRequesting" :aria-label="t('settings.testSound')" @click="testNotification('sound')">{{ t('settings.test') }}</UButton>
             <USwitch :model-value="notificationSoundEnabled" :disabled="!notificationSoundSupported" :aria-label="t('settings.notificationSound')" @update:model-value="setNotificationSound" />
           </div>
         </UFormField>
-        <UFormField :label="t('settings.systemNotifications')" :description="systemNotificationStatus ? t(systemNotificationStatus) : undefined" :error="notificationSettingsError ? t(notificationSettingsError) : undefined" orientation="horizontal" :ui="field" class="notification-setting-row">
+        <UFormField :label="t('settings.systemNotifications')" orientation="horizontal" :ui="field" class="notification-setting-row">
+          <template v-if="systemStatus" #description><span :role="systemError ? 'alert' : 'status'" :class="{ 'text-error': systemError }">{{ systemStatus }}</span></template>
           <div class="settings-controls">
             <UButton type="button" color="neutral" variant="ghost" size="xs" :loading="testingNotification === 'system'" :disabled="!systemNotificationSupported || systemNotificationPermission === 'denied' || systemNotificationRequesting || !!testingNotification" :aria-label="t('settings.testSystemNotification')" @click="testNotification('system')">{{ t('settings.test') }}</UButton>
             <USwitch :model-value="systemNotificationSupported && notificationSystemEnabled && systemNotificationPermission === 'granted'" :disabled="!systemNotificationSupported || systemNotificationRequesting" :aria-label="t('settings.systemNotifications')" @update:model-value="setSystemNotifications" />
@@ -130,7 +137,8 @@ defineExpose({ close })
       </section>
       <USeparator :ui="separator" />
       <section class="settings-section">
-        <UFormField :label="t('settings.keepAwake')" :description="wakeStatus" orientation="horizontal" :ui="field">
+        <UFormField :label="t('settings.keepAwake')" orientation="horizontal" :ui="field">
+          <template v-if="wakeStatus" #description><span role="status">{{ wakeStatus }}</span></template>
           <div class="settings-controls">
             <UButton v-if="wakeRetry" type="button" color="neutral" variant="ghost" size="xs" :aria-label="t('settings.retryWake')" @click="retryScreenWakeLock">{{ t('common.retry') }}</UButton>
             <USwitch :model-value="!screenWakeLockUnavailable && keepScreenAwake" :disabled="!!screenWakeLockUnavailable" :aria-label="t('settings.keepAwake')" @update:model-value="keepScreenAwake = $event" />
@@ -147,7 +155,8 @@ defineExpose({ close })
           <UFormField label="viewport-fit" orientation="horizontal" :ui="{ ...field, label: 'font-mono font-normal text-muted' }"><USelect v-model="viewportFit" :items="viewportFits" color="neutral" size="sm" class="w-36" aria-label="viewport-fit" /></UFormField>
           <UFormField label="interactive-widget" orientation="horizontal" :ui="{ ...field, label: 'font-mono font-normal text-muted' }"><USelect v-model="interactiveWidget" :items="interactiveWidgets" color="neutral" size="sm" class="w-36" aria-label="interactive-widget" /></UFormField>
         </template>
-        <UFormField v-if="developerMode || viewportReloadRequired" :label="t('settings.reload')" :description="viewportReloadRequired ? t('settings.reloadRequired') : undefined" orientation="horizontal" :ui="field">
+        <UFormField v-if="developerMode || viewportReloadRequired" :label="t('settings.reload')" orientation="horizontal" :ui="field">
+          <template v-if="viewportReloadRequired" #description><span role="status">{{ t('settings.reloadRequired') }}</span></template>
           <UButton type="button" color="neutral" variant="outline" size="sm" :disabled="!canReload" :title="canReload ? undefined : t('settings.finishFont')" @click="reloadPage">{{ t('settings.reload') }}</UButton>
         </UFormField>
       </section>

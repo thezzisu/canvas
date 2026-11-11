@@ -30,11 +30,11 @@ function update(key: 'rightClick' | 'shiftPaste' | 'mouseHover', value: string |
   else Object.assign(next, { [key]: key === 'mouseHover' ? value === 'true' : value })
   emit('update:modelValue', next)
 }
-const field = { root: 'items-center gap-4', container: 'w-60 shrink-0', help: 'mt-1 text-xs' }
+const field = { root: 'items-center gap-4 @max-[360px]:flex-col @max-[360px]:items-stretch @max-[360px]:gap-2', container: 'w-60 shrink-0 @max-[360px]:w-full', help: 'mt-1 text-xs' }
 </script>
 
 <template>
-  <div class="grid gap-4">
+  <div class="@container grid gap-4">
     <UFormField v-for="row in rows" :key="row.key" :label="row.label" :help="row.inherited" orientation="horizontal" :ui="field" role="group" :aria-label="row.label">
       <UTabs :model-value="modelValue[row.key] === undefined ? '__default' : String(modelValue[row.key])" :items="row.items" :content="false" color="neutral" variant="pill" size="sm"
         :ui="{ list: 'w-full', trigger: 'flex-1 min-w-0 justify-center', label: 'whitespace-normal text-center' }" :aria-label="row.label" @update:model-value="value => update(row.key, value)" />
