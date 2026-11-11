@@ -13,6 +13,6 @@ const items = computed(() => [
 </script>
 
 <template>
-  <USelect v-model="languagePreference" :items="items" color="neutral" size="sm"
+  <USelect v-model="languagePreference" :items="items" color="neutral"
     class="w-36" :aria-label="t('common.language')" />
 </template>

@@ -47,39 +47,6 @@ body,
   height: 100%;
   overflow: hidden;
 }
-:where(.login-content) input {
-  font: inherit;
-  outline: none;
-  width: 100%;
-  color: #e8e9ed;
-  background: #15171b;
-  border: 1px solid #343840;
-  border-radius: 7px;
-  height: 42px;
-  padding: 0 12px;
-  transition:
-    border-color 0.15s,
-    box-shadow 0.15s;
-}
-:where(.login-content) input:focus {
-  border-color: #b98c6d;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-primary) 7%, transparent);
-}
-:where(.login-content) input::placeholder {
-  color: #616975;
-}
-:where(.login-content) label {
-  display: block;
-  color: #b8bec9;
-  font-size: 12px;
-  margin-top: 19px;
-}
-:where(.login-content) label input {
-  margin-top: 8px;
-}
-:where(.login-content) p {
-  line-height: 1.8;
-}
 .button {
   min-height: 35px;
   padding: 0 13px;
@@ -107,9 +74,6 @@ body,
 .button.subtle:hover {
   background: #2d323a;
 }
-.full-width {
-  width: 100%;
-}
 .icon-button {
   width: 29px;
   height: 29px;
@@ -121,15 +85,6 @@ body,
   background: #ffffff09;
   color: #d9dce4;
 }
-.spinner {
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
-  border-radius: 100%;
-  animation: spin 0.8s linear infinite;
-}
 .spinning {
   animation: spin 1.2s linear infinite;
 }
@@ -139,6 +94,7 @@ body,
   }
 }
 .brand {
+  user-select: none;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -178,30 +134,20 @@ body,
   width: 330px;
   z-index: 2;
 }
+.login-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 30px;
+}
 .login-brand {
   font-size: 29px;
-  margin-bottom: 30px;
-  flex-wrap: wrap;
 }
 .login-form {
-  margin-top: 0;
-}
-.login-form label {
-  font-size: 11px;
-  letter-spacing: 0.3px;
-  margin-top: 15px;
-}
-.login-form input {
-  height: 43px;
-  background: #1a1c21;
-  border-color: #33363d;
-}
-.login-button {
-  width: 100%;
-  height: 43px;
-  margin-top: 24px;
-  justify-content: center;
-  padding: 0 15px;
+  display: grid;
+  gap: 16px;
 }
 .login-address {
   margin: 2px 3px 4px;
@@ -240,6 +186,7 @@ html {
 }
 .app-shell,
 .login-screen {
+  --layer-overlays: 100;
   position: fixed;
   inset: 0;
   width: auto;
@@ -801,17 +748,6 @@ html {
 }
 .focus-overlay .terminal-name {
   font-size: 12px;
-}
-.form-error {
-  font-size: 11px !important;
-  color: #e4aaaa !important;
-  background: #ad4e4e15;
-  border: 1px solid #ad4e4e35;
-  border-radius: 6px;
-  padding: 10px 12px;
-  margin-top: 17px !important;
-  line-height: 1.7 !important;
-  overflow-wrap: anywhere;
 }
 ::-webkit-scrollbar {
   width: 5px;
@@ -1757,7 +1693,6 @@ html {
 
 /* App-owned motion follows the OS preference without overriding component-library transitions. */
 @media (prefers-reduced-motion: reduce) {
-  .spinner,
   .spinning,
   .graph-wrap:is(.canvas-morph-leave, .canvas-morph-enter) .vue-flow__node,
   .graph-wrap:is(.canvas-morph-leave, .canvas-morph-enter) .canvas-background,

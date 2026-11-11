@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UIcon from '@nuxt/ui/components/Icon.vue'
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import UModal from './CanvasModal.vue'
@@ -126,18 +127,18 @@ onBeforeUnmount(() => { cancelRequests() })
     <template #actions><UButton type="button" color="neutral" variant="ghost" class="content-scan-action" :disabled="loading || !!opening" :aria-label="t('panels.scan.refresh')" :title="t('panels.scan.refresh')" @click="scan"><Icon name="refresh" :size="15" /></UButton></template>
     <template #body>
       <div v-if="error" class="content-scan-error" role="alert"><span>{{ errorMessage }}</span><UButton type="button" color="neutral" variant="link" size="xs" :disabled="loading || !!opening" @click="retry">{{ t('common.retry') }}</UButton></div>
-      <div v-if="loading" class="content-scan-empty" role="status"><span class="spinner" />{{ t('common.loading') }}</div>
+      <div v-if="loading" class="content-scan-empty" role="status"><UIcon name="i-lucide-loader-circle" class="spinner size-3.5 shrink-0 motion-safe:animate-spin" />{{ t('common.loading') }}</div>
       <div v-else-if="result && !panes.length" class="content-scan-empty">{{ t('panels.scan.empty') }}</div>
       <section v-for="pane in panes" :key="pane.id" class="content-scan-pane" :data-scan-pane="pane.id">
         <header><strong>{{ pane.name || t('terminal.pane', { name: pane.id.split(':').at(-1) || pane.id }) }}</strong><span v-if="pane.cwd" :title="pane.cwd">{{ pane.cwd }}</span></header>
         <div v-for="item in pane.items" :key="item.id" class="content-scan-item" :data-scan-item="item.id" :data-item-kind="item.kind" :aria-busy="opening === item.id">
           <div v-if="item.kind === 'file'" class="content-scan-open content-scan-file-label" :title="item.path || item.label">
-            <span v-if="opening === item.id" class="spinner" /><FileIcon v-else :name="item.displayLabel" :size="16" />
+            <UIcon v-if="opening === item.id" name="i-lucide-loader-circle" class="spinner size-3.5 shrink-0 motion-safe:animate-spin" /><FileIcon v-else :name="item.displayLabel" :size="16" />
             <span><strong>{{ item.displayLabel }}</strong><small v-if="item.path !== item.displayLabel">{{ item.path || t('panels.scan.unresolved') }}</small></span>
           </div>
           <a v-else-if="item.href" class="content-scan-open" :href="item.href" target="_blank" rel="noopener noreferrer" :title="item.url"><Icon name="globe" :size="16" /><span><strong>{{ item.label }}</strong><small v-if="item.url !== item.label">{{ item.url }}</small></span></a>
           <button v-else class="content-scan-open" type="button" :disabled="!!opening" :title="item.url" @click="openLink(item)">
-            <span v-if="opening === item.id" class="spinner" /><Icon v-else name="globe" :size="16" />
+            <UIcon v-if="opening === item.id" name="i-lucide-loader-circle" class="spinner size-3.5 shrink-0 motion-safe:animate-spin" /><Icon v-else name="globe" :size="16" />
             <span><strong>{{ item.displayLabel }}</strong><small>{{ t('urls.open') }}</small></span>
           </button>
           <UButton type="button" color="neutral" variant="ghost" class="content-scan-action" :aria-label="t(item.kind === 'file' ? 'panels.scan.copyPath' : 'panels.scan.copyLink')" :title="t(item.kind === 'file' ? 'panels.scan.copyPath' : 'panels.scan.copyLink')" @click="copy(item)"><Icon name="copy" :size="15" /></UButton>

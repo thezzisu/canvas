@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UIcon from '@nuxt/ui/components/Icon.vue'
 import { useI18n } from 'vue-i18n'
 import type { NodeProps } from '@vue-flow/core'
 import Icon from './Icon.vue'
@@ -17,7 +18,7 @@ defineProps<NodeProps<{
     :aria-label="t('panels.overview.createIn', { action: t(data.spaceId ? 'panels.overview.newTab' : 'panels.overview.newSpace'), context: data.context })"
     :aria-busy="data.pending()" :disabled="!data.available || data.pending()"
     :title="data.available ? undefined : t('panels.overview.unavailable')" @pointerdown.stop @click.stop="data.create()" @dblclick.stop>
-    <span v-if="data.pending()" class="spinner" />
+    <UIcon v-if="data.pending()" name="i-lucide-loader-circle" class="spinner size-3.5 shrink-0 motion-safe:animate-spin" />
     <Icon v-else :name="data.spaceId ? 'tab-plus' : 'layers'" :size="data.spaceId ? 22 : 15" />
     <span>{{ t(data.spaceId ? 'panels.overview.newTab' : 'panels.overview.newSpace') }}</span>
     <i v-if="!data.spaceId" />

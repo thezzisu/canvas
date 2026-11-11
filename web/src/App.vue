@@ -8,6 +8,9 @@ import UTheme from '@nuxt/ui/components/Theme.vue'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UAlert from '@nuxt/ui/components/Alert.vue'
+import UFormField from '@nuxt/ui/components/FormField.vue'
+import UInput from '@nuxt/ui/components/Input.vue'
+import UIcon from '@nuxt/ui/components/Icon.vue'
 import UModal from './components/CanvasModal.vue'
 import { useToast } from '@nuxt/ui/composables/useToast'
 import { useI18n } from 'vue-i18n'
@@ -2325,23 +2328,24 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
   <NotificationHost :portal="overlayRoot" />
   <AppFeedback :error="error" :success="success" @dismiss="error = ''; success = ''" />
   <PwaUpdatePrompt />
-  <div v-if="!ready" class="boot-screen"><span class="spinner" />{{ t('common.loading') }}</div>
+  <div v-if="!ready" class="boot-screen"><UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" />{{ t('common.loading') }}</div>
   <div v-else-if="!authenticated || unknownInstance" class="login-screen" :class="{ 'mobile-layout': mobile }" :style="mobileViewportStyle">
     <main class="login-content">
-      <div class="brand login-brand"><span class="brand-symbol"><Icon name="canvas" :size="27" /></span><span class="brand-name">canvas</span><LanguageSelect class="ms-auto" /></div>
+      <header class="login-header"><div class="brand login-brand"><span class="brand-symbol"><Icon name="canvas" :size="27" /></span><span class="brand-name">canvas</span></div><LanguageSelect /></header>
       <InstancePicker v-if="instances.length" :disabled="busy" @connect="connectInstance" />
       <InstanceSetup v-if="!hasActiveInstance" :message="instanceSetupMessage ? t(instanceSetupMessage) : ''" @connect="connectInstance" />
-      <div v-else-if="unknownInstance" class="login-form"><p class="form-error" role="status">{{ t('canvasUi.unknownInstance') }}</p><button class="button primary login-button" @click="navigation.visit(activeInstance.id, 'overview'); activateInstance()">{{ t('canvasUi.openInstance') }}</button></div>
-      <div v-else-if="checkingInstance" class="instance-checking" role="status"><span class="spinner" />{{ t('common.loading') }}</div>
+      <div v-else-if="unknownInstance" class="login-form"><UAlert color="warning" variant="subtle" :title="t('canvasUi.unknownInstance')" role="status" /><UButton size="lg" block class="login-button" @click="navigation.visit(activeInstance.id, 'overview'); activateInstance()">{{ t('canvasUi.openInstance') }}</UButton></div>
+      <div v-else-if="checkingInstance" class="instance-checking" role="status"><UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" />{{ t('common.loading') }}</div>
       <InstanceSetup v-else-if="instanceUnavailable" :message="instanceSetupMessage ? t(instanceSetupMessage) : ''" @connect="connectInstance" />
       <form v-else class="login-form" @submit.prevent="login">
         <div class="login-endpoint"><p class="login-address" :title="activeInstance.base">{{ activeInstance.base }}</p><span v-if="serverBuild" class="login-version" :title="`${t('instances.serverVersion')}: ${serverBuild.build.version}${serverBuild.build.revision ? ` · ${serverBuild.build.revision}` : ''}`">{{ buildLabel(serverBuild.build) }}</span></div>
-        <label>{{ t('app.username') }}<input v-model="username" name="username" autocomplete="username" required :autofocus="!username" /></label>
-        <label>{{ t('app.passwordLabel') }}<input v-model="password" name="password" type="password" autocomplete="current-password" required :autofocus="!!username" /></label>
-        <p v-if="loginError" class="form-error" role="alert">{{ loginError }}</p>
-        <button class="button primary login-button" :disabled="busy || checkingInstance" type="submit"><span v-if="busy || checkingInstance" class="spinner" />{{ busy ? t('app.signingIn') : t('app.signIn') }}</button>
+        <UFormField :label="t('app.username')" required><UInput v-model="username" name="username" autocomplete="username" required :autofocus="!username" size="lg" class="w-full" /></UFormField>
+        <UFormField :label="t('app.passwordLabel')" required><UInput v-model="password" name="password" type="password" autocomplete="current-password" required :autofocus="!!username" size="lg" class="w-full" /></UFormField>
+        <UAlert v-if="loginError" color="error" variant="subtle" :title="loginError" role="alert" />
+        <UButton type="submit" size="lg" block class="login-button" :loading="busy || checkingInstance" :disabled="busy || checkingInstance">{{ busy ? t('app.signingIn') : t('app.signIn') }}</UButton>
       </form>
     </main>
+    <div ref="overlayRoot" class="overlay-root" />
   </div>
   <div v-else class="app-shell" :class="{ 'canvas-fullscreen': canvasFullscreen, 'mobile-layout': mobile, 'sidebar-drawer': sidebarDrawer, 'has-display-cutout': hasSafeTop, 'cutout-preview-active': settingsDialog && mobile && hasSafeTop }" :style="[mobileViewportStyle, contentFontStyle, terminalMaterialStyle]" :data-content-font="appliedContentFont">
     <header class="workspace-header" :inert="contentFontReady && !!focusedCard || undefined" :aria-hidden="contentFontReady && !!focusedCard || undefined">
@@ -2403,7 +2407,7 @@ onBeforeUnmount(() => { cancelCanvasMorph(); setTerminalReadFocus(); window.remo
         <VueFlow :style="{ '--card-resize-hit': `${8 / Math.min(getViewport().zoom, 1)}px` }" :snap-to-grid="false" :apply-default="false" v-if="contentFontReady && nodes.length && !hasFocus" :key="graphKey" :min-zoom="0.08" :max-zoom="2" :nodes-connectable="false" :nodes-draggable="!isOverview && (!mobile || layoutEditing)" :elements-selectable="!mobile" :zoom-on-double-click="false" :zoom-on-scroll="false" :zoom-on-pinch="false" :pan-on-scroll="false" :delete-key-code="null" :selection-key-code="null" :pan-on-drag="!mobile && !paging" :pan-activation-key-code="paging ? null : 'Space'" :prevent-scrolling="true" @pane-click="layoutSelected = ''" @node-drag-start="layoutStarted" @node-drag="snapDraggedCards" @node-drag-stop="dragStopped" @move-end="saveViewport" @init="restoreViewport" @nodes-initialized="nodesInitialized" @nodes-change="changeNodes"><template #node-terminal="nodeProps"><TerminalNode v-bind="nodeProps" /></template><template #node-note="nodeProps"><NoteNode v-bind="nodeProps" /></template><template #node-file="nodeProps"><FileNode v-bind="nodeProps" /></template><template #node-group="nodeProps"><GroupNode v-bind="nodeProps" /></template><template #node-create="nodeProps"><OverviewCreateNode v-bind="nodeProps" /></template><CanvasMiniMap v-if="showMinimap" ref="minimap" :data-terminal-overlap="minimapOverlap" :aria-label="t('app.windowNavigation')" :width="mobile ? 96 : 150" :height="mobile ? 64 : 98" :position="mobile ? 'top-right' : 'bottom-right'" @node-click="navigateMinimap" :node-class-name="node => node.type === 'terminal' ? `minimap-card minimap-window${node.data.statusFresh && needsAttention(node.data.status) ? ' minimap-pulse' : ''}${paging && currentPage?.id === `${node.data.sourceId}/${node.data.windowId}` ? ' minimap-current' : ''}` : node.type === 'note' || node.type === 'file' ? 'minimap-card' : 'minimap-decoration'" :pannable="!paging" :zoomable="!mobile && !paging" :node-color="node => node.type === 'terminal' ? statusColor(node.data.status) : node.type === 'note' ? noteColor(node.data.color) : node.type === 'file' ? '#8796b3' : 'transparent'" :node-stroke-width="0" :mask-color="'rgba(17,19,23,.7)'" /></VueFlow>
         <div v-if="workspacePending || !contentFontReady && (nodes.length || hasFocus) || !nodes.length && undiscoveredSources.length" class="workspace-status" :class="loadFailure ? 'workspace-error' : 'workspace-loading'" role="status">
           <template v-if="loadFailure"><span :title="loadFailure instanceof Error ? loadFailure.message : undefined">{{ t('app.loadFailed') }}</span><button class="button subtle" @click="load">{{ t('common.retry') }}</button></template>
-          <template v-else><span class="spinner" />{{ t('common.loading') }}</template>
+          <template v-else><UIcon name="i-lucide-loader-circle" class="spinner size-3.5 shrink-0 motion-safe:animate-spin" />{{ t('common.loading') }}</template>
         </div>
         <div v-else-if="!nodes.length && isOverview" class="empty-state"><Icon name="server" :size="32" /><h2>{{ windowCount && overviewFiltered ? t('app.noMatchingWindows') : sources.length ? t('app.noWindows') : t('app.noConnections') }}</h2><button v-if="windowCount && overviewFiltered" class="button subtle" @click="overviewSelected = [...overviewStatuses]">{{ t('app.clearFilters') }}</button><button v-else class="button primary" @click="sources.length ? sourcePanel = true : openSource()"><Icon :name="sources.length ? 'server' : 'plus'" :size="17" />{{ sources.length ? t('app.connections') : t('app.addConnection') }}</button></div>
         <div v-else-if="!nodes.length && !isOverview" class="empty-state"><Icon name="canvas" :size="32" /><h2>{{ t('app.emptyCanvas') }}</h2><button class="button primary" @click="openAdd()"><Icon name="layers" :size="17" />{{ t('app.addWindows') }}</button></div>

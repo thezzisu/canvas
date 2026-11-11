@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UIcon from '@nuxt/ui/components/Icon.vue'
 import { useI18n } from 'vue-i18n'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useElementSize } from '@vueuse/core'
@@ -139,7 +140,7 @@ onBeforeUnmount(() => request?.abort())
     @update:open="openChanged">
     <template #header>
       <header class="download-preview-header" :class="{ 'cutout-header': mobileHeader && expanded }" :data-cutout-position="mobileHeader && expanded && cutoutWidth > 0 ? cutoutPosition : undefined" :style="{ '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` }">
-        <span v-if="preparing" class="download-preview-pending" role="status"><span class="spinner" />{{ t('common.loading') }}</span>
+        <span v-if="preparing" class="download-preview-pending" role="status"><UIcon name="i-lucide-loader-circle" class="spinner size-3.5 shrink-0 motion-safe:animate-spin" />{{ t('common.loading') }}</span>
         <DialogTitle class="download-preview-title" :class="{ 'cutout-title': mobileHeader && expanded, 'sr-only': preparing }"><FileIcon class="me-2" :name="downloadPreview.filename" :size="16" />{{ downloadPreview.filename }}<span v-if="downloadPreviewCount > 1" class="download-preview-count" :aria-label="t('panels.preview.remaining', downloadPreviewCount - 1)"> +{{ n(downloadPreviewCount - 1) }}</span></DialogTitle>
         <div ref="actions" class="download-preview-actions" :class="{ 'cutout-actions': mobileHeader && expanded }" :style="{ '--header-actions-width': `${(textShortcuts.length + 3) * 44}px` }">
           <template v-for="key in textShortcuts" :key="key"><TextPreviewActions v-if="showShortcut(key)" :only="key" :filename="downloadPreview.filename" v-model:rendered="rendered" v-model:wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :source-preview="downloadPreview.sourcePreview" :preview-busy="previewBusy" @preview="previewSite" /></template>
@@ -155,7 +156,7 @@ onBeforeUnmount(() => request?.abort())
     <template #body>
       <div class="download-preview-content" :inert="preparing || undefined" :aria-hidden="preparing || undefined" :data-download-id="downloadPreview.id" :data-preview-kind="downloadPreview.preview">
         <div v-if="ticketError && !previewUrl" class="download-preview-status" role="alert"><span>{{ t('panels.preview.unavailable') }}</span><UButton color="primary" variant="link" size="xs" @click="retryTicket">{{ t('common.retry') }}</UButton></div>
-        <div v-else-if="loading || (downloadPreview.preview !== 'text' && !previewUrl)" class="download-preview-status" role="status"><span class="spinner" /> {{ t('common.loading') }}</div>
+        <div v-else-if="loading || (downloadPreview.preview !== 'text' && !previewUrl)" class="download-preview-status" role="status"><UIcon name="i-lucide-loader-circle" class="spinner size-3.5 shrink-0 motion-safe:animate-spin" /> {{ t('common.loading') }}</div>
         <div v-if="error && downloadPreview.preview !== 'audio' && downloadPreview.preview !== 'video'" class="download-preview-status" role="alert"><span>{{ error instanceof Error ? error.message : t(error) }}</span><UButton v-if="downloadPreview.preview === 'text'" color="primary" variant="link" size="xs" @click="loadText">{{ t('common.retry') }}</UButton></div>
         <ImagePreview v-if="downloadPreview.preview === 'image' && previewUrl && !error" :key="downloadPreview.id" :id="downloadPreview.id" :src="previewUrl" :alt="downloadPreview.filename" @loaded="imageLoaded" @failed="imageFailed" />
         <MediaPreview v-else-if="(downloadPreview.preview === 'audio' || downloadPreview.preview === 'video') && previewUrl" :key="downloadPreview.id" :kind="downloadPreview.preview" :src="previewUrl" :title="downloadPreview.filename" @download="download" @loaded="mediaLoaded" @failed="loading = false; error = 'panels.preview.mediaUnavailable'" />

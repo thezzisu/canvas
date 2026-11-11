@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UIcon from '@nuxt/ui/components/Icon.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import { useI18n } from 'vue-i18n'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
@@ -137,12 +138,12 @@ const size = computed(() => {
     <div ref="fileBody" class="file-body card-content nodrag nopan" :style="{ '--content-zoom': data.focus ? zoom / 100 : 1 }" :data-content-active="contentActive" :tabindex="mobilePreview ? -1 : 0" :aria-label="data.asset.filename" :inert="mobilePreview || undefined" :aria-hidden="mobilePreview || undefined" @pointerdown.capture="contentPointerDown" @pointerdown.stop @dblclick.stop>
       <div v-if="(['image', 'audio', 'video'].includes(preview) || preview === 'pdf' && pdfPreview) && !url" class="file-text-status" :role="ticketError ? 'alert' : 'status'">
         <template v-if="ticketError"><span>{{ t('panels.preview.unavailable') }}</span><button type="button" @click="retryTicket">{{ t('common.retry') }}</button></template>
-        <template v-else><span class="spinner" />{{ t('common.loading') }}</template>
+        <template v-else><UIcon name="i-lucide-loader-circle" class="spinner size-3.5 shrink-0 motion-safe:animate-spin" />{{ t('common.loading') }}</template>
       </div>
       <ImagePreview v-else-if="preview === 'image' && url && !imageFailed" :key="data.assetId" :id="data.assetId" :src="url" :alt="data.asset.filename" :read-only="mobilePreview" @failed="imageFailed = true" />
       <MediaPreview v-else-if="(preview === 'audio' || preview === 'video') && url" :key="data.assetId" :kind="preview" :src="url" :title="data.asset.filename" :read-only="mobilePreview" @download="download" />
       <div v-else-if="preview === 'text'" class="file-text-body nowheel" @wheel.stop>
-        <div v-if="textLoading" class="file-text-status" role="status"><span class="spinner" /> {{ t('common.loading') }}</div>
+        <div v-if="textLoading" class="file-text-status" role="status"><UIcon name="i-lucide-loader-circle" class="spinner size-3.5 shrink-0 motion-safe:animate-spin" /> {{ t('common.loading') }}</div>
         <div v-else-if="textError" class="file-text-status" role="alert"><span>{{ textError instanceof Error ? textError.message : t(textError) }}</span><button type="button" @click="loadText">{{ t('common.retry') }}</button></div>
         <TextPreview v-else :text="text" :filename="data.asset.filename" :rendered="rendered" :wrap="wrap" v-model:formatted="formatted" v-model:highlighted="highlighted" :reading="reading" :read-only="mobilePreview" @reading="remember" />
         <div v-if="truncated" class="file-text-truncated"><span>{{ t('panels.preview.truncated') }}</span><button type="button" @click="download">{{ t('panels.file.downloadOriginal') }}</button></div>

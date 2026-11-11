@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import UIcon from '@nuxt/ui/components/Icon.vue'
 import { computed, defineAsyncComponent, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useEventListener, useResizeObserver } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
@@ -105,9 +106,9 @@ watch([() => props.text, renderMarkdown, () => props.resources], async () => {
     <pre v-else-if="!renderMarkdown" ref="readingElement" class="text-preview-source" :class="{ 'text-preview-wrap': wrap }" :aria-label="filename" tabindex="0"><span ref="readingContent" class="text-preview-lines"><template v-if="code?.tokens"><span v-for="(token, index) in code.tokens" :key="index" :style="{ color: token.color }">{{ token.text }}</span></template><template v-else>{{ code?.text ?? text }}</template></span></pre>
     <div v-else ref="readingElement" class="text-preview-markdown" :aria-label="filename" tabindex="0">
       <div ref="readingContent" class="text-preview-document">
-      <div v-if="loading" class="text-preview-status" role="status"><span class="spinner" />{{ t('common.loading') }}</div>
+      <div v-if="loading" class="text-preview-status" role="status"><UIcon name="i-lucide-loader-circle" class="spinner size-3.5 shrink-0 motion-safe:animate-spin" />{{ t('common.loading') }}</div>
       <div v-else-if="failed" class="text-preview-status" role="alert">{{ t('panels.preview.unavailable') }}</div>
-      <Suspense v-else-if="document"><MarkdownDocument :value="document" :components="prose" /><template #fallback><span class="spinner" /></template></Suspense>
+      <Suspense v-else-if="document"><MarkdownDocument :value="document" :components="prose" /><template #fallback><UIcon name="i-lucide-loader-circle" class="spinner size-3.5 shrink-0 motion-safe:animate-spin" /></template></Suspense>
       </div>
     </div>
   </div>

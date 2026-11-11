@@ -104,8 +104,8 @@ defineExpose({ close })
            USeparator is the only divider between sections. -->
       <section class="settings-section">
         <UFormField :label="t('common.language')" orientation="horizontal" :ui="field"><LanguageSelect /></UFormField>
-        <UFormField :label="t('settings.inputMode')" orientation="horizontal" :ui="field"><USelect v-model="inputMode" :items="inputModes" color="neutral" size="sm" class="w-36" :aria-label="t('settings.inputMode')" /></UFormField>
-        <UFormField :label="t('settings.uiScale')" orientation="horizontal" :ui="field"><USelect v-model="uiScale" :items="uiScales" color="neutral" size="sm" class="w-36" :aria-label="t('settings.uiScale')" /></UFormField>
+        <UFormField :label="t('settings.inputMode')" orientation="horizontal" :ui="field"><USelect v-model="inputMode" :items="inputModes" color="neutral" class="w-36" :aria-label="t('settings.inputMode')" /></UFormField>
+        <UFormField :label="t('settings.uiScale')" orientation="horizontal" :ui="field"><USelect v-model="uiScale" :items="uiScales" color="neutral" class="w-36" :aria-label="t('settings.uiScale')" /></UFormField>
         <UFormField :label="t('terminal.settings.defaults')" :description="t('settings.thisBrowser')" orientation="horizontal" :ui="field"><UButton color="neutral" variant="outline" size="sm" @click="subdialog = 'terminal'">{{ t('common.open') }}</UButton></UFormField>
         <UFormField :label="t('settings.contentFont')" orientation="horizontal" :ui="field"><UButton color="neutral" variant="outline" size="sm" @click="subdialog = 'font'">{{ t('common.open') }}</UButton></UFormField>
       </section>
@@ -152,8 +152,8 @@ defineExpose({ close })
           <USwitch v-model="developerMode" :aria-label="t('settings.developerMode')" />
         </UFormField>
         <template v-if="developerMode">
-          <UFormField label="viewport-fit" orientation="horizontal" :ui="{ ...field, label: 'font-mono font-normal text-muted' }"><USelect v-model="viewportFit" :items="viewportFits" color="neutral" size="sm" class="w-36" aria-label="viewport-fit" /></UFormField>
-          <UFormField label="interactive-widget" orientation="horizontal" :ui="{ ...field, label: 'font-mono font-normal text-muted' }"><USelect v-model="interactiveWidget" :items="interactiveWidgets" color="neutral" size="sm" class="w-36" aria-label="interactive-widget" /></UFormField>
+          <UFormField label="viewport-fit" orientation="horizontal" :ui="{ ...field, label: 'font-mono font-normal text-muted' }"><USelect v-model="viewportFit" :items="viewportFits" color="neutral" class="w-36" aria-label="viewport-fit" /></UFormField>
+          <UFormField label="interactive-widget" orientation="horizontal" :ui="{ ...field, label: 'font-mono font-normal text-muted' }"><USelect v-model="interactiveWidget" :items="interactiveWidgets" color="neutral" class="w-36" aria-label="interactive-widget" /></UFormField>
         </template>
         <UFormField v-if="developerMode || viewportReloadRequired" :label="t('settings.reload')" orientation="horizontal" :ui="field">
           <template v-if="viewportReloadRequired" #description><span role="status">{{ t('settings.reloadRequired') }}</span></template>
