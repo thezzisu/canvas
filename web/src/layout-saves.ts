@@ -14,7 +14,12 @@ export function createLayoutSaves() {
     pending.set(canvasId, nodes)
   }
 
-  function flush(canvasId: string, write: (batch: ReadonlyMap<string, LayoutPatch>) => Promise<void>, acknowledged?: () => void, keepalive = false): Promise<void> {
+  function flush(
+    canvasId: string,
+    write: (batch: ReadonlyMap<string, LayoutPatch>) => Promise<void>,
+    acknowledged?: () => void,
+    keepalive = false,
+  ): Promise<void> {
     const existing = running.get(canvasId)
     if (existing) {
       // A closing page may cancel the write in flight, so a keepalive copy of every pending patch goes out now.
@@ -27,7 +32,10 @@ export function createLayoutSaves() {
     const task = (async () => {
       while (generation === revision) {
         const nodes = pending.get(canvasId)
-        if (!nodes?.size) { pending.delete(canvasId); return }
+        if (!nodes?.size) {
+          pending.delete(canvasId)
+          return
+        }
         const batch = new Map(nodes)
         await write(batch)
         if (generation !== revision) return
@@ -37,14 +45,24 @@ export function createLayoutSaves() {
         }
         acknowledged?.()
       }
-    })().finally(() => { if (running.get(canvasId) === task) running.delete(canvasId) })
+    })().finally(() => {
+      if (running.get(canvasId) === task) running.delete(canvasId)
+    })
     running.set(canvasId, task)
     return task
   }
 
   return {
-    pending, set, flush,
-    get saving() { return running.size > 0 },
-    reset() { generation++; pending.clear(); running.clear() },
+    pending,
+    set,
+    flush,
+    get saving() {
+      return running.size > 0
+    },
+    reset() {
+      generation++
+      pending.clear()
+      running.clear()
+    },
   }
 }

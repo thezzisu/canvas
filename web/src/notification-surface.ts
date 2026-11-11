@@ -6,5 +6,7 @@ export const notificationPortal = shallowRef<HTMLElement>()
 
 export function registerNotificationSurface(element: HTMLElement) {
   surfaces.value = [...surfaces.value, element]
-  return () => { surfaces.value = surfaces.value.filter(surface => surface !== element) }
+  return () => {
+    surfaces.value = surfaces.value.filter((surface) => surface !== element)
+  }
 }

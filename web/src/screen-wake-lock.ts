@@ -3,7 +3,10 @@ import { computed, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import { t } from './i18n'
 
 type WakeLockState = 'off' | 'pending' | 'active' | 'released' | 'denied'
-interface ScreenLock extends EventTarget { readonly released: boolean; release(): Promise<void> }
+interface ScreenLock extends EventTarget {
+  readonly released: boolean
+  release(): Promise<void>
+}
 
 /** A pending browser request cannot be cancelled; release obsolete results. */
 export class ScreenWakeLockController {
@@ -13,34 +16,50 @@ export class ScreenWakeLockController {
   private revision = 0
   private lock?: ScreenLock
   private onRelease?: () => void
-  constructor(private readonly request: () => Promise<ScreenLock>, private readonly changed: (state: WakeLockState) => void) {}
+  constructor(
+    private readonly request: () => Promise<ScreenLock>,
+    private readonly changed: (state: WakeLockState) => void,
+  ) {}
 
   setActive(active: boolean) {
     if (this.disposed || active === this.active) return
-    this.active = active; this.revision++
+    this.active = active
+    this.revision++
     if (active) this.acquire()
-    else { this.release(); this.changed('off') }
+    else {
+      this.release()
+      this.changed('off')
+    }
   }
 
   retry() {
     if (this.disposed || !this.active || this.pending || this.lock) return
-    this.revision++; this.acquire()
+    this.revision++
+    this.acquire()
   }
 
   private acquire() {
     if (this.pending || !this.active || this.disposed) return
     const revision = this.revision
-    this.pending = true; this.changed('pending')
+    this.pending = true
+    this.changed('pending')
     void (async () => {
       try {
         const lock = await this.request()
-        if (this.disposed || !this.active || revision !== this.revision) { await lock.release().catch(() => {}); return }
-        if (lock.released) { this.changed('released'); return }
+        if (this.disposed || !this.active || revision !== this.revision) {
+          await lock.release().catch(() => {})
+          return
+        }
+        if (lock.released) {
+          this.changed('released')
+          return
+        }
         this.lock = lock
         this.onRelease = () => {
           if (this.lock !== lock) return
           lock.removeEventListener('release', this.onRelease!)
-          this.lock = undefined; this.onRelease = undefined
+          this.lock = undefined
+          this.onRelease = undefined
           this.changed('released')
         }
         lock.addEventListener('release', this.onRelease)
@@ -58,40 +77,67 @@ export class ScreenWakeLockController {
     const lock = this.lock
     if (!lock) return
     if (this.onRelease) lock.removeEventListener('release', this.onRelease)
-    this.lock = undefined; this.onRelease = undefined
+    this.lock = undefined
+    this.onRelease = undefined
     void lock.release().catch(() => {})
   }
 
   dispose() {
-    this.disposed = true; this.active = false; this.revision++
-    this.release(); this.changed('off')
+    this.disposed = true
+    this.active = false
+    this.revision++
+    this.release()
+    this.changed('off')
   }
 }
 
 export const keepScreenAwake = useLocalStorage('canvas:display:keep-awake', false)
 export const screenWakeLockState = ref<WakeLockState>('off')
-export const screenWakeLockUnavailable = computed(() => typeof window === 'undefined' || !window.isSecureContext
-  ? t('common.httpsRequired') : typeof navigator.wakeLock?.request !== 'function' ? t('common.unsupportedBrowser') : '')
+export const screenWakeLockUnavailable = computed(() =>
+  typeof window === 'undefined' || !window.isSecureContext
+    ? t('common.httpsRequired')
+    : typeof navigator.wakeLock?.request !== 'function'
+      ? t('common.unsupportedBrowser')
+      : '',
+)
 let retry = () => {}
-export function retryScreenWakeLock() { retry() }
+export function retryScreenWakeLock() {
+  retry()
+}
 
 export function useScreenWakeLock(authenticated: Ref<boolean>) {
-  const controller = new ScreenWakeLockController(() => navigator.wakeLock.request('screen'), state => { screenWakeLockState.value = state })
+  const controller = new ScreenWakeLockController(
+    () => navigator.wakeLock.request('screen'),
+    (state) => {
+      screenWakeLockState.value = state
+    },
+  )
   let mounted = false
-  const update = () => controller.setActive(mounted && authenticated.value && keepScreenAwake.value &&
-    !screenWakeLockUnavailable.value && document.visibilityState === 'visible')
+  const update = () =>
+    controller.setActive(
+      mounted &&
+        authenticated.value &&
+        keepScreenAwake.value &&
+        !screenWakeLockUnavailable.value &&
+        document.visibilityState === 'visible',
+    )
   const hide = () => controller.setActive(false)
   retry = () => controller.retry()
   const stop = watch([authenticated, keepScreenAwake], update, { flush: 'sync' })
   onMounted(() => {
     mounted = true
     document.addEventListener('visibilitychange', update)
-    window.addEventListener('pagehide', hide); window.addEventListener('pageshow', update)
+    window.addEventListener('pagehide', hide)
+    window.addEventListener('pageshow', update)
     update()
   })
   onBeforeUnmount(() => {
-    mounted = false; stop(); retry = () => {}; controller.dispose()
+    mounted = false
+    stop()
+    retry = () => {}
+    controller.dispose()
     document.removeEventListener('visibilitychange', update)
-    window.removeEventListener('pagehide', hide); window.removeEventListener('pageshow', update)
+    window.removeEventListener('pagehide', hide)
+    window.removeEventListener('pageshow', update)
   })
 }

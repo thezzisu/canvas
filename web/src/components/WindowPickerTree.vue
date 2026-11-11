@@ -11,44 +11,115 @@ import Icon from './Icon.vue'
 import WindowTitle from './WindowTitle.vue'
 import { windowLabel } from '../window-title'
 
-const props = defineProps<{ resources: SourceResource[]; sources: Source[]; query: string; selected: string[]; existing: Set<string>; fresh?: boolean }>()
+const props = defineProps<{
+  resources: SourceResource[]
+  sources: Source[]
+  query: string
+  selected: string[]
+  existing: Set<string>
+  fresh?: boolean
+}>()
 const emit = defineEmits<{ 'update:selected': [value: string[]] }>()
 const { t, n } = useI18n()
 const touch = useMobileLayout()
-const pending = computed(() => props.sources.some(source => !props.resources.some(resource => resource.id === source.id)))
-const groups = computed(() => pickerGroups(props.sources, props.resources, props.query, props.existing))
-const online = computed(() => new Set(props.resources.filter(source => source.status === 'online' && !source.error).map(source => source.id)))
+const pending = computed(() =>
+  props.sources.some((source) => !props.resources.some((resource) => resource.id === source.id)),
+)
+const groups = computed(() =>
+  pickerGroups(props.sources, props.resources, props.query, props.existing),
+)
+const online = computed(
+  () =>
+    new Set(
+      props.resources
+        .filter((source) => source.status === 'online' && !source.error)
+        .map((source) => source.id),
+    ),
+)
 const selected = computed(() => new Set(props.selected))
 const collapsed = ref(new Set<string>())
 const expanded = (key: string) => !!props.query.trim() || !collapsed.value.has(key)
 function toggleGroup(key: string) {
   if (props.query.trim()) return
   const next = new Set(collapsed.value)
-  if (next.has(key)) next.delete(key); else next.add(key)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
   collapsed.value = next
 }
-function toggle(keys: string[], checked: boolean | 'indeterminate') { emit('update:selected', updatePickerSelection(props.selected, keys, checked === true)) }
+function toggle(keys: string[], checked: boolean | 'indeterminate') {
+  emit('update:selected', updatePickerSelection(props.selected, keys, checked === true))
+}
 const checkboxUi = { root: 'picker-checkbox', base: 'picker-checkbox-base' }
 </script>
 
 <template>
   <div class="window-picker-tree" :class="{ 'picker-touch': touch }">
-    <details v-for="source in groups" :key="source.id" class="picker-source" :open="expanded(source.id)">
+    <details
+      v-for="source in groups"
+      :key="source.id"
+      class="picker-source"
+      :open="expanded(source.id)"
+    >
       <summary class="picker-group-row picker-source-row" @click.prevent="toggleGroup(source.id)">
         <Icon class="picker-disclosure" name="chevron" :size="12" />
-        <span @click.stop @keydown.stop><UCheckbox :model-value="pickerChecked(source.eligible, selected)" :disabled="!source.eligible.length" :aria-label="t('windowPicker.selectGroup', { name: source.name })" :ui="checkboxUi" @update:model-value="toggle(source.eligible, $event)" /></span>
-        <Icon name="server" :size="14" /><strong :title="source.name">{{ source.name }}</strong><span class="picker-count">{{ n(source.spaces.reduce((count, space) => count + space.windows.length, 0)) }}</span>
+        <span @click.stop @keydown.stop
+          ><UCheckbox
+            :model-value="pickerChecked(source.eligible, selected)"
+            :disabled="!source.eligible.length"
+            :aria-label="t('windowPicker.selectGroup', { name: source.name })"
+            :ui="checkboxUi"
+            @update:model-value="toggle(source.eligible, $event)"
+        /></span>
+        <Icon name="server" :size="14" /><strong :title="source.name">{{ source.name }}</strong
+        ><span class="picker-count">{{
+          n(source.spaces.reduce((count, space) => count + space.windows.length, 0))
+        }}</span>
       </summary>
-      <details v-for="space in source.spaces" :key="space.id" class="picker-space" :open="expanded(`${source.id}/${space.id}`)">
-        <summary class="picker-group-row picker-space-row" @click.prevent="toggleGroup(`${source.id}/${space.id}`)">
+      <details
+        v-for="space in source.spaces"
+        :key="space.id"
+        class="picker-space"
+        :open="expanded(`${source.id}/${space.id}`)"
+      >
+        <summary
+          class="picker-group-row picker-space-row"
+          @click.prevent="toggleGroup(`${source.id}/${space.id}`)"
+        >
           <Icon class="picker-disclosure" name="chevron" :size="12" />
-          <span @click.stop @keydown.stop><UCheckbox :model-value="pickerChecked(space.eligible, selected)" :disabled="!space.eligible.length" :aria-label="t('windowPicker.selectGroup', { name: space.name })" :ui="checkboxUi" @update:model-value="toggle(space.eligible, $event)" /></span>
-          <Icon name="layers" :size="13" /><strong :title="space.name">{{ space.name }}</strong><span class="picker-count">{{ n(space.windows.length) }}</span>
+          <span @click.stop @keydown.stop
+            ><UCheckbox
+              :model-value="pickerChecked(space.eligible, selected)"
+              :disabled="!space.eligible.length"
+              :aria-label="t('windowPicker.selectGroup', { name: space.name })"
+              :ui="checkboxUi"
+              @update:model-value="toggle(space.eligible, $event)"
+          /></span>
+          <Icon name="layers" :size="13" /><strong :title="space.name">{{ space.name }}</strong
+          ><span class="picker-count">{{ n(space.windows.length) }}</span>
         </summary>
-        <label v-for="window in space.windows" :key="window.key" class="picker-window-row" :class="{ added: window.added }">
-          <UCheckbox :model-value="!window.added && selected.has(window.key)" :disabled="window.added" :aria-label="windowLabel(window)" :ui="checkboxUi" @update:model-value="toggle([window.key], $event)" />
-          <span class="program-dot" :data-status-pulse="fresh && online.has(source.id) && needsAttention(window.status)" :style="{ '--program-color': statusColor(window.status) }" />
-          <WindowTitle class="picker-window-name" :window="window" /><span v-if="window.added" class="picker-added">{{ t('windowPicker.added') }}</span>
+        <label
+          v-for="window in space.windows"
+          :key="window.key"
+          class="picker-window-row"
+          :class="{ added: window.added }"
+        >
+          <UCheckbox
+            :model-value="!window.added && selected.has(window.key)"
+            :disabled="window.added"
+            :aria-label="windowLabel(window)"
+            :ui="checkboxUi"
+            @update:model-value="toggle([window.key], $event)"
+          />
+          <span
+            class="program-dot"
+            :data-status-pulse="fresh && online.has(source.id) && needsAttention(window.status)"
+            :style="{ '--program-color': statusColor(window.status) }"
+          />
+          <WindowTitle class="picker-window-name" :window="window" /><span
+            v-if="window.added"
+            class="picker-added"
+            >{{ t('windowPicker.added') }}</span
+          >
         </label>
       </details>
     </details>
@@ -57,21 +128,139 @@ const checkboxUi = { root: 'picker-checkbox', base: 'picker-checkbox-base' }
 </template>
 
 <style>
-.window-picker-tree{max-height:min(420px,calc(var(--mobile-height,var(--ui-viewport-height)) / 2));min-height:100px;overflow:auto;overscroll-behavior:contain;border:1px solid #343b47;border-radius:7px;background:#191e25;scrollbar-width:thin}
-.window-picker-tree .picker-source,.window-picker-tree .picker-space,.window-picker-tree .picker-window-row{margin:0}
-.picker-source+.picker-source{border-top:1px solid #303844}
-.picker-group-row{list-style:none;display:flex;align-items:center;gap:8px;min-height:38px;padding:5px 10px;color:#a6b2c3;cursor:pointer;user-select:none}
-.picker-group-row::-webkit-details-marker{display:none}.picker-group-row>svg{flex:none;color:#7e8ea3}
-.picker-group-row strong{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:500}
-.picker-group-row:focus-visible{outline:1px solid #b99a81;outline-offset:-2px;border-radius:4px}
-.picker-source[open]>.picker-group-row>.picker-disclosure,.picker-space[open]>.picker-group-row>.picker-disclosure{transform:rotate(90deg)}
-.picker-source-row{background:#ffffff02}.picker-space-row{padding-left:25px;color:#939fb0;min-height:34px}
-.picker-count{margin-left:auto;color:#6f7f94;font-size:10px;font-variant-numeric:tabular-nums;flex:none}
-.picker-window-row{display:flex;align-items:center;gap:9px;min-height:34px;margin:0;padding:6px 12px 6px 62px;color:#b9c3d2;cursor:pointer}
-.picker-window-row:hover:not(.added){background:#ffffff04}.picker-window-row.added{color:#68778b;cursor:default}
-.picker-window-row.added{--window-title-color:currentColor}
-.picker-window-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
-.picker-added{flex:none;color:#728296;font-size:10px}.picker-checkbox{display:flex;align-items:center;flex:none}
-.picker-checkbox-base{width:15px;height:15px;border-radius:3px;padding:0;gap:0}.picker-checkbox-base:disabled{cursor:default}.picker-empty{padding:28px 16px;text-align:center;color:#7d8a9d;font-size:12px}
-.picker-touch .picker-group-row,.picker-touch .picker-window-row{min-height:44px}.picker-touch .picker-window-name,.picker-touch .picker-group-row strong{font-size:12px}.picker-touch .picker-checkbox-base{width:18px;height:18px}
+.window-picker-tree {
+  max-height: min(420px, calc(var(--mobile-height, var(--ui-viewport-height)) / 2));
+  min-height: 100px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #343b47;
+  border-radius: 7px;
+  background: #191e25;
+  scrollbar-width: thin;
+}
+.window-picker-tree .picker-source,
+.window-picker-tree .picker-space,
+.window-picker-tree .picker-window-row {
+  margin: 0;
+}
+.picker-source + .picker-source {
+  border-top: 1px solid #303844;
+}
+.picker-group-row {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 5px 10px;
+  color: #a6b2c3;
+  cursor: pointer;
+  user-select: none;
+}
+.picker-group-row::-webkit-details-marker {
+  display: none;
+}
+.picker-group-row > svg {
+  flex: none;
+  color: #7e8ea3;
+}
+.picker-group-row strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 500;
+}
+.picker-group-row:focus-visible {
+  outline: 1px solid #b99a81;
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+.picker-source[open] > .picker-group-row > .picker-disclosure,
+.picker-space[open] > .picker-group-row > .picker-disclosure {
+  transform: rotate(90deg);
+}
+.picker-source-row {
+  background: #ffffff02;
+}
+.picker-space-row {
+  padding-left: 25px;
+  color: #939fb0;
+  min-height: 34px;
+}
+.picker-count {
+  margin-left: auto;
+  color: #6f7f94;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.picker-window-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 34px;
+  margin: 0;
+  padding: 6px 12px 6px 62px;
+  color: #b9c3d2;
+  cursor: pointer;
+}
+.picker-window-row:hover:not(.added) {
+  background: #ffffff04;
+}
+.picker-window-row.added {
+  color: #68778b;
+  cursor: default;
+}
+.picker-window-row.added {
+  --window-title-color: currentColor;
+}
+.picker-window-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.picker-added {
+  flex: none;
+  color: #728296;
+  font-size: 10px;
+}
+.picker-checkbox {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+.picker-checkbox-base {
+  width: 15px;
+  height: 15px;
+  border-radius: 3px;
+  padding: 0;
+  gap: 0;
+}
+.picker-checkbox-base:disabled {
+  cursor: default;
+}
+.picker-empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: #7d8a9d;
+  font-size: 12px;
+}
+.picker-touch .picker-group-row,
+.picker-touch .picker-window-row {
+  min-height: 44px;
+}
+.picker-touch .picker-window-name,
+.picker-touch .picker-group-row strong {
+  font-size: 12px;
+}
+.picker-touch .picker-checkbox-base {
+  width: 18px;
+  height: 18px;
+}
 </style>

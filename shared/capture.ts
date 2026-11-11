@@ -8,7 +8,10 @@ export interface CaptureDescriptor {
   paneId: string
   preview?: 'static'
 }
-export interface CaptureState { type: 'capture'; capture: CaptureDescriptor | null }
+export interface CaptureState {
+  type: 'capture'
+  capture: CaptureDescriptor | null
+}
 
 /** Shared normal cards reserve the capture toolbar even when showing the terminal. */
 export const captureToolbarHeight = 34

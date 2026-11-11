@@ -1,76 +1,76 @@
-import { CompletionReads } from './completion-reads.ts';
-import type { PaneAction, PaneContext, PanePoint } from '../shared/pane-context.ts';
-import { sameCompletion, type CompletionToken } from '../shared/completion.ts';
-import headless from "@xterm/headless";
-import { terminalUnicodeAddon } from "../shared/terminal-unicode.ts";
-import serialize from "@xterm/addon-serialize";
-import type { WebSocket } from "ws";
-import { sourceConnectionKey, type Source } from "./state.ts";
-import { openTerminal } from "./runtimes.ts";
-import { GeometryController, type Size } from "./geometry.ts";
-import { HERDR_MOUSE_ENCODING, type HerdrClientTransport } from "./herdr/client.ts";
-import type { WindowMetadata } from "../shared/window-metadata.ts";
-import { randomUUID } from "node:crypto";
-import type { CanvasNotification } from "../shared/notification.ts";
-import type { PasteSegment } from "../shared/paste.ts";
-import type { CaptureDescriptor, CaptureState } from "../shared/capture.ts";
-import { defaultTerminalCell } from '../shared/settings.ts';
-import { defaultWindowSize, normalTerminalGrid } from '../shared/window-size.ts';
-import { isTerminalHoverInput } from '../shared/terminal-mouse.ts';
-const { Terminal } = headless;
-const { SerializeAddon } = serialize;
+import { CompletionReads } from './completion-reads.ts'
+import type { PaneAction, PaneContext, PanePoint } from '../shared/pane-context.ts'
+import { sameCompletion, type CompletionToken } from '../shared/completion.ts'
+import headless from '@xterm/headless'
+import { terminalUnicodeAddon } from '../shared/terminal-unicode.ts'
+import serialize from '@xterm/addon-serialize'
+import type { WebSocket } from 'ws'
+import { sourceConnectionKey, type Source } from './state.ts'
+import { openTerminal } from './runtimes.ts'
+import { GeometryController, type Size } from './geometry.ts'
+import { HERDR_MOUSE_ENCODING, type HerdrClientTransport } from './herdr/client.ts'
+import type { WindowMetadata } from '../shared/window-metadata.ts'
+import { randomUUID } from 'node:crypto'
+import type { CanvasNotification } from '../shared/notification.ts'
+import type { PasteSegment } from '../shared/paste.ts'
+import type { CaptureDescriptor, CaptureState } from '../shared/capture.ts'
+import { defaultTerminalCell } from '../shared/settings.ts'
+import { defaultWindowSize, normalTerminalGrid } from '../shared/window-size.ts'
+import { isTerminalHoverInput } from '../shared/terminal-mouse.ts'
+const { Terminal } = headless
+const { SerializeAddon } = serialize
 export type TerminalTarget = {
-  sourceId: string;
-  spaceId: string;
-  windowId: string;
-};
+  sourceId: string
+  spaceId: string
+  windowId: string
+}
 // Agents may read a pasted attachment path asynchronously and insert its
 // placeholder later. Following text waits until the screen has stayed quiet.
-export const PASTE_SETTLE_QUIET_MS = 500;
-export const PASTE_SETTLE_LIMIT_MS = 2_000;
+export const PASTE_SETTLE_QUIET_MS = 500
+export const PASTE_SETTLE_LIMIT_MS = 2_000
 // One paste never holds keyboard input or its upload request much longer.
-export const PASTE_TOTAL_LIMIT_MS = 10_000;
+export const PASTE_TOTAL_LIMIT_MS = 10_000
 const clamp = (n: unknown, min: number, max: number, fallback: number) =>
-  typeof n === "number" && Number.isFinite(n)
+  typeof n === 'number' && Number.isFinite(n)
     ? Math.min(max, Math.max(min, Math.round(n)))
-    : fallback;
+    : fallback
 function json(ws: WebSocket, data: unknown) {
-  if (ws.readyState === 1) ws.send(JSON.stringify(data));
+  if (ws.readyState === 1) ws.send(JSON.stringify(data))
 }
 class LiveTerminal {
-  emulator: InstanceType<typeof Terminal>;
-  serializer: InstanceType<typeof SerializeAddon>;
-  clients = new Set<WebSocket>();
-  private rendered = new Set<WebSocket>();
-  private hidden = new Set<WebSocket>();
-  private focused = new Set<WebSocket>();
-  private maximized?: { owner: WebSocket; token: string; lease: number; releasing?: boolean };
-  private presentationRevision = 0;
-  private focusedPaneId?: string;
-  private metadata?: WindowMetadata;
-  private rawMetadata?: WindowMetadata;
-  private frame?: WindowMetadata;
-  private sentFrames = new WeakMap<WebSocket, WindowMetadata>();
-  private readGenerations = new WeakMap<WebSocket, number>();
-  private pendingFences = new WeakMap<WebSocket, number>();
-  private readSubscription?: { dispose(): unknown };
-  private cursorVisible = true;
-  private cursorShape = 0;
-  private outputWaiters = new Set<() => void>();
+  emulator: InstanceType<typeof Terminal>
+  serializer: InstanceType<typeof SerializeAddon>
+  clients = new Set<WebSocket>()
+  private rendered = new Set<WebSocket>()
+  private hidden = new Set<WebSocket>()
+  private focused = new Set<WebSocket>()
+  private maximized?: { owner: WebSocket; token: string; lease: number; releasing?: boolean }
+  private presentationRevision = 0
+  private focusedPaneId?: string
+  private metadata?: WindowMetadata
+  private rawMetadata?: WindowMetadata
+  private frame?: WindowMetadata
+  private sentFrames = new WeakMap<WebSocket, WindowMetadata>()
+  private readGenerations = new WeakMap<WebSocket, number>()
+  private pendingFences = new WeakMap<WebSocket, number>()
+  private readSubscription?: { dispose(): unknown }
+  private cursorVisible = true
+  private cursorShape = 0
+  private outputWaiters = new Set<() => void>()
   // Keyboard input typed during a paced paste follows the complete paste.
-  private pasting?: Promise<void>;
-  controller?: WebSocket;
-  private downloadController?: WebSocket;
-  idle?: ReturnType<typeof setTimeout>;
-  queue: Promise<void> = Promise.resolve();
-  pendingBytes = 0;
-  paused = false;
-  geometry: GeometryController<WebSocket>;
-  closing?: Promise<void>;
-  closed = false;
-  cols: number;
-  rows: number;
-  private normalSize: Size;
+  private pasting?: Promise<void>
+  controller?: WebSocket
+  private downloadController?: WebSocket
+  idle?: ReturnType<typeof setTimeout>
+  queue: Promise<void> = Promise.resolve()
+  pendingBytes = 0
+  paused = false
+  geometry: GeometryController<WebSocket>
+  closing?: Promise<void>
+  closed = false
+  cols: number
+  rows: number
+  private normalSize: Size
   constructor(
     readonly key: string,
     readonly sourceId: string,
@@ -88,28 +88,30 @@ class LiveTerminal {
     readonly capture: () => CaptureDescriptor | null = () => null,
     readonly onReadFocus?: () => void,
   ) {
-    this.cols = cols;
-    this.rows = rows;
-    this.normalSize = { cols, rows };
+    this.cols = cols
+    this.rows = rows
+    this.normalSize = { cols, rows }
     this.emulator = new Terminal({
       cols,
       rows,
       scrollback: 2000,
       allowProposedApi: true,
-    });
-    this.emulator.loadAddon(terminalUnicodeAddon());
-    this.serializer = new SerializeAddon();
-    this.emulator.loadAddon(this.serializer);
+    })
+    this.emulator.loadAddon(terminalUnicodeAddon())
+    this.serializer = new SerializeAddon()
+    this.emulator.loadAddon(this.serializer)
     // SerializeAddon omits cursor appearance. Observe it on the same parser lane
     // as screen writes so resumed snapshots retain the completed frame's state.
-    for (const final of ['h', 'l']) this.emulator.parser.registerCsiHandler({ prefix: '?', final }, params => {
-      if (params.includes(25)) this.cursorVisible = final === 'h';
-      return false;
-    });
-    this.emulator.parser.registerCsiHandler({ intermediates: ' ', final: 'q' }, params => {
-      if (typeof params[0] === 'number' && params[0] >= 0 && params[0] <= 6) this.cursorShape = params[0];
-      return false;
-    });
+    for (const final of ['h', 'l'])
+      this.emulator.parser.registerCsiHandler({ prefix: '?', final }, (params) => {
+        if (params.includes(25)) this.cursorVisible = final === 'h'
+        return false
+      })
+    this.emulator.parser.registerCsiHandler({ intermediates: ' ', final: 'q' }, (params) => {
+      if (typeof params[0] === 'number' && params[0] >= 0 && params[0] <= 6)
+        this.cursorShape = params[0]
+      return false
+    })
     this.geometry = new GeometryController(
       { cols, rows },
       (size) => this.adoptGeometry(size),
@@ -118,463 +120,617 @@ class LiveTerminal {
           json(ws, {
             ...this.geometry.state(ws),
             ...(reason ? { reason } : {}),
-          });
+          })
       },
-      () => { void this.close(); },
-    );
+      () => {
+        void this.close()
+      },
+    )
     this.proc.onPaneFocus((paneId) => {
-      if (this.closed || this.focusedPaneId === paneId) return;
-      this.focusedPaneId = paneId;
-      for (const ws of this.clients) json(ws, { type: "pane-focus", paneId });
-    });
-    this.readSubscription = reads?.onRead(sourceId => { if (sourceId === this.sourceId) this.publishMetadata(); });
-    this.proc.onMetadata(metadata => {
-      if (this.closed) return;
-      this.rawMetadata = metadata;
-      this.publishMetadata();
-    });
-    this.proc.onFrame(metadata => {
-      const recipients = [...this.clients].map(ws => ({ ws, generation: this.readGenerations.get(ws) || 0, blocked: this.pendingFences.has(ws) }));
-      this.queue = this.queue.then(() => {
-        if (this.closed) return;
-        this.frame = metadata;
-        for (const { ws, generation, blocked } of recipients) if (!blocked && generation === (this.readGenerations.get(ws) || 0) && this.canRender(ws)) this.publishFrame(ws);
-      }).catch(() => { void this.close(); });
-    });
+      if (this.closed || this.focusedPaneId === paneId) return
+      this.focusedPaneId = paneId
+      for (const ws of this.clients) json(ws, { type: 'pane-focus', paneId })
+    })
+    this.readSubscription = reads?.onRead((sourceId) => {
+      if (sourceId === this.sourceId) this.publishMetadata()
+    })
+    this.proc.onMetadata((metadata) => {
+      if (this.closed) return
+      this.rawMetadata = metadata
+      this.publishMetadata()
+    })
+    this.proc.onFrame((metadata) => {
+      const recipients = [...this.clients].map((ws) => ({
+        ws,
+        generation: this.readGenerations.get(ws) || 0,
+        blocked: this.pendingFences.has(ws),
+      }))
+      this.queue = this.queue
+        .then(() => {
+          if (this.closed) return
+          this.frame = metadata
+          for (const { ws, generation, blocked } of recipients)
+            if (
+              !blocked &&
+              generation === (this.readGenerations.get(ws) || 0) &&
+              this.canRender(ws)
+            )
+              this.publishFrame(ws)
+        })
+        .catch(() => {
+          void this.close()
+        })
+    })
     this.proc.onData((data) => {
-      if (this.closed) return;
-      for (const waiter of this.outputWaiters) waiter();
-      const bytes = Buffer.byteLength(data);
-      this.pendingBytes += bytes;
+      if (this.closed) return
+      for (const waiter of this.outputWaiters) waiter()
+      const bytes = Buffer.byteLength(data)
+      this.pendingBytes += bytes
       if (this.pendingBytes > 256 * 1024 && !this.paused) {
-        this.paused = true;
-        this.proc.pause();
+        this.paused = true
+        this.proc.pause()
       }
       this.queue = this.queue
         .then(async () => {
           try {
-            if (this.closed) return;
+            if (this.closed) return
             await new Promise<void>((resolve) =>
               this.emulator.write(data, () => {
                 for (const ws of this.clients) {
-                  if (!this.canRender(ws)) continue;
+                  if (!this.canRender(ws)) continue
                   if (ws.bufferedAmount > 2 * 1024 * 1024) {
-                    ws.close(1013, "Terminal output is too fast; reconnect");
-                    continue;
+                    ws.close(1013, 'Terminal output is too fast; reconnect')
+                    continue
                   }
-                  if (ws.readyState === 1) ws.send(Buffer.from(data, "utf8"));
+                  if (ws.readyState === 1) ws.send(Buffer.from(data, 'utf8'))
                 }
-                resolve();
+                resolve()
               }),
-            );
+            )
           } finally {
-            this.pendingBytes -= bytes;
+            this.pendingBytes -= bytes
             if (this.paused && this.pendingBytes < 128 * 1024 && !this.closed) {
-              this.paused = false;
-              this.proc.resume();
+              this.paused = false
+              this.proc.resume()
             }
           }
         })
         .catch(() => {
-          void this.close();
-        });
-    });
-    this.proc.onExit(event => void this.close(event.reason));
+          void this.close()
+        })
+    })
+    this.proc.onExit((event) => void this.close(event.reason))
   }
   private publishMetadata() {
-    if (this.closed || !this.rawMetadata) return;
-    this.metadata = this.reads?.project(this.source, this.rawMetadata) || this.rawMetadata;
-    for (const ws of this.clients) json(ws, { type: 'metadata', window: this.metadata });
+    if (this.closed || !this.rawMetadata) return
+    this.metadata = this.reads?.project(this.source, this.rawMetadata) || this.rawMetadata
+    for (const ws of this.clients) json(ws, { type: 'metadata', window: this.metadata })
   }
   private publishFrame(ws: WebSocket) {
-    if (!this.frame || this.pendingFences.has(ws)) return;
-    const frame = this.reads?.project(this.source, this.frame) || this.frame;
-    this.sentFrames.set(ws, frame);
-    json(ws, { type: 'completion-frame', generation: this.readGenerations.get(ws) || 0, focusedPaneId: frame.panes.find(pane => pane.active)?.id, layout: frame.layout,
-      panes: frame.panes.map(pane => ({ id: pane.id, ...(pane.completion ? { completion: pane.completion } : {}) })) });
+    if (!this.frame || this.pendingFences.has(ws)) return
+    const frame = this.reads?.project(this.source, this.frame) || this.frame
+    this.sentFrames.set(ws, frame)
+    json(ws, {
+      type: 'completion-frame',
+      generation: this.readGenerations.get(ws) || 0,
+      focusedPaneId: frame.panes.find((pane) => pane.active)?.id,
+      layout: frame.layout,
+      panes: frame.panes.map((pane) => ({
+        id: pane.id,
+        ...(pane.completion ? { completion: pane.completion } : {}),
+      })),
+    })
   }
   private canRender(ws: WebSocket) {
-    return !this.hidden.has(ws) && this.rendered.has(ws) &&
-      (!this.maximized || !this.maximized.releasing && this.maximized.owner === ws);
+    return (
+      !this.hidden.has(ws) &&
+      this.rendered.has(ws) &&
+      (!this.maximized || (!this.maximized.releasing && this.maximized.owner === ws))
+    )
   }
   publishCapture() {
-    if (this.closed) return;
-    const message: CaptureState = { type: 'capture', capture: this.capture() };
-    for (const ws of this.clients) json(ws, message);
+    if (this.closed) return
+    const message: CaptureState = { type: 'capture', capture: this.capture() }
+    for (const ws of this.clients) json(ws, message)
   }
   downloadRecipient(): WebSocket | undefined {
-    const ws = this.downloadController;
-    return ws && ws === this.controller && ws.readyState === 1 && this.clients.has(ws) &&
-      (!this.maximized || this.maximized.owner === ws) ? ws : undefined;
+    const ws = this.downloadController
+    return ws &&
+      ws === this.controller &&
+      ws.readyState === 1 &&
+      this.clients.has(ws) &&
+      (!this.maximized || this.maximized.owner === ws)
+      ? ws
+      : undefined
   }
-  captureFilePaste(ws: WebSocket): ((segments: readonly PasteSegment[]) => Promise<void>) | undefined {
-    if (this.closed || this.controller !== ws || !this.clients.has(ws) ||
-        ws.readyState !== 1 || (this.maximized && this.maximized.owner !== ws)) return;
+  captureFilePaste(
+    ws: WebSocket,
+  ): ((segments: readonly PasteSegment[]) => Promise<void>) | undefined {
+    if (
+      this.closed ||
+      this.controller !== ws ||
+      !this.clients.has(ws) ||
+      ws.readyState !== 1 ||
+      (this.maximized && this.maximized.owner !== ws)
+    )
+      return
     // A file drop authorizes this window at its start. Canvas navigation and
     // native pane selection do not redirect its eventual paste.
-    return segments => {
-      const paste = this.writePaste(segments);
-      this.holdInput(paste);
-      return paste;
-    };
+    return (segments) => {
+      const paste = this.writePaste(segments)
+      this.holdInput(paste)
+      return paste
+    }
   }
   private holdInput(operation: Promise<unknown>) {
-    const held = this.pasting = operation.then(() => {}, () => {});
-    void held.finally(() => { if (this.pasting === held) this.pasting = undefined; });
+    const held = (this.pasting = operation.then(
+      () => {},
+      () => {},
+    ))
+    void held.finally(() => {
+      if (this.pasting === held) this.pasting = undefined
+    })
   }
   private async writePaste(segments: readonly PasteSegment[]) {
-    const deadline = Date.now() + PASTE_TOTAL_LIMIT_MS;
+    const deadline = Date.now() + PASTE_TOTAL_LIMIT_MS
     for (const [index, segment] of segments.entries()) {
-      await this.queue;
-      if (this.closed) throw new Error("windowClosed");
-      const pace = segment.file && index < segments.length - 1 ? Math.min(PASTE_SETTLE_LIMIT_MS, deadline - Date.now()) : 0;
-      const settled = pace > 0 ? this.outputSettled(pace) : undefined;
-      this.proc.write(this.emulator.modes.bracketedPasteMode ? `\x1b[200~${segment.text}\x1b[201~` : segment.text);
-      await settled;
+      await this.queue
+      if (this.closed) throw new Error('windowClosed')
+      const pace =
+        segment.file && index < segments.length - 1
+          ? Math.min(PASTE_SETTLE_LIMIT_MS, deadline - Date.now())
+          : 0
+      const settled = pace > 0 ? this.outputSettled(pace) : undefined
+      this.proc.write(
+        this.emulator.modes.bracketedPasteMode ? `\x1b[200~${segment.text}\x1b[201~` : segment.text,
+      )
+      await settled
     }
   }
   /** Resolves after output follows by a quiet interval, or after the bounded limit. */
   private outputSettled(limitMs: number) {
-    return new Promise<void>(resolve => {
-      let quiet: ReturnType<typeof setTimeout> | undefined;
-      const done = () => { clearTimeout(quiet); clearTimeout(limit); this.outputWaiters.delete(output); resolve(); };
+    return new Promise<void>((resolve) => {
+      let quiet: ReturnType<typeof setTimeout> | undefined
+      const done = () => {
+        clearTimeout(quiet)
+        clearTimeout(limit)
+        this.outputWaiters.delete(output)
+        resolve()
+      }
       const output = () => {
-        clearTimeout(quiet);
-        if (this.closed) done(); else quiet = setTimeout(done, PASTE_SETTLE_QUIET_MS);
-      };
-      const limit = setTimeout(done, limitMs);
-      this.outputWaiters.add(output);
-    });
+        clearTimeout(quiet)
+        if (this.closed) done()
+        else quiet = setTimeout(done, PASTE_SETTLE_QUIET_MS)
+      }
+      const limit = setTimeout(done, limitMs)
+      this.outputWaiters.add(output)
+    })
   }
   private presentation(ws: WebSocket) {
     json(ws, {
-      type: "presentation",
+      type: 'presentation',
       maximized: !!this.maximized,
       owned: this.maximized?.owner === ws,
       ...(this.maximized ? { token: this.maximized.token, lease: this.maximized.lease } : {}),
-    });
+    })
   }
   private snapshot(ws: WebSocket) {
-    if (this.closed || !this.clients.has(ws) || ws.readyState !== 1) return;
-    json(ws, { type: "pane-focus", paneId: this.focusedPaneId });
-    if (this.hidden.has(ws) || this.maximized && (this.maximized.releasing || this.maximized.owner !== ws)) {
-      this.rendered.delete(ws);
-      this.presentation(ws);
-      return;
+    if (this.closed || !this.clients.has(ws) || ws.readyState !== 1) return
+    json(ws, { type: 'pane-focus', paneId: this.focusedPaneId })
+    if (
+      this.hidden.has(ws) ||
+      (this.maximized && (this.maximized.releasing || this.maximized.owner !== ws))
+    ) {
+      this.rendered.delete(ws)
+      this.presentation(ws)
+      return
     }
     // The caller runs in the same queue as headless writes. Reset, geometry,
     // serialized state and live output therefore form one ordered stream.
-    json(ws, { type: "reset" });
-    json(ws, { type: "resize", cols: this.emulator.cols, rows: this.emulator.rows });
+    json(ws, { type: 'reset' })
+    json(ws, { type: 'resize', cols: this.emulator.cols, rows: this.emulator.rows })
     // SerializeAddon restores tracking but omits its wire encoding.
-    const cursor = this.emulator.buffer.active;
+    const cursor = this.emulator.buffer.active
     // Absolute positioning also avoids SerializeAddon's last-column relative
     // cursor offset when the native projection has disabled wrapping.
-    ws.send(Buffer.from(this.serializer.serialize() + HERDR_MOUSE_ENCODING +
-      `\x1b[${cursor.cursorY + 1};${cursor.cursorX + 1}H\x1b[${this.cursorShape} q\x1b[?25${this.cursorVisible ? 'h' : 'l'}`, "utf8"));
-    this.rendered.add(ws);
-    this.sentFrames.delete(ws); this.publishFrame(ws);
-    this.presentation(ws);
+    ws.send(
+      Buffer.from(
+        this.serializer.serialize() +
+          HERDR_MOUSE_ENCODING +
+          `\x1b[${cursor.cursorY + 1};${cursor.cursorX + 1}H\x1b[${this.cursorShape} q\x1b[?25${this.cursorVisible ? 'h' : 'l'}`,
+        'utf8',
+      ),
+    )
+    this.rendered.add(ws)
+    this.sentFrames.delete(ws)
+    this.publishFrame(ws)
+    this.presentation(ws)
   }
   private resume() {
-    const revision = this.presentationRevision;
-    this.queue = this.queue.then(() => {
-      if (revision !== this.presentationRevision) return;
-      for (const ws of this.clients)
-        if (!this.rendered.has(ws)) this.snapshot(ws);
-    }).catch(() => { void this.close(); });
+    const revision = this.presentationRevision
+    this.queue = this.queue
+      .then(() => {
+        if (revision !== this.presentationRevision) return
+        for (const ws of this.clients) if (!this.rendered.has(ws)) this.snapshot(ws)
+      })
+      .catch(() => {
+        void this.close()
+      })
   }
   private maximize(ws: WebSocket, token: string) {
-    this.presentationRevision++;
-    this.maximized = { owner: ws, token, lease: this.presentationRevision };
-    this.controller = ws;
-    this.downloadController = ws;
+    this.presentationRevision++
+    this.maximized = { owner: ws, token, lease: this.presentationRevision }
+    this.controller = ws
+    this.downloadController = ws
     for (const client of this.clients) {
       if (client !== ws) {
-        this.rendered.delete(client);
-        this.presentation(client);
-      } else if (this.rendered.has(client)) this.presentation(client);
+        this.rendered.delete(client)
+        this.presentation(client)
+      } else if (this.rendered.has(client)) this.presentation(client)
     }
-    this.status();
-    this.resume();
+    this.status()
+    this.resume()
   }
   private async releaseMaximized(ws: WebSocket, token?: string) {
-    const current = this.maximized;
-    if (!current || current.releasing || current.owner !== ws || (token !== undefined && token !== current.token)) return;
-    current.releasing = true;
-    this.presentationRevision++;
+    const current = this.maximized
+    if (
+      !current ||
+      current.releasing ||
+      current.owner !== ws ||
+      (token !== undefined && token !== current.token)
+    )
+      return
+    current.releasing = true
+    this.presentationRevision++
     // Keep every view paused until viewport restoration completes.
     // A new owner can take over while it is queued; snapshots
     // re-check the current owner and never release a newer request.
-    this.rendered.clear();
-    await this.geometry.end(ws, current.token);
-    if (this.maximized !== current) return;
-    this.maximized = undefined;
-    this.resume();
-    this.status();
+    this.rendered.clear()
+    await this.geometry.end(ws, current.token)
+    if (this.maximized !== current) return
+    this.maximized = undefined
+    this.resume()
+    this.status()
   }
   async join(ws: WebSocket) {
-    clearTimeout(this.idle);
+    clearTimeout(this.idle)
     this.queue = this.queue.then(() => {
-      if (this.closed || ws.readyState !== 1) return;
-      this.clients.add(ws);
-      if (!this.controller) this.controller = ws;
-      if (this.metadata) json(ws, { type: "metadata", window: this.metadata });
-      json(ws, { type: 'capture', capture: this.capture() } satisfies CaptureState);
-      this.snapshot(ws);
-      this.status();
-      json(ws, this.geometry.state(ws));
-    });
-    await this.queue;
-    ws.on("message", (data, isBinary) => {
-      if (this.closed || ws.readyState !== 1 || !this.clients.has(ws)) return;
-      if (isBinary || Buffer.byteLength(data.toString()) > 128 * 1024) return;
+      if (this.closed || ws.readyState !== 1) return
+      this.clients.add(ws)
+      if (!this.controller) this.controller = ws
+      if (this.metadata) json(ws, { type: 'metadata', window: this.metadata })
+      json(ws, { type: 'capture', capture: this.capture() } satisfies CaptureState)
+      this.snapshot(ws)
+      this.status()
+      json(ws, this.geometry.state(ws))
+    })
+    await this.queue
+    ws.on('message', (data, isBinary) => {
+      if (this.closed || ws.readyState !== 1 || !this.clients.has(ws)) return
+      if (isBinary || Buffer.byteLength(data.toString()) > 128 * 1024) return
       try {
-        const msg = JSON.parse(data.toString());
+        const msg = JSON.parse(data.toString())
         if (msg.type === 'ping') {
-          if (typeof msg.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(msg.id)) json(ws, { type: 'pong', id: msg.id });
-          return;
+          if (typeof msg.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(msg.id))
+            json(ws, { type: 'pong', id: msg.id })
+          return
         }
-        if (msg.type === "view-visible" && typeof msg.visible === "boolean") {
+        if (msg.type === 'view-visible' && typeof msg.visible === 'boolean') {
           // A browser reports focused exactly while this window holds its read focus.
-          if (msg.visible && msg.focused === true && !this.focused.has(ws)) { this.focused.add(ws); this.onReadFocus?.(); }
-          else if (!msg.visible || msg.focused === false) this.focused.delete(ws);
-          if (msg.visible === !this.hidden.has(ws)) return;
-          if (msg.visible) { this.hidden.delete(ws); this.resume(); }
-          else { this.hidden.add(ws); this.rendered.delete(ws); }
-          return;
+          if (msg.visible && msg.focused === true && !this.focused.has(ws)) {
+            this.focused.add(ws)
+            this.onReadFocus?.()
+          } else if (!msg.visible || msg.focused === false) this.focused.delete(ws)
+          if (msg.visible === !this.hidden.has(ws)) return
+          if (msg.visible) {
+            this.hidden.delete(ws)
+            this.resume()
+          } else {
+            this.hidden.add(ws)
+            this.rendered.delete(ws)
+          }
+          return
         }
         if (msg.type === 'completion-fence') {
-          if (!Number.isSafeInteger(msg.generation) || msg.generation <= (this.readGenerations.get(ws) || 0)) return;
-          this.readGenerations.set(ws, msg.generation); this.pendingFences.set(ws, msg.generation); this.sentFrames.delete(ws);
-          void this.proc.completionFence().then(frame => {
-            if (!frame || this.closed || !this.clients.has(ws) || this.pendingFences.get(ws) !== msg.generation) return;
-            this.queue = this.queue.then(() => {
-              if (this.closed || this.pendingFences.get(ws) !== msg.generation) return;
-              this.pendingFences.delete(ws); this.frame = frame;
-              if (this.canRender(ws)) this.publishFrame(ws);
-            });
-          }).catch(() => {});
-          return;
+          if (
+            !Number.isSafeInteger(msg.generation) ||
+            msg.generation <= (this.readGenerations.get(ws) || 0)
+          )
+            return
+          this.readGenerations.set(ws, msg.generation)
+          this.pendingFences.set(ws, msg.generation)
+          this.sentFrames.delete(ws)
+          void this.proc
+            .completionFence()
+            .then((frame) => {
+              if (
+                !frame ||
+                this.closed ||
+                !this.clients.has(ws) ||
+                this.pendingFences.get(ws) !== msg.generation
+              )
+                return
+              this.queue = this.queue.then(() => {
+                if (this.closed || this.pendingFences.get(ws) !== msg.generation) return
+                this.pendingFences.delete(ws)
+                this.frame = frame
+                if (this.canRender(ws)) this.publishFrame(ws)
+              })
+            })
+            .catch(() => {})
+          return
         }
         if (msg.type === 'completion-read') {
-          const frame = this.sentFrames.get(ws);
-          const pane = frame?.panes.find(pane => pane.id === msg.paneId && pane.active);
-          const completion: CompletionToken = { bootId: msg.bootId, sequence: msg.sequence };
-          if (Number.isSafeInteger(msg.generation) && msg.generation === (this.readGenerations.get(ws) || 0) && !this.pendingFences.has(ws) &&
-              this.canRender(ws) && pane && pane.id === this.focusedPaneId && pane.completion && sameCompletion(pane.completion, completion)) {
-            if (this.proc.acknowledgeCompletion) void this.proc.acknowledgeCompletion(pane.id, completion).catch(() => {});
-            else this.reads?.acknowledge(this.source, frame!.id, pane.id, completion);
+          const frame = this.sentFrames.get(ws)
+          const pane = frame?.panes.find((pane) => pane.id === msg.paneId && pane.active)
+          const completion: CompletionToken = { bootId: msg.bootId, sequence: msg.sequence }
+          if (
+            Number.isSafeInteger(msg.generation) &&
+            msg.generation === (this.readGenerations.get(ws) || 0) &&
+            !this.pendingFences.has(ws) &&
+            this.canRender(ws) &&
+            pane &&
+            pane.id === this.focusedPaneId &&
+            pane.completion &&
+            sameCompletion(pane.completion, completion)
+          ) {
+            if (this.proc.acknowledgeCompletion)
+              void this.proc.acknowledgeCompletion(pane.id, completion).catch(() => {})
+            else this.reads?.acknowledge(this.source, frame!.id, pane.id, completion)
           }
-          return;
+          return
         }
-        if (msg.type === "focus") {
-          if (this.maximized && this.maximized.owner !== ws) return;
-          this.controller = ws;
-          this.downloadController = ws;
-          this.status();
-          return;
+        if (msg.type === 'focus') {
+          if (this.maximized && this.maximized.owner !== ws) return
+          this.controller = ws
+          this.downloadController = ws
+          this.status()
+          return
         }
         const size = {
           // xterm needs two columns for wide characters; one row is valid.
           cols: clamp(msg.cols, 2, 500, this.cols),
           rows: clamp(msg.rows, 1, 200, this.rows),
-        };
+        }
         if (
-          msg.type === "focus-resize-begin" &&
-          typeof msg.token === "string" &&
+          msg.type === 'focus-resize-begin' &&
+          typeof msg.token === 'string' &&
           msg.token.length <= 100
         ) {
-          this.maximize(ws, msg.token);
-          this.geometry.begin(ws, msg.token, size);
-          return;
+          this.maximize(ws, msg.token)
+          this.geometry.begin(ws, msg.token, size)
+          return
+        }
+        if (msg.type === 'focus-resize-update' && typeof msg.token === 'string') {
+          if (this.maximized?.owner !== ws || this.maximized.token !== msg.token) return
+          this.geometry.update(ws, msg.token, size)
+          return
+        }
+        if (msg.type === 'focus-resize-end' && typeof msg.token === 'string') {
+          void this.releaseMaximized(ws, msg.token)
+          return
         }
         if (
-          msg.type === "focus-resize-update" &&
-          typeof msg.token === "string"
+          msg.type === 'presentation-cancel' &&
+          typeof msg.token === 'string' &&
+          Number.isSafeInteger(msg.lease)
         ) {
-          if (this.maximized?.owner !== ws || this.maximized.token !== msg.token) return;
-          this.geometry.update(ws, msg.token, size);
-          return;
+          const current = this.maximized
+          if (current && current.token === msg.token && current.lease === msg.lease)
+            void this.releaseMaximized(current.owner, current.token)
+          else this.presentation(ws)
+          return
         }
-        if (msg.type === "focus-resize-end" && typeof msg.token === "string") {
-          void this.releaseMaximized(ws, msg.token);
-          return;
-        }
-        if (msg.type === "presentation-cancel" && typeof msg.token === "string" && Number.isSafeInteger(msg.lease)) {
-          const current = this.maximized;
-          if (current && current.token === msg.token && current.lease === msg.lease) void this.releaseMaximized(current.owner, current.token);
-          else this.presentation(ws);
-          return;
-        }
-        if (this.controller !== ws) return;
-        if (this.maximized && this.maximized.owner !== ws) return;
+        if (this.controller !== ws) return
+        if (this.maximized && this.maximized.owner !== ws) return
         if (
-          msg.type === "input" &&
-          typeof msg.data === "string" &&
+          msg.type === 'input' &&
+          typeof msg.data === 'string' &&
           msg.data.length <= 64 * 1024 &&
-          (msg.encoding === undefined || msg.encoding === "binary")
+          (msg.encoding === undefined || msg.encoding === 'binary')
         ) {
           // Outer window focus reports cannot change the native pane or pixels.
-          if (msg.data !== '\x1b[I' && msg.data !== '\x1b[O' && !isTerminalHoverInput(msg.data)) this.sentFrames.delete(ws);
-          const data = msg.encoding === "binary" ? Buffer.from(msg.data, "latin1") : msg.data;
-          if (this.pasting) this.holdInput(this.pasting.then(() => { if (!this.closed) this.proc.write(data); }));
-          else this.proc.write(data);
+          if (msg.data !== '\x1b[I' && msg.data !== '\x1b[O' && !isTerminalHoverInput(msg.data))
+            this.sentFrames.delete(ws)
+          const data = msg.encoding === 'binary' ? Buffer.from(msg.data, 'latin1') : msg.data
+          if (this.pasting)
+            this.holdInput(
+              this.pasting.then(() => {
+                if (!this.closed) this.proc.write(data)
+              }),
+            )
+          else this.proc.write(data)
         }
       } catch {
         /* Malformed messages cannot become terminal commands. */
       }
-    });
-    ws.once("close", () => {
-      this.clients.delete(ws);
-      this.hidden.delete(ws);
-      this.focused.delete(ws);
-      if (this.downloadController === ws) this.downloadController = undefined;
-      this.rendered.delete(ws);
-      if (this.closed) return;
-      if (this.maximized?.owner === ws) void this.releaseMaximized(ws);
-      else void this.geometry.end(ws);
-      if (this.controller === ws)
-        this.controller = this.clients.values().next().value;
-      this.status();
+    })
+    ws.once('close', () => {
+      this.clients.delete(ws)
+      this.hidden.delete(ws)
+      this.focused.delete(ws)
+      if (this.downloadController === ws) this.downloadController = undefined
+      this.rendered.delete(ws)
+      if (this.closed) return
+      if (this.maximized?.owner === ws) void this.releaseMaximized(ws)
+      else void this.geometry.end(ws)
+      if (this.controller === ws) this.controller = this.clients.values().next().value
+      this.status()
       if (!this.clients.size) {
-        this.idle = setTimeout(() => void this.close(), 20_000);
-        this.idle.unref();
+        this.idle = setTimeout(() => void this.close(), 20_000)
+        this.idle.unref()
       }
-    });
+    })
   }
   adoptGeometry(size: Size) {
-    if (this.cols === size.cols && this.rows === size.rows) return;
-    this.proc.resize(size.cols, size.rows);
-    this.cols = size.cols;
-    this.rows = size.rows;
+    if (this.cols === size.cols && this.rows === size.rows) return
+    this.proc.resize(size.cols, size.rows)
+    this.cols = size.cols
+    this.rows = size.rows
     // Geometry must not overtake bytes already queued at the previous size.
     this.queue = this.queue.then(() => {
-      if (this.closed) return;
-      this.emulator.resize(size.cols, size.rows);
+      if (this.closed) return
+      this.emulator.resize(size.cols, size.rows)
       for (const ws of this.clients)
-        if (this.canRender(ws)) json(ws, { type: "resize", cols: size.cols, rows: size.rows });
-    });
+        if (this.canRender(ws)) json(ws, { type: 'resize', cols: size.cols, rows: size.rows })
+    })
   }
   setNormalSize(size: Size) {
-    if (this.closed || this.normalSize.cols === size.cols && this.normalSize.rows === size.rows) return;
-    this.normalSize = size;
+    if (this.closed || (this.normalSize.cols === size.cols && this.normalSize.rows === size.rows))
+      return
+    this.normalSize = size
     // A shared card/font edit changes the restore size while maximized; it never
     // takes input ownership or replaces an active temporary viewport.
-    this.geometry.persistent(size);
+    this.geometry.persistent(size)
   }
   status() {
     for (const ws of this.clients)
       json(ws, {
-        type: "status",
-        status: "connected",
+        type: 'status',
+        status: 'connected',
         readOnly: this.controller !== ws || (!!this.maximized && this.maximized.owner !== ws),
-      });
+      })
   }
   close(reason?: 'removed'): Promise<void> {
-    if (this.closing) return this.closing;
-    const focused = reason === 'removed' && [...this.focused].some(ws => ws.readyState === 1 && this.clients.has(ws) && this.canRender(ws));
-    this.closed = true;
-    for (const waiter of this.outputWaiters) waiter();
-    this.readSubscription?.dispose();
-    if (reason === 'removed') this.reads?.removeWindow(this.source, this.key.slice(this.sourceId.length + 1));
-    if (focused) this.onFocusedRemove?.();
-    clearTimeout(this.idle);
+    if (this.closing) return this.closing
+    const focused =
+      reason === 'removed' &&
+      [...this.focused].some(
+        (ws) => ws.readyState === 1 && this.clients.has(ws) && this.canRender(ws),
+      )
+    this.closed = true
+    for (const waiter of this.outputWaiters) waiter()
+    this.readSubscription?.dispose()
+    if (reason === 'removed')
+      this.reads?.removeWindow(this.source, this.key.slice(this.sourceId.length + 1))
+    if (focused) this.onFocusedRemove?.()
+    clearTimeout(this.idle)
     // A native snapshot confirmed the tab is gone. Notify before asynchronous
     // viewport/tunnel cleanup so viewers never treat that cleanup as an outage.
-    if (reason === 'removed') for (const ws of this.clients) {
-      json(ws, { type: "status", status: "removed" });
-      ws.close(1000, "Window removed");
-    }
+    if (reason === 'removed')
+      for (const ws of this.clients) {
+        json(ws, { type: 'status', status: 'removed' })
+        ws.close(1000, 'Window removed')
+      }
     this.closing = (async () => {
       // Restore the viewport before detaching this client.
-      await this.geometry.close();
+      await this.geometry.close()
       for (const ws of this.clients) {
-        if (reason !== 'removed') json(ws, { type: "status", status: "closed" });
-        ws.close(1000, "Terminal detached");
+        if (reason !== 'removed') json(ws, { type: 'status', status: 'closed' })
+        ws.close(1000, 'Terminal detached')
       }
-      this.clients.clear();
-      this.hidden.clear();
-      this.focused.clear();
-      this.rendered.clear();
-      this.maximized = undefined;
+      this.clients.clear()
+      this.hidden.clear()
+      this.focused.clear()
+      this.rendered.clear()
+      this.maximized = undefined
       try {
-        this.proc.kill();
+        this.proc.kill()
       } catch {}
-      await this.handle.cleanup().catch(() => {});
-      void this.queue.finally(() => this.emulator.dispose()).catch(() => {});
-      this.onClose();
-    })();
-    return this.closing;
+      await this.handle.cleanup().catch(() => {})
+      void this.queue.finally(() => this.emulator.dispose()).catch(() => {})
+      this.onClose()
+    })()
+    return this.closing
   }
 }
 export class TerminalManager {
-  entries = new Map<string, Promise<LiveTerminal>>();
-  private readonly live = new Set<LiveTerminal>();
-  private readonly notificationListeners = new Set<(notification: CanvasNotification) => void>();
-  private stopped = false;
-  private closingSources = new Set<string>();
-  private pendingCompletions = new Map<string, { source: Source; notification: CanvasNotification; timer: ReturnType<typeof setTimeout> }>();
-  private deliveredCompletions = new Map<string, CompletionToken>();
-  private completionBoots = new Map<string, string>();
-  constructor(private readonly reads?: CompletionReads, private readonly onFocusedWindowRemoved?: (source: Source, windowId: string) => void,
-    private readonly normalSize: (sourceId: string, windowId: string) => Size = () => normalTerminalGrid(defaultWindowSize, defaultTerminalCell()),
-    private readonly capture: (sourceId: string, windowId: string) => CaptureDescriptor | null = () => null,
-    private readonly onWindowRead?: (source: Source, windowId: string) => void) {}
+  entries = new Map<string, Promise<LiveTerminal>>()
+  private readonly live = new Set<LiveTerminal>()
+  private readonly notificationListeners = new Set<(notification: CanvasNotification) => void>()
+  private stopped = false
+  private closingSources = new Set<string>()
+  private pendingCompletions = new Map<
+    string,
+    { source: Source; notification: CanvasNotification; timer: ReturnType<typeof setTimeout> }
+  >()
+  private deliveredCompletions = new Map<string, CompletionToken>()
+  private completionBoots = new Map<string, string>()
+  constructor(
+    private readonly reads?: CompletionReads,
+    private readonly onFocusedWindowRemoved?: (source: Source, windowId: string) => void,
+    private readonly normalSize: (sourceId: string, windowId: string) => Size = () =>
+      normalTerminalGrid(defaultWindowSize, defaultTerminalCell()),
+    private readonly capture: (
+      sourceId: string,
+      windowId: string,
+    ) => CaptureDescriptor | null = () => null,
+    private readonly onWindowRead?: (source: Source, windowId: string) => void,
+  ) {}
   refreshNormalSizes() {
-    if (this.stopped) return;
-    for (const terminal of this.live) terminal.setNormalSize(this.normalSize(terminal.sourceId, terminal.windowId));
+    if (this.stopped) return
+    for (const terminal of this.live)
+      terminal.setNormalSize(this.normalSize(terminal.sourceId, terminal.windowId))
   }
   onNotification(listener: (notification: CanvasNotification) => void) {
-    this.notificationListeners.add(listener);
-    return { dispose: () => { this.notificationListeners.delete(listener); } };
+    this.notificationListeners.add(listener)
+    return {
+      dispose: () => {
+        this.notificationListeners.delete(listener)
+      },
+    }
   }
   private observeCompletionSource(source: Source) {
-    const owner = [...this.live].find(terminal => !terminal.closed && terminal.sourceId === source.id && terminal.connectionKey === sourceConnectionKey(source));
-    const snapshot = owner?.proc.completionSnapshot();
+    const owner = [...this.live].find(
+      (terminal) =>
+        !terminal.closed &&
+        terminal.sourceId === source.id &&
+        terminal.connectionKey === sourceConnectionKey(source),
+    )
+    const snapshot = owner?.proc.completionSnapshot()
     if (owner && snapshot) {
-      this.reads?.observeSnapshot(source, snapshot.windows, snapshot.state, owner);
+      this.reads?.observeSnapshot(source, snapshot.windows, snapshot.state, owner)
       if (this.completionBoots.get(source.id) !== snapshot.state.bootId) {
-        this.completionBoots.set(source.id, snapshot.state.bootId);
-        for (const window of snapshot.windows) for (const pane of window.panes) {
-          const token = this.reads?.completion(source, pane.id)?.completion || pane.completion;
-          if (token) this.deliveredCompletions.set(`${source.id}/${pane.id}`, token);
-        }
+        this.completionBoots.set(source.id, snapshot.state.bootId)
+        for (const window of snapshot.windows)
+          for (const pane of window.panes) {
+            const token = this.reads?.completion(source, pane.id)?.completion || pane.completion
+            if (token) this.deliveredCompletions.set(`${source.id}/${pane.id}`, token)
+          }
       }
-      this.flushCompletions(source.id);
-    } else if (!owner) { this.reads?.disconnected(source.id); this.completionBoots.delete(source.id); }
+      this.flushCompletions(source.id)
+    } else if (!owner) {
+      this.reads?.disconnected(source.id)
+      this.completionBoots.delete(source.id)
+    }
   }
   private publishNotification(notification: CanvasNotification) {
-    for (const listener of this.notificationListeners) listener(notification);
+    for (const listener of this.notificationListeners) listener(notification)
   }
   private flushCompletions(sourceId: string) {
-    if (!this.reads || this.stopped || this.closingSources.has(sourceId)) return;
+    if (!this.reads || this.stopped || this.closingSources.has(sourceId)) return
     for (const [key, pending] of this.pendingCompletions) {
-      if (pending.source.id !== sourceId) continue;
-      const completion = this.reads.completion(pending.source, pending.notification.paneId!);
-      if (!completion) continue;
-      if (sameCompletion(this.deliveredCompletions.get(key), completion.completion)) continue;
-      clearTimeout(pending.timer); this.pendingCompletions.delete(key);
-      this.deliveredCompletions.set(key, completion.completion);
-      if (this.deliveredCompletions.size > 1000) this.deliveredCompletions.delete(this.deliveredCompletions.keys().next().value!);
-      this.publishNotification({ ...pending.notification, windowId: completion.windowId, completion: completion.completion });
+      if (pending.source.id !== sourceId) continue
+      const completion = this.reads.completion(pending.source, pending.notification.paneId!)
+      if (!completion) continue
+      if (sameCompletion(this.deliveredCompletions.get(key), completion.completion)) continue
+      clearTimeout(pending.timer)
+      this.pendingCompletions.delete(key)
+      this.deliveredCompletions.set(key, completion.completion)
+      if (this.deliveredCompletions.size > 1000)
+        this.deliveredCompletions.delete(this.deliveredCompletions.keys().next().value!)
+      this.publishNotification({
+        ...pending.notification,
+        windowId: completion.windowId,
+        completion: completion.completion,
+      })
     }
   }
   async connect(source: Source, target: TerminalTarget, ws: WebSocket) {
     if (this.stopped || this.closingSources.has(source.id))
-      throw new Error("Terminal service is closing");
-    const key = `${source.id}/${target.windowId}`;
+      throw new Error('Terminal service is closing')
+    const key = `${source.id}/${target.windowId}`
     if (!this.entries.has(key)) {
       if (this.entries.size >= 100)
-        throw new Error("At most 100 active terminal windows are supported");
+        throw new Error('At most 100 active terminal windows are supported')
       const creating = (async () => {
-        const handle = await openTerminal(source, target.spaceId, target.windowId);
-        let transport: HerdrClientTransport | undefined;
+        const handle = await openTerminal(source, target.spaceId, target.windowId)
+        let transport: HerdrClientTransport | undefined
         try {
-          const { cols, rows } = this.normalSize(source.id, target.windowId);
-          transport = await handle.connect(cols, rows);
+          const { cols, rows } = this.normalSize(source.id, target.windowId)
+          transport = await handle.connect(cols, rows)
           if (this.stopped || this.closingSources.has(source.id))
-            throw new Error("Terminal service is closing");
+            throw new Error('Terminal service is closing')
           const terminal = new LiveTerminal(
             key,
             source.id,
@@ -584,128 +740,178 @@ export class TerminalManager {
             handle,
             cols,
             rows,
-            () => { this.entries.delete(key); this.live.delete(terminal); this.observeCompletionSource(source); },
+            () => {
+              this.entries.delete(key)
+              this.live.delete(terminal)
+              this.observeCompletionSource(source)
+            },
             transport,
-            source, this.reads, () => this.onFocusedWindowRemoved?.(source, target.windowId),
+            source,
+            this.reads,
+            () => this.onFocusedWindowRemoved?.(source, target.windowId),
             () => this.capture(source.id, target.windowId),
             () => this.onWindowRead?.(source, target.windowId),
-          );
-          this.live.add(terminal);
+          )
+          this.live.add(terminal)
           // A card/font edit may have committed while the native socket opened.
-          terminal.setNormalSize(this.normalSize(source.id, target.windowId));
+          terminal.setNormalSize(this.normalSize(source.id, target.windowId))
           transport.onSnapshot(() => {
-            const owner = [...this.live].find(candidate => !candidate.closed && candidate.sourceId === source.id && candidate.connectionKey === terminal.connectionKey);
-            if (owner === terminal) this.observeCompletionSource(source);
-          });
-          transport.onNotification(notification => {
-            if (this.stopped || this.closingSources.has(source.id) || terminal.closed) return;
+            const owner = [...this.live].find(
+              (candidate) =>
+                !candidate.closed &&
+                candidate.sourceId === source.id &&
+                candidate.connectionKey === terminal.connectionKey,
+            )
+            if (owner === terminal) this.observeCompletionSource(source)
+          })
+          transport.onNotification((notification) => {
+            if (this.stopped || this.closingSources.has(source.id) || terminal.closed) return
             // Herdr broadcasts to every native shell. One existing endpoint owns
             // this connection's live intake; closing it naturally promotes the next.
-            const owner = [...this.live].find(candidate => !candidate.closed && candidate.sourceId === source.id && candidate.connectionKey === terminal.connectionKey);
-            if (owner !== terminal) return;
-            const event: CanvasNotification = { ...notification, id: randomUUID(), sourceId: source.id };
-            if (notification.kind !== 'done' || !this.reads) { this.publishNotification(event); return; }
-            if (!notification.paneId) return;
-            const key = `${source.id}/${notification.paneId}`;
-            clearTimeout(this.pendingCompletions.get(key)?.timer);
-            const timer = setTimeout(() => this.pendingCompletions.delete(key), 1000);
-            timer.unref();
-            this.pendingCompletions.set(key, { source, notification: event, timer });
-            queueMicrotask(() => this.flushCompletions(source.id));
-          });
-          return terminal;
+            const owner = [...this.live].find(
+              (candidate) =>
+                !candidate.closed &&
+                candidate.sourceId === source.id &&
+                candidate.connectionKey === terminal.connectionKey,
+            )
+            if (owner !== terminal) return
+            const event: CanvasNotification = {
+              ...notification,
+              id: randomUUID(),
+              sourceId: source.id,
+            }
+            if (notification.kind !== 'done' || !this.reads) {
+              this.publishNotification(event)
+              return
+            }
+            if (!notification.paneId) return
+            const key = `${source.id}/${notification.paneId}`
+            clearTimeout(this.pendingCompletions.get(key)?.timer)
+            const timer = setTimeout(() => this.pendingCompletions.delete(key), 1000)
+            timer.unref()
+            this.pendingCompletions.set(key, { source, notification: event, timer })
+            queueMicrotask(() => this.flushCompletions(source.id))
+          })
+          return terminal
         } catch (error) {
-          transport?.kill();
-          await handle.cleanup();
-          throw error;
+          transport?.kill()
+          await handle.cleanup()
+          throw error
         }
-      })();
-      this.entries.set(key, creating);
-      creating.catch(() => this.entries.delete(key));
+      })()
+      this.entries.set(key, creating)
+      creating.catch(() => this.entries.delete(key))
     }
-    const terminal = await this.entries.get(key)!;
+    const terminal = await this.entries.get(key)!
     if (this.stopped || this.closingSources.has(source.id))
-      throw new Error("Terminal service is closing");
-    if (terminal.closed)
-      throw new Error("Terminal is detaching; reconnect in a moment");
+      throw new Error('Terminal service is closing')
+    if (terminal.closed) throw new Error('Terminal is detaching; reconnect in a moment')
     if (terminal.connectionKey !== sourceConnectionKey(source))
-      throw new Error("Terminal connection changed");
-    await terminal.join(ws);
+      throw new Error('Terminal connection changed')
+    await terminal.join(ws)
     if (terminal.closed || this.stopped || this.closingSources.has(source.id))
-      throw new Error("Terminal detached while connecting; reconnect in a moment");
+      throw new Error('Terminal detached while connecting; reconnect in a moment')
     if (!terminal.clients.size && !terminal.closed) {
-      terminal.idle = setTimeout(() => void terminal.close(), 20_000);
-      terminal.idle.unref();
+      terminal.idle = setTimeout(() => void terminal.close(), 20_000)
+      terminal.idle.unref()
     }
   }
-  async downloadRecipient(sourceId: string, windowId: string): Promise<{ socket: WebSocket; isCurrent(): boolean } | undefined> {
-    const pending = this.entries.get(`${sourceId}/${windowId}`);
-    if (!pending) return;
-    const terminal = await pending.catch(() => undefined);
-    const socket = terminal?.downloadRecipient();
-    if (!terminal || !socket) return;
-    return { socket, isCurrent: () => terminal.downloadRecipient() === socket };
+  async downloadRecipient(
+    sourceId: string,
+    windowId: string,
+  ): Promise<{ socket: WebSocket; isCurrent(): boolean } | undefined> {
+    const pending = this.entries.get(`${sourceId}/${windowId}`)
+    if (!pending) return
+    const terminal = await pending.catch(() => undefined)
+    const socket = terminal?.downloadRecipient()
+    if (!terminal || !socket) return
+    return { socket, isCurrent: () => terminal.downloadRecipient() === socket }
   }
   /** Captures follow the native window to all its viewers, including later ones. */
   async captureChanged(sourceId: string, windowId: string) {
-    const terminal = await this.entries.get(`${sourceId}/${windowId}`)?.catch(() => undefined);
+    const terminal = await this.entries.get(`${sourceId}/${windowId}`)?.catch(() => undefined)
     if (terminal) {
-      terminal.setNormalSize(this.normalSize(sourceId, windowId));
-      terminal.publishCapture();
+      terminal.setNormalSize(this.normalSize(sourceId, windowId))
+      terminal.publishCapture()
     }
   }
   async content(source: Source, spaceId: string, windowId: string) {
-    const terminal = await this.entries.get(`${source.id}/${windowId}`)?.catch(() => undefined);
-    return terminal && !terminal.closed && terminal.clients.size && terminal.spaceId === spaceId
-      && terminal.connectionKey === sourceConnectionKey(source) ? terminal.proc.content() : undefined;
+    const terminal = await this.entries.get(`${source.id}/${windowId}`)?.catch(() => undefined)
+    return terminal &&
+      !terminal.closed &&
+      terminal.clients.size &&
+      terminal.spaceId === spaceId &&
+      terminal.connectionKey === sourceConnectionKey(source)
+      ? terminal.proc.content()
+      : undefined
   }
   private async paneClient(source: Source, spaceId: string, windowId: string) {
-    const terminal = await this.entries.get(`${source.id}/${windowId}`)?.catch(() => undefined);
-    if (!terminal || terminal.closed || !terminal.clients.size || terminal.spaceId !== spaceId ||
-        terminal.connectionKey !== sourceConnectionKey(source)) throw new Error('Open this window first');
-    return terminal.proc;
+    const terminal = await this.entries.get(`${source.id}/${windowId}`)?.catch(() => undefined)
+    if (
+      !terminal ||
+      terminal.closed ||
+      !terminal.clients.size ||
+      terminal.spaceId !== spaceId ||
+      terminal.connectionKey !== sourceConnectionKey(source)
+    )
+      throw new Error('Open this window first')
+    return terminal.proc
   }
   async paneContext(source: Source, spaceId: string, windowId: string, point: PanePoint) {
-    return (await this.paneClient(source, spaceId, windowId)).paneContext(point);
+    return (await this.paneClient(source, spaceId, windowId)).paneContext(point)
   }
-  async paneAction(source: Source, spaceId: string, windowId: string, context: PaneContext, action: PaneAction, authorized: () => boolean) {
-    return (await this.paneClient(source, spaceId, windowId)).paneAction(context, action, authorized);
+  async paneAction(
+    source: Source,
+    spaceId: string,
+    windowId: string,
+    context: PaneContext,
+    action: PaneAction,
+    authorized: () => boolean,
+  ) {
+    return (await this.paneClient(source, spaceId, windowId)).paneAction(
+      context,
+      action,
+      authorized,
+    )
   }
   async captureFilePaste(sourceId: string, windowId: string, ws: WebSocket) {
-    const pending = this.entries.get(`${sourceId}/${windowId}`);
-    const terminal = await pending?.catch(() => undefined);
-    return terminal?.captureFilePaste(ws);
+    const pending = this.entries.get(`${sourceId}/${windowId}`)
+    const terminal = await pending?.catch(() => undefined)
+    return terminal?.captureFilePaste(ws)
   }
   /** Keep new viewers out until the caller has retired bridges and committed the source. */
   async closeSource(sourceId: string, afterClose?: () => void | Promise<void>) {
-    if (this.closingSources.has(sourceId)) throw new Error("Connection is already changing");
-    this.closingSources.add(sourceId);
-    this.completionBoots.delete(sourceId);
-    for (const [key, pending] of this.pendingCompletions) if (pending.source.id === sourceId) {
-      clearTimeout(pending.timer); this.pendingCompletions.delete(key);
-    }
-    for (const key of this.deliveredCompletions.keys()) if (key.startsWith(`${sourceId}/`)) this.deliveredCompletions.delete(key);
+    if (this.closingSources.has(sourceId)) throw new Error('Connection is already changing')
+    this.closingSources.add(sourceId)
+    this.completionBoots.delete(sourceId)
+    for (const [key, pending] of this.pendingCompletions)
+      if (pending.source.id === sourceId) {
+        clearTimeout(pending.timer)
+        this.pendingCompletions.delete(key)
+      }
+    for (const key of this.deliveredCompletions.keys())
+      if (key.startsWith(`${sourceId}/`)) this.deliveredCompletions.delete(key)
     try {
       await Promise.all(
         [...this.entries.values()].map(async (p) => {
-          const t = await p.catch(() => undefined);
-          if (t?.sourceId === sourceId) await t.close();
+          const t = await p.catch(() => undefined)
+          if (t?.sourceId === sourceId) await t.close()
         }),
-      );
-      await afterClose?.();
+      )
+      await afterClose?.()
     } finally {
-      this.closingSources.delete(sourceId);
+      this.closingSources.delete(sourceId)
     }
   }
   async closeAll() {
-    this.stopped = true;
-    this.notificationListeners.clear();
-    for (const pending of this.pendingCompletions.values()) clearTimeout(pending.timer);
-    this.pendingCompletions.clear(); this.deliveredCompletions.clear(); this.completionBoots.clear();
+    this.stopped = true
+    this.notificationListeners.clear()
+    for (const pending of this.pendingCompletions.values()) clearTimeout(pending.timer)
+    this.pendingCompletions.clear()
+    this.deliveredCompletions.clear()
+    this.completionBoots.clear()
     await Promise.all(
-      [...this.entries.values()].map(async (p) =>
-        (await p.catch(() => undefined))?.close(),
-      ),
-    );
+      [...this.entries.values()].map(async (p) => (await p.catch(() => undefined))?.close()),
+    )
   }
 }

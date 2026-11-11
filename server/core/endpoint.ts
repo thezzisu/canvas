@@ -1,10 +1,22 @@
 import { execFile } from 'node:child_process'
 
-export interface CoreLocation { herdrSocket?: string; herdrSession?: string }
+export interface CoreLocation {
+  herdrSocket?: string
+  herdrSession?: string
+}
 export function validateCoreLocation(location: CoreLocation): void {
-  if (location.herdrSocket !== undefined && (!location.herdrSocket.startsWith('/') || location.herdrSocket.length > 1000 || /[:\x00-\x1f\x7f]/u.test(location.herdrSocket)))
+  if (
+    location.herdrSocket !== undefined &&
+    (!location.herdrSocket.startsWith('/') ||
+      location.herdrSocket.length > 1000 ||
+      /[:\x00-\x1f\x7f]/u.test(location.herdrSocket))
+  )
     throw new Error('Core socket must be an absolute Unix socket path')
-  if (location.herdrSession !== undefined && (!/^[a-zA-Z0-9_.-]{1,64}$/u.test(location.herdrSession) || ['.', '..'].includes(location.herdrSession)))
+  if (
+    location.herdrSession !== undefined &&
+    (!/^[a-zA-Z0-9_.-]{1,64}$/u.test(location.herdrSession) ||
+      ['.', '..'].includes(location.herdrSession))
+  )
     throw new Error('Invalid core session name')
 }
 
@@ -44,21 +56,54 @@ print(json.dumps({'socket':str(path)}))`
 
 export function parseCoreSocket(text: string): string {
   let value: unknown
-  try { value = JSON.parse(text) } catch { throw new Error('Invalid core socket discovery response') }
-  if (!value || typeof value !== 'object' || !('socket' in value) || typeof value.socket !== 'string') throw new Error('Invalid core socket discovery response')
-  try { validateCoreLocation({ herdrSocket: value.socket }) } catch { throw new Error('Invalid core socket discovery response') }
+  try {
+    value = JSON.parse(text)
+  } catch {
+    throw new Error('Invalid core socket discovery response')
+  }
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    !('socket' in value) ||
+    typeof value.socket !== 'string'
+  )
+    throw new Error('Invalid core socket discovery response')
+  try {
+    validateCoreLocation({ herdrSocket: value.socket })
+  } catch {
+    throw new Error('Invalid core socket discovery response')
+  }
   return value.socket
 }
 
 export function localCoreSocket(location: CoreLocation, signal?: AbortSignal): Promise<string> {
   validateCoreLocation(location)
-  if (signal?.aborted) return Promise.reject(new DOMException('Core discovery cancelled', 'AbortError'))
+  if (signal?.aborted)
+    return Promise.reject(new DOMException('Core discovery cancelled', 'AbortError'))
   return new Promise((resolve, reject) => {
-    execFile('python3', ['-c', discoverCorePython, JSON.stringify(location)], {
-      timeout: 10000, maxBuffer: 16 * 1024, signal,
-    }, (error, stdout, stderr) => {
-      if (error) { reject(new Error(`Core socket discovery failed: ${stderr.trim().slice(-500) || error.message}`)); return }
-      try { resolve(parseCoreSocket(stdout)) } catch (error) { reject(error) }
-    })
+    execFile(
+      'python3',
+      ['-c', discoverCorePython, JSON.stringify(location)],
+      {
+        timeout: 10000,
+        maxBuffer: 16 * 1024,
+        signal,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(
+            new Error(
+              `Core socket discovery failed: ${stderr.trim().slice(-500) || error.message}`,
+            ),
+          )
+          return
+        }
+        try {
+          resolve(parseCoreSocket(stdout))
+        } catch (error) {
+          reject(error)
+        }
+      },
+    )
   })
 }

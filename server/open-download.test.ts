@@ -1,688 +1,1138 @@
-import { test, type TestContext } from "node:test";
-import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
-import type { ReadStream } from "node:fs";
-import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { createConnection } from "node:net";
-import { createServer, get } from "node:http";
-import { getRequestListener } from "@hono/node-server";
-import { randomBytes, randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import type { Source, Canvas } from "./state.ts";
-import { Store } from "./state.ts";
-import { AssetStore } from "./assets.ts";
-import { createApp } from "./app.ts";
-import type { TerminalManager } from "./terminals.ts";
-import { OpenDownloadService, type OpenDownloadOptions } from "./open-download.ts";
-import type { EditorAuthority } from "../shared/editor-target.ts";
+import { test, type TestContext } from 'node:test'
+import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
+import type { ReadStream } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { createConnection } from 'node:net'
+import { createServer, get } from 'node:http'
+import { getRequestListener } from '@hono/node-server'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import type { Source, Canvas } from './state.ts'
+import { Store } from './state.ts'
+import { AssetStore } from './assets.ts'
+import { createApp } from './app.ts'
+import type { TerminalManager } from './terminals.ts'
+import { OpenDownloadService, type OpenDownloadOptions } from './open-download.ts'
+import type { EditorAuthority } from '../shared/editor-target.ts'
 
-const helper = fileURLToPath(new URL("../cli/canvas", import.meta.url));
+const helper = fileURLToPath(new URL('../cli/canvas', import.meta.url))
 const notRouted = (result: { code: number | null; stderr: string }, reason: RegExp) => {
-  assert.equal(result.code, 1, result.stderr);
-  assert.match(result.stderr, reason);
-};
-const source: Source = { id: randomUUID(), name: "Open", transport: "local" };
+  assert.equal(result.code, 1, result.stderr)
+  assert.match(result.stderr, reason)
+}
+const source: Source = { id: randomUUID(), name: 'Open', transport: 'local' }
 const resources = {
-  id: source.id, name: source.name, status: "online" as const,
-  spaces: [{ id: "space", name: "Space", windows: [{ id: "window", name: "Window", status: "unknown" as const, panes: [{
-    id: "pane", name: "shell", active: true, status: "unknown" as const,
-  }] }] }],
-};
+  id: source.id,
+  name: source.name,
+  status: 'online' as const,
+  spaces: [
+    {
+      id: 'space',
+      name: 'Space',
+      windows: [
+        {
+          id: 'window',
+          name: 'Window',
+          status: 'unknown' as const,
+          panes: [
+            {
+              id: 'pane',
+              name: 'shell',
+              active: true,
+              status: 'unknown' as const,
+            },
+          ],
+        },
+      ],
+    },
+  ],
+}
 
 class FakeWebSocket extends EventEmitter {
-  readyState = 1;
-  messages: Record<string, unknown>[] = [];
-  onMessage?: (message: Record<string, unknown>) => void;
+  readyState = 1
+  messages: Record<string, unknown>[] = []
+  onMessage?: (message: Record<string, unknown>) => void
   send(value: string) {
-    const message = JSON.parse(value);
-    this.messages.push(message);
-    this.onMessage?.(message);
+    const message = JSON.parse(value)
+    this.messages.push(message)
+    this.onMessage?.(message)
   }
 }
 
-type FixtureOptions = Partial<Pick<OpenDownloadOptions, "contextTimeoutMs" | "progressTimeoutMs">> & {
-  recipientAvailable?: boolean;
-  recipientWindow?: string;
-  autoContext?: boolean;
-  customCanvas?: boolean;
-  uploadFailure?: "create" | "write" | "complete";
-  directoryAck?: boolean;
-  directoryAuthority?: OpenDownloadOptions["directoryAuthority"];
-  urlAck?: boolean;
-  capture?: OpenDownloadOptions["capture"];
-};
+type FixtureOptions = Partial<
+  Pick<OpenDownloadOptions, 'contextTimeoutMs' | 'progressTimeoutMs'>
+> & {
+  recipientAvailable?: boolean
+  recipientWindow?: string
+  autoContext?: boolean
+  customCanvas?: boolean
+  uploadFailure?: 'create' | 'write' | 'complete'
+  directoryAck?: boolean
+  directoryAuthority?: OpenDownloadOptions['directoryAuthority']
+  urlAck?: boolean
+  capture?: OpenDownloadOptions['capture']
+}
 async function fixture(t: TestContext, options: FixtureOptions = {}) {
-  const root = await mkdtemp(join(tmpdir(), "canvas-open-service-"));
-  const registry = join(root, "registry"), sockets = join(root, "sockets");
-  await mkdir(registry, { mode: 0o700 }); await mkdir(sockets, { mode: 0o700 });
-  const nativeSocket = join(root, "herdr.sock");
-  const receiver = new FakeWebSocket();
-  let resourceState = resources;
-  const store = new Store(join(root, "canvas.db"));
-  store.put("source", source);
-  const assets = new AssetStore(root, store);
-  const canvas = store.put<Canvas>("canvas", { id: randomUUID(), name: "Files", nodes: [{
-    id: "anchor", type: "terminal", sourceId: source.id, spaceId: "space", windowId: "window", x: 40, y: 50, width: 480, height: 302,
-  }] });
-  store.addSession("authenticated-session"); store.addSession("other-session");
-  const observations = { uploadedBytes: 0, aborted: 0, finalized: 0, bridgeStarts: 0, bridgeStops: 0, sourceCloses: 0, recipientWindows: [] as string[] };
+  const root = await mkdtemp(join(tmpdir(), 'canvas-open-service-'))
+  const registry = join(root, 'registry'),
+    sockets = join(root, 'sockets')
+  await mkdir(registry, { mode: 0o700 })
+  await mkdir(sockets, { mode: 0o700 })
+  const nativeSocket = join(root, 'herdr.sock')
+  const receiver = new FakeWebSocket()
+  let resourceState = resources
+  const store = new Store(join(root, 'canvas.db'))
+  store.put('source', source)
+  const assets = new AssetStore(root, store)
+  const canvas = store.put<Canvas>('canvas', {
+    id: randomUUID(),
+    name: 'Files',
+    nodes: [
+      {
+        id: 'anchor',
+        type: 'terminal',
+        sourceId: source.id,
+        spaceId: 'space',
+        windowId: 'window',
+        x: 40,
+        y: 50,
+        width: 480,
+        height: 302,
+      },
+    ],
+  })
+  store.addSession('authenticated-session')
+  store.addSession('other-session')
+  const observations = {
+    uploadedBytes: 0,
+    aborted: 0,
+    finalized: 0,
+    bridgeStarts: 0,
+    bridgeStops: 0,
+    sourceCloses: 0,
+    recipientWindows: [] as string[],
+  }
   const service = new OpenDownloadService({
     capture: options.capture,
-    openUrl: (_source, url, session) => { assert.equal(session, "authenticated-session"); return { url, forwarded: false }; },
+    openUrl: (_source, url, session) => {
+      assert.equal(session, 'authenticated-session')
+      return { url, forwarded: false }
+    },
     registryDirectory: registry,
     socketDirectory: sockets,
     idleTimeoutMs: 15,
     contextTimeoutMs: options.contextTimeoutMs,
     progressTimeoutMs: options.progressTimeoutMs,
-    directoryAuthority: options.directoryAuthority ?? (async () => ({ hostName: "192.0.2.10", user: "fixture", port: 22 })),
-    createUpload: async metadata => {
-      if (options.uploadFailure === "create") throw new Error("fixture staging unavailable");
-      const upload = await assets.begin(metadata);
+    directoryAuthority:
+      options.directoryAuthority ??
+      (async () => ({ hostName: '192.0.2.10', user: 'fixture', port: 22 })),
+    createUpload: async (metadata) => {
+      if (options.uploadFailure === 'create') throw new Error('fixture staging unavailable')
+      const upload = await assets.begin(metadata)
       return {
-        write: async chunk => {
-          if (options.uploadFailure === "write") throw new Error("fixture staging disk full");
-          await upload.write(chunk);
-          observations.uploadedBytes += chunk.length;
+        write: async (chunk) => {
+          if (options.uploadFailure === 'write') throw new Error('fixture staging disk full')
+          await upload.write(chunk)
+          observations.uploadedBytes += chunk.length
         },
-        complete: async context => {
-          if (options.uploadFailure === "complete") throw new Error("fixture staging commit failed");
-          const result = await upload.complete(context);
-          observations.finalized++;
-          return result;
+        complete: async (context) => {
+          if (options.uploadFailure === 'complete') throw new Error('fixture staging commit failed')
+          const result = await upload.complete(context)
+          observations.finalized++
+          return result
         },
-        abort: async () => { await upload.abort(); observations.aborted++; },
-      };
+        abort: async () => {
+          await upload.abort()
+          observations.aborted++
+        },
+      }
     },
     readTemporary: (id, range) => assets.readTemporary(id, range),
     prepare: async (_source, localSocket) => {
-      observations.bridgeStarts++;
-      return { nativeSocket, remoteSocket: localSocket, cleanup: async () => { observations.bridgeStops++; } };
+      observations.bridgeStarts++
+      return {
+        nativeSocket,
+        remoteSocket: localSocket,
+        cleanup: async () => {
+          observations.bridgeStops++
+        },
+      }
     },
     resources: async () => resourceState,
     recipient: async (_sourceId, windowId) => {
-      observations.recipientWindows.push(windowId);
-      return options.recipientAvailable !== false && (!options.recipientWindow || options.recipientWindow === windowId) ? {
-        socket: receiver as never, sessionId: "authenticated-session", isCurrent: () => receiver.readyState === 1,
-      } : undefined;
+      observations.recipientWindows.push(windowId)
+      return options.recipientAvailable !== false &&
+        (!options.recipientWindow || options.recipientWindow === windowId)
+        ? {
+            socket: receiver as never,
+            sessionId: 'authenticated-session',
+            isCurrent: () => receiver.readyState === 1,
+          }
+        : undefined
     },
-  });
-  receiver.onMessage = message => {
-    if (message.type === "open-url" && options.urlAck !== false)
-      queueMicrotask(() => service.urlReceived(String(message.id), receiver as never, "authenticated-session"));
-    if (message.type === "open-directory" && options.directoryAck !== false)
-      queueMicrotask(() => service.directoryReceived(String(message.id), receiver as never, "authenticated-session"));
-    if (message.type === "file-context" && options.autoContext !== false) queueMicrotask(() => {
-      if (receiver.readyState === 1) service.prepare(String(message.id), "authenticated-session",
-        options.customCanvas ? { canvasId: canvas.id, anchorId: "anchor" } : undefined);
-    });
-  };
-  await service.ensureSource(source);
-  const app = createApp(store, { username: "fixture", passwordHash: "unused" }, {
-    closeSource: async (_id: string, afterClose?: () => Promise<void>) => { observations.sourceCloses++; await afterClose?.(); },
-  } as unknown as TerminalManager, {
-    openDownload: (ticket, session) => service.open(ticket, session),
-    prepareDownload: (ticket, session, context) => service.prepare(ticket, session, context),
-    closeOpenBridge: id => service.closeSource(id),
-    assets,
-  });
+  })
+  receiver.onMessage = (message) => {
+    if (message.type === 'open-url' && options.urlAck !== false)
+      queueMicrotask(() =>
+        service.urlReceived(String(message.id), receiver as never, 'authenticated-session'),
+      )
+    if (message.type === 'open-directory' && options.directoryAck !== false)
+      queueMicrotask(() =>
+        service.directoryReceived(String(message.id), receiver as never, 'authenticated-session'),
+      )
+    if (message.type === 'file-context' && options.autoContext !== false)
+      queueMicrotask(() => {
+        if (receiver.readyState === 1)
+          service.prepare(
+            String(message.id),
+            'authenticated-session',
+            options.customCanvas ? { canvasId: canvas.id, anchorId: 'anchor' } : undefined,
+          )
+      })
+  }
+  await service.ensureSource(source)
+  const app = createApp(
+    store,
+    { username: 'fixture', passwordHash: 'unused' },
+    {
+      closeSource: async (_id: string, afterClose?: () => Promise<void>) => {
+        observations.sourceCloses++
+        await afterClose?.()
+      },
+    } as unknown as TerminalManager,
+    {
+      openDownload: (ticket, session) => service.open(ticket, session),
+      prepareDownload: (ticket, session, context) => service.prepare(ticket, session, context),
+      closeOpenBridge: (id) => service.closeSource(id),
+      assets,
+    },
+  )
   t.after(async () => {
-    await service.closeAll();
-    await assets.close();
-    store.close();
-    await rm(root, { recursive: true, force: true });
-  });
-  const run = (path: string, identity: { HERDR_SOCKET_PATH?: string; HERDR_PANE_ID?: string } = {}) => new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
-    const child = spawn("python3", [helper, "open", "--", path], { cwd: root, env: {
-      PATH: process.env.PATH, LANG: "C.UTF-8", HERDR_SOCKET_PATH: nativeSocket,
-      HERDR_PANE_ID: "pane", CANVAS_BRIDGE_REGISTRY_DIR: registry, ...identity,
-    } });
-    let stderr = ""; child.stderr.on("data", chunk => stderr += chunk);
-    child.once("error", reject); child.once("close", code => resolve({ code, stderr }));
-    const timer = setTimeout(() => { child.kill(); reject(new Error("helper timed out")); }, 10_000);
-    child.once("close", () => clearTimeout(timer));
-  });
-  return { root, registry, sockets, nativeSocket, service, receiver, app, assets, store, canvas, observations,
-    run, setResources(value: typeof resources) { resourceState = value } };
+    await service.closeAll()
+    await assets.close()
+    store.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const run = (
+    path: string,
+    identity: { HERDR_SOCKET_PATH?: string; HERDR_PANE_ID?: string } = {},
+  ) =>
+    new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
+      const child = spawn('python3', [helper, 'open', '--', path], {
+        cwd: root,
+        env: {
+          PATH: process.env.PATH,
+          LANG: 'C.UTF-8',
+          HERDR_SOCKET_PATH: nativeSocket,
+          HERDR_PANE_ID: 'pane',
+          CANVAS_BRIDGE_REGISTRY_DIR: registry,
+          ...identity,
+        },
+      })
+      let stderr = ''
+      child.stderr.on('data', (chunk) => (stderr += chunk))
+      child.once('error', reject)
+      child.once('close', (code) => resolve({ code, stderr }))
+      const timer = setTimeout(() => {
+        child.kill()
+        reject(new Error('helper timed out'))
+      }, 10_000)
+      child.once('close', () => clearTimeout(timer))
+    })
+  return {
+    root,
+    registry,
+    sockets,
+    nativeSocket,
+    service,
+    receiver,
+    app,
+    assets,
+    store,
+    canvas,
+    observations,
+    run,
+    setResources(value: typeof resources) {
+      resourceState = value
+    },
+  }
 }
 
 async function waitFor(check: () => boolean | Promise<boolean>, message: string) {
   for (let i = 0; i < 150; i++) {
-    if (await check()) return;
-    await new Promise(resolve => setTimeout(resolve, 20));
+    if (await check()) return
+    await new Promise((resolve) => setTimeout(resolve, 20))
   }
-  assert.fail(message);
+  assert.fail(message)
 }
 
-test("CLI web addresses reach only the controlling browser and complete on receipt", async t => {
-  const f = await fixture(t);
-  const result = await f.run("http://localhost:5173/project?q=one#section");
-  assert.deepEqual(result, { code: 0, stderr: "" });
-  const message = f.receiver.messages.find(message => message.type === "open-url")!;
-  assert.equal(message.url, "http://localhost:5173/project?q=one#section");
-  assert.equal(message.forwarded, false);
-  assert.equal(f.observations.uploadedBytes, 0);
-});
+test('CLI web addresses reach only the controlling browser and complete on receipt', async (t) => {
+  const f = await fixture(t)
+  const result = await f.run('http://localhost:5173/project?q=one#section')
+  assert.deepEqual(result, { code: 0, stderr: '' })
+  const message = f.receiver.messages.find((message) => message.type === 'open-url')!
+  assert.equal(message.url, 'http://localhost:5173/project?q=one#section')
+  assert.equal(message.forwarded, false)
+  assert.equal(f.observations.uploadedBytes, 0)
+})
 
-test("CLI URL receipt binds to the original browser, session and message kind", async t => {
-  const f = await fixture(t, { urlAck: false });
-  const pending = f.run("https://example.test/page");
-  await waitFor(() => f.receiver.messages.some(message => message.type === "open-url"), "URL was not delivered");
-  const id = String(f.receiver.messages.find(message => message.type === "open-url")!.id);
-  assert.equal(f.service.directoryReceived(id, f.receiver as never, "authenticated-session"), false);
-  assert.equal(f.service.urlReceived(id, new FakeWebSocket() as never, "authenticated-session"), false);
-  assert.equal(f.service.urlReceived(id, f.receiver as never, "other-session"), false);
-  assert.equal(f.service.urlReceived(id, f.receiver as never, "authenticated-session"), true);
-  assert.equal((await pending).code, 0);
-});
+test('CLI URL receipt binds to the original browser, session and message kind', async (t) => {
+  const f = await fixture(t, { urlAck: false })
+  const pending = f.run('https://example.test/page')
+  await waitFor(
+    () => f.receiver.messages.some((message) => message.type === 'open-url'),
+    'URL was not delivered',
+  )
+  const id = String(f.receiver.messages.find((message) => message.type === 'open-url')!.id)
+  assert.equal(f.service.directoryReceived(id, f.receiver as never, 'authenticated-session'), false)
+  assert.equal(
+    f.service.urlReceived(id, new FakeWebSocket() as never, 'authenticated-session'),
+    false,
+  )
+  assert.equal(f.service.urlReceived(id, f.receiver as never, 'other-session'), false)
+  assert.equal(f.service.urlReceived(id, f.receiver as never, 'authenticated-session'), true)
+  assert.equal((await pending).code, 0)
+})
 
-test("CLI URL open fails without an attached browser or with URL credentials", async t => {
-  const f = await fixture(t, { recipientAvailable: false });
-  notRouted(await f.run("http://localhost:5173/"), /no browser ready/u);
-  assert.deepEqual(await f.run("https://user:DUMMY_PASSWORD@example.test/"), { code: 1, stderr: "canvas: invalid web address\n" });
-});
+test('CLI URL open fails without an attached browser or with URL credentials', async (t) => {
+  const f = await fixture(t, { recipientAvailable: false })
+  notRouted(await f.run('http://localhost:5173/'), /no browser ready/u)
+  assert.deepEqual(await f.run('https://user:DUMMY_PASSWORD@example.test/'), {
+    code: 1,
+    stderr: 'canvas: invalid web address\n',
+  })
+})
 
-test("unacknowledged URL receipt exits within the context deadline", async t => {
-  const f = await fixture(t, { urlAck: false, contextTimeoutMs: 60 });
-  const started = Date.now();
-  assert.deepEqual(await f.run("https://example.test/scoped"), { code: 1, stderr: "canvas: browser did not receive this web address\n" });
-  assert(Date.now() - started < 2000);
-  assert.equal(f.observations.uploadedBytes, 0);
-});
+test('unacknowledged URL receipt exits within the context deadline', async (t) => {
+  const f = await fixture(t, { urlAck: false, contextTimeoutMs: 60 })
+  const started = Date.now()
+  assert.deepEqual(await f.run('https://example.test/scoped'), {
+    code: 1,
+    stderr: 'canvas: browser did not receive this web address\n',
+  })
+  assert(Date.now() - started < 2000)
+  assert.equal(f.observations.uploadedBytes, 0)
+})
 
 async function sender(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, size: number) {
-  const messageMark = f.receiver.messages.length;
-  const record = JSON.parse(await readFile(join(f.registry, (await readdir(f.registry))[0]!), "utf8"));
-  const socket = createConnection(record.socket);
-  socket.on("error", () => {});
-  t.after(() => socket.destroy());
-  let replies = "";
-  socket.on("data", data => replies += data.toString());
-  await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
-  socket.write(JSON.stringify({ version: 1, kind: "file", secret: record.secret, nativeSocket: f.nativeSocket,
-    paneId: "pane", filename: "file.bin", size }) + "\n");
-  await waitFor(() => f.receiver.messages.slice(messageMark).some(message => message.type === "file-context"), "browser received no context request");
-  const context = f.receiver.messages.slice(messageMark).find(message => message.type === "file-context")!;
-  return { socket, id: String(context.id), responses: () => replies.trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) };
+  const messageMark = f.receiver.messages.length
+  const record = JSON.parse(
+    await readFile(join(f.registry, (await readdir(f.registry))[0]!), 'utf8'),
+  )
+  const socket = createConnection(record.socket)
+  socket.on('error', () => {})
+  t.after(() => socket.destroy())
+  let replies = ''
+  socket.on('data', (data) => (replies += data.toString()))
+  await new Promise<void>((resolve, reject) => {
+    socket.once('connect', resolve)
+    socket.once('error', reject)
+  })
+  socket.write(
+    JSON.stringify({
+      version: 1,
+      kind: 'file',
+      secret: record.secret,
+      nativeSocket: f.nativeSocket,
+      paneId: 'pane',
+      filename: 'file.bin',
+      size,
+    }) + '\n',
+  )
+  await waitFor(
+    () => f.receiver.messages.slice(messageMark).some((message) => message.type === 'file-context'),
+    'browser received no context request',
+  )
+  const context = f.receiver.messages
+    .slice(messageMark)
+    .find((message) => message.type === 'file-context')!
+  return {
+    socket,
+    id: String(context.id),
+    responses: () =>
+      replies
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line)),
+  }
 }
 
 async function serveFixture(t: TestContext, f: Awaited<ReturnType<typeof fixture>>) {
-  const server = createServer(getRequestListener(f.app.fetch));
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  t.after(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); });
-  return `http://127.0.0.1:${address.port}`;
+  const server = createServer(getRequestListener(f.app.fetch))
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert.ok(address && typeof address !== 'string')
+  t.after(async () => {
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+  return `http://127.0.0.1:${address.port}`
 }
 
 async function copyFile(f: Awaited<ReturnType<typeof fixture>>, filename: string, content: Buffer) {
-  await writeFile(join(f.root, filename), content);
-  const result = await f.run(filename);
-  assert.equal(result.code, 0, result.stderr);
-  assert.equal(result.stderr, "");
-  return result;
+  await writeFile(join(f.root, filename), content)
+  const result = await f.run(filename)
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(result.stderr, '')
+  return result
 }
 
-test("overview copy succeeds before any HTTP request and stages exact retryable bytes", async t => {
-  const f = await fixture(t), content = randomBytes(1024 * 1024 + 19);
-  await copyFile(f, "风景 文件.bin", content);
-  assert.equal(f.observations.finalized, 1, "CLI completion requires committed server storage");
-  assert.equal(f.observations.uploadedBytes, content.length);
-  const notice = f.receiver.messages.find(message => message.type === "download")!;
-  assert(notice, "native download starts only after server staging completes");
-  assert.equal(notice.sourcePreview, true);
-  const stagedId = f.service.stagedAssetId(String(notice.id), 'authenticated-session');
-  assert(stagedId);
-  assert.equal(f.assets.origin(stagedId, true)?.path, join(f.root, '风景 文件.bin'));
-  assert.equal(f.service.stagedAssetId(String(notice.id), 'other-session'), undefined);
-  assert.equal('path' in notice, false, 'browser messages never expose source provenance');
-  assert.deepEqual(f.receiver.messages.map(message => message.type), ["file-context", "download"]);
-  const url = `http://canvas.test${notice.url}`;
-  assert.equal((await f.app.request(url, { headers: { Authorization: "Bearer other-session" } })).status, 404);
-  assert.equal((await f.app.request(url)).status, 401);
+test('overview copy succeeds before any HTTP request and stages exact retryable bytes', async (t) => {
+  const f = await fixture(t),
+    content = randomBytes(1024 * 1024 + 19)
+  await copyFile(f, '风景 文件.bin', content)
+  assert.equal(f.observations.finalized, 1, 'CLI completion requires committed server storage')
+  assert.equal(f.observations.uploadedBytes, content.length)
+  const notice = f.receiver.messages.find((message) => message.type === 'download')!
+  assert(notice, 'native download starts only after server staging completes')
+  assert.equal(notice.sourcePreview, true)
+  const stagedId = f.service.stagedAssetId(String(notice.id), 'authenticated-session')
+  assert(stagedId)
+  assert.equal(f.assets.origin(stagedId, true)?.path, join(f.root, '风景 文件.bin'))
+  assert.equal(f.service.stagedAssetId(String(notice.id), 'other-session'), undefined)
+  assert.equal('path' in notice, false, 'browser messages never expose source provenance')
+  assert.deepEqual(
+    f.receiver.messages.map((message) => message.type),
+    ['file-context', 'download'],
+  )
+  const url = `http://canvas.test${notice.url}`
+  assert.equal(
+    (await f.app.request(url, { headers: { Authorization: 'Bearer other-session' } })).status,
+    404,
+  )
+  assert.equal((await f.app.request(url)).status, 401)
   for (let attempt = 0; attempt < 2; attempt++) {
-    const response = await f.app.request(url, { headers: { Authorization: "Bearer authenticated-session" } });
-    assert.equal(response.status, 200);
-    assert.equal(response.headers.get("content-length"), String(content.length));
-    assert.match(response.headers.get("content-disposition")!, /filename\*=UTF-8''/u);
-    assert.deepEqual(Buffer.from(await response.arrayBuffer()), content);
+    const response = await f.app.request(url, {
+      headers: { Authorization: 'Bearer authenticated-session' },
+    })
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('content-length'), String(content.length))
+    assert.match(response.headers.get('content-disposition')!, /filename\*=UTF-8''/u)
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), content)
   }
-  assert.equal(f.service.prepare(String(notice.id), "authenticated-session"), false, "completed transfers do not retain a separate HTTP status ticket");
-  assert.equal(f.service.prepare(String(notice.id), "other-session"), false);
-});
+  assert.equal(
+    f.service.prepare(String(notice.id), 'authenticated-session'),
+    false,
+    'completed transfers do not retain a separate HTTP status ticket',
+  )
+  assert.equal(f.service.prepare(String(notice.id), 'other-session'), false)
+})
 
-test("staged download tickets seek to suffix bytes without scanning the temporary file", async t => {
-  const f = await fixture(t), content = randomBytes(2 * 1024 * 1024 + 19);
-  await copyFile(f, "seek.bin", content);
-  const notice = f.receiver.messages.find(message => message.type === "download")!;
-  const streams: Array<{ range?: { start: number; end: number }; body: ReadStream }> = [];
-  const read = f.assets.readTemporary.bind(f.assets);
-  f.assets.readTemporary = async (id, range) => { const result = await read(id, range); if (result) streams.push({ range, body: result.body as ReadStream }); return result; };
-  const headers = { Authorization: "Bearer authenticated-session", "Content-Type": "application/json" };
-  const response = await f.app.request("http://canvas.test/api/media-tickets", { method: "POST", headers,
-    body: JSON.stringify({ path: notice.url }) });
-  assert.equal(response.status, 200);
-  const ticket = await response.json();
-  const partial = await f.app.request(`http://canvas.test${ticket.url}`, { headers: { Range: "bytes=-19" } });
-  assert.equal(partial.status, 206);
-  assert.deepEqual(Buffer.from(await partial.arrayBuffer()), content.subarray(-19));
-  assert(streams.filter(item => !item.range).every(item => item.body.bytesRead === 0));
-  assert.deepEqual(streams.at(-1)!.range, { start: content.length - 19, end: content.length - 1 });
-  assert.equal(streams.at(-1)!.body.bytesRead, 19);
-  await f.service.closeAll();
-  assert.equal((await f.app.request(`http://canvas.test${ticket.url}`, { headers: { Range: "bytes=-19" } })).status, 404);
-});
-
-test("overview completion exposes sniffed preview metadata and owner-only inline bytes", async t => {
-  const samples = [
-    { filename: "photo.png", content: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), preview: "image", mime: "image/png" },
-    { filename: "document.pdf", content: Buffer.from("%PDF-1.4\nfixture\n%%EOF\n"), preview: "pdf", mime: "application/pdf" },
-    { filename: "notes.txt", content: Buffer.from("中文 <b>plain text</b>\n"), preview: "text", mime: "text/plain; charset=utf-8" },
-  ];
-  for (const sample of samples) await t.test(sample.preview, async t => {
-    const f = await fixture(t);
-    await copyFile(f, sample.filename, sample.content);
-    const notice = f.receiver.messages.find(message => message.type === "download")!;
-    assert.equal('preview' in notice, false);
-    assert.equal(notice.mime, sample.mime);
-    assert.equal(f.observations.finalized, 1,
-      "CLI completes without a preview acknowledgement");
-    const url = `http://canvas.test${notice.url}?preview=1`;
-    assert.equal((await f.app.request(url)).status, 401);
-    assert.equal((await f.app.request(url, { headers: { Authorization: "Bearer other-session" } })).status, 404);
-    const preview = await f.app.request(url, { headers: { Authorization: "Bearer authenticated-session" } });
-    assert.equal(preview.status, 200);
-    assert.equal(preview.headers.get("content-type"), sample.mime);
-    assert.match(preview.headers.get("content-disposition")!, /^inline;/u);
-    assert.equal(preview.headers.get("x-content-type-options"), "nosniff");
-    assert.equal(preview.headers.get("cross-origin-resource-policy"), "same-origin");
-    const csp = preview.headers.get("content-security-policy")!;
-    assert.match(csp, /default-src 'none';/u);
-    assert.equal(csp.includes("sandbox"), sample.preview !== "pdf", "native PDF viewer must remain available");
-    assert.deepEqual(Buffer.from(await preview.arrayBuffer()), sample.content);
-    for (const query of ["", "?download=1", "?preview=1&download=1"]) {
-      const download = await f.app.request(`http://canvas.test${notice.url}${query}`, { headers: { Authorization: "Bearer authenticated-session" } });
-      assert.match(download.headers.get("content-disposition")!, /^attachment;/u);
-      assert.equal(download.headers.get("content-type"), "application/octet-stream");
-      assert.deepEqual(Buffer.from(await download.arrayBuffer()), sample.content);
-    }
-  });
-});
-
-test("overview previews markup as inert text or an image and keeps binary downloads opaque", async t => {
-  for (const sample of [
-    { filename: "binary.txt", content: Buffer.from([0, 255, 127, 1]) },
-    { filename: "page.html", content: Buffer.from("<!doctype html><script>fixture</script>") },
-    { filename: "drawing.svg", content: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>') },
-    { filename: "script.js", content: Buffer.from("console.log('fixture')") },
-  ]) await t.test(sample.filename, async t => {
-    const f = await fixture(t);
-    await copyFile(f, sample.filename, sample.content);
-    const notice = f.receiver.messages.find(message => message.type === "download")!;
-    assert.equal('preview' in notice, false);
-    const response = await f.app.request(`http://canvas.test${notice.url}?preview=1`, { headers: { Authorization: "Bearer authenticated-session" } });
-    assert.match(response.headers.get("content-disposition")!, /^inline;/u);
-    assert.match(response.headers.get("content-security-policy")!, /sandbox/u);
-    assert.deepEqual(Buffer.from(await response.arrayBuffer()), sample.content);
-  });
-});
-
-test("directories reach only their controlling browser and do not stage file bytes", async t => {
-  const f = await fixture(t);
-  const path = join(f.root, "Folder 空间");
-  await mkdir(path);
-  await writeFile(join(path, "private.txt"), "not uploaded");
-  const result = await f.run(path);
-  assert.deepEqual(result, { code: 0, stderr: "" });
-  assert.equal(f.receiver.messages.length, 1);
-  const message = f.receiver.messages[0]!;
-  assert.equal(message.type, "open-directory");
-  assert.equal(message.path, path);
-  assert.deepEqual(message.authority, { hostName: "192.0.2.10", user: "fixture", port: 22 });
-  assert.equal(message.uri, undefined, "The browser, not the service, chooses its editor URI");
-  assert.equal(f.observations.uploadedBytes, 0);
-  assert.equal(f.observations.aborted, 0);
-  assert.equal(f.observations.finalized, 0);
-  assert.deepEqual(f.store.fileAssetIds(), []);
-});
-
-test("directory completion requires acknowledgement from the original socket and session", async t => {
-  const f = await fixture(t, { directoryAck: false });
-  let exited = false;
-  const running = f.run(f.root).then(result => { exited = true; return result; });
-  await waitFor(() => f.receiver.messages.some(message => message.type === "open-directory"), "directory request was not sent");
-  const id = String(f.receiver.messages.find(message => message.type === "open-directory")!.id);
-  assert.equal(f.service.directoryReceived(id, new FakeWebSocket() as never, "authenticated-session"), false);
-  assert.equal(f.service.directoryReceived(id, f.receiver as never, "other-session"), false);
-  await new Promise(resolve => setTimeout(resolve, 40));
-  assert.equal(exited, false);
-  assert.equal(f.service.directoryReceived(id, f.receiver as never, "authenticated-session"), true);
-  assert.deepEqual(await running, { code: 0, stderr: "" });
-  assert.equal(f.service.directoryReceived(id, f.receiver as never, "authenticated-session"), false);
-});
-
-test("directory deliveries whitelist the resolved authority and reject invalid targets before publication", async t => {
-  const safe = await fixture(t, { directoryAuthority: async () => ({ hostName: 'host.example', user: 'dev', port: 22,
-    identityFile: '/fixture/private-key', secret: 'fixture-secret' }) });
-  assert.equal((await safe.run(safe.root)).code, 0);
-  assert.deepEqual(safe.receiver.messages[0]!.authority, { hostName: 'host.example', user: 'dev', port: 22 });
-  assert(!JSON.stringify(safe.receiver.messages).includes('private-key'));
-  assert(!JSON.stringify(safe.receiver.messages).includes('fixture-secret'));
-  const invalid = await fixture(t, { directoryAuthority: async () => ({ hostName: 'host/invalid' }) });
-  assert.equal((await invalid.run(invalid.root)).code, 1);
-  assert.deepEqual(invalid.receiver.messages, []);
-});
-
-test("unacknowledged directories time out and a missing browser fails immediately", async t => {
-  const timed = await fixture(t, { directoryAck: false, contextTimeoutMs: 60 });
-  const result = await timed.run(timed.root);
-  assert.equal(result.code, 1);
-  assert.equal(result.stderr, "canvas: browser did not receive this directory\n");
-  const missing = await fixture(t, { recipientAvailable: false });
-  notRouted(await missing.run(missing.root), /no browser ready/u);
-  assert.deepEqual(missing.receiver.messages, []);
-});
-
-test("directory resolution cannot deliver after timeout or a browser disconnect", async t => {
-  let resolveAuthority!: (value: EditorAuthority) => void;
-  const f = await fixture(t, { contextTimeoutMs: 60, directoryAuthority: () => new Promise(resolve => { resolveAuthority = resolve; }) });
-  const running = f.run(f.root);
-  await waitFor(() => !!resolveAuthority, "resolver never started");
-  f.receiver.readyState = 3;
-  f.receiver.emit("close");
-  assert.equal((await running).code, 1);
-  resolveAuthority({ hostName: "192.0.2.10" });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(f.receiver.messages, []);
-});
-
-test("custom canvas copy adds one persistent card without starting a browser download", async t => {
-  const f = await fixture(t, { customCanvas: true }), content = Buffer.from("saved to canvas\n");
-  await copyFile(f, "report.txt", content);
-  assert.equal(f.receiver.messages.some(message => message.type === "download"), false);
-  assert.deepEqual(f.receiver.messages.map(message => message.type), ["file-context"]);
-  const canvas = f.store.canvasView(f.store.get<Canvas>("canvas", f.canvas.id)!);
-  const card = canvas.nodes.find(node => node.type === "file");
-  assert(card && card.type === "file");
-  const response = await f.app.request(`http://canvas.test/api/files/${card.assetId}?download=1`, { headers: { Authorization: "Bearer authenticated-session" } });
-  assert.deepEqual(Buffer.from(await response.arrayBuffer()), content);
-});
-
-test("browser context is bound once and copying never starts through a GET request", async t => {
-  const f = await fixture(t, { autoContext: false }), transfer = await sender(t, f, 4);
-  assert.equal(await f.service.open(transfer.id, "authenticated-session"), undefined);
-  assert.equal(f.service.prepare(transfer.id, "other-session"), false);
-  assert.equal(f.observations.uploadedBytes, 0);
-  const response = await f.app.request(`http://canvas.test/api/downloads/${transfer.id}`, {
-    method: "POST", headers: { Authorization: "Bearer authenticated-session", "Content-Type": "application/json" },
-    body: JSON.stringify({ canvasId: f.canvas.id, anchorId: "anchor" }),
-  });
-  assert.equal(response.status, 204);
-  assert.equal(f.service.prepare(transfer.id, "authenticated-session"), true);
-  await waitFor(() => transfer.responses().some(reply => reply.ok === true), "copy did not start after context binding");
-  transfer.socket.end("done");
-  await waitFor(() => transfer.responses().some(reply => reply.state === "completed"), "copy did not finish");
-  assert.equal(f.receiver.messages.some(message => message.type === "download"), false);
-  assert(f.store.get<Canvas>("canvas", f.canvas.id)!.nodes.some(node => node.type === "file"));
-});
-
-test("staging waits for validated helper EOF after all declared bytes arrive", async t => {
-  for (const content of [Buffer.alloc(0), Buffer.from("complete bytes awaiting EOF")]) {
-    const f = await fixture(t), transfer = await sender(t, f, content.length);
-    await waitFor(() => transfer.responses().some(reply => reply.ok === true), "copy never started");
-    transfer.socket.write(content);
-    await new Promise(resolve => setTimeout(resolve, 60));
-    assert.equal(f.observations.finalized, 0);
-    assert.equal(await f.service.open(transfer.id, "authenticated-session"), undefined);
-    assert.equal(f.receiver.messages.some(message => message.type === "download"), false);
-    transfer.socket.end();
-    await waitFor(() => transfer.responses().some(reply => reply.state === "completed"), "copy was not finalized after EOF");
-    assert.equal(f.observations.finalized, 1);
+test('staged download tickets seek to suffix bytes without scanning the temporary file', async (t) => {
+  const f = await fixture(t),
+    content = randomBytes(2 * 1024 * 1024 + 19)
+  await copyFile(f, 'seek.bin', content)
+  const notice = f.receiver.messages.find((message) => message.type === 'download')!
+  const streams: Array<{ range?: { start: number; end: number }; body: ReadStream }> = []
+  const read = f.assets.readTemporary.bind(f.assets)
+  f.assets.readTemporary = async (id, range) => {
+    const result = await read(id, range)
+    if (result) streams.push({ range, body: result.body as ReadStream })
+    return result
   }
-});
-
-test("cancelling a native HTTP download does not affect the completed CLI copy", async t => {
-  const f = await fixture(t), base = await serveFixture(t, f), content = randomBytes(8 * 1024 * 1024);
-  const result = await copyFile(f, "large.bin", content);
-  const notice = f.receiver.messages.find(message => message.type === "download")!;
-  await new Promise<void>((resolve, reject) => {
-    const request = get(`${base}${notice.url}`, { headers: { Authorization: "Bearer authenticated-session" } }, response => {
-      response.on("error", () => {});
-      response.once("data", () => { response.destroy(); resolve(); });
-    });
-    request.once("error", reject);
-    t.after(() => request.destroy());
-  });
-  assert.equal(result.code, 0);
-  assert.equal(f.observations.aborted, 0);
-  const retry = await f.service.open(String(notice.id), "authenticated-session");
-  assert(retry);
-  const chunks: Buffer[] = [];
-  for await (const chunk of retry.body) chunks.push(Buffer.from(chunk));
-  assert.deepEqual(Buffer.concat(chunks), content);
-});
-
-test("a missing browser context fails with not-attached without sending file data", async t => {
-  const f = await fixture(t, { autoContext: false, contextTimeoutMs: 60 });
-  await writeFile(join(f.root, "copy.txt"), "private data");
-  const began = Date.now();
-  notRouted(await f.run("copy.txt"), /no browser ready/u);
-  assert(Date.now() - began < 2000);
-  assert.equal(f.observations.uploadedBytes, 0);
-});
-
-test("daemon callers route only by their explicit socket and pane, never another live window", async t => {
-  const f = await fixture(t, { recipientWindow: "target-window" });
-  const releaseViewer = f.service.retainSource(source.id);
-  t.after(releaseViewer);
-  const original = resources.spaces[0]!.windows[0]!;
-  f.setResources({ ...resources, spaces: [{ ...resources.spaces[0]!, windows: [
-    { ...original, id: "old-window", panes: [{ ...original.panes[0]!, id: "old-pane", active: false }] },
-    { ...original, id: "target-window", panes: [{ ...original.panes[0]!, id: "target-pane", active: true }] },
-  ] }] });
-  await writeFile(join(f.root, "report.txt"), "scoped fixture");
-
-  const paths = ["report.txt", ".", "https://example.test/scoped"];
-  for (const path of paths) {
-    notRouted(await f.run(path, { HERDR_PANE_ID: "old-pane" }), /no browser ready/u);
-    notRouted(await f.run(path, { HERDR_PANE_ID: "removed-pane" }), /herdr pane is unavailable/u);
-    notRouted(await f.run(path, { HERDR_SOCKET_PATH: join(f.root, "other-herdr.sock"), HERDR_PANE_ID: "target-pane" }), /no Canvas bridge/u);
+  const headers = {
+    Authorization: 'Bearer authenticated-session',
+    'Content-Type': 'application/json',
   }
-  assert.deepEqual(f.observations.recipientWindows, ["old-window", "old-window", "old-window"]);
-  assert.equal(f.observations.uploadedBytes, 0); assert.deepEqual(f.receiver.messages, []);
-
-  for (const path of paths) assert.deepEqual(await f.run(path, { HERDR_SOCKET_PATH: f.nativeSocket, HERDR_PANE_ID: "target-pane" }), { code: 0, stderr: "" });
-  assert.deepEqual(f.observations.recipientWindows, ["old-window", "old-window", "old-window", "target-window", "target-window", "target-window"]);
-  assert.equal(f.observations.uploadedBytes, Buffer.byteLength("scoped fixture"));
-  assert.equal(f.observations.finalized, 1);
-  const notices = f.receiver.messages as Array<Record<string, unknown>>;
-  assert.equal(notices.filter(message => message.type === "download").length, 1);
-  assert.equal(notices.filter(message => message.type === "open-directory").length, 1);
-  assert.equal(notices.filter(message => message.type === "open-url").length, 1);
-});
-
-test("copy inactivity times out and removes partial staging", async t => {
-  const f = await fixture(t, { progressTimeoutMs: 70 }), transfer = await sender(t, f, 10);
-  await waitFor(() => transfer.responses().some(reply => reply.ok === true), "copy never started");
-  transfer.socket.write("part");
-  await waitFor(() => transfer.responses().some(reply => reply.ok === false), "stalled copy did not time out");
-  assert.equal(transfer.responses().at(-1).reason, "timed-out");
-  await waitFor(() => f.observations.aborted === 1, "staging upload was not aborted");
-  assert.deepEqual(await readdir(join(f.root, "tmp")), ["staged"]);
-  assert.deepEqual(await readdir(join(f.root, "tmp", "staged")), []);
-});
-
-test("browser disconnect before context fails, but an already bound copy finishes on the server", async t => {
-  const unbound = await fixture(t, { autoContext: false }), first = await sender(t, unbound, 4);
-  unbound.receiver.readyState = 3; unbound.receiver.emit("close");
-  await waitFor(() => first.responses().some(reply => reply.ok === false), "unbound copy did not fail");
-  assert.equal(first.responses().at(-1).reason, "not-attached");
-  const bound = await fixture(t), second = await sender(t, bound, 4);
-  await waitFor(() => second.responses().some(reply => reply.ok === true), "bound copy never started");
-  bound.receiver.readyState = 3; bound.receiver.emit("close");
-  second.socket.end("done");
-  await waitFor(() => second.responses().some(reply => reply.state === "completed"), "bound copy did not survive browser disconnect");
-  assert.equal(bound.observations.finalized, 1);
-  assert.equal(bound.receiver.messages.some(message => message.type === "download"), false);
-  const staged = await bound.service.open(second.id, "authenticated-session");
-  assert(staged);
-  staged.body.destroy();
-});
-
-test("copy retains its source until server staging finishes even after the last viewer leaves", async t => {
-  const f = await fixture(t), releaseViewer = f.service.retainSource(source.id), transfer = await sender(t, f, 4);
-  await waitFor(() => transfer.responses().some(reply => reply.ok === true), "copy never started");
-  releaseViewer();
-  await new Promise(resolve => setTimeout(resolve, 50));
-  assert.equal((await readdir(f.registry)).length, 1, "in-flight copy owns a source lease");
-  transfer.socket.end("done");
-  await waitFor(() => transfer.responses().some(reply => reply.state === "completed"), "copy did not finish");
-  await waitFor(async () => (await readdir(f.registry)).length === 0, "completed copy leaked the source lease");
-});
-
-test("renaming a source and attaching again preserve an active copy; endpoint edits close it", async t => {
-  const f = await fixture(t), releaseViewer = f.service.retainSource(source.id);
-  t.after(releaseViewer);
-  const patch = (body: unknown) => f.app.request(`http://canvas.test/api/sources/${source.id}`, {
-    method: "PATCH", headers: { Host: "canvas.test", Origin: "http://canvas.test", Authorization: "Bearer authenticated-session", "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const transfer = await sender(t, f, 8);
-  await waitFor(() => transfer.responses().some(reply => reply.ok === true), "copy did not start");
-  transfer.socket.write("left");
-  await waitFor(() => f.observations.uploadedBytes === 4, "first copy chunk was not staged");
-  const registryBefore = await readdir(f.registry);
-  assert.equal((await patch({ ...source, name: "Renamed", target: "", sshIdentityFile: "", sshKnownHostsFile: "", herdrSession: "", herdrSocket: "" })).status, 200);
-  await f.service.ensureSource(f.store.get<Source>("source", source.id)!);
-  assert.deepEqual(await readdir(f.registry), registryBefore, "later attach recreated a renamed source's bridge");
-  assert.equal(f.observations.bridgeStarts, 1);
-  assert.equal(f.observations.bridgeStops, 0);
-  assert.equal(f.observations.sourceCloses, 0);
-  transfer.socket.end("over");
-  await waitFor(() => transfer.responses().some(reply => reply.state === "completed"), "rename interrupted the copy");
-  const download = await f.service.open(transfer.id, "authenticated-session");
-  assert.ok(download);
-  const parts: Buffer[] = [];
-  for await (const chunk of download.body) parts.push(Buffer.from(chunk));
-  assert.equal(Buffer.concat(parts).toString(), "leftover");
-
-  const interrupted = await sender(t, f, 4);
-  await waitFor(() => interrupted.responses().some(reply => reply.ok === true), "second copy did not start");
-  interrupted.socket.write("p");
-  await waitFor(() => f.observations.uploadedBytes === 9, "second copy chunk was not staged");
-  assert.equal((await patch({ herdrSocket: "/fixture/different.sock" })).status, 200);
-  await waitFor(() => interrupted.socket.destroyed && f.observations.aborted > 0, "endpoint edit did not cancel the old copy");
-  assert.equal(f.observations.sourceCloses, 1);
-  assert.equal(f.observations.bridgeStops, 1);
-  assert.deepEqual(await readdir(f.registry), []);
-  assert.equal(await f.service.open(interrupted.id, "authenticated-session"), undefined);
-});
-
-test("staging creation, write and commit failures fail the helper and clean partial data", async t => {
-  for (const uploadFailure of ["create", "write", "complete"] as const) {
-    await t.test(uploadFailure, async t => {
-      const f = await fixture(t, { uploadFailure });
-      await writeFile(join(f.root, "copy.txt"), "copy bytes");
-      const result = await f.run("copy.txt");
-      assert.equal(result.code, 1);
-      assert.match(result.stderr, /file transfer failed/u);
-      assert.equal(f.receiver.messages.some(message => message.type === "download"), false);
-      if (uploadFailure !== "create") {
-        await waitFor(() => f.observations.aborted === 1, "failed staging upload was not aborted");
-        assert.deepEqual(await readdir(join(f.root, "tmp")), ["staged"]);
-        assert.deepEqual(await readdir(join(f.root, "tmp", "staged")), []);
-      }
-      assert.deepEqual(f.store.fileAssetIds(), []);
-    });
-  }
-});
-
-test("truncated and disconnected helpers cannot publish a file", async t => {
-  for (const abrupt of [false, true]) {
-    const f = await fixture(t), transfer = await sender(t, f, 10);
-    await waitFor(() => transfer.responses().some(reply => reply.ok === true), "copy never started");
-    if (abrupt) transfer.socket.destroy(); else transfer.socket.end("short");
-    await waitFor(() => f.observations.aborted === 1, "invalid stream did not abort staging");
-    assert.equal(f.receiver.messages.some(message => message.type === "download"), false);
-    assert.deepEqual(await readdir(join(f.root, "tmp", "staged")), []);
-  }
-});
-
-test("malformed and oversized socket headers cannot generate a file transfer", async t => {
-  const f = await fixture(t);
-  const record = JSON.parse(await readFile(join(f.registry, (await readdir(f.registry))[0]!), "utf8"));
-  for (const input of ["null\n", "[]\n", "1\n", "bad json\n", "x".repeat(17 * 1024)]) {
-    await new Promise<void>((resolve, reject) => {
-      const socket = createConnection(record.socket);
-      const timer = setTimeout(() => { socket.destroy(); reject(new Error("malformed header did not close")); }, 1000);
-      socket.once("connect", () => socket.end(input));
-      socket.resume(); socket.on("error", () => {});
-      socket.once("close", () => { clearTimeout(timer); resolve(); });
-    });
-  }
-  assert.deepEqual(f.receiver.messages, []);
-  await copyFile(f, "still-working", Buffer.from("ok"));
-});
-
-test("file transfer headers require the current protocol and an exact native pane identity", async t => {
-  const f = await fixture(t);
-  const record = JSON.parse(await readFile(join(f.registry, (await readdir(f.registry))[0]!), "utf8"));
-  const header = { version: 1, kind: "file", secret: record.secret, nativeSocket: f.nativeSocket,
-    paneId: "pane", filename: "file.bin", size: 0 };
-  for (const patch of [{ kind: undefined }, { kind: "unknown" }, { version: 0 }, { paneId: "other:pane" }, { paneId: "" }]) {
-    const socket = createConnection(record.socket);
-    t.after(() => socket.destroy());
-    socket.on("error", () => {});
-    let reply = "";
-    socket.on("data", data => reply += data.toString());
-    await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
-    socket.end(JSON.stringify({ ...header, ...patch }) + "\n");
-    await waitFor(() => socket.destroyed, "invalid file header was not closed");
-    assert.equal(JSON.parse(reply).ok, false);
-  }
-  assert.deepEqual(f.receiver.messages, []);
-  assert.equal(f.observations.uploadedBytes, 0);
-});
-
-test("two independent Canvas backends on the same native socket fail closed", async t => {
-  const f = await fixture(t);
-  const other = new OpenDownloadService({
-    registryDirectory: f.registry, socketDirectory: f.sockets,
-    createUpload: metadata => f.assets.begin(metadata), readTemporary: (id, range) => f.assets.readTemporary(id, range),
-    prepare: async (_source, localSocket) => ({ nativeSocket: f.nativeSocket, remoteSocket: localSocket, cleanup: async () => {} }),
-    resources: async () => resources,
-    recipient: async () => ({ socket: f.receiver as never, sessionId: "authenticated-session", isCurrent: () => f.receiver.readyState === 1 }),
-  });
-  t.after(() => other.closeAll());
-  await other.ensureSource({ ...source, id: "second-backend" });
-  await writeFile(join(f.root, "ambiguous"), "must not be duplicated");
-  for (const path of ["ambiguous", ".", "https://example.test/scoped"]) {
-    const result = await f.run(path);
-    assert.equal(result.code, 1);
-    assert.match(result.stderr, /multiple Canvas connections/u);
-  }
-  assert.equal(f.observations.uploadedBytes, 0);
-  assert.deepEqual(f.receiver.messages, []);
-});
-
-
-test('capture distinguishes split tabs from an unavailable capture handler before launching', async t => {
-  const f = await fixture(t)
-  const record = JSON.parse(await readFile(join(f.registry, (await readdir(f.registry))[0]!), 'utf8'))
-  const request = () => new Promise<Record<string, unknown>>((resolve, reject) => {
-    const socket = createConnection(record.socket)
-    let reply = ''
-    socket.on('data', data => { reply += data })
-    socket.once('error', reject)
-    socket.once('end', () => { socket.end(); resolve(JSON.parse(reply)) })
-    socket.once('connect', () => socket.write(JSON.stringify({ version: 1, kind: 'capture', secret: record.secret,
-      nativeSocket: f.nativeSocket, paneId: 'pane', port: 3011, title: 'Fixture' }) + '\n'))
-    t.after(() => socket.destroy())
+  const response = await f.app.request('http://canvas.test/api/media-tickets', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ path: notice.url }),
   })
+  assert.equal(response.status, 200)
+  const ticket = await response.json()
+  const partial = await f.app.request(`http://canvas.test${ticket.url}`, {
+    headers: { Range: 'bytes=-19' },
+  })
+  assert.equal(partial.status, 206)
+  assert.deepEqual(Buffer.from(await partial.arrayBuffer()), content.subarray(-19))
+  assert(streams.filter((item) => !item.range).every((item) => item.body.bytesRead === 0))
+  assert.deepEqual(streams.at(-1)!.range, { start: content.length - 19, end: content.length - 1 })
+  assert.equal(streams.at(-1)!.body.bytesRead, 19)
+  await f.service.closeAll()
+  assert.equal(
+    (await f.app.request(`http://canvas.test${ticket.url}`, { headers: { Range: 'bytes=-19' } }))
+      .status,
+    404,
+  )
+})
+
+test('overview completion exposes sniffed preview metadata and owner-only inline bytes', async (t) => {
+  const samples = [
+    {
+      filename: 'photo.png',
+      content: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+      preview: 'image',
+      mime: 'image/png',
+    },
+    {
+      filename: 'document.pdf',
+      content: Buffer.from('%PDF-1.4\nfixture\n%%EOF\n'),
+      preview: 'pdf',
+      mime: 'application/pdf',
+    },
+    {
+      filename: 'notes.txt',
+      content: Buffer.from('中文 <b>plain text</b>\n'),
+      preview: 'text',
+      mime: 'text/plain; charset=utf-8',
+    },
+  ]
+  for (const sample of samples)
+    await t.test(sample.preview, async (t) => {
+      const f = await fixture(t)
+      await copyFile(f, sample.filename, sample.content)
+      const notice = f.receiver.messages.find((message) => message.type === 'download')!
+      assert.equal('preview' in notice, false)
+      assert.equal(notice.mime, sample.mime)
+      assert.equal(f.observations.finalized, 1, 'CLI completes without a preview acknowledgement')
+      const url = `http://canvas.test${notice.url}?preview=1`
+      assert.equal((await f.app.request(url)).status, 401)
+      assert.equal(
+        (await f.app.request(url, { headers: { Authorization: 'Bearer other-session' } })).status,
+        404,
+      )
+      const preview = await f.app.request(url, {
+        headers: { Authorization: 'Bearer authenticated-session' },
+      })
+      assert.equal(preview.status, 200)
+      assert.equal(preview.headers.get('content-type'), sample.mime)
+      assert.match(preview.headers.get('content-disposition')!, /^inline;/u)
+      assert.equal(preview.headers.get('x-content-type-options'), 'nosniff')
+      assert.equal(preview.headers.get('cross-origin-resource-policy'), 'same-origin')
+      const csp = preview.headers.get('content-security-policy')!
+      assert.match(csp, /default-src 'none';/u)
+      assert.equal(
+        csp.includes('sandbox'),
+        sample.preview !== 'pdf',
+        'native PDF viewer must remain available',
+      )
+      assert.deepEqual(Buffer.from(await preview.arrayBuffer()), sample.content)
+      for (const query of ['', '?download=1', '?preview=1&download=1']) {
+        const download = await f.app.request(`http://canvas.test${notice.url}${query}`, {
+          headers: { Authorization: 'Bearer authenticated-session' },
+        })
+        assert.match(download.headers.get('content-disposition')!, /^attachment;/u)
+        assert.equal(download.headers.get('content-type'), 'application/octet-stream')
+        assert.deepEqual(Buffer.from(await download.arrayBuffer()), sample.content)
+      }
+    })
+})
+
+test('overview previews markup as inert text or an image and keeps binary downloads opaque', async (t) => {
+  for (const sample of [
+    { filename: 'binary.txt', content: Buffer.from([0, 255, 127, 1]) },
+    { filename: 'page.html', content: Buffer.from('<!doctype html><script>fixture</script>') },
+    { filename: 'drawing.svg', content: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>') },
+    { filename: 'script.js', content: Buffer.from("console.log('fixture')") },
+  ])
+    await t.test(sample.filename, async (t) => {
+      const f = await fixture(t)
+      await copyFile(f, sample.filename, sample.content)
+      const notice = f.receiver.messages.find((message) => message.type === 'download')!
+      assert.equal('preview' in notice, false)
+      const response = await f.app.request(`http://canvas.test${notice.url}?preview=1`, {
+        headers: { Authorization: 'Bearer authenticated-session' },
+      })
+      assert.match(response.headers.get('content-disposition')!, /^inline;/u)
+      assert.match(response.headers.get('content-security-policy')!, /sandbox/u)
+      assert.deepEqual(Buffer.from(await response.arrayBuffer()), sample.content)
+    })
+})
+
+test('directories reach only their controlling browser and do not stage file bytes', async (t) => {
+  const f = await fixture(t)
+  const path = join(f.root, 'Folder 空间')
+  await mkdir(path)
+  await writeFile(join(path, 'private.txt'), 'not uploaded')
+  const result = await f.run(path)
+  assert.deepEqual(result, { code: 0, stderr: '' })
+  assert.equal(f.receiver.messages.length, 1)
+  const message = f.receiver.messages[0]!
+  assert.equal(message.type, 'open-directory')
+  assert.equal(message.path, path)
+  assert.deepEqual(message.authority, { hostName: '192.0.2.10', user: 'fixture', port: 22 })
+  assert.equal(message.uri, undefined, 'The browser, not the service, chooses its editor URI')
+  assert.equal(f.observations.uploadedBytes, 0)
+  assert.equal(f.observations.aborted, 0)
+  assert.equal(f.observations.finalized, 0)
+  assert.deepEqual(f.store.fileAssetIds(), [])
+})
+
+test('directory completion requires acknowledgement from the original socket and session', async (t) => {
+  const f = await fixture(t, { directoryAck: false })
+  let exited = false
+  const running = f.run(f.root).then((result) => {
+    exited = true
+    return result
+  })
+  await waitFor(
+    () => f.receiver.messages.some((message) => message.type === 'open-directory'),
+    'directory request was not sent',
+  )
+  const id = String(f.receiver.messages.find((message) => message.type === 'open-directory')!.id)
+  assert.equal(
+    f.service.directoryReceived(id, new FakeWebSocket() as never, 'authenticated-session'),
+    false,
+  )
+  assert.equal(f.service.directoryReceived(id, f.receiver as never, 'other-session'), false)
+  await new Promise((resolve) => setTimeout(resolve, 40))
+  assert.equal(exited, false)
+  assert.equal(f.service.directoryReceived(id, f.receiver as never, 'authenticated-session'), true)
+  assert.deepEqual(await running, { code: 0, stderr: '' })
+  assert.equal(f.service.directoryReceived(id, f.receiver as never, 'authenticated-session'), false)
+})
+
+test('directory deliveries whitelist the resolved authority and reject invalid targets before publication', async (t) => {
+  const safe = await fixture(t, {
+    directoryAuthority: async () => ({
+      hostName: 'host.example',
+      user: 'dev',
+      port: 22,
+      identityFile: '/fixture/private-key',
+      secret: 'fixture-secret',
+    }),
+  })
+  assert.equal((await safe.run(safe.root)).code, 0)
+  assert.deepEqual(safe.receiver.messages[0]!.authority, {
+    hostName: 'host.example',
+    user: 'dev',
+    port: 22,
+  })
+  assert(!JSON.stringify(safe.receiver.messages).includes('private-key'))
+  assert(!JSON.stringify(safe.receiver.messages).includes('fixture-secret'))
+  const invalid = await fixture(t, {
+    directoryAuthority: async () => ({ hostName: 'host/invalid' }),
+  })
+  assert.equal((await invalid.run(invalid.root)).code, 1)
+  assert.deepEqual(invalid.receiver.messages, [])
+})
+
+test('unacknowledged directories time out and a missing browser fails immediately', async (t) => {
+  const timed = await fixture(t, { directoryAck: false, contextTimeoutMs: 60 })
+  const result = await timed.run(timed.root)
+  assert.equal(result.code, 1)
+  assert.equal(result.stderr, 'canvas: browser did not receive this directory\n')
+  const missing = await fixture(t, { recipientAvailable: false })
+  notRouted(await missing.run(missing.root), /no browser ready/u)
+  assert.deepEqual(missing.receiver.messages, [])
+})
+
+test('directory resolution cannot deliver after timeout or a browser disconnect', async (t) => {
+  let resolveAuthority!: (value: EditorAuthority) => void
+  const f = await fixture(t, {
+    contextTimeoutMs: 60,
+    directoryAuthority: () =>
+      new Promise((resolve) => {
+        resolveAuthority = resolve
+      }),
+  })
+  const running = f.run(f.root)
+  await waitFor(() => !!resolveAuthority, 'resolver never started')
+  f.receiver.readyState = 3
+  f.receiver.emit('close')
+  assert.equal((await running).code, 1)
+  resolveAuthority({ hostName: '192.0.2.10' })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(f.receiver.messages, [])
+})
+
+test('custom canvas copy adds one persistent card without starting a browser download', async (t) => {
+  const f = await fixture(t, { customCanvas: true }),
+    content = Buffer.from('saved to canvas\n')
+  await copyFile(f, 'report.txt', content)
+  assert.equal(
+    f.receiver.messages.some((message) => message.type === 'download'),
+    false,
+  )
+  assert.deepEqual(
+    f.receiver.messages.map((message) => message.type),
+    ['file-context'],
+  )
+  const canvas = f.store.canvasView(f.store.get<Canvas>('canvas', f.canvas.id)!)
+  const card = canvas.nodes.find((node) => node.type === 'file')
+  assert(card && card.type === 'file')
+  const response = await f.app.request(`http://canvas.test/api/files/${card.assetId}?download=1`, {
+    headers: { Authorization: 'Bearer authenticated-session' },
+  })
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), content)
+})
+
+test('browser context is bound once and copying never starts through a GET request', async (t) => {
+  const f = await fixture(t, { autoContext: false }),
+    transfer = await sender(t, f, 4)
+  assert.equal(await f.service.open(transfer.id, 'authenticated-session'), undefined)
+  assert.equal(f.service.prepare(transfer.id, 'other-session'), false)
+  assert.equal(f.observations.uploadedBytes, 0)
+  const response = await f.app.request(`http://canvas.test/api/downloads/${transfer.id}`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer authenticated-session', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ canvasId: f.canvas.id, anchorId: 'anchor' }),
+  })
+  assert.equal(response.status, 204)
+  assert.equal(f.service.prepare(transfer.id, 'authenticated-session'), true)
+  await waitFor(
+    () => transfer.responses().some((reply) => reply.ok === true),
+    'copy did not start after context binding',
+  )
+  transfer.socket.end('done')
+  await waitFor(
+    () => transfer.responses().some((reply) => reply.state === 'completed'),
+    'copy did not finish',
+  )
+  assert.equal(
+    f.receiver.messages.some((message) => message.type === 'download'),
+    false,
+  )
+  assert(f.store.get<Canvas>('canvas', f.canvas.id)!.nodes.some((node) => node.type === 'file'))
+})
+
+test('staging waits for validated helper EOF after all declared bytes arrive', async (t) => {
+  for (const content of [Buffer.alloc(0), Buffer.from('complete bytes awaiting EOF')]) {
+    const f = await fixture(t),
+      transfer = await sender(t, f, content.length)
+    await waitFor(
+      () => transfer.responses().some((reply) => reply.ok === true),
+      'copy never started',
+    )
+    transfer.socket.write(content)
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    assert.equal(f.observations.finalized, 0)
+    assert.equal(await f.service.open(transfer.id, 'authenticated-session'), undefined)
+    assert.equal(
+      f.receiver.messages.some((message) => message.type === 'download'),
+      false,
+    )
+    transfer.socket.end()
+    await waitFor(
+      () => transfer.responses().some((reply) => reply.state === 'completed'),
+      'copy was not finalized after EOF',
+    )
+    assert.equal(f.observations.finalized, 1)
+  }
+})
+
+test('cancelling a native HTTP download does not affect the completed CLI copy', async (t) => {
+  const f = await fixture(t),
+    base = await serveFixture(t, f),
+    content = randomBytes(8 * 1024 * 1024)
+  const result = await copyFile(f, 'large.bin', content)
+  const notice = f.receiver.messages.find((message) => message.type === 'download')!
+  await new Promise<void>((resolve, reject) => {
+    const request = get(
+      `${base}${notice.url}`,
+      { headers: { Authorization: 'Bearer authenticated-session' } },
+      (response) => {
+        response.on('error', () => {})
+        response.once('data', () => {
+          response.destroy()
+          resolve()
+        })
+      },
+    )
+    request.once('error', reject)
+    t.after(() => request.destroy())
+  })
+  assert.equal(result.code, 0)
+  assert.equal(f.observations.aborted, 0)
+  const retry = await f.service.open(String(notice.id), 'authenticated-session')
+  assert(retry)
+  const chunks: Buffer[] = []
+  for await (const chunk of retry.body) chunks.push(Buffer.from(chunk))
+  assert.deepEqual(Buffer.concat(chunks), content)
+})
+
+test('a missing browser context fails with not-attached without sending file data', async (t) => {
+  const f = await fixture(t, { autoContext: false, contextTimeoutMs: 60 })
+  await writeFile(join(f.root, 'copy.txt'), 'private data')
+  const began = Date.now()
+  notRouted(await f.run('copy.txt'), /no browser ready/u)
+  assert(Date.now() - began < 2000)
+  assert.equal(f.observations.uploadedBytes, 0)
+})
+
+test('daemon callers route only by their explicit socket and pane, never another live window', async (t) => {
+  const f = await fixture(t, { recipientWindow: 'target-window' })
+  const releaseViewer = f.service.retainSource(source.id)
+  t.after(releaseViewer)
+  const original = resources.spaces[0]!.windows[0]!
+  f.setResources({
+    ...resources,
+    spaces: [
+      {
+        ...resources.spaces[0]!,
+        windows: [
+          {
+            ...original,
+            id: 'old-window',
+            panes: [{ ...original.panes[0]!, id: 'old-pane', active: false }],
+          },
+          {
+            ...original,
+            id: 'target-window',
+            panes: [{ ...original.panes[0]!, id: 'target-pane', active: true }],
+          },
+        ],
+      },
+    ],
+  })
+  await writeFile(join(f.root, 'report.txt'), 'scoped fixture')
+
+  const paths = ['report.txt', '.', 'https://example.test/scoped']
+  for (const path of paths) {
+    notRouted(await f.run(path, { HERDR_PANE_ID: 'old-pane' }), /no browser ready/u)
+    notRouted(await f.run(path, { HERDR_PANE_ID: 'removed-pane' }), /herdr pane is unavailable/u)
+    notRouted(
+      await f.run(path, {
+        HERDR_SOCKET_PATH: join(f.root, 'other-herdr.sock'),
+        HERDR_PANE_ID: 'target-pane',
+      }),
+      /no Canvas bridge/u,
+    )
+  }
+  assert.deepEqual(f.observations.recipientWindows, ['old-window', 'old-window', 'old-window'])
+  assert.equal(f.observations.uploadedBytes, 0)
+  assert.deepEqual(f.receiver.messages, [])
+
+  for (const path of paths)
+    assert.deepEqual(
+      await f.run(path, { HERDR_SOCKET_PATH: f.nativeSocket, HERDR_PANE_ID: 'target-pane' }),
+      { code: 0, stderr: '' },
+    )
+  assert.deepEqual(f.observations.recipientWindows, [
+    'old-window',
+    'old-window',
+    'old-window',
+    'target-window',
+    'target-window',
+    'target-window',
+  ])
+  assert.equal(f.observations.uploadedBytes, Buffer.byteLength('scoped fixture'))
+  assert.equal(f.observations.finalized, 1)
+  const notices = f.receiver.messages as Array<Record<string, unknown>>
+  assert.equal(notices.filter((message) => message.type === 'download').length, 1)
+  assert.equal(notices.filter((message) => message.type === 'open-directory').length, 1)
+  assert.equal(notices.filter((message) => message.type === 'open-url').length, 1)
+})
+
+test('copy inactivity times out and removes partial staging', async (t) => {
+  const f = await fixture(t, { progressTimeoutMs: 70 }),
+    transfer = await sender(t, f, 10)
+  await waitFor(() => transfer.responses().some((reply) => reply.ok === true), 'copy never started')
+  transfer.socket.write('part')
+  await waitFor(
+    () => transfer.responses().some((reply) => reply.ok === false),
+    'stalled copy did not time out',
+  )
+  assert.equal(transfer.responses().at(-1).reason, 'timed-out')
+  await waitFor(() => f.observations.aborted === 1, 'staging upload was not aborted')
+  assert.deepEqual(await readdir(join(f.root, 'tmp')), ['staged'])
+  assert.deepEqual(await readdir(join(f.root, 'tmp', 'staged')), [])
+})
+
+test('browser disconnect before context fails, but an already bound copy finishes on the server', async (t) => {
+  const unbound = await fixture(t, { autoContext: false }),
+    first = await sender(t, unbound, 4)
+  unbound.receiver.readyState = 3
+  unbound.receiver.emit('close')
+  await waitFor(
+    () => first.responses().some((reply) => reply.ok === false),
+    'unbound copy did not fail',
+  )
+  assert.equal(first.responses().at(-1).reason, 'not-attached')
+  const bound = await fixture(t),
+    second = await sender(t, bound, 4)
+  await waitFor(
+    () => second.responses().some((reply) => reply.ok === true),
+    'bound copy never started',
+  )
+  bound.receiver.readyState = 3
+  bound.receiver.emit('close')
+  second.socket.end('done')
+  await waitFor(
+    () => second.responses().some((reply) => reply.state === 'completed'),
+    'bound copy did not survive browser disconnect',
+  )
+  assert.equal(bound.observations.finalized, 1)
+  assert.equal(
+    bound.receiver.messages.some((message) => message.type === 'download'),
+    false,
+  )
+  const staged = await bound.service.open(second.id, 'authenticated-session')
+  assert(staged)
+  staged.body.destroy()
+})
+
+test('copy retains its source until server staging finishes even after the last viewer leaves', async (t) => {
+  const f = await fixture(t),
+    releaseViewer = f.service.retainSource(source.id),
+    transfer = await sender(t, f, 4)
+  await waitFor(() => transfer.responses().some((reply) => reply.ok === true), 'copy never started')
+  releaseViewer()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal((await readdir(f.registry)).length, 1, 'in-flight copy owns a source lease')
+  transfer.socket.end('done')
+  await waitFor(
+    () => transfer.responses().some((reply) => reply.state === 'completed'),
+    'copy did not finish',
+  )
+  await waitFor(
+    async () => (await readdir(f.registry)).length === 0,
+    'completed copy leaked the source lease',
+  )
+})
+
+test('renaming a source and attaching again preserve an active copy; endpoint edits close it', async (t) => {
+  const f = await fixture(t),
+    releaseViewer = f.service.retainSource(source.id)
+  t.after(releaseViewer)
+  const patch = (body: unknown) =>
+    f.app.request(`http://canvas.test/api/sources/${source.id}`, {
+      method: 'PATCH',
+      headers: {
+        Host: 'canvas.test',
+        Origin: 'http://canvas.test',
+        Authorization: 'Bearer authenticated-session',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    })
+  const transfer = await sender(t, f, 8)
+  await waitFor(() => transfer.responses().some((reply) => reply.ok === true), 'copy did not start')
+  transfer.socket.write('left')
+  await waitFor(() => f.observations.uploadedBytes === 4, 'first copy chunk was not staged')
+  const registryBefore = await readdir(f.registry)
+  assert.equal(
+    (
+      await patch({
+        ...source,
+        name: 'Renamed',
+        target: '',
+        sshIdentityFile: '',
+        sshKnownHostsFile: '',
+        herdrSession: '',
+        herdrSocket: '',
+      })
+    ).status,
+    200,
+  )
+  await f.service.ensureSource(f.store.get<Source>('source', source.id)!)
+  assert.deepEqual(
+    await readdir(f.registry),
+    registryBefore,
+    "later attach recreated a renamed source's bridge",
+  )
+  assert.equal(f.observations.bridgeStarts, 1)
+  assert.equal(f.observations.bridgeStops, 0)
+  assert.equal(f.observations.sourceCloses, 0)
+  transfer.socket.end('over')
+  await waitFor(
+    () => transfer.responses().some((reply) => reply.state === 'completed'),
+    'rename interrupted the copy',
+  )
+  const download = await f.service.open(transfer.id, 'authenticated-session')
+  assert.ok(download)
+  const parts: Buffer[] = []
+  for await (const chunk of download.body) parts.push(Buffer.from(chunk))
+  assert.equal(Buffer.concat(parts).toString(), 'leftover')
+
+  const interrupted = await sender(t, f, 4)
+  await waitFor(
+    () => interrupted.responses().some((reply) => reply.ok === true),
+    'second copy did not start',
+  )
+  interrupted.socket.write('p')
+  await waitFor(() => f.observations.uploadedBytes === 9, 'second copy chunk was not staged')
+  assert.equal((await patch({ herdrSocket: '/fixture/different.sock' })).status, 200)
+  await waitFor(
+    () => interrupted.socket.destroyed && f.observations.aborted > 0,
+    'endpoint edit did not cancel the old copy',
+  )
+  assert.equal(f.observations.sourceCloses, 1)
+  assert.equal(f.observations.bridgeStops, 1)
+  assert.deepEqual(await readdir(f.registry), [])
+  assert.equal(await f.service.open(interrupted.id, 'authenticated-session'), undefined)
+})
+
+test('staging creation, write and commit failures fail the helper and clean partial data', async (t) => {
+  for (const uploadFailure of ['create', 'write', 'complete'] as const) {
+    await t.test(uploadFailure, async (t) => {
+      const f = await fixture(t, { uploadFailure })
+      await writeFile(join(f.root, 'copy.txt'), 'copy bytes')
+      const result = await f.run('copy.txt')
+      assert.equal(result.code, 1)
+      assert.match(result.stderr, /file transfer failed/u)
+      assert.equal(
+        f.receiver.messages.some((message) => message.type === 'download'),
+        false,
+      )
+      if (uploadFailure !== 'create') {
+        await waitFor(() => f.observations.aborted === 1, 'failed staging upload was not aborted')
+        assert.deepEqual(await readdir(join(f.root, 'tmp')), ['staged'])
+        assert.deepEqual(await readdir(join(f.root, 'tmp', 'staged')), [])
+      }
+      assert.deepEqual(f.store.fileAssetIds(), [])
+    })
+  }
+})
+
+test('truncated and disconnected helpers cannot publish a file', async (t) => {
+  for (const abrupt of [false, true]) {
+    const f = await fixture(t),
+      transfer = await sender(t, f, 10)
+    await waitFor(
+      () => transfer.responses().some((reply) => reply.ok === true),
+      'copy never started',
+    )
+    if (abrupt) transfer.socket.destroy()
+    else transfer.socket.end('short')
+    await waitFor(() => f.observations.aborted === 1, 'invalid stream did not abort staging')
+    assert.equal(
+      f.receiver.messages.some((message) => message.type === 'download'),
+      false,
+    )
+    assert.deepEqual(await readdir(join(f.root, 'tmp', 'staged')), [])
+  }
+})
+
+test('malformed and oversized socket headers cannot generate a file transfer', async (t) => {
+  const f = await fixture(t)
+  const record = JSON.parse(
+    await readFile(join(f.registry, (await readdir(f.registry))[0]!), 'utf8'),
+  )
+  for (const input of ['null\n', '[]\n', '1\n', 'bad json\n', 'x'.repeat(17 * 1024)]) {
+    await new Promise<void>((resolve, reject) => {
+      const socket = createConnection(record.socket)
+      const timer = setTimeout(() => {
+        socket.destroy()
+        reject(new Error('malformed header did not close'))
+      }, 1000)
+      socket.once('connect', () => socket.end(input))
+      socket.resume()
+      socket.on('error', () => {})
+      socket.once('close', () => {
+        clearTimeout(timer)
+        resolve()
+      })
+    })
+  }
+  assert.deepEqual(f.receiver.messages, [])
+  await copyFile(f, 'still-working', Buffer.from('ok'))
+})
+
+test('file transfer headers require the current protocol and an exact native pane identity', async (t) => {
+  const f = await fixture(t)
+  const record = JSON.parse(
+    await readFile(join(f.registry, (await readdir(f.registry))[0]!), 'utf8'),
+  )
+  const header = {
+    version: 1,
+    kind: 'file',
+    secret: record.secret,
+    nativeSocket: f.nativeSocket,
+    paneId: 'pane',
+    filename: 'file.bin',
+    size: 0,
+  }
+  for (const patch of [
+    { kind: undefined },
+    { kind: 'unknown' },
+    { version: 0 },
+    { paneId: 'other:pane' },
+    { paneId: '' },
+  ]) {
+    const socket = createConnection(record.socket)
+    t.after(() => socket.destroy())
+    socket.on('error', () => {})
+    let reply = ''
+    socket.on('data', (data) => (reply += data.toString()))
+    await new Promise<void>((resolve, reject) => {
+      socket.once('connect', resolve)
+      socket.once('error', reject)
+    })
+    socket.end(JSON.stringify({ ...header, ...patch }) + '\n')
+    await waitFor(() => socket.destroyed, 'invalid file header was not closed')
+    assert.equal(JSON.parse(reply).ok, false)
+  }
+  assert.deepEqual(f.receiver.messages, [])
+  assert.equal(f.observations.uploadedBytes, 0)
+})
+
+test('two independent Canvas backends on the same native socket fail closed', async (t) => {
+  const f = await fixture(t)
+  const other = new OpenDownloadService({
+    registryDirectory: f.registry,
+    socketDirectory: f.sockets,
+    createUpload: (metadata) => f.assets.begin(metadata),
+    readTemporary: (id, range) => f.assets.readTemporary(id, range),
+    prepare: async (_source, localSocket) => ({
+      nativeSocket: f.nativeSocket,
+      remoteSocket: localSocket,
+      cleanup: async () => {},
+    }),
+    resources: async () => resources,
+    recipient: async () => ({
+      socket: f.receiver as never,
+      sessionId: 'authenticated-session',
+      isCurrent: () => f.receiver.readyState === 1,
+    }),
+  })
+  t.after(() => other.closeAll())
+  await other.ensureSource({ ...source, id: 'second-backend' })
+  await writeFile(join(f.root, 'ambiguous'), 'must not be duplicated')
+  for (const path of ['ambiguous', '.', 'https://example.test/scoped']) {
+    const result = await f.run(path)
+    assert.equal(result.code, 1)
+    assert.match(result.stderr, /multiple Canvas connections/u)
+  }
+  assert.equal(f.observations.uploadedBytes, 0)
+  assert.deepEqual(f.receiver.messages, [])
+})
+
+test('capture distinguishes split tabs from an unavailable capture handler before launching', async (t) => {
+  const f = await fixture(t)
+  const record = JSON.parse(
+    await readFile(join(f.registry, (await readdir(f.registry))[0]!), 'utf8'),
+  )
+  const request = () =>
+    new Promise<Record<string, unknown>>((resolve, reject) => {
+      const socket = createConnection(record.socket)
+      let reply = ''
+      socket.on('data', (data) => {
+        reply += data
+      })
+      socket.once('error', reject)
+      socket.once('end', () => {
+        socket.end()
+        resolve(JSON.parse(reply))
+      })
+      socket.once('connect', () =>
+        socket.write(
+          JSON.stringify({
+            version: 1,
+            kind: 'capture',
+            secret: record.secret,
+            nativeSocket: f.nativeSocket,
+            paneId: 'pane',
+            port: 3011,
+            title: 'Fixture',
+          }) + '\n',
+        ),
+      )
+      t.after(() => socket.destroy())
+    })
   const split = structuredClone(resources)
-  split.spaces[0]!.windows[0]!.panes.push({ id: 'second-pane', name: 'shell', active: false, status: 'unknown' })
+  split.spaces[0]!.windows[0]!.panes.push({
+    id: 'second-pane',
+    name: 'shell',
+    active: false,
+    status: 'unknown',
+  })
   f.setResources(split)
   assert.deepEqual(await request(), { ok: false, reason: 'capture-requires-single-pane' })
   f.setResources(resources)

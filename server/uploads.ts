@@ -1,248 +1,440 @@
-import { randomBytes } from "node:crypto";
-import type { Readable } from "node:stream";
-import type { WebSocket } from "ws";
-import { z } from "zod";
-import type { Source } from "./state.ts";
-import type { TerminalManager } from "./terminals.ts";
-import { listResources } from "./runtimes.ts";
-import { validateInboxFile, writeInboxFile, removeInboxFiles, type InboxFile } from "./inbox.ts";
-import { filePasteParts, MAX_PASTE_PARTS, MAX_TERMINAL_PASTE_BYTES, MAX_UPLOAD_BEGIN_BYTES, renderPasteSegments, type PastePart, type PasteSegment } from "../shared/paste.ts";
+import { randomBytes } from 'node:crypto'
+import type { Readable } from 'node:stream'
+import type { WebSocket } from 'ws'
+import { z } from 'zod'
+import type { Source } from './state.ts'
+import type { TerminalManager } from './terminals.ts'
+import { listResources } from './runtimes.ts'
+import { validateInboxFile, writeInboxFile, removeInboxFiles, type InboxFile } from './inbox.ts'
+import {
+  filePasteParts,
+  MAX_PASTE_PARTS,
+  MAX_TERMINAL_PASTE_BYTES,
+  MAX_UPLOAD_BEGIN_BYTES,
+  renderPasteSegments,
+  type PastePart,
+  type PasteSegment,
+} from '../shared/paste.ts'
 
-const pastePartSchema = z.union([z.string(), z.object({
-  file: z.number().int().nonnegative(),
-  format: z.enum(["path", "markdown"]),
-  label: z.string().optional(),
-  image: z.boolean().optional(),
-}).strict()]);
+const pastePartSchema = z.union([
+  z.string(),
+  z
+    .object({
+      file: z.number().int().nonnegative(),
+      format: z.enum(['path', 'markdown']),
+      label: z.string().optional(),
+      image: z.boolean().optional(),
+    })
+    .strict(),
+])
 
-const beginSchema = z.object({
-  id: z.string().min(1).max(100),
-  files: z.array(z.object({ name: z.string(), size: z.number() }).strict()).min(1).max(64),
-  parts: z.array(pastePartSchema).min(1).max(MAX_PASTE_PARTS).optional(),
-}).strict();
+const beginSchema = z
+  .object({
+    id: z.string().min(1).max(100),
+    files: z
+      .array(z.object({ name: z.string(), size: z.number() }).strict())
+      .min(1)
+      .max(64),
+    parts: z.array(pastePartSchema).min(1).max(MAX_PASTE_PARTS).optional(),
+  })
+  .strict()
 
 /** A file already held by Canvas, streamed into the native inbox on demand. */
-export interface StoredFile extends InboxFile { open(): Promise<Readable | undefined> }
+export interface StoredFile extends InboxFile {
+  open(): Promise<Readable | undefined>
+}
 
 interface Batch {
-  key: string; id: string; source: Source; windowId: string; session: string; socket: WebSocket;
-  files: InboxFile[]; parts: PastePart[]; tokens: string[]; paths: string[]; next: number; busy: boolean;
-  completedBytes: number; transferred: number; total: number; committed?: boolean; stored?: boolean;
-  controller: AbortController; timer?: ReturnType<typeof setTimeout>; lastProgress: number;
-  paste(segments: readonly PasteSegment[]): Promise<void>;
+  key: string
+  id: string
+  source: Source
+  windowId: string
+  session: string
+  socket: WebSocket
+  files: InboxFile[]
+  parts: PastePart[]
+  tokens: string[]
+  paths: string[]
+  next: number
+  busy: boolean
+  completedBytes: number
+  transferred: number
+  total: number
+  committed?: boolean
+  stored?: boolean
+  controller: AbortController
+  timer?: ReturnType<typeof setTimeout>
+  lastProgress: number
+  paste(segments: readonly PasteSegment[]): Promise<void>
 }
 
 export class UploadService {
-  private batches = new Map<string, Batch>();
-  private tokens = new Map<string, { batch: Batch; index: number }>();
-  private closing = new Set<Promise<void>>();
-  private sourceGenerations = new Map<string, number>();
-  private stopped = false;
-  constructor(private readonly terminals: TerminalManager, private readonly options = {
-    write: writeInboxFile, remove: removeInboxFiles, resources: listResources,
-  }) {}
+  private batches = new Map<string, Batch>()
+  private tokens = new Map<string, { batch: Batch; index: number }>()
+  private closing = new Set<Promise<void>>()
+  private sourceGenerations = new Map<string, number>()
+  private stopped = false
+  constructor(
+    private readonly terminals: TerminalManager,
+    private readonly options = {
+      write: writeInboxFile,
+      remove: removeInboxFiles,
+      resources: listResources,
+    },
+  ) {}
 
   private send(socket: WebSocket, value: unknown) {
-    if (socket.readyState === 1) socket.send(JSON.stringify(value));
+    if (socket.readyState === 1) socket.send(JSON.stringify(value))
   }
-  private progress(batch: Batch, state: "uploading" | "completed" | "cancelled" | "failed", error?: string, failedFile?: string) {
-    this.send(batch.socket, { type: "upload-progress", id: batch.id, state,
-      transferred: batch.transferred, total: batch.total, ...(error ? { error } : {}),
+  private progress(
+    batch: Batch,
+    state: 'uploading' | 'completed' | 'cancelled' | 'failed',
+    error?: string,
+    failedFile?: string,
+  ) {
+    this.send(batch.socket, {
+      type: 'upload-progress',
+      id: batch.id,
+      state,
+      transferred: batch.transferred,
+      total: batch.total,
+      ...(error ? { error } : {}),
       ...(failedFile ? { failedFile } : {}),
-      ...(state === "completed" ? { paths: batch.paths } : {}) });
+      ...(state === 'completed' ? { paths: batch.paths } : {}),
+    })
   }
   private deadline(batch: Batch) {
-    clearTimeout(batch.timer);
-    batch.timer = setTimeout(() => this.fail(batch, "timeout", false, batch.files[batch.next]?.name), 60_000);
-    batch.timer.unref();
+    clearTimeout(batch.timer)
+    batch.timer = setTimeout(
+      () => this.fail(batch, 'timeout', false, batch.files[batch.next]?.name),
+      60_000,
+    )
+    batch.timer.unref()
   }
-  async begin(source: Source, windowId: string, socket: WebSocket, session: string, input: unknown) {
-    let id = "";
+  async begin(
+    source: Source,
+    windowId: string,
+    socket: WebSocket,
+    session: string,
+    input: unknown,
+  ) {
+    let id = ''
     try {
-      const request = beginSchema.parse(input); id = request.id;
-      if (Buffer.byteLength(JSON.stringify(request)) > MAX_UPLOAD_BEGIN_BYTES) throw new Error("tooLarge");
-      for (const file of request.files) validateInboxFile(file);
+      const request = beginSchema.parse(input)
+      id = request.id
+      if (Buffer.byteLength(JSON.stringify(request)) > MAX_UPLOAD_BEGIN_BYTES)
+        throw new Error('tooLarge')
+      for (const file of request.files) validateInboxFile(file)
       if (request.parts) {
-        const referenced = new Set(request.parts.filter(part => typeof part !== "string").map(part => part.file));
-        if (referenced.size !== request.files.length || [...referenced].some(index => index >= request.files.length))
-          throw new Error("invalidReference");
+        const referenced = new Set(
+          request.parts.filter((part) => typeof part !== 'string').map((part) => part.file),
+        )
+        if (
+          referenced.size !== request.files.length ||
+          [...referenced].some((index) => index >= request.files.length)
+        )
+          throw new Error('invalidReference')
       }
-      const total = request.files.reduce((sum, file) => sum + file.size, 0);
-      if (!Number.isSafeInteger(total)) throw new Error("invalidSize");
-      const key = `${source.id}/${windowId}`;
-      if (this.stopped || this.batches.has(key)) throw new Error("busy");
-      const generation = this.sourceGenerations.get(source.id) || 0;
-      const paste = await this.terminals.captureFilePaste(source.id, windowId, socket);
-      if (this.stopped || (this.sourceGenerations.get(source.id) || 0) !== generation) throw new Error("closed");
-      if (!paste || socket.readyState !== 1) throw new Error("notConnected");
-      if (this.batches.has(key)) throw new Error("busy");
-      const batch: Batch = { key, id, source, windowId, socket, session, files: request.files, parts: request.parts ?? filePasteParts(request.files.length),
-        tokens: request.files.map(() => randomBytes(32).toString("base64url")), paths: [], next: 0,
-        busy: false, completedBytes: 0, transferred: 0, total, controller: new AbortController(),
-        lastProgress: 0, paste };
-      this.batches.set(key, batch);
-      batch.tokens.forEach((token, index) => this.tokens.set(token, { batch, index }));
-      this.deadline(batch);
-      this.send(socket, { type: "upload-ready", id, urls: batch.tokens.map(token => `/api/uploads/${token}`) });
-      this.progress(batch, "uploading");
+      const total = request.files.reduce((sum, file) => sum + file.size, 0)
+      if (!Number.isSafeInteger(total)) throw new Error('invalidSize')
+      const key = `${source.id}/${windowId}`
+      if (this.stopped || this.batches.has(key)) throw new Error('busy')
+      const generation = this.sourceGenerations.get(source.id) || 0
+      const paste = await this.terminals.captureFilePaste(source.id, windowId, socket)
+      if (this.stopped || (this.sourceGenerations.get(source.id) || 0) !== generation)
+        throw new Error('closed')
+      if (!paste || socket.readyState !== 1) throw new Error('notConnected')
+      if (this.batches.has(key)) throw new Error('busy')
+      const batch: Batch = {
+        key,
+        id,
+        source,
+        windowId,
+        socket,
+        session,
+        files: request.files,
+        parts: request.parts ?? filePasteParts(request.files.length),
+        tokens: request.files.map(() => randomBytes(32).toString('base64url')),
+        paths: [],
+        next: 0,
+        busy: false,
+        completedBytes: 0,
+        transferred: 0,
+        total,
+        controller: new AbortController(),
+        lastProgress: 0,
+        paste,
+      }
+      this.batches.set(key, batch)
+      batch.tokens.forEach((token, index) => this.tokens.set(token, { batch, index }))
+      this.deadline(batch)
+      this.send(socket, {
+        type: 'upload-ready',
+        id,
+        urls: batch.tokens.map((token) => `/api/uploads/${token}`),
+      })
+      this.progress(batch, 'uploading')
     } catch (error) {
-      if (!id && input && typeof input === "object" && "id" in input && typeof input.id === "string") id = input.id.slice(0, 100);
-      this.send(socket, { type: "upload-progress", id, state: "failed", transferred: 0, total: 0,
-        error: error instanceof z.ZodError ? "invalidRequest" : error instanceof Error ? error.message : "startFailed" });
+      if (
+        !id &&
+        input &&
+        typeof input === 'object' &&
+        'id' in input &&
+        typeof input.id === 'string'
+      )
+        id = input.id.slice(0, 100)
+      this.send(socket, {
+        type: 'upload-progress',
+        id,
+        state: 'failed',
+        transferred: 0,
+        total: 0,
+        error:
+          error instanceof z.ZodError
+            ? 'invalidRequest'
+            : error instanceof Error
+              ? error.message
+              : 'startFailed',
+      })
     }
   }
   /** Deliver Canvas-held files and text through the same ordered native paste as browser uploads. */
-  async sendStored(source: Source, windowId: string, socket: WebSocket, session: string,
-    request: { id: string; files: StoredFile[]; parts: PastePart[]; delivered(): void }) {
-    const { id } = request;
-    let batch: Batch | undefined;
+  async sendStored(
+    source: Source,
+    windowId: string,
+    socket: WebSocket,
+    session: string,
+    request: { id: string; files: StoredFile[]; parts: PastePart[]; delivered(): void },
+  ) {
+    const { id } = request
+    let batch: Batch | undefined
     try {
-      if (request.files.length > 64 || request.parts.length > MAX_PASTE_PARTS) throw new Error("tooLarge");
-      for (const file of request.files) validateInboxFile(file);
+      if (request.files.length > 64 || request.parts.length > MAX_PASTE_PARTS)
+        throw new Error('tooLarge')
+      for (const file of request.files) validateInboxFile(file)
       // Inbox paths stay below 4 KiB; reject an oversized paste before streaming any file.
-      const text = request.parts.reduce((size, part) => size + (typeof part === "string" ? Buffer.byteLength(part) : 4096), 0);
-      if (text > MAX_TERMINAL_PASTE_BYTES) throw new Error("tooLarge");
-      const total = request.files.reduce((sum, file) => sum + file.size, 0);
-      if (!Number.isSafeInteger(total)) throw new Error("invalidSize");
-      const key = `${source.id}/${windowId}`;
-      if (this.stopped || this.batches.has(key)) throw new Error("busy");
-      const generation = this.sourceGenerations.get(source.id) || 0;
-      const paste = await this.terminals.captureFilePaste(source.id, windowId, socket);
-      if (this.stopped || (this.sourceGenerations.get(source.id) || 0) !== generation) throw new Error("closed");
-      if (!paste || socket.readyState !== 1) throw new Error("notConnected");
-      if (this.batches.has(key)) throw new Error("busy");
-      const current: Batch = batch = { key, id, source, windowId, socket, session, files: request.files, parts: request.parts, tokens: [], paths: [],
-        next: 0, busy: true, completedBytes: 0, transferred: 0, total, controller: new AbortController(), lastProgress: 0, paste, stored: true };
-      this.batches.set(key, current);
-      this.deadline(current);
-      this.progress(current, "uploading");
+      const text = request.parts.reduce(
+        (size, part) => size + (typeof part === 'string' ? Buffer.byteLength(part) : 4096),
+        0,
+      )
+      if (text > MAX_TERMINAL_PASTE_BYTES) throw new Error('tooLarge')
+      const total = request.files.reduce((sum, file) => sum + file.size, 0)
+      if (!Number.isSafeInteger(total)) throw new Error('invalidSize')
+      const key = `${source.id}/${windowId}`
+      if (this.stopped || this.batches.has(key)) throw new Error('busy')
+      const generation = this.sourceGenerations.get(source.id) || 0
+      const paste = await this.terminals.captureFilePaste(source.id, windowId, socket)
+      if (this.stopped || (this.sourceGenerations.get(source.id) || 0) !== generation)
+        throw new Error('closed')
+      if (!paste || socket.readyState !== 1) throw new Error('notConnected')
+      if (this.batches.has(key)) throw new Error('busy')
+      const current: Batch = (batch = {
+        key,
+        id,
+        source,
+        windowId,
+        socket,
+        session,
+        files: request.files,
+        parts: request.parts,
+        tokens: [],
+        paths: [],
+        next: 0,
+        busy: true,
+        completedBytes: 0,
+        transferred: 0,
+        total,
+        controller: new AbortController(),
+        lastProgress: 0,
+        paste,
+        stored: true,
+      })
+      this.batches.set(key, current)
+      this.deadline(current)
+      this.progress(current, 'uploading')
       for (const [index, file] of request.files.entries()) {
-        const bytes = await file.open();
-        if (!bytes) throw new Error("fileMissing");
-        let path: string;
+        const bytes = await file.open()
+        if (!bytes) throw new Error('fileMissing')
+        let path: string
         try {
-          if (this.batches.get(key) !== current) return;
-          path = await this.options.write(source, file, bytes, current.controller.signal, received => this.written(current, received));
-        } finally { bytes.destroy(); }
-        if (this.batches.get(key) !== current) { this.cleanup(source, [path]); return; }
-        current.paths.push(path);
-        current.next = index + 1; current.completedBytes += file.size; current.transferred = current.completedBytes;
-        this.deadline(current);
+          if (this.batches.get(key) !== current) return
+          path = await this.options.write(
+            source,
+            file,
+            bytes,
+            current.controller.signal,
+            (received) => this.written(current, received),
+          )
+        } finally {
+          bytes.destroy()
+        }
+        if (this.batches.get(key) !== current) {
+          this.cleanup(source, [path])
+          return
+        }
+        current.paths.push(path)
+        current.next = index + 1
+        current.completedBytes += file.size
+        current.transferred = current.completedBytes
+        this.deadline(current)
       }
-      if (await this.deliver(current)) request.delivered();
+      if (await this.deliver(current)) request.delivered()
     } catch (error) {
-      const message = error instanceof Error ? error.message : "failed";
-      if (batch) this.fail(batch, message, false, batch.files[batch.next]?.name);
-      else this.send(socket, { type: "upload-progress", id, state: "failed", transferred: 0, total: 0, error: message });
+      const message = error instanceof Error ? error.message : 'failed'
+      if (batch) this.fail(batch, message, false, batch.files[batch.next]?.name)
+      else
+        this.send(socket, {
+          type: 'upload-progress',
+          id,
+          state: 'failed',
+          transferred: 0,
+          total: 0,
+          error: message,
+        })
     }
   }
   private written(batch: Batch, received: number) {
-    if (this.batches.get(batch.key) !== batch || batch.controller.signal.aborted) return;
-    batch.transferred = batch.completedBytes + received;
-    this.deadline(batch);
-    if (Date.now() - batch.lastProgress > 100) { batch.lastProgress = Date.now(); this.progress(batch, "uploading"); }
+    if (this.batches.get(batch.key) !== batch || batch.controller.signal.aborted) return
+    batch.transferred = batch.completedBytes + received
+    this.deadline(batch)
+    if (Date.now() - batch.lastProgress > 100) {
+      batch.lastProgress = Date.now()
+      this.progress(batch, 'uploading')
+    }
   }
   /** Paste all segments once every file is in the inbox; returns whether this batch was delivered. */
   private async deliver(batch: Batch): Promise<boolean> {
-    const native = await this.options.resources(batch.source);
-    if (!native.spaces.some(space => space.windows.some(window => window.id === batch.windowId))) throw new Error("windowClosed");
-    if (this.batches.get(batch.key) !== batch) return false;
-    const segments = renderPasteSegments(batch.parts, batch.paths);
-    if (segments.reduce((size, segment) => size + Buffer.byteLength(segment.text), 0) > MAX_TERMINAL_PASTE_BYTES) throw new Error("tooLarge");
+    const native = await this.options.resources(batch.source)
+    if (
+      !native.spaces.some((space) => space.windows.some((window) => window.id === batch.windowId))
+    )
+      throw new Error('windowClosed')
+    if (this.batches.get(batch.key) !== batch) return false
+    const segments = renderPasteSegments(batch.parts, batch.paths)
+    if (
+      segments.reduce((size, segment) => size + Buffer.byteLength(segment.text), 0) >
+      MAX_TERMINAL_PASTE_BYTES
+    )
+      throw new Error('tooLarge')
     // Pasting is paced by the target's output. Once it starts, the batch is
     // committed: cancellation and disconnects can no longer split it.
-    batch.committed = true;
-    clearTimeout(batch.timer);
-    try { await batch.paste(segments); }
-    catch (error) {
-      this.removeBatch(batch);
-      this.progress(batch, "failed", error instanceof Error ? error.message : "pasteFailed");
-      return false;
+    batch.committed = true
+    clearTimeout(batch.timer)
+    try {
+      await batch.paste(segments)
+    } catch (error) {
+      this.removeBatch(batch)
+      this.progress(batch, 'failed', error instanceof Error ? error.message : 'pasteFailed')
+      return false
     }
-    this.removeBatch(batch);
-    this.progress(batch, "completed");
-    return true;
+    this.removeBatch(batch)
+    this.progress(batch, 'completed')
+    return true
   }
   private removeBatch(batch: Batch) {
-    clearTimeout(batch.timer);
-    for (const token of batch.tokens) this.tokens.delete(token);
-    if (this.batches.get(batch.key) === batch) this.batches.delete(batch.key);
+    clearTimeout(batch.timer)
+    for (const token of batch.tokens) this.tokens.delete(token)
+    if (this.batches.get(batch.key) === batch) this.batches.delete(batch.key)
   }
   private cleanup(source: Source, paths: string[]) {
-    const cleaning = this.options.remove(source, paths).catch(() => {}).finally(() => this.closing.delete(cleaning));
-    this.closing.add(cleaning);
+    const cleaning = this.options
+      .remove(source, paths)
+      .catch(() => {})
+      .finally(() => this.closing.delete(cleaning))
+    this.closing.add(cleaning)
   }
   private fail(batch: Batch, error: string, cancelled = false, failedFile?: string) {
-    if (this.batches.get(batch.key) !== batch || batch.committed) return;
-    this.removeBatch(batch);
-    batch.controller.abort();
-    this.progress(batch, cancelled ? "cancelled" : "failed", error, failedFile);
+    if (this.batches.get(batch.key) !== batch || batch.committed) return
+    this.removeBatch(batch)
+    batch.controller.abort()
+    this.progress(batch, cancelled ? 'cancelled' : 'failed', error, failedFile)
     // A failed browser file never pastes a partial batch or deletes earlier successes.
     // Canvas still holds stored files, so their partial inbox copies are only waste.
-    if (cancelled || batch.stored) this.cleanup(batch.source, [...batch.paths]);
+    if (cancelled || batch.stored) this.cleanup(batch.source, [...batch.paths])
   }
   failed(socket: WebSocket, id: string) {
     for (const batch of this.batches.values())
-      if (batch.socket === socket && batch.id === id) this.fail(batch, "requestFailed");
+      if (batch.socket === socket && batch.id === id) this.fail(batch, 'requestFailed')
   }
   cancel(socket: WebSocket, id?: string) {
     for (const batch of this.batches.values())
-      if (batch.socket === socket && (id === undefined || batch.id === id)) this.fail(batch, "cancelled", true);
+      if (batch.socket === socket && (id === undefined || batch.id === id))
+        this.fail(batch, 'cancelled', true)
   }
   disconnected(socket: WebSocket) {
     for (const batch of this.batches.values())
-      if (batch.socket === socket) this.fail(batch, "interrupted", false, batch.files[batch.next]?.name);
+      if (batch.socket === socket)
+        this.fail(batch, 'interrupted', false, batch.files[batch.next]?.name)
   }
   closeSource(sourceId: string) {
-    this.sourceGenerations.set(sourceId, (this.sourceGenerations.get(sourceId) || 0) + 1);
-    for (const batch of this.batches.values()) if (batch.source.id === sourceId) this.fail(batch, "connectionRemoved");
+    this.sourceGenerations.set(sourceId, (this.sourceGenerations.get(sourceId) || 0) + 1)
+    for (const batch of this.batches.values())
+      if (batch.source.id === sourceId) this.fail(batch, 'connectionRemoved')
   }
   async receive(token: string, session: string, request: Request): Promise<204 | 404 | 409> {
-    const entry = this.tokens.get(token);
-    if (!entry || entry.batch.session !== session) return 404;
-    const { batch, index } = entry;
-    if (batch.busy || index !== batch.next) return 409;
-    batch.busy = true;
-    this.tokens.delete(token);
-    const reader = request.body?.getReader();
-    const interrupted = () => this.fail(batch, "interrupted", false, batch.files[index]!.name);
-    request.signal.addEventListener("abort", interrupted, { once: true });
-    const abortReader = () => { void reader?.cancel().catch(() => {}); };
-    batch.controller.signal.addEventListener("abort", abortReader, { once: true });
+    const entry = this.tokens.get(token)
+    if (!entry || entry.batch.session !== session) return 404
+    const { batch, index } = entry
+    if (batch.busy || index !== batch.next) return 409
+    batch.busy = true
+    this.tokens.delete(token)
+    const reader = request.body?.getReader()
+    const interrupted = () => this.fail(batch, 'interrupted', false, batch.files[index]!.name)
+    request.signal.addEventListener('abort', interrupted, { once: true })
+    const abortReader = () => {
+      void reader?.cancel().catch(() => {})
+    }
+    batch.controller.signal.addEventListener('abort', abortReader, { once: true })
     const chunks = async function* () {
-      if (!reader) return;
+      if (!reader) return
       while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) return;
-        yield chunk.value;
+        const chunk = await reader.read()
+        if (chunk.done) return
+        yield chunk.value
       }
-    };
-    let written = false;
+    }
+    let written = false
     try {
-      if (request.signal.aborted) throw new Error("cancelled");
-      const path = await this.options.write(batch.source, batch.files[index]!, chunks(), batch.controller.signal, received => this.written(batch, received));
-      written = true;
-      if (this.batches.get(batch.key) !== batch) { this.cleanup(batch.source, [path]); return 409; }
-      batch.paths.push(path);
-      batch.next++; batch.completedBytes += batch.files[index]!.size; batch.transferred = batch.completedBytes;
-      batch.busy = false;
-      this.deadline(batch);
+      if (request.signal.aborted) throw new Error('cancelled')
+      const path = await this.options.write(
+        batch.source,
+        batch.files[index]!,
+        chunks(),
+        batch.controller.signal,
+        (received) => this.written(batch, received),
+      )
+      written = true
+      if (this.batches.get(batch.key) !== batch) {
+        this.cleanup(batch.source, [path])
+        return 409
+      }
+      batch.paths.push(path)
+      batch.next++
+      batch.completedBytes += batch.files[index]!.size
+      batch.transferred = batch.completedBytes
+      batch.busy = false
+      this.deadline(batch)
       if (batch.next === batch.files.length) {
-        if (!await this.deliver(batch)) return 409;
-      } else this.progress(batch, "uploading");
-      return 204;
+        if (!(await this.deliver(batch))) return 409
+      } else this.progress(batch, 'uploading')
+      return 204
     } catch (error) {
-      this.fail(batch, error instanceof Error ? error.message : "failed", false, written ? undefined : batch.files[index]!.name);
-      return 409;
+      this.fail(
+        batch,
+        error instanceof Error ? error.message : 'failed',
+        false,
+        written ? undefined : batch.files[index]!.name,
+      )
+      return 409
     } finally {
-      request.signal.removeEventListener("abort", interrupted);
-      batch.controller.signal.removeEventListener("abort", abortReader);
-      await reader?.cancel().catch(() => {});
+      request.signal.removeEventListener('abort', interrupted)
+      batch.controller.signal.removeEventListener('abort', abortReader)
+      await reader?.cancel().catch(() => {})
     }
   }
   async closeAll() {
-    this.stopped = true;
-    for (const batch of this.batches.values()) this.fail(batch, "closed");
-    await Promise.all([...this.closing]);
+    this.stopped = true
+    for (const batch of this.batches.values()) this.fail(batch, 'closed')
+    await Promise.all([...this.closing])
   }
 }

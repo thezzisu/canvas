@@ -31,23 +31,65 @@ export type AppLocale = 'zh-CN' | 'en'
 export const languagePreference = useLocalStorage<'system' | AppLocale>('canvas:language', 'system')
 const preferredLanguages = usePreferredLanguages()
 const preferredLocale = computed<AppLocale>(() => {
-  if (languagePreference.value === 'zh-CN' || languagePreference.value === 'en') return languagePreference.value
+  if (languagePreference.value === 'zh-CN' || languagePreference.value === 'en')
+    return languagePreference.value
   for (const language of preferredLanguages.value) {
     if (/^zh(?:-|$)/i.test(language)) return 'zh-CN'
     if (/^en(?:-|$)/i.test(language)) return 'en'
   }
   return 'en'
 })
-const zh = { common: zhCommon, settings: zhSettings, app: zhApp, panels: zhPanels, terminal: zhTerminal, instances: zhInstances, canvasUi: zhCanvasUi, urls: zhUrls, windowPicker: zhWindowPicker, fileTransfer: zhFileTransfer, account: zhAccount, notifications: zhNotifications }
-const en: typeof zh = { common: enCommon, settings: enSettings, app: enApp, panels: enPanels, terminal: enTerminal, instances: enInstances, canvasUi: enCanvasUi, urls: enUrls, windowPicker: enWindowPicker, fileTransfer: enFileTransfer, account: enAccount, notifications: enNotifications }
-export const i18n = createI18n({ legacy: false, locale: preferredLocale.value, fallbackLocale: 'en', messages: { 'zh-CN': zh, en } })
+const zh = {
+  common: zhCommon,
+  settings: zhSettings,
+  app: zhApp,
+  panels: zhPanels,
+  terminal: zhTerminal,
+  instances: zhInstances,
+  canvasUi: zhCanvasUi,
+  urls: zhUrls,
+  windowPicker: zhWindowPicker,
+  fileTransfer: zhFileTransfer,
+  account: zhAccount,
+  notifications: zhNotifications,
+}
+const en: typeof zh = {
+  common: enCommon,
+  settings: enSettings,
+  app: enApp,
+  panels: enPanels,
+  terminal: enTerminal,
+  instances: enInstances,
+  canvasUi: enCanvasUi,
+  urls: enUrls,
+  windowPicker: enWindowPicker,
+  fileTransfer: enFileTransfer,
+  account: enAccount,
+  notifications: enNotifications,
+}
+export const i18n = createI18n({
+  legacy: false,
+  locale: preferredLocale.value,
+  fallbackLocale: 'en',
+  messages: { 'zh-CN': zh, en },
+})
 export const { t, te, locale } = i18n.global
-export const uiLocale = computed(() => locale.value === 'zh-CN' ? zhUi : enUi)
-watch(preferredLocale, value => { locale.value = value }, { flush: 'sync' })
+export const uiLocale = computed(() => (locale.value === 'zh-CN' ? zhUi : enUi))
+watch(
+  preferredLocale,
+  (value) => {
+    locale.value = value
+  },
+  { flush: 'sync' },
+)
 
 export function watchDocumentLocale() {
-  watch(locale, () => {
-    document.documentElement.lang = locale.value
-    document.documentElement.dir = uiLocale.value.dir || 'ltr'
-  }, { immediate: true, flush: 'sync' })
+  watch(
+    locale,
+    () => {
+      document.documentElement.lang = locale.value
+      document.documentElement.dir = uiLocale.value.dir || 'ltr'
+    },
+    { immediate: true, flush: 'sync' },
+  )
 }

@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import type { WindowContentItem, WindowContentOpen, WindowContentScan } from '../shared/window-content.ts'
+import type {
+  WindowContentItem,
+  WindowContentOpen,
+  WindowContentScan,
+} from '../shared/window-content.ts'
 import type { NativeContentPane } from './herdr/content.ts'
 import type { AssetStore } from './assets.ts'
 import { contentCandidates } from './content-candidates.ts'
@@ -19,7 +23,11 @@ interface ScanRecord {
 export interface WindowContentOptions {
   store: Store
   assets: AssetStore
-  content(source: Source, spaceId: string, windowId: string): Promise<NativeContentPane[] | undefined>
+  content(
+    source: Source,
+    spaceId: string,
+    windowId: string,
+  ): Promise<NativeContentPane[] | undefined>
   registerStaged(assetId: string, sessionId: string): string
   readFile?(source: Source, path: string, signal: AbortSignal): Promise<SourceFile>
   regularFiles?(source: Source, paths: string[], signal: AbortSignal): Promise<Map<string, string>>
@@ -28,7 +36,10 @@ export interface WindowContentOptions {
 export class WindowContentService {
   private scans = new Map<string, ScanRecord>()
   private transfers = new Map<AbortController, ScanRecord>()
-  private scanning = new Map<AbortController, { sourceId: string; sourceKey: string; sessionId: string }>()
+  private scanning = new Map<
+    AbortController,
+    { sourceId: string; sourceKey: string; sessionId: string }
+  >()
   constructor(private readonly options: WindowContentOptions) {
     options.store.on('sessions', this.invalidate)
     options.store.on('change', this.invalidate)
@@ -37,7 +48,11 @@ export class WindowContentService {
   private invalidate = () => {
     const valid = (record: Pick<ScanRecord, 'sourceId' | 'sourceKey' | 'sessionId'>) => {
       const source = this.options.store.get<Source>('source', record.sourceId)
-      return source && sourceConnectionKey(source) === record.sourceKey && this.options.store.hasSession(record.sessionId)
+      return (
+        source &&
+        sourceConnectionKey(source) === record.sourceKey &&
+        this.options.store.hasSession(record.sessionId)
+      )
     }
     for (const [id, record] of this.scans) {
       if (!valid(record)) this.scans.delete(id)
@@ -46,44 +61,73 @@ export class WindowContentService {
     for (const [controller, record] of this.scanning) if (!valid(record)) controller.abort()
   }
 
-  async read(source: Source, spaceId: string, windowId: string, sessionId: string): Promise<NativeContentPane[]> {
+  async read(
+    source: Source,
+    spaceId: string,
+    windowId: string,
+    sessionId: string,
+  ): Promise<NativeContentPane[]> {
     if (!this.options.store.hasSession(sessionId)) throw new Error('Please sign in')
     const sourceKey = sourceConnectionKey(source)
     const panes = await this.options.content(source, spaceId, windowId)
     const current = this.options.store.get<Source>('source', source.id)
-    if (!current || sourceConnectionKey(current) !== sourceKey) throw new Error('Connection changed; try again')
+    if (!current || sourceConnectionKey(current) !== sourceKey)
+      throw new Error('Connection changed; try again')
     if (!this.options.store.hasSession(sessionId)) throw new Error('Please sign in')
     if (!panes) throw new Error('Open this window before reading its content')
     return panes
   }
 
-  async scan(source: Source, spaceId: string, windowId: string, sessionId: string, signal = new AbortController().signal): Promise<WindowContentScan> {
+  async scan(
+    source: Source,
+    spaceId: string,
+    windowId: string,
+    sessionId: string,
+    signal = new AbortController().signal,
+  ): Promise<WindowContentScan> {
     const sourceKey = sourceConnectionKey(source)
     const panes = await this.read(source, spaceId, windowId, sessionId)
     const { fileChoices, ...candidates } = contentCandidates(panes)
     const scan = { id: randomUUID(), ...candidates }
-    const allPaths = [...new Set([...fileChoices.values()].flatMap(choice => [...choice.paths, ...choice.references]))]
-    const paths = allPaths.slice(0, 200), checked = new Set(paths)
+    const allPaths = [
+      ...new Set(
+        [...fileChoices.values()].flatMap((choice) => [...choice.paths, ...choice.references]),
+      ),
+    ]
+    const paths = allPaths.slice(0, 200),
+      checked = new Set(paths)
     if (paths.length < allPaths.length) scan.truncated = true
-    const controller = new AbortController(), abort = () => controller.abort()
-    signal.throwIfAborted(); signal.addEventListener('abort', abort, { once: true })
+    const controller = new AbortController(),
+      abort = () => controller.abort()
+    signal.throwIfAborted()
+    signal.addEventListener('abort', abort, { once: true })
     this.scanning.set(controller, { sourceId: source.id, sourceKey, sessionId })
     try {
       let files = new Map<string, string>()
       if (paths.length) {
-        try { files = await (this.options.regularFiles || regularSourceFiles)(source, paths, controller.signal) }
-        catch (error) { if (controller.signal.aborted) throw error; scan.incomplete = true }
+        try {
+          files = await (this.options.regularFiles || regularSourceFiles)(
+            source,
+            paths,
+            controller.signal,
+          )
+        } catch (error) {
+          if (controller.signal.aborted) throw error
+          scan.incomplete = true
+        }
       }
       controller.signal.throwIfAborted()
-      scan.panes = scan.panes.flatMap(pane => {
+      scan.panes = scan.panes.flatMap((pane) => {
         const seen = new Set<string>()
-        const items = pane.items.flatMap<WindowContentItem>(item => {
+        const items = pane.items.flatMap<WindowContentItem>((item) => {
           if (item.kind === 'link') return [item]
           const choice = fileChoices.get(item.id)!
-          const existing = (paths: string[]) => [...new Set(paths.flatMap(path => files.has(path) ? [files.get(path)!] : []))]
-          if (!choice.paths.every(path => checked.has(path))) return []
+          const existing = (paths: string[]) => [
+            ...new Set(paths.flatMap((path) => (files.has(path) ? [files.get(path)!] : []))),
+          ]
+          if (!choice.paths.every((path) => checked.has(path))) return []
           const exact = existing(choice.paths)
-          if (!exact.length && !choice.references.every(path => checked.has(path))) return []
+          if (!exact.length && !choice.references.every((path) => checked.has(path))) return []
           const matches = exact.length ? exact : existing(choice.references)
           if (matches.length !== 1) return []
           const path = matches[0]!
@@ -94,29 +138,48 @@ export class WindowContentService {
         return items.length ? [{ ...pane, items }] : []
       })
     } finally {
-      signal.removeEventListener('abort', abort); this.scanning.delete(controller)
+      signal.removeEventListener('abort', abort)
+      this.scanning.delete(controller)
     }
     for (const [id, record] of this.scans) if (record.expires <= Date.now()) this.scans.delete(id)
     if (this.scans.size >= 128) this.scans.delete(this.scans.keys().next().value!)
-    this.scans.set(scan.id, { sessionId, sourceId: source.id, sourceKey, windowId, scan, expires: Date.now() + 10 * 60_000 })
+    this.scans.set(scan.id, {
+      sessionId,
+      sourceId: source.id,
+      sourceKey,
+      windowId,
+      scan,
+      expires: Date.now() + 10 * 60_000,
+    })
     return scan
   }
 
   private source(record: ScanRecord): Source {
     if (!this.options.store.hasSession(record.sessionId)) throw new Error('Please sign in')
     const source = this.options.store.get<Source>('source', record.sourceId)
-    if (!source || sourceConnectionKey(source) !== record.sourceKey) throw new Error('Connection changed; scan again')
+    if (!source || sourceConnectionKey(source) !== record.sourceKey)
+      throw new Error('Connection changed; scan again')
     return source
   }
 
-  async open(scanId: string, itemId: string, sessionId: string, context: DownloadContext & { position?: { x: number; y: number } }, signal: AbortSignal): Promise<WindowContentOpen | undefined> {
+  async open(
+    scanId: string,
+    itemId: string,
+    sessionId: string,
+    context: DownloadContext & { position?: { x: number; y: number } },
+    signal: AbortSignal,
+  ): Promise<WindowContentOpen | undefined> {
     const record = this.scans.get(scanId)
     if (!record || record.sessionId !== sessionId || record.expires <= Date.now()) return
-    const item = record.scan.panes.flatMap(pane => pane.items).find(item => item.id === itemId)
+    const item = record.scan.panes.flatMap((pane) => pane.items).find((item) => item.id === itemId)
     if (!item || item.kind !== 'file' || !item.path) return
-    if ([...this.transfers.values()].filter(active => active.sourceId === record.sourceId).length >= 4)
+    if (
+      [...this.transfers.values()].filter((active) => active.sourceId === record.sourceId).length >=
+      4
+    )
       throw new Error('Too many file transfers; try again when one finishes')
-    const source = this.source(record), controller = new AbortController()
+    const source = this.source(record),
+      controller = new AbortController()
     const abort = () => controller.abort()
     signal.throwIfAborted()
     signal.addEventListener('abort', abort, { once: true })
@@ -124,20 +187,36 @@ export class WindowContentService {
     let file: SourceFile | undefined, upload: Awaited<ReturnType<AssetStore['begin']>> | undefined
     try {
       file = await (this.options.readFile || readSourceFile)(source, item.path, controller.signal)
-      controller.signal.throwIfAborted(); this.source(record)
+      controller.signal.throwIfAborted()
+      this.source(record)
       upload = await this.options.assets.begin({ filename: file.filename, size: file.size })
       for await (const bytes of file.chunks) {
-        controller.signal.throwIfAborted(); this.source(record)
+        controller.signal.throwIfAborted()
+        this.source(record)
         await upload.write(bytes)
       }
-      controller.signal.throwIfAborted(); this.source(record)
-      const destination = context.position ? { canvasId: context.canvasId, position: context.position }
+      controller.signal.throwIfAborted()
+      this.source(record)
+      const destination = context.position
+        ? { canvasId: context.canvasId, position: context.position }
         : { ...context, sourceId: record.sourceId, windowId: record.windowId }
-      const asset = await upload.complete({ ...destination,
-        origin: { sourceId: source.id, sourceKey: record.sourceKey, path: item.path } }, controller.signal)
+      const asset = await upload.complete(
+        {
+          ...destination,
+          origin: { sourceId: source.id, sourceKey: record.sourceKey, path: item.path },
+        },
+        controller.signal,
+      )
       const id = asset.temporary ? this.options.registerStaged(asset.id, sessionId) : asset.id
-      return { id, filename: asset.filename, size: asset.size, mime: asset.mime, sourcePreview: asset.sourcePreview,
-        temporary: asset.temporary, url: asset.temporary ? `/api/downloads/${id}` : `/api/files/${id}` }
+      return {
+        id,
+        filename: asset.filename,
+        size: asset.size,
+        mime: asset.mime,
+        sourcePreview: asset.sourcePreview,
+        temporary: asset.temporary,
+        url: asset.temporary ? `/api/downloads/${id}` : `/api/files/${id}`,
+      }
     } catch (error) {
       await upload?.abort()
       throw error
@@ -150,8 +229,10 @@ export class WindowContentService {
 
   closeSource(sourceId: string) {
     for (const [id, record] of this.scans) if (record.sourceId === sourceId) this.scans.delete(id)
-    for (const [controller, record] of this.transfers) if (record.sourceId === sourceId) controller.abort()
-    for (const [controller, record] of this.scanning) if (record.sourceId === sourceId) controller.abort()
+    for (const [controller, record] of this.transfers)
+      if (record.sourceId === sourceId) controller.abort()
+    for (const [controller, record] of this.scanning)
+      if (record.sourceId === sourceId) controller.abort()
   }
 
   close() {

@@ -12,24 +12,48 @@ export function serveCanvasStatic(directory: string, mount = ''): MiddlewareHand
   const root = resolve(directory)
   return async (c, next) => {
     const path = mount ? c.req.path.slice(mount.length) : c.req.path
-    if (!['GET', 'HEAD'].includes(c.req.method) || !c.req.path.startsWith(mount) || /^\/api(?:\/|$)/.test(path)) return next()
+    if (
+      !['GET', 'HEAD'].includes(c.req.method) ||
+      !c.req.path.startsWith(mount) ||
+      /^\/api(?:\/|$)/.test(path)
+    )
+      return next()
     let pathname: string
-    try { pathname = decodeURIComponent(path) } catch { return c.notFound() }
-    if (pathname.includes('\\') || pathname.includes('\0') || pathname.split('/').some(part => part === '.' || part === '..')) return c.notFound()
+    try {
+      pathname = decodeURIComponent(path)
+    } catch {
+      return c.notFound()
+    }
+    if (
+      pathname.includes('\\') ||
+      pathname.includes('\0') ||
+      pathname.split('/').some((part) => part === '.' || part === '..')
+    )
+      return c.notFound()
     const file = join(root, pathname === '/' ? 'index.html' : pathname)
     const info = await stat(file).catch(() => undefined)
     if (!info?.isFile()) return c.notFound()
 
     const etag = `W/"${info.size.toString(16)}-${info.mtimeMs.toString(16)}"`
-    c.header('Cache-Control', hashedAsset.test(pathname) ? 'public, max-age=31536000, immutable' : 'public, max-age=0, must-revalidate')
+    c.header(
+      'Cache-Control',
+      hashedAsset.test(pathname)
+        ? 'public, max-age=31536000, immutable'
+        : 'public, max-age=0, must-revalidate',
+    )
     c.header('ETag', etag)
     c.header('Last-Modified', info.mtime.toUTCString())
     c.header('X-Content-Type-Options', 'nosniff')
     const match = c.req.header('If-None-Match')
     const modified = c.req.header('If-Modified-Since')
-    const notModified = match !== undefined
-      ? match.split(',').some(value => value.trim() === '*' || value.trim().replace(/^W\//, '') === etag.slice(2))
-      : modified !== undefined && Math.floor(info.mtimeMs / 1000) * 1000 <= Date.parse(modified)
+    const notModified =
+      match !== undefined
+        ? match
+            .split(',')
+            .some(
+              (value) => value.trim() === '*' || value.trim().replace(/^W\//, '') === etag.slice(2),
+            )
+        : modified !== undefined && Math.floor(info.mtimeMs / 1000) * 1000 <= Date.parse(modified)
     if (notModified) return c.body(null, 304)
 
     c.header('Content-Type', getMimeType(file) || 'application/octet-stream')

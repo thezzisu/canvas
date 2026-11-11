@@ -133,7 +133,8 @@
 }
 /* Center labels by cap height, independent of each font's ascent and descent.
    Padding keeps descenders and CJK glyphs inside ellipsis clipping. */
-.sidebar :is(.canvas-nav-name > span, .canvas-nav-count, .source-empty-label, .nav-section-label > span) {
+.sidebar
+  :is(.canvas-nav-name > span, .canvas-nav-count, .source-empty-label, .nav-section-label > span) {
   text-box: trim-both cap alphabetic;
   padding-block: 0.3em;
 }
@@ -171,7 +172,7 @@
   border-radius: 5px;
 }
 .sidebar-account:hover,
-.sidebar-account[aria-expanded="true"] {
+.sidebar-account[aria-expanded='true'] {
   background: #ffffff05;
 }
 .sidebar-account > span:nth-child(2) {
@@ -222,7 +223,8 @@
   inset: var(--window-controls-height) auto 0 0;
   width: min(292px, calc(100% - 44px));
   min-width: 0;
-  padding: var(--ui-safe-top) max(6px, var(--ui-safe-right)) var(--ui-safe-bottom) max(6px, var(--ui-safe-left));
+  padding: var(--ui-safe-top) max(6px, var(--ui-safe-right)) var(--ui-safe-bottom)
+    max(6px, var(--ui-safe-left));
   z-index: 42;
   box-shadow: 12px 0 40px #0005;
   overflow: hidden;

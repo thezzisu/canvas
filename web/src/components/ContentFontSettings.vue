@@ -18,30 +18,127 @@ const field = { root: 'items-center gap-4', labelWrapper: 'justify-start', descr
 <template>
   <form class="grid gap-4" @submit.prevent>
     <ol class="grid gap-2" :aria-label="t('settings.fontOrder')">
-      <li v-for="(entry, index) in editor.draft.stack" :key="editor.entryIds[index]" class="font-stack-entry flex min-w-0 items-center gap-2">
-        <span class="w-3 shrink-0 text-center text-xs tabular-nums text-dimmed" :title="t(index === 0 ? 'settings.primaryFont' : 'settings.fallbackFont')">{{ n(index + 1) }}</span>
-        <UInputMenu :model-value="entry.family" mode="autocomplete" :items="editor.families" :open-on-focus="false" color="neutral" class="min-w-0 flex-1" :aria-label="t('settings.font', { index: n(index + 1) })" :title="entry.family" :placeholder="t('settings.fontPlaceholder')" :maxlength="100"
-          @update:model-value="editor.setFamily(index, $event)"><template #empty>{{ t('settings.localFont') }}</template></UInputMenu>
+      <li
+        v-for="(entry, index) in editor.draft.stack"
+        :key="editor.entryIds[index]"
+        class="font-stack-entry flex min-w-0 items-center gap-2"
+      >
+        <span
+          class="w-3 shrink-0 text-center text-xs tabular-nums text-dimmed"
+          :title="t(index === 0 ? 'settings.primaryFont' : 'settings.fallbackFont')"
+          >{{ n(index + 1) }}</span
+        >
+        <UInputMenu
+          :model-value="entry.family"
+          mode="autocomplete"
+          :items="editor.families"
+          :open-on-focus="false"
+          color="neutral"
+          class="min-w-0 flex-1"
+          :aria-label="t('settings.font', { index: n(index + 1) })"
+          :title="entry.family"
+          :placeholder="t('settings.fontPlaceholder')"
+          :maxlength="100"
+          @update:model-value="editor.setFamily(index, $event)"
+          ><template #empty>{{ t('settings.localFont') }}</template></UInputMenu
+        >
         <UFieldGroup>
-          <UButton type="button" color="neutral" variant="ghost" icon="i-lucide-chevron-up" :disabled="index === 0" :aria-label="t('settings.moveFontUp', { index: n(index + 1) })" @click="editor.moveFont(index, -1)" />
-          <UButton type="button" color="neutral" variant="ghost" icon="i-lucide-chevron-down" :disabled="index === editor.draft.stack.length - 1" :aria-label="t('settings.moveFontDown', { index: n(index + 1) })" @click="editor.moveFont(index, 1)" />
-          <UButton type="button" color="neutral" variant="ghost" icon="i-lucide-x" :disabled="editor.draft.stack.length === 1" :aria-label="t('settings.deleteFont', { index: n(index + 1) })" @click="editor.removeFont(index)" />
+          <UButton
+            type="button"
+            color="neutral"
+            variant="ghost"
+            icon="i-lucide-chevron-up"
+            :disabled="index === 0"
+            :aria-label="t('settings.moveFontUp', { index: n(index + 1) })"
+            @click="editor.moveFont(index, -1)"
+          />
+          <UButton
+            type="button"
+            color="neutral"
+            variant="ghost"
+            icon="i-lucide-chevron-down"
+            :disabled="index === editor.draft.stack.length - 1"
+            :aria-label="t('settings.moveFontDown', { index: n(index + 1) })"
+            @click="editor.moveFont(index, 1)"
+          />
+          <UButton
+            type="button"
+            color="neutral"
+            variant="ghost"
+            icon="i-lucide-x"
+            :disabled="editor.draft.stack.length === 1"
+            :aria-label="t('settings.deleteFont', { index: n(index + 1) })"
+            @click="editor.removeFont(index)"
+          />
         </UFieldGroup>
       </li>
     </ol>
-    <UButton type="button" color="neutral" variant="outline" size="sm" icon="i-lucide-plus" class="justify-self-start" :disabled="editor.draft.stack.length >= 12" :aria-label="t('settings.addFont')" @click="editor.addFont">{{ t('settings.add') }}</UButton>
+    <UButton
+      type="button"
+      color="neutral"
+      variant="outline"
+      size="sm"
+      icon="i-lucide-plus"
+      class="justify-self-start"
+      :disabled="editor.draft.stack.length >= 12"
+      :aria-label="t('settings.addFont')"
+      @click="editor.addFont"
+      >{{ t('settings.add') }}</UButton
+    >
     <UFormField :label="t('settings.ligatures')" orientation="horizontal" :ui="field">
       <USwitch v-model="editor.draft.ligatures" :aria-label="t('settings.ligatures')" />
     </UFormField>
-    <UFormField :label="t('settings.preview')" :ui="{ labelWrapper: 'justify-start gap-2', hint: 'text-xs' }">
-      <template v-if="editor.loading || editor.saving" #hint><span class="font-loading inline-flex items-center gap-1.5" role="status"><UIcon name="i-lucide-loader-circle" class="size-3 animate-spin" />{{ t(editor.saving ? 'settings.applying' : 'settings.loadingFont') }}</span></template>
-      <pre class="font-preview" :style="editor.previewStyle" :aria-busy="editor.loading" :aria-label="t('settings.fontPreview')">{{ editor.previewText }}</pre>
+    <UFormField
+      :label="t('settings.preview')"
+      :ui="{ labelWrapper: 'justify-start gap-2', hint: 'text-xs' }"
+    >
+      <template v-if="editor.loading || editor.saving" #hint
+        ><span class="font-loading inline-flex items-center gap-1.5" role="status"
+          ><UIcon name="i-lucide-loader-circle" class="size-3 animate-spin" />{{
+            t(editor.saving ? 'settings.applying' : 'settings.loadingFont')
+          }}</span
+        ></template
+      >
+      <pre
+        class="font-preview"
+        :style="editor.previewStyle"
+        :aria-busy="editor.loading"
+        :aria-label="t('settings.fontPreview')"
+        >{{ editor.previewText }}</pre>
     </UFormField>
-    <UAlert v-if="editor.fontError" color="error" variant="subtle" :title="editor.fontErrorMessage" role="alert"
-      :actions="[{ label: t('common.retry'), color: 'error', variant: 'link', 'aria-label': t('settings.retryFont'), onClick: editor.retryPreview }]" />
+    <UAlert
+      v-if="editor.fontError"
+      color="error"
+      variant="subtle"
+      :title="editor.fontErrorMessage"
+      role="alert"
+      :actions="[
+        {
+          label: t('common.retry'),
+          color: 'error',
+          variant: 'link',
+          'aria-label': t('settings.retryFont'),
+          onClick: editor.retryPreview,
+        },
+      ]"
+    />
   </form>
 </template>
 
 <style scoped>
-.font-preview{margin:0;padding:12px;min-height:108px;overflow:auto;border:1px solid var(--ui-border);border-radius:calc(var(--ui-radius)*1.5);background:var(--ui-bg-muted);color:var(--ui-text-highlighted);font-family:var(--content-font-family);font-size:13px;line-height:1.6;white-space:pre;tab-size:4}
+.font-preview {
+  margin: 0;
+  padding: 12px;
+  min-height: 108px;
+  overflow: auto;
+  border: 1px solid var(--ui-border);
+  border-radius: calc(var(--ui-radius) * 1.5);
+  background: var(--ui-bg-muted);
+  color: var(--ui-text-highlighted);
+  font-family: var(--content-font-family);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre;
+  tab-size: 4;
+}
 </style>

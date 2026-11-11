@@ -6,8 +6,31 @@ import { trustedPreviewRequest, closeTrustedPreview } from '../trusted-preview'
 const { t } = useI18n()
 </script>
 <template>
-  <CanvasModal v-if="trustedPreviewRequest" :open="true" :title="t('panels.preview.trustTitle')" :description="t('panels.preview.trustDescription')" @update:open="value => { if (!value) closeTrustedPreview() }">
-    <template #body><p class="truncate text-sm text-muted">{{ trustedPreviewRequest?.title }}</p></template>
-    <template #footer><div class="flex w-full justify-end gap-2"><UButton color="neutral" variant="outline" :label="t('common.cancel')" @click="closeTrustedPreview()" /><UButton :label="t('panels.preview.trustConfirm')" @click="closeTrustedPreview(true)" /></div></template>
+  <CanvasModal
+    v-if="trustedPreviewRequest"
+    :open="true"
+    :title="t('panels.preview.trustTitle')"
+    :description="t('panels.preview.trustDescription')"
+    @update:open="
+      (value) => {
+        if (!value) closeTrustedPreview()
+      }
+    "
+  >
+    <template #body
+      ><p class="truncate text-sm text-muted">{{ trustedPreviewRequest?.title }}</p></template
+    >
+    <template #footer
+      ><div class="flex w-full justify-end gap-2">
+        <UButton
+          color="neutral"
+          variant="outline"
+          :label="t('common.cancel')"
+          @click="closeTrustedPreview()"
+        /><UButton
+          :label="t('panels.preview.trustConfirm')"
+          @click="closeTrustedPreview(true)"
+        /></div
+    ></template>
   </CanvasModal>
 </template>

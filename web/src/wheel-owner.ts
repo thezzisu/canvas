@@ -13,5 +13,8 @@ export class WheelOwner<T> {
     return this.owner
   }
 
-  reset() { this.last = -Infinity; this.owner = null }
+  reset() {
+    this.last = -Infinity
+    this.owner = null
+  }
 }

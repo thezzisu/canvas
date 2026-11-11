@@ -23,13 +23,23 @@ test('the longest matching extension wins before shorter ones', () => {
 })
 
 test('unknown and extensionless names fall back to the default file icon', () => {
-  for (const name of ['', 'README-notes', 'archive.unknownext', 'trailing.']) assert.equal(resolve(name), manifest.file)
+  for (const name of ['', 'README-notes', 'archive.unknownext', 'trailing.'])
+    assert.equal(resolve(name), manifest.file)
 })
 
 test('every resolvable icon ships an SVG outside the excluded folder and light variants', () => {
-  for (const icon of new Set([manifest.file, ...Object.values(manifest.fileNames), ...Object.values(manifest.fileExtensions)])) {
-    const file = (manifest.iconDefinitions as Record<string, { iconPath: string }>)[icon].iconPath.split('/').at(-1)!
-    assert(existsSync(new URL(`../../node_modules/material-icon-theme/icons/${file}`, import.meta.url)), file)
+  for (const icon of new Set([
+    manifest.file,
+    ...Object.values(manifest.fileNames),
+    ...Object.values(manifest.fileExtensions),
+  ])) {
+    const file = (manifest.iconDefinitions as Record<string, { iconPath: string }>)[icon].iconPath
+      .split('/')
+      .at(-1)!
+    assert(
+      existsSync(new URL(`../../node_modules/material-icon-theme/icons/${file}`, import.meta.url)),
+      file,
+    )
     assert(!file.startsWith('folder') && !file.includes('_light.'), file)
   }
 })

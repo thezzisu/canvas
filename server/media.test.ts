@@ -13,42 +13,107 @@ import { Store } from './state.ts'
 import type { TerminalManager } from './terminals.ts'
 
 async function fixture(t: TestContext) {
-  const dir = await mkdtemp(join(tmpdir(), 'canvas-media-')), store = new Store(join(dir, 'state.db'))
-  store.addSession('owner'); store.addSession('other')
+  const dir = await mkdtemp(join(tmpdir(), 'canvas-media-')),
+    store = new Store(join(dir, 'state.db'))
+  store.addSession('owner')
+  store.addSession('other')
   const bytes = Buffer.from('%PDF-1.7\nfixture\n%%EOF\n')
-  const app = createApp(store, { username: 'fixture', passwordHash: 'unused' }, {} as TerminalManager, {
-    allowedOrigins: new Set(['https://c.zzs1.cn']),
-    openDownload: async (id, session) => id === 'file' && session === 'owner' ? {
-      body: Readable.from([bytes.subarray(0, 8), bytes.subarray(8)]),
-      headers: { 'Content-Type': 'application/pdf', 'Content-Length': String(bytes.length), 'Content-Disposition': 'attachment; filename="report.pdf"' },
-      previewHeaders: { 'Content-Type': 'application/pdf', 'Content-Length': String(bytes.length), 'Content-Disposition': 'inline; filename="report.pdf"' },
-    } : undefined,
+  const app = createApp(
+    store,
+    { username: 'fixture', passwordHash: 'unused' },
+    {} as TerminalManager,
+    {
+      allowedOrigins: new Set(['https://c.zzs1.cn']),
+      openDownload: async (id, session) =>
+        id === 'file' && session === 'owner'
+          ? {
+              body: Readable.from([bytes.subarray(0, 8), bytes.subarray(8)]),
+              headers: {
+                'Content-Type': 'application/pdf',
+                'Content-Length': String(bytes.length),
+                'Content-Disposition': 'attachment; filename="report.pdf"',
+              },
+              previewHeaders: {
+                'Content-Type': 'application/pdf',
+                'Content-Length': String(bytes.length),
+                'Content-Disposition': 'inline; filename="report.pdf"',
+              },
+            }
+          : undefined,
+    },
+  )
+  t.after(async () => {
+    store.close()
+    await rm(dir, { recursive: true, force: true })
   })
-  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }) })
-  const call = (path: string, method = 'GET', body?: unknown, headers: Record<string, string> = {}) => app.request(`http://canvas.test${path}`, {
-    method, headers: { Origin: 'https://c.zzs1.cn', Authorization: 'Bearer owner', 'Content-Type': 'application/json', ...headers },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  })
+  const call = (
+    path: string,
+    method = 'GET',
+    body?: unknown,
+    headers: Record<string, string> = {},
+  ) =>
+    app.request(`http://canvas.test${path}`, {
+      method,
+      headers: {
+        Origin: 'https://c.zzs1.cn',
+        Authorization: 'Bearer owner',
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
   return { store, bytes, call }
 }
 
-test('cross-origin API accepts only configured exact origins and uses no credentials', async t => {
+test('cross-origin API accepts only configured exact origins and uses no credentials', async (t) => {
   const f = await fixture(t)
-  const preflight = await f.call('/api/state', 'OPTIONS', undefined, { Authorization: '', 'Access-Control-Request-Headers': 'authorization,content-type' })
+  const preflight = await f.call('/api/state', 'OPTIONS', undefined, {
+    Authorization: '',
+    'Access-Control-Request-Headers': 'authorization,content-type',
+  })
   assert.equal(preflight.status, 204)
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://c.zzs1.cn')
   assert.match(preflight.headers.get('access-control-allow-headers')!, /Authorization/u)
   assert.equal(preflight.headers.get('access-control-allow-credentials'), null)
   assert.equal((await f.call('/api/state')).status, 200)
-  assert.equal((await f.call('/api/state', 'GET', undefined, { Origin: 'https://c.zzs1.cn.other.test' })).status, 403)
+  assert.equal(
+    (await f.call('/api/state', 'GET', undefined, { Origin: 'https://c.zzs1.cn.other.test' }))
+      .status,
+    403,
+  )
   assert.equal((await f.call('/api/state', 'GET', undefined, { Origin: 'null' })).status, 403)
 })
 
-test('media tickets authorize exact objects and stream reusable PDF range, preview and download responses', async t => {
+test('media tickets authorize exact objects and stream reusable PDF range, preview and download responses', async (t) => {
   const f = await fixture(t)
-  assert.equal((await f.call('/api/media-tickets', 'POST', { path: '/api/downloads/file' }, { Authorization: '' })).status, 401)
-  assert.equal((await f.call('/api/media-tickets', 'POST', { path: '/api/downloads/file' }, { Authorization: 'Bearer other' })).status, 404)
-  for (const path of ['/api/state', '/api/downloads/file?preview=1', 'https://other.test/api/files/file', '/api/files/../state'])
+  assert.equal(
+    (
+      await f.call(
+        '/api/media-tickets',
+        'POST',
+        { path: '/api/downloads/file' },
+        { Authorization: '' },
+      )
+    ).status,
+    401,
+  )
+  assert.equal(
+    (
+      await f.call(
+        '/api/media-tickets',
+        'POST',
+        { path: '/api/downloads/file' },
+        { Authorization: 'Bearer other' },
+      )
+    ).status,
+    404,
+  )
+  for (const path of [
+    '/api/state',
+    '/api/downloads/file?preview=1',
+    'https://other.test/api/files/file',
+    '/api/files/../state',
+  ])
     assert.equal((await f.call('/api/media-tickets', 'POST', { path })).status, 400)
   const result = await f.call('/api/media-tickets', 'POST', { path: '/api/downloads/file' })
   assert.equal(result.status, 200)
@@ -60,96 +125,203 @@ test('media tickets authorize exact objects and stream reusable PDF range, previ
   assert.match(response.headers.get('content-disposition')!, /^inline/u)
   assert.equal(response.headers.get('cross-origin-resource-policy'), 'cross-origin')
   assert.equal(response.headers.get('x-frame-options'), null)
-  assert.equal(response.headers.get('content-security-policy'), "default-src 'none'; frame-ancestors 'self' https://c.zzs1.cn")
-  for (const [range, start, end] of [['bytes=2-10', 2, 11], ['bytes=-4', f.bytes.length - 4, f.bytes.length], ['bytes=9-', 9, f.bytes.length]] as const) {
+  assert.equal(
+    response.headers.get('content-security-policy'),
+    "default-src 'none'; frame-ancestors 'self' https://c.zzs1.cn",
+  )
+  for (const [range, start, end] of [
+    ['bytes=2-10', 2, 11],
+    ['bytes=-4', f.bytes.length - 4, f.bytes.length],
+    ['bytes=9-', 9, f.bytes.length],
+  ] as const) {
     const partial = await f.call(url, 'GET', undefined, { Authorization: '', Range: range })
     assert.equal(partial.status, 206)
     assert.deepEqual(Buffer.from(await partial.arrayBuffer()), f.bytes.subarray(start, end))
-    assert.equal(partial.headers.get('content-range'), `bytes ${start}-${end - 1}/${f.bytes.length}`)
+    assert.equal(
+      partial.headers.get('content-range'),
+      `bytes ${start}-${end - 1}/${f.bytes.length}`,
+    )
   }
   const head = await f.call(url, 'HEAD', undefined, { Authorization: '' })
-  assert.equal(head.headers.get('content-length'), String(f.bytes.length)); assert.equal(await head.text(), '')
+  assert.equal(head.headers.get('content-length'), String(f.bytes.length))
+  assert.equal(await head.text(), '')
   assert.equal((await f.call(url, 'GET', undefined, { Range: 'bytes=999-' })).status, 416)
-  const download = await (await f.call('/api/media-tickets', 'POST', { path: '/api/downloads/file', download: true })).json()
+  const download = await (
+    await f.call('/api/media-tickets', 'POST', { path: '/api/downloads/file', download: true })
+  ).json()
   const attachment = await f.call(download.url, 'GET', undefined, { Authorization: '' })
-  assert.match(attachment.headers.get('content-disposition')!, /^attachment/u); await attachment.body?.cancel()
+  assert.match(attachment.headers.get('content-disposition')!, /^attachment/u)
+  await attachment.body?.cancel()
   f.store.removeSession('owner')
   assert.equal((await f.call(url, 'GET', undefined, { Authorization: '' })).status, 404)
 })
 
 test('media tickets expire and active formats stay sandboxed', async () => {
-  let now = 1000, active = true
-  const tickets = new MediaTickets(() => active, async () => ({ body: Readable.from(['<svg/>']), headers: {
-    'Content-Type': 'image/svg+xml', 'Content-Length': '6', 'X-Frame-Options': 'DENY',
-  } }), new Set(['https://c.zzs1.cn']), () => now)
-  const ticket = (await tickets.create('/api/files/image', 'owner'))!, id = ticket.url.split('/').at(-1)!
+  let now = 1000,
+    active = true
+  const tickets = new MediaTickets(
+    () => active,
+    async () => ({
+      body: Readable.from(['<svg/>']),
+      headers: {
+        'Content-Type': 'image/svg+xml',
+        'Content-Length': '6',
+        'X-Frame-Options': 'DENY',
+      },
+    }),
+    new Set(['https://c.zzs1.cn']),
+    () => now,
+  )
+  const ticket = (await tickets.create('/api/files/image', 'owner'))!,
+    id = ticket.url.split('/').at(-1)!
   const response = (await tickets.open(id, 'GET'))!
   assert.match(response.headers.get('content-security-policy')!, /sandbox;/u)
-  assert.equal(response.headers.get('x-frame-options'), null); await response.body?.cancel()
+  assert.equal(response.headers.get('x-frame-options'), null)
+  await response.body?.cancel()
   now = ticket.expiresAt
   assert.equal(await tickets.open(id, 'GET'), undefined)
   active = false
   assert.equal(await tickets.create('/api/files/image', 'owner'), undefined)
 })
 
-test('file ticket ranges seek directly while HEAD and invalid ranges read no file bytes', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'canvas-seek-')), store = new Store(join(directory, 'state.db'))
+test('file ticket ranges seek directly while HEAD and invalid ranges read no file bytes', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'canvas-seek-')),
+    store = new Store(join(directory, 'state.db'))
   const assets = new AssetStore(directory, store)
   store.addSession('owner')
-  t.after(async () => { await assets.close(); store.close(); await rm(directory, { recursive: true, force: true }) })
-  const sourceId = randomUUID(), windowId = 'window'
-  const canvas = store.put('canvas', { id: randomUUID(), name: 'Seek fixture', nodes: [{
-    type: 'terminal', id: 'anchor', sourceId, spaceId: 'space', windowId, x: 0, y: 0, width: 480, height: 300,
-  }] })
-  const bytes = Buffer.alloc(2 * 1024 * 1024 + 17, 0x5a), upload = await assets.begin({ filename: 'large.bin', size: bytes.length })
+  t.after(async () => {
+    await assets.close()
+    store.close()
+    await rm(directory, { recursive: true, force: true })
+  })
+  const sourceId = randomUUID(),
+    windowId = 'window'
+  const canvas = store.put('canvas', {
+    id: randomUUID(),
+    name: 'Seek fixture',
+    nodes: [
+      {
+        type: 'terminal',
+        id: 'anchor',
+        sourceId,
+        spaceId: 'space',
+        windowId,
+        x: 0,
+        y: 0,
+        width: 480,
+        height: 300,
+      },
+    ],
+  })
+  const bytes = Buffer.alloc(2 * 1024 * 1024 + 17, 0x5a),
+    upload = await assets.begin({ filename: 'large.bin', size: bytes.length })
   await upload.write(bytes)
-  const asset = await upload.complete({ canvasId: canvas.id, anchorId: 'anchor', sourceId, windowId })
+  const asset = await upload.complete({
+    canvasId: canvas.id,
+    anchorId: 'anchor',
+    sourceId,
+    windowId,
+  })
   const reads: Array<{ range?: { start: number; end: number }; stream: ReadStream }> = []
   const read = assets.read.bind(assets)
-  assets.read = async (id, range) => { const result = await read(id, range); if (result) reads.push({ range, stream: result.body as ReadStream }); return result }
-  const app = createApp(store, { username: 'fixture', passwordHash: 'unused' }, {} as TerminalManager, { assets })
-  const issued = await app.request('http://fixture/api/media-tickets', { method: 'POST', headers: { Authorization: 'Bearer owner', 'Content-Type': 'application/json' }, body: JSON.stringify({ path: `/api/files/${asset.id}` }) })
+  assets.read = async (id, range) => {
+    const result = await read(id, range)
+    if (result) reads.push({ range, stream: result.body as ReadStream })
+    return result
+  }
+  const app = createApp(
+    store,
+    { username: 'fixture', passwordHash: 'unused' },
+    {} as TerminalManager,
+    { assets },
+  )
+  const issued = await app.request('http://fixture/api/media-tickets', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer owner', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: `/api/files/${asset.id}` }),
+  })
   assert.equal(issued.status, 200)
   const { url } = await issued.json()
   assert.equal(reads[0]!.stream.bytesRead, 0, 'ticket issuance only validates metadata')
-  for (const [range, start, end] of [['bytes=-11', bytes.length - 11, bytes.length - 1], ['bytes=1700000-1700031', 1700000, 1700031]] as const) {
+  for (const [range, start, end] of [
+    ['bytes=-11', bytes.length - 11, bytes.length - 1],
+    ['bytes=1700000-1700031', 1700000, 1700031],
+  ] as const) {
     const mark = reads.length
     const response = await app.request(`http://fixture${url}`, { headers: { Range: range } })
     assert.equal(response.status, 206)
     assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes.subarray(start, end + 1))
     assert.equal(reads[mark]!.stream.bytesRead, 0, 'full-file validation stream is never consumed')
     assert.deepEqual(reads[mark + 1]!.range, { start, end })
-    assert.equal(reads[mark + 1]!.stream.bytesRead, end - start + 1, 'only requested disk bytes are read')
+    assert.equal(
+      reads[mark + 1]!.stream.bytesRead,
+      end - start + 1,
+      'only requested disk bytes are read',
+    )
   }
-  for (const [method, range, status] of [['HEAD', undefined, 200], ['HEAD', 'bytes=-11', 206], ['GET', 'bytes=9999999-', 416]] as const) {
+  for (const [method, range, status] of [
+    ['HEAD', undefined, 200],
+    ['HEAD', 'bytes=-11', 206],
+    ['GET', 'bytes=9999999-', 416],
+  ] as const) {
     const mark = reads.length
-    const response = await app.request(`http://fixture${url}`, { method, headers: range ? { Range: range } : undefined })
-    assert.equal(response.status, status); assert.equal(await response.text(), '')
-    assert.equal(reads.length, mark + 1); assert.equal(reads[mark]!.stream.bytesRead, 0)
+    const response = await app.request(`http://fixture${url}`, {
+      method,
+      headers: range ? { Range: range } : undefined,
+    })
+    assert.equal(response.status, status)
+    assert.equal(await response.text(), '')
+    assert.equal(reads.length, mark + 1)
+    assert.equal(reads[mark]!.stream.bytesRead, 0)
   }
-  const cancelled = await app.request(`http://fixture${url}`, { headers: { Range: 'bytes=1700000-' } })
+  const cancelled = await app.request(`http://fixture${url}`, {
+    headers: { Range: 'bytes=1700000-' },
+  })
   const stream = reads.at(-1)!.stream
   await cancelled.body!.cancel()
-  await new Promise(resolve => setTimeout(resolve, 20))
+  await new Promise((resolve) => setTimeout(resolve, 20))
   assert.equal(stream.destroyed, true, 'cancellation closes the selected file stream')
-  assert(stream.bytesRead < bytes.length - 1700000, 'cancellation does not read the whole remaining file')
+  assert(
+    stream.bytesRead < bytes.length - 1700000,
+    'cancellation does not read the whole remaining file',
+  )
   store.removeSession('owner')
   const mark = reads.length
-  assert.equal((await app.request(`http://fixture${url}`, { headers: { Range: 'bytes=-11' } })).status, 404)
+  assert.equal(
+    (await app.request(`http://fixture${url}`, { headers: { Range: 'bytes=-11' } })).status,
+    404,
+  )
   assert.equal(reads.length, mark, 'revocation prevents reopening the disk file')
 })
 
 test('range open drops its late stream when session or ticket expires while seeking', async () => {
   for (const revoke of ['session', 'ticket'] as const) {
-    let active = true, now = 1000, settle!: (stream: Readable) => void
-    const tickets = new MediaTickets(() => active, async () => ({ body: Readable.from(['fixture']), headers: { 'Content-Length': '7' },
-      readRange: () => new Promise(resolve => { settle = resolve }) }), new Set(), () => now)
-    const ticket = (await tickets.create('/api/files/fixture', 'owner'))!, id = ticket.url.split('/').at(-1)!
+    let active = true,
+      now = 1000,
+      settle!: (stream: Readable) => void
+    const tickets = new MediaTickets(
+      () => active,
+      async () => ({
+        body: Readable.from(['fixture']),
+        headers: { 'Content-Length': '7' },
+        readRange: () =>
+          new Promise((resolve) => {
+            settle = resolve
+          }),
+      }),
+      new Set(),
+      () => now,
+    )
+    const ticket = (await tickets.create('/api/files/fixture', 'owner'))!,
+      id = ticket.url.split('/').at(-1)!
     const pending = tickets.open(id, 'GET', 'bytes=-2')
-    await Promise.resolve(); await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
     if (revoke === 'session') active = false
     else now = ticket.expiresAt
-    const stream = Readable.from(['re']); settle(stream)
-    assert.equal(await pending, undefined); assert.equal(stream.destroyed, true)
+    const stream = Readable.from(['re'])
+    settle(stream)
+    assert.equal(await pending, undefined)
+    assert.equal(stream.destroyed, true)
   }
 })

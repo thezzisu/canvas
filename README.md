@@ -56,9 +56,9 @@ Add local or SSH connections from the sidebar. SSH accepts an alias,
 `user@host` or `ssh://user@host:port`. Select the herdr session, or give an
 absolute socket path.
 
-| Runtime | Supports |
-| --- | --- |
-| Herdr TUI | herdr 0.9.x sessions |
+| Runtime          | Supports                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------ |
+| Herdr TUI        | herdr 0.9.x sessions                                                                 |
 | Herdr Core / App | herdr-core 0.1.17 and herdr-app 0.1.12 layouts (config discovery needs Python 3.11+) |
 
 No TUI or desktop app process needs to stay open. Configure a separate SSH
@@ -92,16 +92,16 @@ apps must support the forwarded subpath.
 
 ## Configuration
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `CANVAS_DATA_DIR` | `~/.local/share/canvas` | Account, database and files |
-| `CANVAS_HOST` | `127.0.0.1` | Listen address, or a comma-separated list |
-| `CANVAS_PORT` | `3010` | Listen port |
-| `CANVAS_ALLOWED_ORIGINS` | Same origin | Allowed frontend origins |
-| `CANVAS_INIT_USERNAME` | `canvas` | First-start username |
-| `CANVAS_INIT_PASSWORD` | Random | First-start password, at least 8 characters |
+| Variable                 | Default                    | Purpose                                     |
+| ------------------------ | -------------------------- | ------------------------------------------- |
+| `CANVAS_DATA_DIR`        | `~/.local/share/canvas`    | Account, database and files                 |
+| `CANVAS_HOST`            | `127.0.0.1`                | Listen address, or a comma-separated list   |
+| `CANVAS_PORT`            | `3010`                     | Listen port                                 |
+| `CANVAS_ALLOWED_ORIGINS` | Same origin                | Allowed frontend origins                    |
+| `CANVAS_INIT_USERNAME`   | `canvas`                   | First-start username                        |
+| `CANVAS_INIT_PASSWORD`   | Random                     | First-start password, at least 8 characters |
 | `CANVAS_PUBLIC_SSH_HOST` | Listen address or hostname | SSH host advertised for local VS Code links |
-| `CANVAS_PUBLIC_SSH_PORT` | `22` | SSH port advertised for local VS Code links |
+| `CANVAS_PUBLIC_SSH_PORT` | `22`                       | SSH port advertised for local VS Code links |
 
 ## Deployment
 

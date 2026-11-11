@@ -13,15 +13,62 @@ const terminalCodes = [
   ...Array.from({ length: 10 }, (_, index) => `Digit${index}`),
   ...Array.from({ length: 12 }, (_, index) => `F${index + 1}`),
   ...Array.from({ length: 10 }, (_, index) => `Numpad${index}`),
-  'Backquote', 'Minus', 'Equal', 'BracketLeft', 'BracketRight', 'Backslash', 'Semicolon', 'Quote', 'Comma', 'Period', 'Slash',
-  'IntlBackslash', 'IntlRo', 'IntlYen', 'Backspace', 'Tab', 'Enter', 'Space',
-  'Insert', 'Delete', 'Home', 'End', 'PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-  'ControlLeft', 'ControlRight', 'ShiftLeft', 'ShiftRight', 'AltLeft', 'AltRight',
-  'NumpadAdd', 'NumpadSubtract', 'NumpadMultiply', 'NumpadDivide', 'NumpadDecimal', 'NumpadEnter', 'NumpadEqual', 'NumpadComma',
+  'Backquote',
+  'Minus',
+  'Equal',
+  'BracketLeft',
+  'BracketRight',
+  'Backslash',
+  'Semicolon',
+  'Quote',
+  'Comma',
+  'Period',
+  'Slash',
+  'IntlBackslash',
+  'IntlRo',
+  'IntlYen',
+  'Backspace',
+  'Tab',
+  'Enter',
+  'Space',
+  'Insert',
+  'Delete',
+  'Home',
+  'End',
+  'PageUp',
+  'PageDown',
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight',
+  'ControlLeft',
+  'ControlRight',
+  'ShiftLeft',
+  'ShiftRight',
+  'AltLeft',
+  'AltRight',
+  'NumpadAdd',
+  'NumpadSubtract',
+  'NumpadMultiply',
+  'NumpadDivide',
+  'NumpadDecimal',
+  'NumpadEnter',
+  'NumpadEqual',
+  'NumpadComma',
 ]
-interface KeyboardLock { lock(codes: string[]): Promise<void>; unlock(): void }
-interface Binding { input: HTMLElement; eligible(): boolean }
-interface Request { binding: Binding; revision: number; cancelled?: boolean }
+interface KeyboardLock {
+  lock(codes: string[]): Promise<void>
+  unlock(): void
+}
+interface Binding {
+  input: HTMLElement
+  eligible(): boolean
+}
+interface Request {
+  binding: Binding
+  revision: number
+  cancelled?: boolean
+}
 const bindings = new Set<Binding>()
 let context: { document: Document; window: Window; keyboard: KeyboardLock } | undefined
 let desired: Binding | undefined
@@ -34,24 +81,34 @@ let pageHidden = false
 let focusQueued = false
 
 function release() {
-  if (context && (active || pending && !pending.cancelled)) context.keyboard.unlock()
+  if (context && (active || (pending && !pending.cancelled))) context.keyboard.unlock()
   if (pending) pending.cancelled = true
   active = undefined
 }
 function drive() {
   if (!context || pending) return
-  if (!desired) { keyboardLockState.value = 'idle'; return }
-  if (active === desired) { keyboardLockState.value = 'active'; return }
+  if (!desired) {
+    keyboardLockState.value = 'idle'
+    return
+  }
+  if (active === desired) {
+    keyboardLockState.value = 'active'
+    return
+  }
   if (attempted === revision) return
   const keyboard = context.keyboard
-  const request = pending = { binding: desired, revision }
+  const request = (pending = { binding: desired, revision })
   attempted = revision
   keyboardLockState.value = 'pending'
   keyboardLockError.value = undefined
   void (async () => {
     try {
       await keyboard.lock(terminalCodes)
-      if (request.revision === revision && desired === request.binding && focusedBinding() === request.binding) {
+      if (
+        request.revision === revision &&
+        desired === request.binding &&
+        focusedBinding() === request.binding
+      ) {
         active = request.binding
         keyboardLockState.value = 'active'
       } else keyboard.unlock()
@@ -69,8 +126,17 @@ function drive() {
 function focusedBinding() {
   if (!context) return undefined
   const { document } = context
-  return !pageHidden && windowFocused && document.hasFocus() && document.visibilityState === 'visible' && document.fullscreenElement
-    ? [...bindings].find(binding => binding.input.isConnected && document.activeElement === binding.input && binding.eligible())
+  return !pageHidden &&
+    windowFocused &&
+    document.hasFocus() &&
+    document.visibilityState === 'visible' &&
+    document.fullscreenElement
+    ? [...bindings].find(
+        (binding) =>
+          binding.input.isConnected &&
+          document.activeElement === binding.input &&
+          binding.eligible(),
+      )
     : undefined
 }
 function refresh() {
@@ -89,12 +155,28 @@ function focusChanged() {
   // Clipboard copying temporarily borrows focus within one task.
   if (focusQueued) return
   focusQueued = true
-  queueMicrotask(() => { focusQueued = false; refresh() })
+  queueMicrotask(() => {
+    focusQueued = false
+    refresh()
+  })
 }
-function focused() { windowFocused = true; refresh() }
-function blurred() { windowFocused = false; refresh() }
-function hidden() { pageHidden = true; refresh() }
-function shown() { pageHidden = false; windowFocused = context?.document.hasFocus() === true; refresh() }
+function focused() {
+  windowFocused = true
+  refresh()
+}
+function blurred() {
+  windowFocused = false
+  refresh()
+}
+function hidden() {
+  pageHidden = true
+  refresh()
+}
+function shown() {
+  pageHidden = false
+  windowFocused = context?.document.hasFocus() === true
+  refresh()
+}
 function listen(add: boolean) {
   if (!context) return
   const { document, window } = context
@@ -110,13 +192,25 @@ function listen(add: boolean) {
 }
 
 /** One page-wide lock follows the currently focused terminal input. */
-export function bindTerminalKeyboardLock(input: HTMLElement, eligible: () => boolean): { refresh(retryDenied?: boolean): void; dispose(): void } {
+export function bindTerminalKeyboardLock(
+  input: HTMLElement,
+  eligible: () => boolean,
+): { refresh(retryDenied?: boolean): void; dispose(): void } {
   const document = input.ownerDocument
   const window = document.defaultView
-  const keyboard = (window?.navigator as Navigator & { keyboard?: KeyboardLock } | undefined)?.keyboard
-  const reason = !window?.isSecureContext ? 'insecure-context' : !keyboard?.lock || !keyboard.unlock ? 'unsupported' : undefined
+  const keyboard = (window?.navigator as (Navigator & { keyboard?: KeyboardLock }) | undefined)
+    ?.keyboard
+  const reason = !window?.isSecureContext
+    ? 'insecure-context'
+    : !keyboard?.lock || !keyboard.unlock
+      ? 'unsupported'
+      : undefined
   keyboardLockUnavailableReason.value = reason
-  if (reason || !window || !keyboard) { keyboardLockState.value = 'unavailable'; keyboardLockError.value = undefined; return { refresh() {}, dispose() {} } }
+  if (reason || !window || !keyboard) {
+    keyboardLockState.value = 'unavailable'
+    keyboardLockError.value = undefined
+    return { refresh() {}, dispose() {} }
+  }
   if (!bindings.size) {
     // A pending permission request remains serialized across replacement inputs.
     context = { document, window, keyboard }
@@ -129,7 +223,12 @@ export function bindTerminalKeyboardLock(input: HTMLElement, eligible: () => boo
   refresh()
   return {
     refresh(retryDenied = false) {
-      if (retryDenied && window.navigator.userActivation?.isActive && keyboardLockState.value === 'denied') attempted = -1
+      if (
+        retryDenied &&
+        window.navigator.userActivation?.isActive &&
+        keyboardLockState.value === 'denied'
+      )
+        attempted = -1
       refresh()
     },
     dispose() {

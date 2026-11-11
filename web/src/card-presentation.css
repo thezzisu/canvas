@@ -5,7 +5,7 @@
 
 @media (prefers-reduced-motion: no-preference) {
   .minimap-pulse,
-  [data-status-pulse="true"] {
+  [data-status-pulse='true'] {
     --attention-low-opacity: 0.25;
     animation: status-breathe 2.4s ease-in-out infinite;
   }
@@ -51,7 +51,7 @@
 .file-card {
   cursor: auto;
 }
-.card-content[data-content-active="false"] {
+.card-content[data-content-active='false'] {
   cursor: pointer;
 }
 

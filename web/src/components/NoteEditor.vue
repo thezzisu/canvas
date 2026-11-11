@@ -14,9 +14,29 @@ import { apiContext, segment } from '../api'
 import { hasFileTransfer, readFileTransfer } from '../browser-file-input'
 import { presentDownload, reportDownloadError } from '../downloads'
 import { attachmentToken, noteDocument, noteOffset, serializeNote } from '../note-document'
-import { NoteSelectionEnter, mapNoteRange, noteRange, replaceNoteDocument, replaceNoteRange, selectedAttachment, uploadPlaceholder, type NoteRange } from '../note-editing'
-import { noteUpload, uploadNoteAttachment, pasteNoteAttachments, type NoteInsertion, type NoteOwner } from '../note-uploads'
-import { clipboardText, noteClipboard, readNoteClipboard, NOTE_CLIPBOARD_TYPE } from '../note-clipboard'
+import {
+  NoteSelectionEnter,
+  mapNoteRange,
+  noteRange,
+  replaceNoteDocument,
+  replaceNoteRange,
+  selectedAttachment,
+  uploadPlaceholder,
+  type NoteRange,
+} from '../note-editing'
+import {
+  noteUpload,
+  uploadNoteAttachment,
+  pasteNoteAttachments,
+  type NoteInsertion,
+  type NoteOwner,
+} from '../note-uploads'
+import {
+  clipboardText,
+  noteClipboard,
+  readNoteClipboard,
+  NOTE_CLIPBOARD_TYPE,
+} from '../note-clipboard'
 import { beginCopyFeedback } from '../copy-feedback'
 import type { FileAsset } from '../types'
 import NoteAttachment from './NoteAttachment.vue'
@@ -24,7 +44,17 @@ import NoteUploadPlaceholder from './NoteUploadPlaceholder.vue'
 import UploadProgress from './UploadProgress.vue'
 import { useNoteScroll } from '../note-scroll'
 
-const props = defineProps<{ content: string; attachments: FileAsset[]; owner: NoteOwner; scrollKey: string; placeholder?: string; holdKeyboard?: () => ((returned: boolean) => void) | undefined; canPersist?: () => boolean; readOnly: boolean; insertAttachment: (value: NoteInsertion) => void }>()
+const props = defineProps<{
+  content: string
+  attachments: FileAsset[]
+  owner: NoteOwner
+  scrollKey: string
+  placeholder?: string
+  holdKeyboard?: () => ((returned: boolean) => void) | undefined
+  canPersist?: () => boolean
+  readOnly: boolean
+  insertAttachment: (value: NoteInsertion) => void
+}>()
 const emit = defineEmits<{ change: [content: string]; flush: [] }>()
 const { t } = useI18n()
 const input = ref<{ editor?: Editor }>()
@@ -32,34 +62,60 @@ const input = ref<{ editor?: Editor }>()
 // back through v-model can replace the DOM under an active IME composition.
 const initial = noteDocument(props.content)
 const scrollTarget = computed(() => input.value?.editor?.view.dom)
-useNoteScroll(scrollTarget, () => props.scrollKey, () => props.canPersist?.() !== false)
+useNoteScroll(
+  scrollTarget,
+  () => props.scrollKey,
+  () => props.canPersist?.() !== false,
+)
 const uploaded = shallowRef<FileAsset[]>([])
-const assets = computed(() => [...props.attachments, ...uploaded.value.filter(asset => !props.attachments.some(item => item.id === asset.id))])
+const assets = computed(() => [
+  ...props.attachments,
+  ...uploaded.value.filter((asset) => !props.attachments.some((item) => item.id === asset.id)),
+])
 const task = computed(() => noteUpload(props.owner))
 const pending = computed(() => !!task.value)
-const uploadName = computed(() => task.value && task.value.fileCount > 1 ? t('terminal.upload.files', { count: task.value.fileCount }) : task.value?.name || '')
-const uploadLabel = computed(() => task.value?.total && task.value.transferred < task.value.total
-  ? `${Math.floor(task.value.transferred / task.value.total * 100)}%` : t('panels.file.adding'))
+const uploadName = computed(() =>
+  task.value && task.value.fileCount > 1
+    ? t('terminal.upload.files', { count: task.value.fileCount })
+    : task.value?.name || '',
+)
+const uploadLabel = computed(() =>
+  task.value?.total && task.value.transferred < task.value.total
+    ? `${Math.floor((task.value.transferred / task.value.total) * 100)}%`
+    : t('panels.file.adding'),
+)
 // Not selectable: arrow keys step over a capsule and typing never replaces it.
 // ProseMirror handles its events like any leaf; the editor opens previews.
 const extension = Node.create({
-  name: 'noteAttachment', inline: true, group: 'inline', atom: true, selectable: false,
+  name: 'noteAttachment',
+  inline: true,
+  group: 'inline',
+  atom: true,
+  selectable: false,
   addOptions: () => ({ assets: () => assets.value }),
   addAttributes: () => ({ id: { default: null } }),
   parseHTML: () => [],
-  renderText: ({ node }) => assets.value.find(asset => asset.id === node.attrs.id)?.filename ?? '[file]',
+  renderText: ({ node }) =>
+    assets.value.find((asset) => asset.id === node.attrs.id)?.filename ?? '[file]',
   renderHTML: ({ node }) => ['span', { 'data-note-attachment': node.attrs.id }, '[file]'],
   addNodeView: () => VueNodeViewRenderer(NoteAttachment, { stopEvent: () => false }),
 })
-const attachmentTarget = (event: Event) => (event.target as Element).closest?.('[data-note-attachment]')?.getAttribute('data-note-attachment')
+const attachmentTarget = (event: Event) =>
+  (event.target as Element)
+    .closest?.('[data-note-attachment]')
+    ?.getAttribute('data-note-attachment')
 function preview(id: string) {
-  const asset = assets.value.find(item => item.id === id)
-  if (asset) void presentDownload({ ...asset, url: `/api/files/${segment(asset.id)}` }).catch(reportDownloadError)
+  const asset = assets.value.find((item) => item.id === id)
+  if (asset)
+    void presentDownload({ ...asset, url: `/api/files/${segment(asset.id)}` }).catch(
+      reportDownloadError,
+    )
   return !!asset
 }
 // Keyboard users select a capsule, as with Shift+Arrow, and press Enter to preview it.
 function previewSelected(view: EditorView, event: KeyboardEvent) {
-  if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return false
+  if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey)
+    return false
   const id = selectedAttachment(view.state)
   return !!id && preview(id)
 }
@@ -73,37 +129,68 @@ function track({ transaction, nextState }: EditorEvents['beforeTransaction']) {
 const placeholders = new WeakMap<globalThis.Node, VueRenderer>()
 const uploadPlaceholders = Extension.create({
   name: 'noteUploadPlaceholders',
-  onBeforeCreate() { this.editor.on('beforeTransaction', track) },
+  onBeforeCreate() {
+    this.editor.on('beforeTransaction', track)
+  },
   addProseMirrorPlugins() {
     const render = (files: readonly string[]) => {
-      const renderer = new VueRenderer(NoteUploadPlaceholder, { editor: this.editor, props: { files } })
+      const renderer = new VueRenderer(NoteUploadPlaceholder, {
+        editor: this.editor,
+        props: { files },
+      })
       const dom = renderer.element as HTMLElement
-      placeholders.set(dom, renderer); return dom
+      placeholders.set(dom, renderer)
+      return dom
     }
-    const destroy = (dom: globalThis.Node) => { placeholders.get(dom)?.destroy(); placeholders.delete(dom) }
-    return [new Plugin({ props: { decorations: state => uploadPlaceholder(state.doc, task.value?.uploading ? task.value : undefined, render, destroy) } })]
+    const destroy = (dom: globalThis.Node) => {
+      placeholders.get(dom)?.destroy()
+      placeholders.delete(dom)
+    }
+    return [
+      new Plugin({
+        props: {
+          decorations: (state) =>
+            uploadPlaceholder(
+              state.doc,
+              task.value?.uploading ? task.value : undefined,
+              render,
+              destroy,
+            ),
+        },
+      }),
+    ]
   },
 })
 const sizeLimit = Extension.create({
   name: 'noteSizeLimit',
-  addProseMirrorPlugins: () => [new Plugin({ filterTransaction(transaction) {
-    if (!transaction.docChanged || serializeNote(transaction.doc.toJSON()).length <= 200_000) return true
-    queueMicrotask(() => fail('panels.note.tooLong'))
-    return false
-  } })],
+  addProseMirrorPlugins: () => [
+    new Plugin({
+      filterTransaction(transaction) {
+        if (!transaction.docChanged || serializeNote(transaction.doc.toJSON()).length <= 200_000)
+          return true
+        queueMicrotask(() => fail('panels.note.tooLong'))
+        return false
+      },
+    }),
+  ],
 })
 const fileDropCursor = Extension.create({
   name: 'noteFileDropCursor',
-  addProseMirrorPlugins: () => [dropCursor({ color: 'var(--ui-primary)', width: 2, class: 'note-file-dropcursor' })],
-  extendNodeSchema: () => ({ disableDropCursor: (_view: EditorView, _position: unknown, event: DragEvent) =>
-    props.readOnly || pending.value || !hasFileTransfer(event.dataTransfer) }),
+  addProseMirrorPlugins: () => [
+    dropCursor({ color: 'var(--ui-primary)', width: 2, class: 'note-file-dropcursor' }),
+  ],
+  extendNodeSchema: () => ({
+    disableDropCursor: (_view: EditorView, _position: unknown, event: DragEvent) =>
+      props.readOnly || pending.value || !hasFileTransfer(event.dataTransfer),
+  }),
 })
 // Contents this editor produced recently; a delayed copy of one is an echo, not a peer edit.
 const produced: string[] = []
 // The last content both the editor and its owner agreed on.
 let synced = props.content
 function emitContent(content: string) {
-  produced.push(content); if (produced.length > 32) produced.shift()
+  produced.push(content)
+  if (produced.length > 32) produced.shift()
   synced = content
   emit('change', content)
 }
@@ -115,11 +202,16 @@ function changed() {
   if (content !== props.content) emitContent(content)
 }
 function synchronize() {
-  const current = editor(), content = props.content
+  const current = editor(),
+    content = props.content
   // Applying a peer edit replaces the DOM; never do so under an active composition.
   if (!current || current.isDestroyed || current.view.composing) return
   const local = serializeNote(current.getJSON())
-  if (content === local) { produced.length = 0; synced = content; return }
+  if (content === local) {
+    produced.length = 0
+    synced = content
+    return
+  }
   if (produced.includes(content)) return
   current.view.dispatch(replaceNoteDocument(current.state, content).setMeta('preventUpdate', true))
   synced = content
@@ -131,25 +223,35 @@ function compositionEnded() {
   setTimeout(() => {
     const current = editor()
     if (!current || current.isDestroyed || current.view.composing) return
-    if (serializeNote(current.getJSON()) === synced) synchronize(); else changed()
+    if (serializeNote(current.getJSON()) === synced) synchronize()
+    else changed()
   }, 30)
   return false
 }
-function fail(key: string) { window.dispatchEvent(new CustomEvent('canvas:error', { detail: new Error(t(key)) })) }
-function editor() { return input.value?.editor }
+function fail(key: string) {
+  window.dispatchEvent(new CustomEvent('canvas:error', { detail: new Error(t(key)) }))
+}
+function editor() {
+  return input.value?.editor
+}
 function insert(value: NoteInsertion) {
   const current = editor()
   if (!current || current.isDestroyed) return false
   uploaded.value = [...uploaded.value, ...value.assets]
   const tr = replaceNoteRange(current.state, value)
-  closeHistory(tr); current.view.dispatch(tr)
+  closeHistory(tr)
+  current.view.dispatch(tr)
   current.view.dispatch(closeHistory(current.state.tr))
   return true
 }
-watch(task, (current, previous) => {
-  if (previous?.insert === insert) previous.insert = undefined
-  if (current) current.insert = insert
-}, { immediate: true, flush: 'sync' })
+watch(
+  task,
+  (current, previous) => {
+    if (previous?.insert === insert) previous.insert = undefined
+    if (current) current.insert = insert
+  },
+  { immediate: true, flush: 'sync' },
+)
 // Placeholders are decorations; an empty transaction redraws them.
 watch(task, () => {
   const current = editor()
@@ -157,64 +259,118 @@ watch(task, () => {
 })
 function upload(files: File[], range?: NoteRange) {
   if (props.readOnly) return
-  if (pending.value) { fail('panels.file.uploadBusy'); return }
-  if (!files.length || files.length !== 1) { fail('panels.file.singleOnly'); return }
-  const file = files[0]!, current = editor()
-  if (file.webkitRelativePath) { fail('terminal.upload.foldersUnsupported'); return }
+  if (pending.value) {
+    fail('panels.file.uploadBusy')
+    return
+  }
+  if (!files.length || files.length !== 1) {
+    fail('panels.file.singleOnly')
+    return
+  }
+  const file = files[0]!,
+    current = editor()
+  if (file.webkitRelativePath) {
+    fail('terminal.upload.foldersUnsupported')
+    return
+  }
   if (!current) return
-  void uploadNoteAttachment(props.owner, file, range ?? noteRange(current.state), props.insertAttachment)
+  void uploadNoteAttachment(
+    props.owner,
+    file,
+    range ?? noteRange(current.state),
+    props.insertAttachment,
+  )
 }
 function copy(event: ClipboardEvent, cut = false) {
-  const current = editor(), data = event.clipboardData
+  const current = editor(),
+    data = event.clipboardData
   if (!current || !data || current.state.selection.empty || props.readOnly) return false
   const { from, to } = current.state.selection
-  const content = current.state.doc.textBetween(from, to, '\n', node => node.type.name === 'noteAttachment' ? attachmentToken(node.attrs.id) : '\n')
+  const content = current.state.doc.textBetween(from, to, '\n', (node) =>
+    node.type.name === 'noteAttachment' ? attachmentToken(node.attrs.id) : '\n',
+  )
   try {
     const note = noteClipboard(content, assets.value, apiContext())
     data.setData('text/plain', clipboardText(note))
-    if (note.parts.some(part => typeof part !== 'string')) data.setData(NOTE_CLIPBOARD_TYPE, JSON.stringify(note))
+    if (note.parts.some((part) => typeof part !== 'string'))
+      data.setData(NOTE_CLIPBOARD_TYPE, JSON.stringify(note))
     event.preventDefault()
     const removed = cut && current.commands.deleteSelection()
     beginCopyFeedback()(removed ? 'cut' : 'copied')
-  } catch (error) { event.preventDefault(); reportDownloadError(error) }
+  } catch (error) {
+    event.preventDefault()
+    reportDownloadError(error)
+  }
   return true
 }
 function paste(event: ClipboardEvent) {
   const data = event.clipboardData
   if (data?.types.includes(NOTE_CLIPBOARD_TYPE)) {
     event.preventDefault()
-    const note = readNoteClipboard(data), current = editor()
-    if (!note || !current) { fail('fileTransfer.failed'); return true }
+    const note = readNoteClipboard(data),
+      current = editor()
+    if (!note || !current) {
+      fail('fileTransfer.failed')
+      return true
+    }
     if (props.readOnly) return true
-    if (pending.value) { fail('panels.file.uploadBusy'); return true }
+    if (pending.value) {
+      fail('panels.file.uploadBusy')
+      return true
+    }
     const { offset, end, replaced } = noteRange(current.state)
-    const length = note.parts.reduce((size, part) => size + (typeof part === 'string' ? part.length : 38), 0)
-    if (serializeNote(current.state.doc.toJSON()).length - (end - offset) + length > 200_000) { fail('panels.note.tooLong'); return true }
-    void pasteNoteAttachments(props.owner, note, offset, end, replaced,
-      value => { if (!insert(value)) props.insertAttachment(value) }, assets.value)
+    const length = note.parts.reduce(
+      (size, part) => size + (typeof part === 'string' ? part.length : 38),
+      0,
+    )
+    if (serializeNote(current.state.doc.toJSON()).length - (end - offset) + length > 200_000) {
+      fail('panels.note.tooLong')
+      return true
+    }
+    void pasteNoteAttachments(
+      props.owner,
+      note,
+      offset,
+      end,
+      replaced,
+      (value) => {
+        if (!insert(value)) props.insertAttachment(value)
+      },
+      assets.value,
+    )
     return true
   }
   if (!hasFileTransfer(data)) {
-    const text = data?.getData('text/plain'), current = editor()
+    const text = data?.getData('text/plain'),
+      current = editor()
     if (!text || !current || props.readOnly) return false
     event.preventDefault()
     // Notes store plain paragraphs. Use clipboard text rather than importing
     // HTML block spacing or the rich editor's double-newline serialization.
     const content = current.schema.nodeFromJSON(noteDocument(text.replace(/\r\n?/g, '\n'))).content
-    const tr = current.state.tr.replaceSelection(new Slice(content, 1, 1)).scrollIntoView()
-      .setMeta('paste', true).setMeta('uiEvent', 'paste')
+    const tr = current.state.tr
+      .replaceSelection(new Slice(content, 1, 1))
+      .scrollIntoView()
+      .setMeta('paste', true)
+      .setMeta('uiEvent', 'paste')
     current.view.dispatch(closeHistory(tr))
     current.view.dispatch(closeHistory(current.state.tr))
     return true
   }
   event.preventDefault()
   const incoming = readFileTransfer(data)
-  if (incoming.error) fail(incoming.error === 'folders' ? 'terminal.upload.foldersUnsupported' : 'panels.file.unreadableTransfer')
+  if (incoming.error)
+    fail(
+      incoming.error === 'folders'
+        ? 'terminal.upload.foldersUnsupported'
+        : 'panels.file.unreadableTransfer',
+    )
   else void upload(incoming.files)
   return true
 }
 const fileDialog = useFileDialog({ multiple: false, reset: true })
-let selection: { context: ReturnType<typeof apiContext>; owner: string; range: NoteRange } | undefined
+let selection:
+  { context: ReturnType<typeof apiContext>; owner: string; range: NoteRange } | undefined
 function chooseFiles() {
   const current = editor()
   if (props.readOnly || !current) return
@@ -224,62 +380,171 @@ function chooseFiles() {
   fileDialog.open()
 }
 let pickerReturned: ((returned: boolean) => void) | undefined
-function pickerFinished() { const finish = pickerReturned; pickerReturned = undefined; finish?.(true) }
-fileDialog.onChange(files => {
+function pickerFinished() {
+  const finish = pickerReturned
+  pickerReturned = undefined
+  finish?.(true)
+}
+fileDialog.onChange((files) => {
   // `open()` resets a previous selection with a null change before the picker shows.
   if (files === null) return
   pickerFinished()
   if (!files?.length) return
-  const target = selection; selection = undefined
+  const target = selection
+  selection = undefined
   if (target && !target.context.signal.aborted && target.owner === props.owner.key)
     void upload([...files], target.range)
 })
-fileDialog.onCancel(() => { pickerFinished(); selection = undefined })
+fileDialog.onCancel(() => {
+  pickerFinished()
+  selection = undefined
+})
 function dragOver(event: DragEvent) {
   if (!hasFileTransfer(event.dataTransfer)) return
-  event.preventDefault(); event.stopPropagation()
-  if (event.dataTransfer) event.dataTransfer.dropEffect = props.readOnly || pending.value ? 'none' : 'copy'
+  event.preventDefault()
+  event.stopPropagation()
+  if (event.dataTransfer)
+    event.dataTransfer.dropEffect = props.readOnly || pending.value ? 'none' : 'copy'
 }
 function drop(event: DragEvent) {
   if (!hasFileTransfer(event.dataTransfer)) return false
-  event.preventDefault(); event.stopPropagation()
+  event.preventDefault()
+  event.stopPropagation()
   const incoming = readFileTransfer(event.dataTransfer)
-  if (incoming.error) fail(incoming.error === 'folders' ? 'terminal.upload.foldersUnsupported' : 'panels.file.unreadableTransfer')
+  if (incoming.error)
+    fail(
+      incoming.error === 'folders'
+        ? 'terminal.upload.foldersUnsupported'
+        : 'panels.file.unreadableTransfer',
+    )
   else {
     const current = editor()
     if (current) {
-      const position = current.view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos ?? current.state.doc.content.size - 1
+      const position =
+        current.view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos ??
+        current.state.doc.content.size - 1
       const offset = noteOffset(current.state.doc, position)
       void upload(incoming.files, { offset, end: offset, replaced: '' })
     }
   }
   return true
 }
-watch(() => props.owner.key, () => { selection = undefined; uploaded.value = [] })
-onBeforeUnmount(() => { if (task.value?.insert === insert) task.value.insert = undefined })
-defineExpose({ chooseFiles, pending, focus: () => editor()?.commands.focus('end'), element: () => editor()?.view.dom })
+watch(
+  () => props.owner.key,
+  () => {
+    selection = undefined
+    uploaded.value = []
+  },
+)
+onBeforeUnmount(() => {
+  if (task.value?.insert === insert) task.value.insert = undefined
+})
+defineExpose({
+  chooseFiles,
+  pending,
+  focus: () => editor()?.commands.focus('end'),
+  element: () => editor()?.view.dom,
+})
 </script>
 
 <template>
   <div class="note-editor-shell" @dragenter="dragOver" @dragover="dragOver">
-  <UEditor ref="input" :model-value="initial" content-type="json" :starter-kit="false" :image="false" :mention="false" :extensions="[extension, uploadPlaceholders, sizeLimit, NoteSelectionEnter, fileDropCursor]" :editable="!readOnly" :enable-input-rules="false" :enable-paste-rules="false" :placeholder="placeholder ?? t('panels.note.placeholder')" class="note-editor"
-    :ui="{ root: 'h-full min-h-0', content: 'h-full min-h-0', base: 'note-editor-content h-full min-h-0 outline-none' }"
-    :editor-props="{ attributes: { 'aria-label': t('panels.note.content'), role: 'textbox', 'aria-multiline': 'true' },
-      handleDOMEvents: { copy: (_view, event) => copy(event), cut: (_view, event) => copy(event, true), compositionend: compositionEnded,
-        // A capsule keeps the caret and focus; clicking it previews the file.
-        mousedown: (_view, event) => { if (!attachmentTarget(event)) return false; event.preventDefault(); return true },
-        click: (_view, event) => { const id = attachmentTarget(event); if (!id) return false; preview(id); return true } },
-      handleKeyDown: previewSelected, handleDrop: (_view, event) => drop(event), handlePaste: (_view, event) => paste(event) }"
-    :on-blur="() => emit('flush')" @update:model-value="changed" />
+    <UEditor
+      ref="input"
+      :model-value="initial"
+      content-type="json"
+      :starter-kit="false"
+      :image="false"
+      :mention="false"
+      :extensions="[extension, uploadPlaceholders, sizeLimit, NoteSelectionEnter, fileDropCursor]"
+      :editable="!readOnly"
+      :enable-input-rules="false"
+      :enable-paste-rules="false"
+      :placeholder="placeholder ?? t('panels.note.placeholder')"
+      class="note-editor"
+      :ui="{
+        root: 'h-full min-h-0',
+        content: 'h-full min-h-0',
+        base: 'note-editor-content h-full min-h-0 outline-none',
+      }"
+      :editor-props="{
+        attributes: {
+          'aria-label': t('panels.note.content'),
+          role: 'textbox',
+          'aria-multiline': 'true',
+        },
+        handleDOMEvents: {
+          copy: (_view, event) => copy(event),
+          cut: (_view, event) => copy(event, true),
+          compositionend: compositionEnded,
+          // A capsule keeps the caret and focus; clicking it previews the file.
+          mousedown: (_view, event) => {
+            if (!attachmentTarget(event)) return false
+            event.preventDefault()
+            return true
+          },
+          click: (_view, event) => {
+            const id = attachmentTarget(event)
+            if (!id) return false
+            preview(id)
+            return true
+          },
+        },
+        handleKeyDown: previewSelected,
+        handleDrop: (_view, event) => drop(event),
+        handlePaste: (_view, event) => paste(event),
+      }"
+      :on-blur="() => emit('flush')"
+      @update:model-value="changed"
+    />
   </div>
-  <UploadProgress v-if="task?.uploading" class="note-upload-status" :name="uploadName" :status="uploadLabel" :transferred="task.transferred" :total="task.total" active @cancel="task.controller.abort()" />
+  <UploadProgress
+    v-if="task?.uploading"
+    class="note-upload-status"
+    :name="uploadName"
+    :status="uploadLabel"
+    :transferred="task.transferred"
+    :total="task.total"
+    active
+    @cancel="task.controller.abort()"
+  />
 </template>
 
 <style scoped>
-.note-editor-shell{position:relative;height:100%;min-height:0}
-.note-editor :deep(.note-editor-content){padding:11px 12px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;overscroll-behavior:contain;font-family:var(--content-font-family);font-feature-settings:var(--content-font-features);font-size:inherit;line-height:inherit}
-.note-editor :deep(p){margin:0;min-height:1lh}
-.note-editor :deep(.is-editor-empty:first-child::before){content:attr(data-placeholder);float:left;height:0;pointer-events:none;color:#75808d}
-.note-editor :deep(.is-empty:has(.note-upload-placeholder)::before){content:none}
-.note-upload-status{position:absolute;left:8px;right:8px;bottom:6px}
+.note-editor-shell {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+}
+.note-editor :deep(.note-editor-content) {
+  padding: 11px 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  font-family: var(--content-font-family);
+  font-feature-settings: var(--content-font-features);
+  font-size: inherit;
+  line-height: inherit;
+}
+.note-editor :deep(p) {
+  margin: 0;
+  min-height: 1lh;
+}
+.note-editor :deep(.is-editor-empty:first-child::before) {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: #75808d;
+}
+.note-editor :deep(.is-empty:has(.note-upload-placeholder)::before) {
+  content: none;
+}
+.note-upload-status {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 6px;
+}
 </style>

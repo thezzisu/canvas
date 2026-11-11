@@ -14,4 +14,6 @@ function follow(event: MouseEvent) {
   })
 }
 </script>
-<template><ProseA v-bind="$attrs" :href="href" @click="follow"><slot /></ProseA></template>
+<template>
+  <ProseA v-bind="$attrs" :href="href" @click="follow"><slot /></ProseA>
+</template>

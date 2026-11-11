@@ -18,29 +18,47 @@ export function bindMobileInput(parent: HTMLElement, options: MobileInputOptions
   const element = document.createElement('div')
   element.className = 'terminal-mobile-input'
   element.setAttribute('role', 'textbox')
-  const stopLabel = watchEffect(() => element.setAttribute('aria-label', t('terminal.keyboard.input')))
+  const stopLabel = watchEffect(() =>
+    element.setAttribute('aria-label', t('terminal.keyboard.input')),
+  )
   element.setAttribute('aria-multiline', 'true')
   element.setAttribute('autocapitalize', 'off')
   element.setAttribute('autocorrect', 'off')
   element.spellcheck = false
   element.tabIndex = 0
-  Object.assign(element.style, { position: 'absolute', left: '0', top: '0', width: '1px', height: '20px',
-    opacity: '0', overflow: 'hidden', whiteSpace: 'pre', fontSize: '16px', lineHeight: '20px', pointerEvents: 'none' })
+  Object.assign(element.style, {
+    position: 'absolute',
+    left: '0',
+    top: '0',
+    width: '1px',
+    height: '20px',
+    opacity: '0',
+    overflow: 'hidden',
+    whiteSpace: 'pre',
+    fontSize: '16px',
+    lineHeight: '20px',
+    pointerEvents: 'none',
+  })
   let editable = false
   let composing = false
   let commitTimer: ReturnType<typeof setTimeout> | undefined
   let finishTimer: ReturnType<typeof setTimeout> | undefined
   let finishResolve: (() => void) | undefined
   const finish = () => {
-    clearTimeout(finishTimer); finishTimer = undefined
-    const resolve = finishResolve; finishResolve = undefined; resolve?.()
+    clearTimeout(finishTimer)
+    finishTimer = undefined
+    const resolve = finishResolve
+    finishResolve = undefined
+    resolve?.()
   }
   // A preceding character lets Android's deleteSurroundingText emit Backspace
   // even after the previous input has already been sent to the terminal.
   const anchor = '\u200b'
   const placeCaret = () => {
     if (editable && document.activeElement === element && element.firstChild) {
-      document.getSelection()?.collapse(element.firstChild, element.firstChild.textContent?.length || 0)
+      document
+        .getSelection()
+        ?.collapse(element.firstChild, element.firstChild.textContent?.length || 0)
     }
   }
   const clear = () => {
@@ -48,7 +66,8 @@ export function bindMobileInput(parent: HTMLElement, options: MobileInputOptions
     placeCaret()
   }
   function commit() {
-    clearTimeout(commitTimer); commitTimer = undefined
+    clearTimeout(commitTimer)
+    commitTimer = undefined
     const text = (element.textContent || '').replace(/^\u200b/, '')
     clear()
     if (text && editable && options.active()) options.input(text)
@@ -62,83 +81,137 @@ export function bindMobileInput(parent: HTMLElement, options: MobileInputOptions
     element.contentEditable = String(value)
     element.setAttribute('aria-readonly', String(!value))
     element.inputMode = value ? 'text' : 'none'
-    if (!value) { clearTimeout(commitTimer); commitTimer = undefined; composing = false; clear() }
-    else placeCaret()
+    if (!value) {
+      clearTimeout(commitTimer)
+      commitTimer = undefined
+      composing = false
+      clear()
+    } else placeCaret()
   }
   const key = (event: KeyboardEvent) => {
-    if (!options.active()) { event.preventDefault(); return }
+    if (!options.active()) {
+      event.preventDefault()
+      return
+    }
     // Candidate confirmation/navigation belongs to the IME even on keyboards
     // that omit KeyboardEvent.isComposing on their final Enter key.
     if (composing) return
-    if (event.type === 'keydown' && !event.isComposing && event.keyCode !== 229 && commitTimer !== undefined) commit()
+    if (
+      event.type === 'keydown' &&
+      !event.isComposing &&
+      event.keyCode !== 229 &&
+      commitTimer !== undefined
+    )
+      commit()
     options.key(event)
   }
   const beforeInput = (event: InputEvent) => {
-    if (!editable || !options.active()) { event.preventDefault(); return }
+    if (!editable || !options.active()) {
+      event.preventDefault()
+      return
+    }
     if (composing || event.isComposing || event.inputType === 'insertCompositionText') return
-    const files = [...event.dataTransfer?.files || []]
+    const files = [...(event.dataTransfer?.files || [])]
     if (files.length) {
-      event.preventDefault(); options.files(files); return
+      event.preventDefault()
+      options.files(files)
+      return
     }
     if (event.inputType === 'insertFromPaste') {
-      event.preventDefault(); options.paste(event.dataTransfer?.getData('text/plain') || event.data || ''); return
+      event.preventDefault()
+      options.paste(event.dataTransfer?.getData('text/plain') || event.data || '')
+      return
     }
     const special: Record<string, string> = {
-      insertParagraph: 'Enter', insertLineBreak: 'Enter',
-      deleteContentBackward: 'Backspace', deleteContentForward: 'Delete',
+      insertParagraph: 'Enter',
+      insertLineBreak: 'Enter',
+      deleteContentBackward: 'Backspace',
+      deleteContentForward: 'Delete',
     }
     if (special[event.inputType]) {
       event.preventDefault()
       if (commitTimer !== undefined) commit()
-      options.special(special[event.inputType]!); clear()
+      options.special(special[event.inputType]!)
+      clear()
     }
   }
-  const input = (event: Event) => { if (!composing && !(event as InputEvent).isComposing && commitTimer === undefined) commit() }
+  const input = (event: Event) => {
+    if (!composing && !(event as InputEvent).isComposing && commitTimer === undefined) commit()
+  }
   const start = () => {
     if (commitTimer !== undefined) commit()
-    composing = true; options.composing()
+    composing = true
+    options.composing()
   }
   const end = () => {
     composing = false
     // Chromium can deliver the final DOM edit after compositionend. Read that
     // edit once instead of forwarding both the composition and input events.
-    clearTimeout(commitTimer); commitTimer = setTimeout(commit, 0)
-    if (finishResolve) { clearTimeout(finishTimer); finishTimer = setTimeout(finish, 0) }
+    clearTimeout(commitTimer)
+    commitTimer = setTimeout(commit, 0)
+    if (finishResolve) {
+      clearTimeout(finishTimer)
+      finishTimer = setTimeout(finish, 0)
+    }
   }
   const paste = (event: ClipboardEvent) => {
     // File paste is captured by the existing host upload handler before this.
-    event.preventDefault(); event.stopPropagation()
-    if (editable && options.active()) options.paste(event.clipboardData?.getData('text/plain') || '')
+    event.preventDefault()
+    event.stopPropagation()
+    if (editable && options.active())
+      options.paste(event.clipboardData?.getData('text/plain') || '')
   }
-  const focus = () => { if (!composing && commitTimer === undefined) clear(); options.focus() }
-  const blur = () => { options.blur() }
-  element.addEventListener('keydown', key); element.addEventListener('keypress', key); element.addEventListener('keyup', key)
-  element.addEventListener('beforeinput', beforeInput); element.addEventListener('input', input)
-  element.addEventListener('compositionstart', start); element.addEventListener('compositionend', end)
-  element.addEventListener('paste', paste); element.addEventListener('focus', focus); element.addEventListener('blur', blur)
+  const focus = () => {
+    if (!composing && commitTimer === undefined) clear()
+    options.focus()
+  }
+  const blur = () => {
+    options.blur()
+  }
+  element.addEventListener('keydown', key)
+  element.addEventListener('keypress', key)
+  element.addEventListener('keyup', key)
+  element.addEventListener('beforeinput', beforeInput)
+  element.addEventListener('input', input)
+  element.addEventListener('compositionstart', start)
+  element.addEventListener('compositionend', end)
+  element.addEventListener('paste', paste)
+  element.addEventListener('focus', focus)
+  element.addEventListener('blur', blur)
   setEditable(false)
   parent.append(element)
   return {
-    element, setEditable,
+    element,
+    setEditable,
     finishEditing() {
       finish()
-      return new Promise<void>(resolve => {
+      return new Promise<void>((resolve) => {
         finishResolve = resolve
         // Native blur normally ends composition synchronously. If a browser
         // omits compositionend, stop waiting without forwarding partial preedit.
-        finishTimer = setTimeout(() => {
-          if (!composing && commitTimer !== undefined) commit()
-          finish()
-        }, composing ? 120 : 0)
+        finishTimer = setTimeout(
+          () => {
+            if (!composing && commitTimer !== undefined) commit()
+            finish()
+          },
+          composing ? 120 : 0,
+        )
       })
     },
     dispose() {
-      stopLabel(); finish()
+      stopLabel()
+      finish()
       clearTimeout(commitTimer)
-      element.removeEventListener('keydown', key); element.removeEventListener('keypress', key); element.removeEventListener('keyup', key)
-      element.removeEventListener('beforeinput', beforeInput); element.removeEventListener('input', input)
-      element.removeEventListener('compositionstart', start); element.removeEventListener('compositionend', end)
-      element.removeEventListener('paste', paste); element.removeEventListener('focus', focus); element.removeEventListener('blur', blur)
+      element.removeEventListener('keydown', key)
+      element.removeEventListener('keypress', key)
+      element.removeEventListener('keyup', key)
+      element.removeEventListener('beforeinput', beforeInput)
+      element.removeEventListener('input', input)
+      element.removeEventListener('compositionstart', start)
+      element.removeEventListener('compositionend', end)
+      element.removeEventListener('paste', paste)
+      element.removeEventListener('focus', focus)
+      element.removeEventListener('blur', blur)
       element.remove()
     },
   }

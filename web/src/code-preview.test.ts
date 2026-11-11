@@ -1,15 +1,33 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { textCapabilities, processCodePreview, type CodePreviewRequest, type CodePreviewResult } from './code-preview'
+import {
+  textCapabilities,
+  processCodePreview,
+  type CodePreviewRequest,
+  type CodePreviewResult,
+} from './code-preview'
 import { extensions } from './code-preview-language'
 import { MAX_HIGHLIGHT_TOKENS, grammars, processCode } from './code-preview-process'
 
-const request = (filename: string, text: string, format = false, highlight = false) => ({ filename, text, format, highlight })
+const request = (filename: string, text: string, format = false, highlight = false) => ({
+  filename,
+  text,
+  format,
+  highlight,
+})
 
 test('text capabilities distinguish formatting, highlighting and actual HTML files', () => {
   assert.deepEqual(textCapabilities('report.HTML'), { format: true, highlight: true, html: true })
-  assert.deepEqual(textCapabilities('/path/component.vue'), { format: true, highlight: true, html: false })
-  assert.deepEqual(textCapabilities('scripts/example.py'), { format: false, highlight: true, html: false })
+  assert.deepEqual(textCapabilities('/path/component.vue'), {
+    format: true,
+    highlight: true,
+    html: false,
+  })
+  assert.deepEqual(textCapabilities('scripts/example.py'), {
+    format: false,
+    highlight: true,
+    html: false,
+  })
   for (const name of ['README', 'notes.txt', 'html', 'archive.html.gz'])
     assert.deepEqual(textCapabilities(name), { format: false, highlight: false, html: false })
 })
@@ -17,9 +35,14 @@ test('text capabilities distinguish formatting, highlighting and actual HTML fil
 test('plain and disabled processing returns original text without creating a worker', async () => {
   const original = '\n <script>plain text</script>\r\n'
   assert.deepEqual(await processCodePreview(request('page.html', original)), { text: original })
-  assert.deepEqual(await processCodePreview(request('notes.txt', original, true, true)), { text: original })
+  assert.deepEqual(await processCodePreview(request('notes.txt', original, true, true)), {
+    text: original,
+  })
   const aborted = AbortSignal.abort(new Error('Closed preview'))
-  await assert.rejects(processCodePreview(request('page.html', original, true), aborted), /Closed preview/)
+  await assert.rejects(
+    processCodePreview(request('page.html', original, true), aborted),
+    /Closed preview/,
+  )
 })
 
 test('shared worker isolates cancellation, rejects failures and safely recreates after errors', async () => {
@@ -35,10 +58,18 @@ test('shared worker isolates cancellation, rejects failures and safely recreates
       if (FakeWorker.failCreation) throw new Error('Worker blocked')
       workers.push(this)
     }
-    postMessage(message: { id: number; request: CodePreviewRequest }) { this.messages.push(message) }
-    terminate() { this.terminated = true }
-    fail() { this.onerror?.({ preventDefault() {} }) }
-    reply(index: number, result: CodePreviewResult) { this.onmessage?.({ data: { id: this.messages[index]!.id, result } }) }
+    postMessage(message: { id: number; request: CodePreviewRequest }) {
+      this.messages.push(message)
+    }
+    terminate() {
+      this.terminated = true
+    }
+    fail() {
+      this.onerror?.({ preventDefault() {} })
+    }
+    reply(index: number, result: CodePreviewResult) {
+      this.onmessage?.({ data: { id: this.messages[index]!.id, result } })
+    }
   }
   Object.defineProperty(globalThis, 'Worker', { value: FakeWorker, configurable: true })
   try {
@@ -73,7 +104,8 @@ test('shared worker isolates cancellation, rejects failures and safely recreates
 })
 
 test('HTML formatting includes embedded CSS and JavaScript without changing the original input', async () => {
-  const text = '<!doctype html><html><head><style>body{color:red}</style></head><body><p>中文 &amp; text</p><script>const config={a:1};</script></body></html>'
+  const text =
+    '<!doctype html><html><head><style>body{color:red}</style></head><body><p>中文 &amp; text</p><script>const config={a:1};</script></body></html>'
   const input = request('page.html', text, true, true)
   const result = await processCode(input)
   assert.equal(result.formatError, undefined)
@@ -83,27 +115,39 @@ test('HTML formatting includes embedded CSS and JavaScript without changing the 
   assert.match(result.text, /const config = \{ a: 1 \};/u)
   assert(result.text.includes('<p>中文 &amp; text</p>'))
   assert.equal(input.text, text)
-  assert.equal(result.tokens?.map(token => token.text).join(''), result.text)
-  assert(new Set(result.tokens?.flatMap(token => token.color || [])).size > 1)
+  assert.equal(result.tokens?.map((token) => token.text).join(''), result.text)
+  assert(new Set(result.tokens?.flatMap((token) => token.color || [])).size > 1)
 })
 
 test('highlight tokens preserve leading/trailing and mixed newlines plus literal markup', async () => {
-  const text = '\r\n<script>alert("<img src=x>")</script>\r\n<div>雪\t &amp; </div>\r<p>CR line ending</p>\r\n\n'
+  const text =
+    '\r\n<script>alert("<img src=x>")</script>\r\n<div>雪\t &amp; </div>\r<p>CR line ending</p>\r\n\n'
   const result = await processCode(request('page.html', text, false, true))
   assert.equal(result.highlightError, undefined)
   assert.equal(result.text, text)
-  assert.equal(result.tokens?.map(token => token.text).join(''), text)
-  assert(result.tokens?.every(token => typeof token.text === 'string' && (!token.color || /^#[\da-f]{3,8}$/iu.test(token.color))))
+  assert.equal(result.tokens?.map((token) => token.text).join(''), text)
+  assert(
+    result.tokens?.every(
+      (token) =>
+        typeof token.text === 'string' && (!token.color || /^#[\da-f]{3,8}$/iu.test(token.color)),
+    ),
+  )
 })
 
 test('long formatted files highlight a bounded prefix and keep the rest as exact plain text', async () => {
-  const text = '<!doctype html><html><head><style>' + Array.from({ length: 4000 }, (_, i) => `.c${i}{color:#${(i % 4096).toString(16).padStart(3, '0')};margin:${i}px}`).join('') + '</style></head><body></body></html>'
+  const text =
+    '<!doctype html><html><head><style>' +
+    Array.from(
+      { length: 4000 },
+      (_, i) => `.c${i}{color:#${(i % 4096).toString(16).padStart(3, '0')};margin:${i}px}`,
+    ).join('') +
+    '</style></head><body></body></html>'
   const result = await processCode(request('large.html', text, true, true))
   assert.equal(result.formatError, undefined)
   assert.equal(result.highlightError, undefined)
   assert.equal(result.tokens?.length, MAX_HIGHLIGHT_TOKENS + 1)
   assert.equal(result.tokens?.at(-1)?.color, undefined)
-  assert.equal(result.tokens?.map(token => token.text).join(''), result.text)
+  assert.equal(result.tokens?.map((token) => token.text).join(''), result.text)
 })
 
 test('malformed code reports a formatting failure and still highlights the original content', async () => {
@@ -111,37 +155,50 @@ test('malformed code reports a formatting failure and still highlights the origi
   const result = await processCode(request('broken.json', text, true, true))
   assert.equal(result.formatError, true)
   assert.equal(result.text, text)
-  assert.equal(result.tokens?.map(token => token.text).join(''), text)
+  assert.equal(result.tokens?.map((token) => token.text).join(''), text)
 })
 
 test('common formatters and highlight-only languages stay separate', async () => {
-  for (const [filename, text] of [['example.ts', 'const n:number=1'], ['example.json', '{"n":1}'], ['example.css', 'body{color:red}'], ['example.yml', 'a: [1,2]'], ['example.md', '#Title\n\ntext']]) {
+  for (const [filename, text] of [
+    ['example.ts', 'const n:number=1'],
+    ['example.json', '{"n":1}'],
+    ['example.css', 'body{color:red}'],
+    ['example.yml', 'a: [1,2]'],
+    ['example.md', '#Title\n\ntext'],
+  ]) {
     const result = await processCode(request(filename!, text!, true, true))
     assert.equal(result.formatError, undefined, filename)
     assert.equal(result.highlightError, undefined, filename)
-    assert.equal(result.tokens?.map(token => token.text).join(''), result.text, filename)
+    assert.equal(result.tokens?.map((token) => token.text).join(''), result.text, filename)
   }
   const python = 'print("hello")\n'
   const result = await processCode(request('example.py', python, true, true))
   assert.equal(result.text, python)
   assert.equal(result.formatError, undefined)
-  assert(result.tokens?.some(token => token.color))
+  assert(result.tokens?.some((token) => token.color))
 })
 
 test('every mapped language has a matching bundled grammar in the worker', async () => {
   for (const language of new Set(Object.values(extensions))) {
     const grammar = await grammars[language]?.()
-    assert(grammar?.default.some(entry => entry.name === language), language)
+    assert(
+      grammar?.default.some((entry) => entry.name === language),
+      language,
+    )
   }
 })
 
 test('Kotlin sources and Gradle Kotlin scripts highlight with the Kotlin grammar', async () => {
   for (const filename of ['Main.kt', 'script.KTS', 'app/build.gradle.kts']) {
-    assert.deepEqual(textCapabilities(filename), { format: false, highlight: true, html: false }, filename)
+    assert.deepEqual(
+      textCapabilities(filename),
+      { format: false, highlight: true, html: false },
+      filename,
+    )
     const text = 'fun main() {\n  val greeting = "hello"\n}\n'
     const result = await processCode(request(filename, text, false, true))
     assert.equal(result.highlightError, undefined, filename)
-    assert.equal(result.tokens?.map(token => token.text).join(''), text, filename)
-    assert(new Set(result.tokens?.flatMap(token => token.color || [])).size > 1, filename)
+    assert.equal(result.tokens?.map((token) => token.text).join(''), text, filename)
+    assert(new Set(result.tokens?.flatMap((token) => token.color || [])).size > 1, filename)
   }
 })

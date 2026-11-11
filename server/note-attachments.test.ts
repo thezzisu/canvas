@@ -12,20 +12,46 @@ import { CARD_REMOVAL_UNDO_MS } from '../shared/card-removal.ts'
 import type { TerminalManager } from './terminals.ts'
 
 async function fixture(t: TestContext) {
-  const root = await mkdtemp(join(tmpdir(), 'canvas-note-assets-')), store = new Store(join(root, 'canvas.db'))
+  const root = await mkdtemp(join(tmpdir(), 'canvas-note-assets-')),
+    store = new Store(join(root, 'canvas.db'))
   const assets = new AssetStore(root, store)
   store.addSession('fixture')
-  const note: NoteNode = { id: randomUUID(), type: 'note', title: '', content: 'Draft', color: 'blue', x: 0, y: 0, width: 320, height: 240 }
+  const note: NoteNode = {
+    id: randomUUID(),
+    type: 'note',
+    title: '',
+    content: 'Draft',
+    color: 'blue',
+    x: 0,
+    y: 0,
+    width: 320,
+    height: 240,
+  }
   const canvas = store.put<Canvas>('canvas', { id: randomUUID(), name: 'A', nodes: [note] })
-  const app = createApp(store, { username: 'fixture', passwordHash: 'unused' }, {} as TerminalManager, { assets })
-  t.after(async () => { await assets.close(); store.close(); await rm(root, { recursive: true, force: true }) })
-  const upload = async (noteId = note.id, canvasId = canvas.id) => app.request(`http://canvas.test/api/canvases/${canvasId}/notes/${noteId}/files?filename=photo.png&size=3`, {
-    method: 'POST', headers: { Authorization: 'Bearer fixture', 'Content-Type': 'application/octet-stream' }, body: 'abc',
+  const app = createApp(
+    store,
+    { username: 'fixture', passwordHash: 'unused' },
+    {} as TerminalManager,
+    { assets },
+  )
+  t.after(async () => {
+    await assets.close()
+    store.close()
+    await rm(root, { recursive: true, force: true })
   })
+  const upload = async (noteId = note.id, canvasId = canvas.id) =>
+    app.request(
+      `http://canvas.test/api/canvases/${canvasId}/notes/${noteId}/files?filename=photo.png&size=3`,
+      {
+        method: 'POST',
+        headers: { Authorization: 'Bearer fixture', 'Content-Type': 'application/octet-stream' },
+        body: 'abc',
+      },
+    )
   return { root, store, assets, canvas, note, app, upload }
 }
 
-test('upload associates an asset with a shared note without replacing its current text or creating file cards', async t => {
+test('upload associates an asset with a shared note without replacing its current text or creating file cards', async (t) => {
   const f = await fixture(t)
   const peer = f.store.put<Canvas>('canvas', { id: randomUUID(), name: 'B', nodes: [] })
   f.store.addNodeReference(f.canvas.id, f.note.id, peer.id, { x: 50, y: 70 })
@@ -41,13 +67,22 @@ test('upload associates an asset with a shared note without replacing its curren
     assert.equal(view.attachments?.[0]?.id, asset.id)
     assert.equal(f.store.fileAssetForCanvas(asset.id, id)?.id, asset.id)
   }
-  assert.equal((await f.app.request(`http://canvas.test/api/files/${asset.id}`, { headers: { Authorization: 'Bearer fixture' } })).status, 200)
+  assert.equal(
+    (
+      await f.app.request(`http://canvas.test/api/files/${asset.id}`, {
+        headers: { Authorization: 'Bearer fixture' },
+      })
+    ).status,
+    200,
+  )
   assert.equal((await f.upload(randomUUID())).status, 404)
   assert.equal(f.store.fileAssetIds().length, 1)
 })
 
-test('removing capsules keeps bytes for editor undo; shared and removed-card references retain note assets', async t => {
-  const f = await fixture(t), response = await f.upload(), asset = await response.json()
+test('removing capsules keeps bytes for editor undo; shared and removed-card references retain note assets', async (t) => {
+  const f = await fixture(t),
+    response = await f.upload(),
+    asset = await response.json()
   f.store.updateNote(f.canvas.id, f.note.id, { content: '' })
   assert(f.store.fileAssetReferenced(asset.id), 'capsule content is not asset ownership')
   const peer = f.store.put<Canvas>('canvas', { id: randomUUID(), name: 'B', nodes: [] })
@@ -67,65 +102,116 @@ test('removing capsules keeps bytes for editor undo; shared and removed-card ref
   assert.deepEqual(f.store.noteAttachments(f.note.id), [], 'association is removed with its asset')
 })
 
-test('deleting the note or revoking its session aborts an in-flight attachment and discards partial bytes', async t => {
-  for (const reason of ['note', 'session'] as const) await t.test(reason, async t => {
-    const f = await fixture(t)
-    let ready!: () => void
-    const reading = new Promise<void>(resolve => { ready = resolve })
-    const stream = new ReadableStream<Uint8Array>({ pull() { ready() } })
-    const request = new Request('http://canvas.test/file', { method: 'POST', body: stream, duplex: 'half' } as RequestInit)
-    const pending = receiveCanvasFile(f.store, f.assets, f.canvas.id, { noteId: f.note.id, filename: 'partial.png', size: 9 }, request, 'fixture')
-    await reading
-    if (reason === 'note') f.store.removeCard(f.canvas.id, f.note.id, 'fixture')
-    else f.store.removeSession('fixture')
-    await assert.rejects(pending)
-    assert.deepEqual(f.store.fileAssetIds(), [])
-    assert.deepEqual(await readdir(join(f.root, 'files')), [])
-  })
+test('deleting the note or revoking its session aborts an in-flight attachment and discards partial bytes', async (t) => {
+  for (const reason of ['note', 'session'] as const)
+    await t.test(reason, async (t) => {
+      const f = await fixture(t)
+      let ready!: () => void
+      const reading = new Promise<void>((resolve) => {
+        ready = resolve
+      })
+      const stream = new ReadableStream<Uint8Array>({
+        pull() {
+          ready()
+        },
+      })
+      const request = new Request('http://canvas.test/file', {
+        method: 'POST',
+        body: stream,
+        duplex: 'half',
+      } as RequestInit)
+      const pending = receiveCanvasFile(
+        f.store,
+        f.assets,
+        f.canvas.id,
+        { noteId: f.note.id, filename: 'partial.png', size: 9 },
+        request,
+        'fixture',
+      )
+      await reading
+      if (reason === 'note') f.store.removeCard(f.canvas.id, f.note.id, 'fixture')
+      else f.store.removeSession('fixture')
+      await assert.rejects(pending)
+      assert.deepEqual(f.store.fileAssetIds(), [])
+      assert.deepEqual(await readdir(join(f.root, 'files')), [])
+    })
 })
 
-
-test('references share existing bytes across notes and preserve them until the last owner leaves', async t => {
-  const f = await fixture(t), asset = await (await f.upload()).json()
+test('references share existing bytes across notes and preserve them until the last owner leaves', async (t) => {
+  const f = await fixture(t),
+    asset = await (await f.upload()).json()
   const peer: NoteNode = { ...f.note, id: randomUUID(), content: 'Second note' }
   const canvas = f.store.put<Canvas>('canvas', { id: randomUUID(), name: 'B', nodes: [peer] })
-  const refs = (ids: string[]) => f.app.request(`http://canvas.test/api/canvases/${canvas.id}/notes/${peer.id}/file-references`, {
-    method: 'POST', headers: { Authorization: 'Bearer fixture', 'Content-Type': 'application/json' }, body: JSON.stringify({ assetIds: ids }),
-  })
+  const refs = (ids: string[]) =>
+    f.app.request(`http://canvas.test/api/canvases/${canvas.id}/notes/${peer.id}/file-references`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer fixture', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assetIds: ids }),
+    })
   let changes = 0
-  const changed = () => { changes++ }
-  f.store.on('change', changed); t.after(() => f.store.off('change', changed))
+  const changed = () => {
+    changes++
+  }
+  f.store.on('change', changed)
+  t.after(() => f.store.off('change', changed))
   const linked = await refs([asset.id, asset.id])
-  assert.equal(linked.status, 200); assert.deepEqual(await linked.json(), [f.store.fileAsset(asset.id)])
+  assert.equal(linked.status, 200)
+  assert.deepEqual(await linked.json(), [f.store.fileAsset(asset.id)])
   assert.equal(changes, 1)
-  assert.equal((await refs([asset.id])).status, 200); assert.equal(changes, 1, 'linking existing ownership is a no-op')
+  assert.equal((await refs([asset.id])).status, 200)
+  assert.equal(changes, 1, 'linking existing ownership is a no-op')
   assert.equal(f.store.fileAssetIds().length, 1)
   assert.deepEqual(await readdir(join(f.root, 'files')), [asset.id])
-  assert.equal((f.store.get<Canvas>('canvas', canvas.id)!.nodes[0] as NoteNode).content, 'Second note')
+  assert.equal(
+    (f.store.get<Canvas>('canvas', canvas.id)!.nodes[0] as NoteNode).content,
+    'Second note',
+  )
   f.store.remove('canvas', f.canvas.id)
   assert(f.store.fileAssetReferenced(asset.id), 'the receiving note owns the original bytes')
-  assert.equal((await f.app.request(`http://canvas.test/api/files/${asset.id}`, { headers: { Authorization: 'Bearer fixture' } })).status, 200)
+  assert.equal(
+    (
+      await f.app.request(`http://canvas.test/api/files/${asset.id}`, {
+        headers: { Authorization: 'Bearer fixture' },
+      })
+    ).status,
+    200,
+  )
   f.store.updateNote(canvas.id, peer.id, { content: '' })
   assert(f.store.fileAssetReferenced(asset.id), 'deleting a capsule keeps editor undo available')
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
   const removed = f.store.removeCard(canvas.id, peer.id, 'fixture')!
-  assert(f.store.fileAssetReferenced(asset.id)); assert(f.store.restoreCard(canvas.id, removed.undo!.token, 'fixture'))
-  f.store.removeCard(canvas.id, peer.id, 'fixture'); t.mock.timers.tick(CARD_REMOVAL_UNDO_MS + 1)
+  assert(f.store.fileAssetReferenced(asset.id))
+  assert(f.store.restoreCard(canvas.id, removed.undo!.token, 'fixture'))
+  f.store.removeCard(canvas.id, peer.id, 'fixture')
+  t.mock.timers.tick(CARD_REMOVAL_UNDO_MS + 1)
   assert.equal(f.store.fileAssetReferenced(asset.id), false)
 })
 
-test('note references require authentication and validate the whole destination batch before linking', async t => {
-  const f = await fixture(t), asset = await (await f.upload()).json()
+test('note references require authentication and validate the whole destination batch before linking', async (t) => {
+  const f = await fixture(t),
+    asset = await (await f.upload()).json()
   const peer: NoteNode = { ...f.note, id: randomUUID() }
   const canvas = f.store.put<Canvas>('canvas', { id: randomUUID(), name: 'B', nodes: [peer] })
-  const request = (body: unknown, token = 'fixture', node = peer.id) => f.app.request(`http://canvas.test/api/canvases/${canvas.id}/notes/${node}/file-references`, {
-    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-  })
+  const request = (body: unknown, token = 'fixture', node = peer.id) =>
+    f.app.request(`http://canvas.test/api/canvases/${canvas.id}/notes/${node}/file-references`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
   assert.equal((await request({ assetIds: [asset.id] }, 'expired')).status, 401)
   assert.equal((await request({ assetIds: [asset.id] }, 'fixture', randomUUID())).status, 404)
   assert.equal((await request({ assetIds: [asset.id, randomUUID()] })).status, 404)
-  for (const body of [{ assetIds: [] }, { assetIds: Array(65).fill(asset.id) }, { assetIds: ['../file'] }, { assetIds: [asset.id], path: '/unrelated' }])
+  for (const body of [
+    { assetIds: [] },
+    { assetIds: Array(65).fill(asset.id) },
+    { assetIds: ['../file'] },
+    { assetIds: [asset.id], path: '/unrelated' },
+  ])
     assert.equal((await request(body)).status, 400)
-  assert.deepEqual(f.store.noteAttachments(peer.id), [], 'invalid batches leave no partial ownership')
+  assert.deepEqual(
+    f.store.noteAttachments(peer.id),
+    [],
+    'invalid batches leave no partial ownership',
+  )
   assert.equal(f.store.fileAssetIds().length, 1)
 })

@@ -7,7 +7,10 @@ export const KatexMath = defineComponent({
   setup(props) {
     return () => {
       const inline = props.class.includes('inline')
-      const innerHTML = katex.renderToString(props.content, { throwOnError: false, displayMode: !inline })
+      const innerHTML = katex.renderToString(props.content, {
+        throwOnError: false,
+        displayMode: !inline,
+      })
       return h(inline ? 'span' : 'div', { class: inline ? 'math inline' : 'math block', innerHTML })
     }
   },

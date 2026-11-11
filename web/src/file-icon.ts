@@ -1,9 +1,15 @@
-export type FileIconManifest = { file: string, fileNames: Record<string, string>, fileExtensions: Record<string, string> }
+export type FileIconManifest = {
+  file: string
+  fileNames: Record<string, string>
+  fileExtensions: Record<string, string>
+}
 
 /** Match Material Icon Theme file associations case-insensitively: exact name, then the longest extension, then the default icon. */
 export function fileIconResolver({ file, fileNames, fileExtensions }: FileIconManifest) {
-  const lower = (map: Record<string, string>) => new Map(Object.entries(map).map(([key, icon]) => [key.toLowerCase(), icon]))
-  const names = lower(fileNames), extensions = lower(fileExtensions)
+  const lower = (map: Record<string, string>) =>
+    new Map(Object.entries(map).map(([key, icon]) => [key.toLowerCase(), icon]))
+  const names = lower(fileNames),
+    extensions = lower(fileExtensions)
   return (filename: string) => {
     const name = filename.slice(filename.lastIndexOf('/') + 1).toLowerCase()
     const icon = names.get(name)

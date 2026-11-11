@@ -43,21 +43,35 @@ export class TerminalReconnect {
 
   resume(windowPresent = false) {
     if (windowPresent && this.removed) {
-      this.removed = false; this.attempt = 0; this.exhausted = false
+      this.removed = false
+      this.attempt = 0
+      this.exhausted = false
     }
-    if (!this.options.active() || this.exhausted || this.retryTimer !== undefined || this.handshakeTimer !== undefined) return
-    if (this.attempt) this.retryTimer = setTimeout(() => this.connect(), retryDelays[this.attempt - 1]!)
+    if (
+      !this.options.active() ||
+      this.exhausted ||
+      this.retryTimer !== undefined ||
+      this.handshakeTimer !== undefined
+    )
+      return
+    if (this.attempt)
+      this.retryTimer = setTimeout(() => this.connect(), retryDelays[this.attempt - 1]!)
     else this.connect()
   }
 
   restart() {
-    this.pause(); this.attempt = 0; this.exhausted = false; this.removed = false
+    this.pause()
+    this.attempt = 0
+    this.exhausted = false
+    this.removed = false
     this.connect()
   }
 
   connected() {
-    clearTimeout(this.handshakeTimer); this.handshakeTimer = undefined
-    clearTimeout(this.retryTimer); this.retryTimer = undefined
+    clearTimeout(this.handshakeTimer)
+    this.handshakeTimer = undefined
+    clearTimeout(this.retryTimer)
+    this.retryTimer = undefined
     if (this.stableTimer !== undefined || !this.options.active()) return
     this.stableTimer = setTimeout(() => {
       this.stableTimer = undefined
@@ -67,7 +81,9 @@ export class TerminalReconnect {
 
   /** A confirmed window removal retires this view without showing an outage. */
   stop() {
-    this.pause(); this.exhausted = true; this.removed = true
+    this.pause()
+    this.exhausted = true
+    this.removed = true
   }
 
   failed(retry = true) {
@@ -80,16 +96,22 @@ export class TerminalReconnect {
       return
     }
     if (!retry || this.attempt === retryDelays.length) {
-      this.exhausted = true; this.options.failed(); return
+      this.exhausted = true
+      this.options.failed()
+      return
     }
     this.attempt++
     this.options.waiting(this.attempt)
-    if (this.options.active()) this.retryTimer = setTimeout(() => this.connect(), retryDelays[this.attempt - 1]!)
+    if (this.options.active())
+      this.retryTimer = setTimeout(() => this.connect(), retryDelays[this.attempt - 1]!)
   }
 
   pause() {
-    clearTimeout(this.retryTimer); this.retryTimer = undefined
-    clearTimeout(this.handshakeTimer); this.handshakeTimer = undefined
-    clearTimeout(this.stableTimer); this.stableTimer = undefined
+    clearTimeout(this.retryTimer)
+    this.retryTimer = undefined
+    clearTimeout(this.handshakeTimer)
+    this.handshakeTimer = undefined
+    clearTimeout(this.stableTimer)
+    this.stableTimer = undefined
   }
 }

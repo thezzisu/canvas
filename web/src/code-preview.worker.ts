@@ -6,6 +6,9 @@ declare const self: {
   postMessage(value: { id: number; result?: CodePreviewResult }): void
 }
 self.onmessage = async ({ data: { id, request } }) => {
-  try { self.postMessage({ id, result: await processCode(request) }) }
-  catch { self.postMessage({ id }) }
+  try {
+    self.postMessage({ id, result: await processCode(request) })
+  } catch {
+    self.postMessage({ id })
+  }
 }

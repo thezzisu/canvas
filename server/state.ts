@@ -1,113 +1,160 @@
-import { DatabaseSync } from "node:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { randomUUID } from "node:crypto";
-import { EventEmitter } from "node:events";
-import { isDeepStrictEqual } from "node:util";
-import { z } from "zod";
-import { defaultSettings, type GlobalSettings } from "../shared/settings.ts";
-import { defaultWindowSize, normalTerminalGrid } from "../shared/window-size.ts";
-import { settingsPatchSchema } from "./settings.ts";
-import { layoutFields, type LayoutUpdate, type LayoutGeometry } from "../shared/layout.ts";
-import { getMimeType } from "hono/utils/mime";
-import { CARD_REMOVAL_UNDO_MS, type CardRemovalResponse } from '../shared/card-removal.ts';
-import { orderedIds, type NavigationOrder, type NavigationOrderKind } from '../shared/navigation-order.ts';
+import { DatabaseSync } from 'node:sqlite'
+import { mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { EventEmitter } from 'node:events'
+import { isDeepStrictEqual } from 'node:util'
+import { z } from 'zod'
+import { defaultSettings, type GlobalSettings } from '../shared/settings.ts'
+import { defaultWindowSize, normalTerminalGrid } from '../shared/window-size.ts'
+import { settingsPatchSchema } from './settings.ts'
+import { layoutFields, type LayoutUpdate, type LayoutGeometry } from '../shared/layout.ts'
+import { getMimeType } from 'hono/utils/mime'
+import { CARD_REMOVAL_UNDO_MS, type CardRemovalResponse } from '../shared/card-removal.ts'
+import {
+  orderedIds,
+  type NavigationOrder,
+  type NavigationOrderKind,
+} from '../shared/navigation-order.ts'
 
 export const sourceSchema = z
   .object({
     id: z.string().uuid().optional(),
     name: z.string().trim().min(1).max(100),
-    runtime: z.enum(["tui", "core"]).optional(),
-    transport: z.enum(["local", "ssh"]),
+    runtime: z.enum(['tui', 'core']).optional(),
+    transport: z.enum(['local', 'ssh']),
     target: z.string().max(500).optional(),
     sshIdentityFile: z.string().max(1000).optional(),
     sshKnownHostsFile: z.string().max(1000).optional(),
     herdrSession: z.preprocess(
-      value => typeof value === "string" && !value.trim() ? undefined : value,
-      z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9_.-]+$/u).refine(value => value !== "." && value !== "..").optional(),
+      (value) => (typeof value === 'string' && !value.trim() ? undefined : value),
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(64)
+        .regex(/^[a-zA-Z0-9_.-]+$/u)
+        .refine((value) => value !== '.' && value !== '..')
+        .optional(),
     ),
     herdrSocket: z.preprocess(
-      value => typeof value === "string" && !value.trim() ? undefined : value,
-      z.string().trim().max(1000).refine(value => value.startsWith("/") && !/[:\x00-\x1f\x7f]/u.test(value), "Use an absolute herdr socket path").optional(),
+      (value) => (typeof value === 'string' && !value.trim() ? undefined : value),
+      z
+        .string()
+        .trim()
+        .max(1000)
+        .refine(
+          (value) => value.startsWith('/') && !/[:\x00-\x1f\x7f]/u.test(value),
+          'Use an absolute herdr socket path',
+        )
+        .optional(),
     ),
   })
   .strict()
-  .refine(
-    (s) => s.transport !== "ssh" || !!s.target?.trim(),
-    "SSH target is required",
-  );
-export type Source = z.infer<typeof sourceSchema> & { id: string };
+  .refine((s) => s.transport !== 'ssh' || !!s.target?.trim(), 'SSH target is required')
+export type Source = z.infer<typeof sourceSchema> & { id: string }
 /** Display-name edits do not change the native connection or its transfers. */
 export function sourceConnectionKey(source: Source): string {
   // Empty form fields select defaults. Nonempty paths remain literal, including
   // spaces; local connections do not use any of the retained SSH form fields.
-  return JSON.stringify([source.id, source.transport,
-    ...(source.transport === "ssh" ? [source.target || null, source.sshIdentityFile || null, source.sshKnownHostsFile || null] : []),
-    source.herdrSession || null, source.herdrSocket || null, ...(source.runtime === "core" ? ["core"] : [])]);
+  return JSON.stringify([
+    source.id,
+    source.transport,
+    ...(source.transport === 'ssh'
+      ? [source.target || null, source.sshIdentityFile || null, source.sshKnownHostsFile || null]
+      : []),
+    source.herdrSession || null,
+    source.herdrSocket || null,
+    ...(source.runtime === 'core' ? ['core'] : []),
+  ])
 }
-export const nodeLayoutSchema = z.object({
-  id: z.string().min(1).max(150),
-  x: z.number().finite().min(-1e7).max(1e7),
-  y: z.number().finite().min(-1e7).max(1e7),
-  width: z.number().min(240).max(4000),
-  height: z.number().min(160).max(3000),
-}).strict();
-export const terminalNodeSchema = nodeLayoutSchema.extend({
-  type: z.literal("terminal"),
-  sourceId: z.string().uuid(),
-  spaceId: z.string().max(300),
-  windowId: z.string().max(300),
-}).strict();
-export const noteColorSchema = z.enum(["yellow", "blue", "green", "pink", "neutral"]);
-export const fileAssetSchema = z.object({
-  id: z.string().uuid(),
-  filename: z.string().min(1).max(255),
-  size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  mime: z.string().max(100),
-  createdAt: z.number().int().nonnegative(),
-  sourcePreview: z.boolean().optional(),
-}).strict();
-export const noteNodeSchema = nodeLayoutSchema.extend({
-  type: z.literal("note"),
-  title: z.string().max(200).default(""),
-  content: z.string().max(200_000).default(""),
-  color: noteColorSchema.default("yellow"),
-  attachments: z.array(fileAssetSchema).optional(),
-}).strict();
-export const fileNodeSchema = nodeLayoutSchema.extend({
-  type: z.literal("file"),
-  assetId: z.string().uuid(),
-  asset: fileAssetSchema.optional(),
-}).strict();
-export const itemSchema = z.discriminatedUnion("type", [terminalNodeSchema, noteNodeSchema, fileNodeSchema]);
-export type TerminalNode = z.infer<typeof terminalNodeSchema>;
-export type NoteNode = z.infer<typeof noteNodeSchema>;
-export type FileNode = z.infer<typeof fileNodeSchema>;
-export type CanvasNode = z.infer<typeof itemSchema>;
+export const nodeLayoutSchema = z
+  .object({
+    id: z.string().min(1).max(150),
+    x: z.number().finite().min(-1e7).max(1e7),
+    y: z.number().finite().min(-1e7).max(1e7),
+    width: z.number().min(240).max(4000),
+    height: z.number().min(160).max(3000),
+  })
+  .strict()
+export const terminalNodeSchema = nodeLayoutSchema
+  .extend({
+    type: z.literal('terminal'),
+    sourceId: z.string().uuid(),
+    spaceId: z.string().max(300),
+    windowId: z.string().max(300),
+  })
+  .strict()
+export const noteColorSchema = z.enum(['yellow', 'blue', 'green', 'pink', 'neutral'])
+export const fileAssetSchema = z
+  .object({
+    id: z.string().uuid(),
+    filename: z.string().min(1).max(255),
+    size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    mime: z.string().max(100),
+    createdAt: z.number().int().nonnegative(),
+    sourcePreview: z.boolean().optional(),
+  })
+  .strict()
+export const noteNodeSchema = nodeLayoutSchema
+  .extend({
+    type: z.literal('note'),
+    title: z.string().max(200).default(''),
+    content: z.string().max(200_000).default(''),
+    color: noteColorSchema.default('yellow'),
+    attachments: z.array(fileAssetSchema).optional(),
+  })
+  .strict()
+export const fileNodeSchema = nodeLayoutSchema
+  .extend({
+    type: z.literal('file'),
+    assetId: z.string().uuid(),
+    asset: fileAssetSchema.optional(),
+  })
+  .strict()
+export const itemSchema = z.discriminatedUnion('type', [
+  terminalNodeSchema,
+  noteNodeSchema,
+  fileNodeSchema,
+])
+export type TerminalNode = z.infer<typeof terminalNodeSchema>
+export type NoteNode = z.infer<typeof noteNodeSchema>
+export type FileNode = z.infer<typeof fileNodeSchema>
+export type CanvasNode = z.infer<typeof itemSchema>
 export type FileAsset = {
-  id: string;
-  filename: string;
-  size: number;
-  mime: string;
-  createdAt: number;
-  sourcePreview?: boolean;
-};
+  id: string
+  filename: string
+  size: number
+  mime: string
+  createdAt: number
+  sourcePreview?: boolean
+}
 /** Source provenance stays server-side; browsers receive only the capability. */
-export interface FileOrigin { sourceId: string; sourceKey: string; path: string }
-export type FileNodeView = FileNode & { asset: FileAsset };
+export interface FileOrigin {
+  sourceId: string
+  sourceKey: string
+  path: string
+}
+export type FileNodeView = FileNode & { asset: FileAsset }
 export type FileAssetContext = { canvasId?: string; origin?: FileOrigin } & (
   | { anchorId?: string; sourceId: string; windowId: string }
   | { position: { x: number; y: number } }
   | { noteId: string }
   | { composer: ComposerTarget }
-);
-export interface ComposerTarget { sourceId: string; windowId: string }
+)
+export interface ComposerTarget {
+  sourceId: string
+  windowId: string
+}
 /** A terminal's draft: a note owned by its native window instead of a canvas. */
-export interface Composer extends ComposerTarget { id: string; content: string; version: number }
-export type ComposerView = Composer & { attachments: FileAsset[] };
-export const composerKey = (target: ComposerTarget) => `${target.sourceId}/${target.windowId}`;
-export const isTerminalNode = (node: CanvasNode): node is TerminalNode =>
-  node.type === "terminal";
+export interface Composer extends ComposerTarget {
+  id: string
+  content: string
+  version: number
+}
+export type ComposerView = Composer & { attachments: FileAsset[] }
+export const composerKey = (target: ComposerTarget) => `${target.sourceId}/${target.windowId}`
+export const isTerminalNode = (node: CanvasNode): node is TerminalNode => node.type === 'terminal'
 export const canvasSchema = z
   .object({
     id: z.string().uuid().optional(),
@@ -115,56 +162,67 @@ export const canvasSchema = z
     nodes: z.array(itemSchema).max(500).default([]),
     snapToGrid: z.boolean().optional(),
   })
-  .strict();
-export type Canvas = z.infer<typeof canvasSchema> & { id: string };
-export type CanvasBackground = { url: string; opacity: number };
-export type CanvasView = Omit<Canvas, "nodes"> & {
-  nodes: Array<Exclude<CanvasNode, FileNode> | FileNodeView>;
-  background: CanvasBackground | null;
-};
-export type WindowSize = { width: number; height: number };
+  .strict()
+export type Canvas = z.infer<typeof canvasSchema> & { id: string }
+export type CanvasBackground = { url: string; opacity: number }
+export type CanvasView = Omit<Canvas, 'nodes'> & {
+  nodes: Array<Exclude<CanvasNode, FileNode> | FileNodeView>
+  background: CanvasBackground | null
+}
+export type WindowSize = { width: number; height: number }
 interface RemovedCard {
-  canvasId: string; node: CanvasNode; index: number; sessionId: string; expiresAt: number;
-  sourceKey?: string; restored: boolean; timer: ReturnType<typeof setTimeout>;
+  canvasId: string
+  node: CanvasNode
+  index: number
+  sessionId: string
+  expiresAt: number
+  sourceKey?: string
+  restored: boolean
+  timer: ReturnType<typeof setTimeout>
 }
 export type SharedState = {
-  navigationOrder: NavigationOrder;
-  settings: GlobalSettings;
-  instanceId: string;
-  revision: number;
-  sources: Source[];
-  canvases: CanvasView[];
-  overviewBackground: CanvasBackground | null;
-  windowSizes: Record<string, WindowSize>;
-  composers: Record<string, ComposerView>;
-  windowReads: Record<string, number>;
-};
+  navigationOrder: NavigationOrder
+  settings: GlobalSettings
+  instanceId: string
+  revision: number
+  sources: Source[]
+  canvases: CanvasView[]
+  overviewBackground: CanvasBackground | null
+  windowSizes: Record<string, WindowSize>
+  composers: Record<string, ComposerView>
+  windowReads: Record<string, number>
+}
 export class LayoutConflict extends Error {}
 
 export class Store extends EventEmitter {
-  db: DatabaseSync;
-  readonly instanceId = randomUUID();
-  revision = 0;
-  private removals = new Map<string, RemovedCard>();
+  db: DatabaseSync
+  readonly instanceId = randomUUID()
+  revision = 0
+  private removals = new Map<string, RemovedCard>()
   /** Windows recently closed through Canvas; late draft or read writes must not recreate their records. */
-  private closedWindows = new Map<string, number>();
-  private lastRead = 0;
+  private closedWindows = new Map<string, number>()
+  private lastRead = 0
   constructor(path: string) {
-    super();
-    this.setMaxListeners(0);
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    this.db = new DatabaseSync(path);
+    super()
+    this.setMaxListeners(0)
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+    this.db = new DatabaseSync(path)
     this.db.exec(
       "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (kind TEXT, id TEXT, body TEXT, PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER); CREATE TABLE IF NOT EXISTS canvas_backgrounds (canvas_id TEXT PRIMARY KEY, image_id TEXT NOT NULL UNIQUE, opacity REAL NOT NULL CHECK(opacity >= 0 AND opacity <= 1), data BLOB NOT NULL, document_kind TEXT NOT NULL DEFAULT 'canvas' CHECK(document_kind = 'canvas'), FOREIGN KEY(document_kind, canvas_id) REFERENCES documents(kind, id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS canvas_files (id TEXT PRIMARY KEY, canvas_id TEXT NOT NULL, filename TEXT NOT NULL, size INTEGER NOT NULL CHECK(size >= 0), mime TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS note_files (note_id TEXT NOT NULL, asset_id TEXT NOT NULL REFERENCES canvas_files(id) ON DELETE CASCADE, PRIMARY KEY(note_id,asset_id)); CREATE INDEX IF NOT EXISTS note_files_asset ON note_files(asset_id);",
-    );
+    )
     // The overview only owns its background. Its name and generated window
     // layout never enter the editable canvas collection.
     this.db
-      .prepare(
-        "INSERT OR IGNORE INTO documents(kind,id,body) VALUES('canvas','overview',?)",
-      )
-      .run(JSON.stringify({ id: "overview", name: "overview", nodes: [] }));
-    this.lastRead = Number(this.db.prepare("SELECT max(json_extract(body,'$.at')) AS at FROM documents WHERE kind='window-read'").get()?.at) || 0;
+      .prepare("INSERT OR IGNORE INTO documents(kind,id,body) VALUES('canvas','overview',?)")
+      .run(JSON.stringify({ id: 'overview', name: 'overview', nodes: [] }))
+    this.lastRead =
+      Number(
+        this.db
+          .prepare(
+            "SELECT max(json_extract(body,'$.at')) AS at FROM documents WHERE kind='window-read'",
+          )
+          .get()?.at,
+      ) || 0
   }
   list<T>(kind: string): T[] {
     return this.db
@@ -172,134 +230,219 @@ export class Store extends EventEmitter {
         "SELECT body FROM documents WHERE kind=? AND NOT(kind='canvas' AND id='overview') ORDER BY rowid",
       )
       .all(kind)
-      .map((r) => JSON.parse(String(r.body)));
+      .map((r) => JSON.parse(String(r.body)))
   }
   get<T>(kind: string, id: string): T | undefined {
-    const r = this.db
-      .prepare("SELECT body FROM documents WHERE kind=? AND id=?")
-      .get(kind, id);
-    return r ? JSON.parse(String(r.body)) : undefined;
+    const r = this.db.prepare('SELECT body FROM documents WHERE kind=? AND id=?').get(kind, id)
+    return r ? JSON.parse(String(r.body)) : undefined
   }
   put<T extends { id?: string }>(kind: string, obj: T): T & { id: string } {
-    let result = { ...obj, id: obj.id ?? randomUUID() };
-    if (kind === "canvas") {
-      const canvas = result as unknown as Canvas;
-      this.validateFileNodes(canvas);
-      result = { ...result, nodes: this.normalizeNodes(canvas.nodes) };
+    let result = { ...obj, id: obj.id ?? randomUUID() }
+    if (kind === 'canvas') {
+      const canvas = result as unknown as Canvas
+      this.validateFileNodes(canvas)
+      result = { ...result, nodes: this.normalizeNodes(canvas.nodes) }
     }
     this.db
       .prepare(
-        "INSERT INTO documents(kind,id,body) VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body",
+        'INSERT INTO documents(kind,id,body) VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body',
       )
-      .run(kind, result.id, JSON.stringify(result));
-    if (kind === 'source') this.cancelRemovals(item => item.node.type === 'terminal' && item.node.sourceId === result.id &&
-      item.sourceKey !== sourceConnectionKey(result as unknown as Source));
-    this.changed();
-    return result;
+      .run(kind, result.id, JSON.stringify(result))
+    if (kind === 'source')
+      this.cancelRemovals(
+        (item) =>
+          item.node.type === 'terminal' &&
+          item.node.sourceId === result.id &&
+          item.sourceKey !== sourceConnectionKey(result as unknown as Source),
+      )
+    this.changed()
+    return result
   }
   remove(kind: string, id: string) {
-    if (kind === "source") {
-      this.db.prepare("DELETE FROM documents WHERE kind IN ('window-size','window-read') AND substr(id,1,?)=?")
-        .run(id.length + 1, `${id}/`);
-      this.removeComposers(composer => composer.sourceId === id);
-      for (const key of this.closedWindows.keys()) if (key.startsWith(`${id}/`)) this.closedWindows.delete(key);
+    if (kind === 'source') {
+      this.db
+        .prepare(
+          "DELETE FROM documents WHERE kind IN ('window-size','window-read') AND substr(id,1,?)=?",
+        )
+        .run(id.length + 1, `${id}/`)
+      this.removeComposers((composer) => composer.sourceId === id)
+      for (const key of this.closedWindows.keys())
+        if (key.startsWith(`${id}/`)) this.closedWindows.delete(key)
     }
-    this.db
-      .prepare("DELETE FROM documents WHERE kind=? AND id=?")
-      .run(kind, id);
-    this.cancelRemovals(item => kind === 'canvas' && item.canvasId === id || kind === 'source' && item.node.type === 'terminal' && item.node.sourceId === id);
-    this.changed();
+    this.db.prepare('DELETE FROM documents WHERE kind=? AND id=?').run(kind, id)
+    this.cancelRemovals(
+      (item) =>
+        (kind === 'canvas' && item.canvasId === id) ||
+        (kind === 'source' && item.node.type === 'terminal' && item.node.sourceId === id),
+    )
+    this.changed()
   }
   /** Publish all references of successfully closed native windows as one change. */
   removeWindowReferences(source: Source, windowIds: readonly string[]) {
-    const current = this.get<Source>("source", source.id);
-    if (!current || sourceConnectionKey(current) !== sourceConnectionKey(source)) return;
-    const closed = new Set(windowIds);
-    if (!closed.size) return;
-    let changed = false;
-    this.db.exec("BEGIN IMMEDIATE");
+    const current = this.get<Source>('source', source.id)
+    if (!current || sourceConnectionKey(current) !== sourceConnectionKey(source)) return
+    const closed = new Set(windowIds)
+    if (!closed.size) return
+    let changed = false
+    this.db.exec('BEGIN IMMEDIATE')
     try {
-      const update = this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?");
-      for (const canvas of this.list<Canvas>("canvas")) {
-        const nodes = canvas.nodes.filter(node => !isTerminalNode(node) || node.sourceId !== source.id || !closed.has(node.windowId));
-        if (nodes.length === canvas.nodes.length) continue;
-        update.run(JSON.stringify({ ...canvas, nodes }), canvas.id);
-        changed = true;
+      const update = this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
+      for (const canvas of this.list<Canvas>('canvas')) {
+        const nodes = canvas.nodes.filter(
+          (node) =>
+            !isTerminalNode(node) || node.sourceId !== source.id || !closed.has(node.windowId),
+        )
+        if (nodes.length === canvas.nodes.length) continue
+        update.run(JSON.stringify({ ...canvas, nodes }), canvas.id)
+        changed = true
       }
-      const removeWindow = this.db.prepare("DELETE FROM documents WHERE kind IN ('window-size','window-read') AND id=?");
-      for (const windowId of closed) changed = !!removeWindow.run(`${source.id}/${windowId}`).changes || changed;
-      changed = this.removeComposers(composer => composer.sourceId === source.id && closed.has(composer.windowId)) || changed;
+      const removeWindow = this.db.prepare(
+        "DELETE FROM documents WHERE kind IN ('window-size','window-read') AND id=?",
+      )
+      for (const windowId of closed)
+        changed = !!removeWindow.run(`${source.id}/${windowId}`).changes || changed
+      changed =
+        this.removeComposers(
+          (composer) => composer.sourceId === source.id && closed.has(composer.windowId),
+        ) || changed
       // Native IDs may be reused later; the guard only outlives in-flight browser writes.
-      const until = Date.now() + 120_000;
-      for (const windowId of closed) this.closedWindows.set(composerKey({ sourceId: source.id, windowId }), until);
-      this.db.exec("COMMIT");
-    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-    this.cancelRemovals(item => item.node.type === 'terminal' && item.node.sourceId === source.id && closed.has(item.node.windowId));
-    if (changed) this.changed();
+      const until = Date.now() + 120_000
+      for (const windowId of closed)
+        this.closedWindows.set(composerKey({ sourceId: source.id, windowId }), until)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    this.cancelRemovals(
+      (item) =>
+        item.node.type === 'terminal' &&
+        item.node.sourceId === source.id &&
+        closed.has(item.node.windowId),
+    )
+    if (changed) this.changed()
   }
   private cancelRemovals(matches: (item: RemovedCard) => boolean): boolean {
-    let releasedFile = false;
-    for (const [token, item] of this.removals) if (matches(item)) {
-      clearTimeout(item.timer); this.removals.delete(token);
-      releasedFile ||= !item.restored && item.node.type !== 'terminal';
-    }
-    return releasedFile;
+    let releasedFile = false
+    for (const [token, item] of this.removals)
+      if (matches(item)) {
+        clearTimeout(item.timer)
+        this.removals.delete(token)
+        releasedFile ||= !item.restored && item.node.type !== 'terminal'
+      }
+    return releasedFile
   }
-  removeCard(canvasId: string, nodeId: string, sessionId: string): CardRemovalResponse<Canvas> | undefined {
-    if (canvasId === 'overview' || !this.hasSession(sessionId)) return;
-    const canvas = this.get<Canvas>('canvas', canvasId);
-    if (!canvas) return;
-    const index = canvas.nodes.findIndex(node => node.id === nodeId);
-    if (index < 0) return { canvas, undo: null, lastReference: false };
-    const node = canvas.nodes[index]!, token = randomUUID(), expiresAt = Date.now() + CARD_REMOVAL_UNDO_MS;
-    const source = node.type === 'terminal' ? this.get<Source>('source', node.sourceId) : undefined;
+  removeCard(
+    canvasId: string,
+    nodeId: string,
+    sessionId: string,
+  ): CardRemovalResponse<Canvas> | undefined {
+    if (canvasId === 'overview' || !this.hasSession(sessionId)) return
+    const canvas = this.get<Canvas>('canvas', canvasId)
+    if (!canvas) return
+    const index = canvas.nodes.findIndex((node) => node.id === nodeId)
+    if (index < 0) return { canvas, undo: null, lastReference: false }
+    const node = canvas.nodes[index]!,
+      token = randomUUID(),
+      expiresAt = Date.now() + CARD_REMOVAL_UNDO_MS
+    const source = node.type === 'terminal' ? this.get<Source>('source', node.sourceId) : undefined
     const timer = setTimeout(() => {
-      const item = this.removals.get(token);
-      if (!item) return;
-      this.removals.delete(token);
-      if (!item.restored && item.node.type !== 'terminal') this.changed();
-    }, CARD_REMOVAL_UNDO_MS);
-    timer.unref();
-    this.removals.set(token, { canvasId, node, index, sessionId, expiresAt, timer, restored: false,
-      ...(source ? { sourceKey: sourceConnectionKey(source) } : {}) });
-    canvas.nodes.splice(index, 1);
-    try { this.put('canvas', canvas); }
-    catch (error) { clearTimeout(timer); this.removals.delete(token); throw error; }
+      const item = this.removals.get(token)
+      if (!item) return
+      this.removals.delete(token)
+      if (!item.restored && item.node.type !== 'terminal') this.changed()
+    }, CARD_REMOVAL_UNDO_MS)
+    timer.unref()
+    this.removals.set(token, {
+      canvasId,
+      node,
+      index,
+      sessionId,
+      expiresAt,
+      timer,
+      restored: false,
+      ...(source ? { sourceKey: sourceConnectionKey(source) } : {}),
+    })
+    canvas.nodes.splice(index, 1)
+    try {
+      this.put('canvas', canvas)
+    } catch (error) {
+      clearTimeout(timer)
+      this.removals.delete(token)
+      throw error
+    }
     // Undo keeps a recoverable copy, but only live canvas references count here.
     // A terminal remains owned by its runtime even after its last canvas removal.
-    const lastReference = node.type !== 'terminal' && !this.list<Canvas>('canvas').some(canvas => canvas.nodes.some(current =>
-      node.type === 'note' ? current.type === 'note' && current.id === node.id : current.type === 'file' && current.assetId === node.assetId));
-    return { canvas, undo: { token, remainingMs: Math.max(0, expiresAt - Date.now()) }, lastReference };
+    const lastReference =
+      node.type !== 'terminal' &&
+      !this.list<Canvas>('canvas').some((canvas) =>
+        canvas.nodes.some((current) =>
+          node.type === 'note'
+            ? current.type === 'note' && current.id === node.id
+            : current.type === 'file' && current.assetId === node.assetId,
+        ),
+      )
+    return {
+      canvas,
+      undo: { token, remainingMs: Math.max(0, expiresAt - Date.now()) },
+      lastReference,
+    }
   }
   restoreCard(canvasId: string, token: string, sessionId: string): Canvas | undefined {
-    const item = this.removals.get(token);
-    if (!item || item.canvasId !== canvasId || item.sessionId !== sessionId || item.expiresAt <= Date.now() || !this.hasSession(sessionId)) return;
-    const canvas = this.get<Canvas>('canvas', canvasId);
-    if (!canvas || canvasId === 'overview') return;
-    if (item.restored) return canvas;
-    const node = item.node;
+    const item = this.removals.get(token)
+    if (
+      !item ||
+      item.canvasId !== canvasId ||
+      item.sessionId !== sessionId ||
+      item.expiresAt <= Date.now() ||
+      !this.hasSession(sessionId)
+    )
+      return
+    const canvas = this.get<Canvas>('canvas', canvasId)
+    if (!canvas || canvasId === 'overview') return
+    if (item.restored) return canvas
+    const node = item.node
     if (node.type === 'terminal') {
-      const source = this.get<Source>('source', node.sourceId);
-      if (!source || sourceConnectionKey(source) !== item.sourceKey) return;
-    } else if (node.type === 'file' && !this.fileAsset(node.assetId)) return;
-    const collision = canvas.nodes.find(current => current.id === node.id);
-    if (collision && (collision.type !== node.type || node.type === 'file' && collision.type === 'file' && collision.assetId !== node.assetId ||
-      node.type === 'terminal' && collision.type === 'terminal' && (collision.sourceId !== node.sourceId || collision.windowId !== node.windowId))) return;
-    const existing = canvas.nodes.some(current => current.id === node.id ||
-      node.type === 'file' && current.type === 'file' && current.assetId === node.assetId ||
-      node.type === 'terminal' && current.type === 'terminal' && current.sourceId === node.sourceId && current.windowId === node.windowId);
+      const source = this.get<Source>('source', node.sourceId)
+      if (!source || sourceConnectionKey(source) !== item.sourceKey) return
+    } else if (node.type === 'file' && !this.fileAsset(node.assetId)) return
+    const collision = canvas.nodes.find((current) => current.id === node.id)
+    if (
+      collision &&
+      (collision.type !== node.type ||
+        (node.type === 'file' && collision.type === 'file' && collision.assetId !== node.assetId) ||
+        (node.type === 'terminal' &&
+          collision.type === 'terminal' &&
+          (collision.sourceId !== node.sourceId || collision.windowId !== node.windowId)))
+    )
+      return
+    const existing = canvas.nodes.some(
+      (current) =>
+        current.id === node.id ||
+        (node.type === 'file' && current.type === 'file' && current.assetId === node.assetId) ||
+        (node.type === 'terminal' &&
+          current.type === 'terminal' &&
+          current.sourceId === node.sourceId &&
+          current.windowId === node.windowId),
+    )
     if (!existing) {
-      if (canvas.nodes.length >= 500) throw new Error('Canvas contains too many items');
-      canvas.nodes.splice(Math.min(item.index, canvas.nodes.length), 0, this.normalizeNodes([node])[0]!);
-      this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?").run(JSON.stringify(canvas), canvasId);
+      if (canvas.nodes.length >= 500) throw new Error('Canvas contains too many items')
+      canvas.nodes.splice(
+        Math.min(item.index, canvas.nodes.length),
+        0,
+        this.normalizeNodes([node])[0]!,
+      )
+      this.db
+        .prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
+        .run(JSON.stringify(canvas), canvasId)
     }
-    item.restored = true;
-    if (!existing) this.changed();
-    return canvas;
+    item.restored = true
+    if (!existing) this.changed()
+    return canvas
   }
   private changed(normalGeometryChanged = false) {
-    this.revision++;
-    this.emit("change", normalGeometryChanged);
+    this.revision++
+    this.emit('change', normalGeometryChanged)
   }
   snapshot(): SharedState {
     return {
@@ -307,485 +450,733 @@ export class Store extends EventEmitter {
       settings: this.settings(),
       instanceId: this.instanceId,
       revision: this.revision,
-      sources: this.list<Source>("source"),
-      canvases: this.list<Canvas>("canvas").map((canvas) =>
-        this.canvasView(canvas),
+      sources: this.list<Source>('source'),
+      canvases: this.list<Canvas>('canvas').map((canvas) => this.canvasView(canvas)),
+      overviewBackground: this.canvasView(this.get<Canvas>('canvas', 'overview')!).background,
+      windowSizes: Object.fromEntries(
+        this.list<WindowSize & { id: string }>('window-size').map(({ id, width, height }) => [
+          id,
+          { width, height },
+        ]),
       ),
-      overviewBackground: this.canvasView(
-        this.get<Canvas>("canvas", "overview")!,
-      ).background,
-      windowSizes: Object.fromEntries(this.list<WindowSize & { id: string }>("window-size")
-        .map(({ id, width, height }) => [id, { width, height }])),
-      composers: Object.fromEntries(this.list<Composer>("composer").map(composer => [composerKey(composer), this.composerView(composer)])),
-      windowReads: Object.fromEntries(this.list<{ id: string; at: number }>("window-read").map(({ id, at }) => [id, at])),
-    };
+      composers: Object.fromEntries(
+        this.list<Composer>('composer').map((composer) => [
+          composerKey(composer),
+          this.composerView(composer),
+        ]),
+      ),
+      windowReads: Object.fromEntries(
+        this.list<{ id: string; at: number }>('window-read').map(({ id, at }) => [id, at]),
+      ),
+    }
   }
   settings(): GlobalSettings {
-    const stored = this.get<unknown>("settings", "global");
-    return stored === undefined ? defaultSettings() : settingsPatchSchema.parse(stored);
+    const stored = this.get<unknown>('settings', 'global')
+    return stored === undefined ? defaultSettings() : settingsPatchSchema.parse(stored)
   }
   navigationOrder(): NavigationOrder {
-    const saved = this.get<NavigationOrder>('navigation', 'order');
-    const ids = (kind: string) => this.db.prepare("SELECT id FROM documents WHERE kind=? AND NOT(kind='canvas' AND id='overview') ORDER BY rowid").all(kind).map(row => String(row.id));
+    const saved = this.get<NavigationOrder>('navigation', 'order')
+    const ids = (kind: string) =>
+      this.db
+        .prepare(
+          "SELECT id FROM documents WHERE kind=? AND NOT(kind='canvas' AND id='overview') ORDER BY rowid",
+        )
+        .all(kind)
+        .map((row) => String(row.id))
     return {
       canvases: orderedIds(ids('canvas'), saved?.canvases || []),
       sources: orderedIds(ids('source'), saved?.sources || []),
-    };
+    }
   }
   updateNavigationOrder(kind: NavigationOrderKind, ids: string[]): NavigationOrder {
-    const current = this.navigationOrder();
-    const next = { ...current, [kind]: orderedIds(current[kind], ids) };
-    if (isDeepStrictEqual(current, next)) return current;
-    this.db.prepare("INSERT INTO documents(kind,id,body) VALUES('navigation','order',?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body")
-      .run(JSON.stringify(next));
-    this.changed();
-    return next;
+    const current = this.navigationOrder()
+    const next = { ...current, [kind]: orderedIds(current[kind], ids) }
+    if (isDeepStrictEqual(current, next)) return current
+    this.db
+      .prepare(
+        "INSERT INTO documents(kind,id,body) VALUES('navigation','order',?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body",
+      )
+      .run(JSON.stringify(next))
+    this.changed()
+    return next
   }
   updateSettings(value: GlobalSettings): GlobalSettings {
-    const settings = settingsPatchSchema.parse(value);
-    const previous = this.settings();
-    if (isDeepStrictEqual(settings, previous)) return settings;
-    this.db.prepare("INSERT INTO documents(kind,id,body) VALUES('settings','global',?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body")
-      .run(JSON.stringify(settings));
-    this.changed(!isDeepStrictEqual(settings.terminalCell, previous.terminalCell));
-    return settings;
+    const settings = settingsPatchSchema.parse(value)
+    const previous = this.settings()
+    if (isDeepStrictEqual(settings, previous)) return settings
+    this.db
+      .prepare(
+        "INSERT INTO documents(kind,id,body) VALUES('settings','global',?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body",
+      )
+      .run(JSON.stringify(settings))
+    this.changed(!isDeepStrictEqual(settings.terminalCell, previous.terminalCell))
+    return settings
   }
   canvasView(canvas: Canvas): CanvasView {
     const background = this.db
-      .prepare(
-        "SELECT image_id, opacity FROM canvas_backgrounds WHERE canvas_id=?",
-      )
-      .get(canvas.id);
+      .prepare('SELECT image_id, opacity FROM canvas_backgrounds WHERE canvas_id=?')
+      .get(canvas.id)
     return {
       ...canvas,
-      nodes: canvas.nodes.map(node => node.type === "file"
-        ? { ...node, asset: this.fileAsset(node.assetId)! }
-        : node.type === "note" ? { ...node, attachments: this.noteAttachments(node.id) } : { ...node, ...this.windowSize(node.sourceId, node.windowId) }),
+      nodes: canvas.nodes.map((node) =>
+        node.type === 'file'
+          ? { ...node, asset: this.fileAsset(node.assetId)! }
+          : node.type === 'note'
+            ? { ...node, attachments: this.noteAttachments(node.id) }
+            : { ...node, ...this.windowSize(node.sourceId, node.windowId) },
+      ),
       background: background
         ? {
             url: `/api/backgrounds/${String(background.image_id)}`,
             opacity: Number(background.opacity),
           }
         : null,
-    };
+    }
   }
   /** Compare only edited geometry, then publish one committed layout snapshot. */
   applyLayout(id: string, changes: LayoutUpdate[]): Canvas | undefined {
-    let result: Canvas | undefined;
-    let normalGeometryChanged = false;
-    this.db.exec("BEGIN IMMEDIATE");
+    let result: Canvas | undefined
+    let normalGeometryChanged = false
+    this.db.exec('BEGIN IMMEDIATE')
     try {
-      const canvas = this.get<Canvas>('canvas', id);
-      if (!canvas) { this.db.exec("ROLLBACK"); return; }
-      const byId = new Map(changes.map(change => [change.id, change]));
-      if (byId.size !== changes.length) throw new Error('Duplicate layout node');
-      const sizes = new Map<string, Partial<WindowSize>>();
+      const canvas = this.get<Canvas>('canvas', id)
+      if (!canvas) {
+        this.db.exec('ROLLBACK')
+        return
+      }
+      const byId = new Map(changes.map((change) => [change.id, change]))
+      if (byId.size !== changes.length) throw new Error('Duplicate layout node')
+      const sizes = new Map<string, Partial<WindowSize>>()
       for (const change of changes) {
-        const node = canvas.nodes.find(node => node.id === change.id);
-        if (!node) { if (change.expected) throw new LayoutConflict(); else continue; }
-        const geometry = isTerminalNode(node) ? { ...node, ...this.windowSize(node.sourceId, node.windowId) } : node;
+        const node = canvas.nodes.find((node) => node.id === change.id)
+        if (!node) {
+          if (change.expected) throw new LayoutConflict()
+          else continue
+        }
+        const geometry = isTerminalNode(node)
+          ? { ...node, ...this.windowSize(node.sourceId, node.windowId) }
+          : node
         for (const field of layoutFields) {
-          if (change.expected?.[field] !== undefined && geometry[field] !== change.expected[field] && geometry[field] !== change[field]) throw new LayoutConflict();
+          if (
+            change.expected?.[field] !== undefined &&
+            geometry[field] !== change.expected[field] &&
+            geometry[field] !== change[field]
+          )
+            throw new LayoutConflict()
         }
         if (isTerminalNode(node)) {
-          const key = `${node.sourceId}/${node.windowId}`, patch = sizes.get(key) || {};
-          for (const field of ['width', 'height'] as const) if (change[field] !== undefined) {
-            if (patch[field] !== undefined && patch[field] !== change[field]) throw new LayoutConflict();
-            patch[field] = change[field];
-          }
-          sizes.set(key, patch);
+          const key = `${node.sourceId}/${node.windowId}`,
+            patch = sizes.get(key) || {}
+          for (const field of ['width', 'height'] as const)
+            if (change[field] !== undefined) {
+              if (patch[field] !== undefined && patch[field] !== change[field])
+                throw new LayoutConflict()
+              patch[field] = change[field]
+            }
+          sizes.set(key, patch)
         }
       }
-      const nodes = canvas.nodes.map(node => {
-        const patch = byId.get(node.id);
-        if (!patch) return node;
-        const geometry: Partial<LayoutGeometry> = {};
-        for (const field of layoutFields) if (patch[field] !== undefined) geometry[field] = patch[field];
-        return { ...node, ...geometry };
-      });
-      result = { ...canvasSchema.parse({ ...canvas, nodes }), id };
-      for (const [key, patch] of sizes) if (Object.keys(patch).length) {
-        const node = canvas.nodes.find(node => isTerminalNode(node) && `${node.sourceId}/${node.windowId}` === key)! as TerminalNode;
-        const previous = this.windowSize(node.sourceId, node.windowId);
-        if (patch.width !== undefined && patch.width !== previous.width || patch.height !== undefined && patch.height !== previous.height)
-          normalGeometryChanged = true;
-        this.setWindowSize(node.sourceId, node.windowId, patch);
-      }
-      this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?").run(JSON.stringify(result), id);
-      this.db.exec("COMMIT");
-    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-    this.changed(normalGeometryChanged);
-    return result;
+      const nodes = canvas.nodes.map((node) => {
+        const patch = byId.get(node.id)
+        if (!patch) return node
+        const geometry: Partial<LayoutGeometry> = {}
+        for (const field of layoutFields)
+          if (patch[field] !== undefined) geometry[field] = patch[field]
+        return { ...node, ...geometry }
+      })
+      result = { ...canvasSchema.parse({ ...canvas, nodes }), id }
+      for (const [key, patch] of sizes)
+        if (Object.keys(patch).length) {
+          const node = canvas.nodes.find(
+            (node) => isTerminalNode(node) && `${node.sourceId}/${node.windowId}` === key,
+          )! as TerminalNode
+          const previous = this.windowSize(node.sourceId, node.windowId)
+          if (
+            (patch.width !== undefined && patch.width !== previous.width) ||
+            (patch.height !== undefined && patch.height !== previous.height)
+          )
+            normalGeometryChanged = true
+          this.setWindowSize(node.sourceId, node.windowId, patch)
+        }
+      this.db
+        .prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
+        .run(JSON.stringify(result), id)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    this.changed(normalGeometryChanged)
+    return result
   }
   windowSize(sourceId: string, windowId: string): WindowSize {
-    const stored = this.get<WindowSize>("window-size", `${sourceId}/${windowId}`);
-    return stored ? { width: stored.width, height: stored.height } : { ...defaultWindowSize };
+    const stored = this.get<WindowSize>('window-size', `${sourceId}/${windowId}`)
+    return stored ? { width: stored.width, height: stored.height } : { ...defaultWindowSize }
   }
   normalTerminalSize(sourceId: string, windowId: string, reservedHeight = 0) {
-    const size = this.windowSize(sourceId, windowId);
-    return normalTerminalGrid({ ...size, height: size.height - reservedHeight }, this.settings().terminalCell);
+    const size = this.windowSize(sourceId, windowId)
+    return normalTerminalGrid(
+      { ...size, height: size.height - reservedHeight },
+      this.settings().terminalCell,
+    )
   }
   setWindowSize(sourceId: string, windowId: string, patch: Partial<WindowSize>) {
-    const id = `${sourceId}/${windowId}`;
-    const value = { id, ...this.windowSize(sourceId, windowId), ...patch };
-    this.db.prepare("INSERT INTO documents(kind,id,body) VALUES('window-size',?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body")
-      .run(id, JSON.stringify(value));
+    const id = `${sourceId}/${windowId}`
+    const value = { id, ...this.windowSize(sourceId, windowId), ...patch }
+    this.db
+      .prepare(
+        "INSERT INTO documents(kind,id,body) VALUES('window-size',?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body",
+      )
+      .run(id, JSON.stringify(value))
     // The owning canvas write publishes the combined geometry/layout snapshot.
   }
-  private normalizeNodes(nodes: Canvas["nodes"]): Canvas["nodes"] {
-    const notes = nodes.some(node => node.type === "note") ? new Map(this.list<Canvas>("canvas").flatMap(canvas =>
-      canvas.nodes.filter((node): node is NoteNode => node.type === "note").map(node => [node.id, node] as const))) : new Map<string, NoteNode>();
-    return nodes.map(node => {
-      if (node.type === "note") {
-        const current = notes.get(node.id);
-        const { attachments: _, ...stored } = node;
-        return current ? { ...stored, title: current.title, content: current.content, color: current.color } : stored;
+  private normalizeNodes(nodes: Canvas['nodes']): Canvas['nodes'] {
+    const notes = nodes.some((node) => node.type === 'note')
+      ? new Map(
+          this.list<Canvas>('canvas').flatMap((canvas) =>
+            canvas.nodes
+              .filter((node): node is NoteNode => node.type === 'note')
+              .map((node) => [node.id, node] as const),
+          ),
+        )
+      : new Map<string, NoteNode>()
+    return nodes.map((node) => {
+      if (node.type === 'note') {
+        const current = notes.get(node.id)
+        const { attachments: _, ...stored } = node
+        return current
+          ? { ...stored, title: current.title, content: current.content, color: current.color }
+          : stored
       }
-      if (node.type === "file") {
-        const { asset: _asset, ...stored } = node;
-        return stored;
+      if (node.type === 'file') {
+        const { asset: _asset, ...stored } = node
+        return stored
       }
-      return { ...node, ...this.windowSize(node.sourceId, node.windowId) };
-    });
+      return { ...node, ...this.windowSize(node.sourceId, node.windowId) }
+    })
   }
 
   private validateFileNodes(canvas: Canvas) {
-    const references = new Set(this.get<Canvas>("canvas", canvas.id)?.nodes.flatMap(node => node.type === "file" ? [node.assetId] : []));
+    const references = new Set(
+      this.get<Canvas>('canvas', canvas.id)?.nodes.flatMap((node) =>
+        node.type === 'file' ? [node.assetId] : [],
+      ),
+    )
     for (const node of canvas.nodes)
-      if (node.type === "file" && (!references.has(node.assetId) || !this.fileAsset(node.assetId)))
-        throw new Error("File asset not found in this canvas");
+      if (node.type === 'file' && (!references.has(node.assetId) || !this.fileAsset(node.assetId)))
+        throw new Error('File asset not found in this canvas')
   }
 
-  updateNote(canvasId: string, nodeId: string, patch: Partial<Pick<NoteNode, "title" | "content" | "color">>): Canvas {
-    this.db.exec("BEGIN IMMEDIATE");
-    let selected: Canvas | undefined;
+  updateNote(
+    canvasId: string,
+    nodeId: string,
+    patch: Partial<Pick<NoteNode, 'title' | 'content' | 'color'>>,
+  ): Canvas {
+    this.db.exec('BEGIN IMMEDIATE')
+    let selected: Canvas | undefined
     try {
-      const canvases = this.list<Canvas>("canvas");
-      selected = canvases.find(canvas => canvas.id === canvasId);
-      if (!selected?.nodes.some(node => node.id === nodeId && node.type === "note")) throw new Error("Note not found");
-      const update = this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?");
+      const canvases = this.list<Canvas>('canvas')
+      selected = canvases.find((canvas) => canvas.id === canvasId)
+      if (!selected?.nodes.some((node) => node.id === nodeId && node.type === 'note'))
+        throw new Error('Note not found')
+      const update = this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
       for (const canvas of canvases) {
-        const node = canvas.nodes.find((item): item is NoteNode => item.id === nodeId && item.type === "note");
-        if (!node) continue;
-        Object.assign(node, patch);
-        update.run(JSON.stringify(canvas), canvas.id);
+        const node = canvas.nodes.find(
+          (item): item is NoteNode => item.id === nodeId && item.type === 'note',
+        )
+        if (!node) continue
+        Object.assign(node, patch)
+        update.run(JSON.stringify(canvas), canvas.id)
       }
-      this.db.exec("COMMIT");
-    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-    for (const item of this.removals.values()) if (item.node.type === 'note' && item.node.id === nodeId) Object.assign(item.node, patch);
-    this.changed();
-    return selected;
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    for (const item of this.removals.values())
+      if (item.node.type === 'note' && item.node.id === nodeId) Object.assign(item.node, patch)
+    this.changed()
+    return selected
   }
 
-  addNodeReference(sourceCanvasId: string, nodeId: string, targetCanvasId: string, position: { x: number; y: number }): { canvas: Canvas; added: boolean } {
-    if (sourceCanvasId === "overview" || targetCanvasId === "overview") throw new Error("Overview is read-only");
-    const coordinates = nodeLayoutSchema.pick({ x: true, y: true }).parse(position);
-    this.db.exec("BEGIN IMMEDIATE");
-    let canvas: Canvas, added = false;
+  addNodeReference(
+    sourceCanvasId: string,
+    nodeId: string,
+    targetCanvasId: string,
+    position: { x: number; y: number },
+  ): { canvas: Canvas; added: boolean } {
+    if (sourceCanvasId === 'overview' || targetCanvasId === 'overview')
+      throw new Error('Overview is read-only')
+    const coordinates = nodeLayoutSchema.pick({ x: true, y: true }).parse(position)
+    this.db.exec('BEGIN IMMEDIATE')
+    let canvas: Canvas,
+      added = false
     try {
-      const source = this.get<Canvas>("canvas", sourceCanvasId), target = this.get<Canvas>("canvas", targetCanvasId);
-      if (!source || !target) throw new Error("Canvas not found");
-      const node = source.nodes.find(item => item.id === nodeId);
-      if (!node || node.type === "terminal") throw new Error("Shareable card not found");
-      if (node.type === "file" && !this.fileAssetForCanvas(node.assetId, sourceCanvasId)) throw new Error("File asset not found");
-      canvas = target;
-      const existing = target.nodes.some(item => item.id === node.id || node.type === "file" && item.type === "file" && item.assetId === node.assetId);
+      const source = this.get<Canvas>('canvas', sourceCanvasId),
+        target = this.get<Canvas>('canvas', targetCanvasId)
+      if (!source || !target) throw new Error('Canvas not found')
+      const node = source.nodes.find((item) => item.id === nodeId)
+      if (!node || node.type === 'terminal') throw new Error('Shareable card not found')
+      if (node.type === 'file' && !this.fileAssetForCanvas(node.assetId, sourceCanvasId))
+        throw new Error('File asset not found')
+      canvas = target
+      const existing = target.nodes.some(
+        (item) =>
+          item.id === node.id ||
+          (node.type === 'file' && item.type === 'file' && item.assetId === node.assetId),
+      )
       if (!existing) {
-        if (target.nodes.length >= 500) throw new Error("Canvas contains too many items");
-        target.nodes.push({ ...node, ...coordinates });
-        this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?").run(JSON.stringify(target), targetCanvasId);
-        added = true;
+        if (target.nodes.length >= 500) throw new Error('Canvas contains too many items')
+        target.nodes.push({ ...node, ...coordinates })
+        this.db
+          .prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
+          .run(JSON.stringify(target), targetCanvasId)
+        added = true
       }
-      this.db.exec("COMMIT");
-    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-    if (added) this.changed();
-    return { canvas, added };
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    if (added) this.changed()
+    return { canvas, added }
   }
 
   commitFileAsset(asset: FileAsset, context: FileAssetContext): boolean {
     if ('composer' in context) {
-      this.db.exec("BEGIN IMMEDIATE");
+      this.db.exec('BEGIN IMMEDIATE')
       try {
-        if (!this.acceptsWindow(context.composer)) { this.db.exec("ROLLBACK"); return false; }
-        const composer = this.ensureComposer(context.composer);
-        this.db.prepare("INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)")
-          .run(asset.id, '', asset.filename, asset.size, asset.mime, asset.createdAt);
-        this.db.prepare("INSERT INTO note_files(note_id,asset_id) VALUES(?,?)").run(composer.id, asset.id);
-        this.db.exec("COMMIT");
-      } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-      this.changed();
-      return true;
-    }
-    const canvasId = context.canvasId;
-    if (!canvasId || canvasId === "overview") return false;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const row = this.db.prepare("SELECT body FROM documents WHERE kind='canvas' AND id=?").get(canvasId);
-      if (!row) { this.db.exec("ROLLBACK"); return false; }
-      const canvas = JSON.parse(String(row.body)) as Canvas;
-      if ('noteId' in context) {
-        if (!canvas.nodes.some(node => node.type === 'note' && node.id === context.noteId)) { this.db.exec("ROLLBACK"); return false; }
-        this.db.prepare("INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)")
-          .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.createdAt);
-        this.db.prepare("INSERT INTO note_files(note_id,asset_id) VALUES(?,?)").run(context.noteId, asset.id);
-      } else {
-        let x: number, y: number;
-        if ('position' in context) {
-          ({ x, y } = nodeLayoutSchema.pick({ x: true, y: true }).parse(context.position));
-        } else {
-          const anchor = canvas.nodes.find(node => isTerminalNode(node) && node.id === context.anchorId &&
-            node.sourceId === context.sourceId && node.windowId === context.windowId);
-          if (!anchor) { this.db.exec("ROLLBACK"); return false; }
-          x = Math.min(1e7, anchor.x + this.windowSize(context.sourceId, context.windowId).width + 24);
-          const occupied = canvas.nodes.filter(node => node.type === "file" && Math.abs(node.x - x) < 1)
-            .reduce((bottom, node) => Math.max(bottom, node.y + node.height), anchor.y);
-          y = Math.min(1e7, occupied === anchor.y ? anchor.y : occupied + 16);
+        if (!this.acceptsWindow(context.composer)) {
+          this.db.exec('ROLLBACK')
+          return false
         }
-        if (canvas.nodes.length >= 500) throw new Error("Canvas contains too many items");
-        this.db.prepare("INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)")
-          .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.createdAt);
-        const node: FileNode = {
-          id: randomUUID(), type: "file", assetId: asset.id,
-          x, y,
-          width: 360, height: 280,
-        };
-        canvas.nodes.push(node);
-        this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
-          .run(JSON.stringify(canvas), canvasId);
+        const composer = this.ensureComposer(context.composer)
+        this.db
+          .prepare(
+            'INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)',
+          )
+          .run(asset.id, '', asset.filename, asset.size, asset.mime, asset.createdAt)
+        this.db
+          .prepare('INSERT INTO note_files(note_id,asset_id) VALUES(?,?)')
+          .run(composer.id, asset.id)
+        this.db.exec('COMMIT')
+      } catch (error) {
+        this.db.exec('ROLLBACK')
+        throw error
       }
-      if (context.origin) this.db.prepare("INSERT INTO documents(kind,id,body) VALUES('file-origin',?,?)")
-        .run(asset.id, JSON.stringify(context.origin));
-      this.db.exec("COMMIT");
-    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-    this.changed();
-    return true;
+      this.changed()
+      return true
+    }
+    const canvasId = context.canvasId
+    if (!canvasId || canvasId === 'overview') return false
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const row = this.db
+        .prepare("SELECT body FROM documents WHERE kind='canvas' AND id=?")
+        .get(canvasId)
+      if (!row) {
+        this.db.exec('ROLLBACK')
+        return false
+      }
+      const canvas = JSON.parse(String(row.body)) as Canvas
+      if ('noteId' in context) {
+        if (!canvas.nodes.some((node) => node.type === 'note' && node.id === context.noteId)) {
+          this.db.exec('ROLLBACK')
+          return false
+        }
+        this.db
+          .prepare(
+            'INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)',
+          )
+          .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.createdAt)
+        this.db
+          .prepare('INSERT INTO note_files(note_id,asset_id) VALUES(?,?)')
+          .run(context.noteId, asset.id)
+      } else {
+        let x: number, y: number
+        if ('position' in context) {
+          ;({ x, y } = nodeLayoutSchema.pick({ x: true, y: true }).parse(context.position))
+        } else {
+          const anchor = canvas.nodes.find(
+            (node) =>
+              isTerminalNode(node) &&
+              node.id === context.anchorId &&
+              node.sourceId === context.sourceId &&
+              node.windowId === context.windowId,
+          )
+          if (!anchor) {
+            this.db.exec('ROLLBACK')
+            return false
+          }
+          x = Math.min(
+            1e7,
+            anchor.x + this.windowSize(context.sourceId, context.windowId).width + 24,
+          )
+          const occupied = canvas.nodes
+            .filter((node) => node.type === 'file' && Math.abs(node.x - x) < 1)
+            .reduce((bottom, node) => Math.max(bottom, node.y + node.height), anchor.y)
+          y = Math.min(1e7, occupied === anchor.y ? anchor.y : occupied + 16)
+        }
+        if (canvas.nodes.length >= 500) throw new Error('Canvas contains too many items')
+        this.db
+          .prepare(
+            'INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)',
+          )
+          .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.createdAt)
+        const node: FileNode = {
+          id: randomUUID(),
+          type: 'file',
+          assetId: asset.id,
+          x,
+          y,
+          width: 360,
+          height: 280,
+        }
+        canvas.nodes.push(node)
+        this.db
+          .prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
+          .run(JSON.stringify(canvas), canvasId)
+      }
+      if (context.origin)
+        this.db
+          .prepare("INSERT INTO documents(kind,id,body) VALUES('file-origin',?,?)")
+          .run(asset.id, JSON.stringify(context.origin))
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    this.changed()
+    return true
   }
 
   hasNote(canvasId: string, noteId: string): boolean {
-    return !!this.get<Canvas>('canvas', canvasId)?.nodes.some(node => node.type === 'note' && node.id === noteId);
+    return !!this.get<Canvas>('canvas', canvasId)?.nodes.some(
+      (node) => node.type === 'note' && node.id === noteId,
+    )
   }
 
-  referenceNoteFiles(canvasId: string, noteId: string, assetIds: readonly string[]): FileAsset[] | undefined {
-    this.db.exec("BEGIN IMMEDIATE");
-    let assets: FileAsset[];
-    let changed = false;
+  referenceNoteFiles(
+    canvasId: string,
+    noteId: string,
+    assetIds: readonly string[],
+  ): FileAsset[] | undefined {
+    this.db.exec('BEGIN IMMEDIATE')
+    let assets: FileAsset[]
+    let changed = false
     try {
-      if (!this.hasNote(canvasId, noteId)) { this.db.exec("ROLLBACK"); return; }
-      const existing = [...new Set(assetIds)].map(id => this.fileAsset(id));
-      if (existing.some(asset => !asset)) { this.db.exec("ROLLBACK"); return; }
-      assets = existing as FileAsset[];
-      const link = this.db.prepare("INSERT OR IGNORE INTO note_files(note_id,asset_id) VALUES(?,?)");
-      for (const asset of assets) changed = link.run(noteId, asset.id).changes > 0 || changed;
-      this.db.exec("COMMIT");
-    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-    if (changed) this.changed();
-    return assets;
+      if (!this.hasNote(canvasId, noteId)) {
+        this.db.exec('ROLLBACK')
+        return
+      }
+      const existing = [...new Set(assetIds)].map((id) => this.fileAsset(id))
+      if (existing.some((asset) => !asset)) {
+        this.db.exec('ROLLBACK')
+        return
+      }
+      assets = existing as FileAsset[]
+      const link = this.db.prepare('INSERT OR IGNORE INTO note_files(note_id,asset_id) VALUES(?,?)')
+      for (const asset of assets) changed = link.run(noteId, asset.id).changes > 0 || changed
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    if (changed) this.changed()
+    return assets
   }
 
   /** Window-owned records need their connection and a window that Canvas has not closed. */
   acceptsWindow(target: ComposerTarget): boolean {
-    const key = composerKey(target), closedUntil = this.closedWindows.get(key);
-    if (closedUntil !== undefined && closedUntil <= Date.now()) this.closedWindows.delete(key);
-    return !!this.get<Source>('source', target.sourceId) && !(closedUntil! > Date.now());
+    const key = composerKey(target),
+      closedUntil = this.closedWindows.get(key)
+    if (closedUntil !== undefined && closedUntil <= Date.now()) this.closedWindows.delete(key)
+    return !!this.get<Source>('source', target.sourceId) && !(closedUntil! > Date.now())
   }
   /** Records when a window's read focus starts; strictly increasing, so order survives equal or rewound clocks. */
   markWindowRead(source: Source, windowId: string) {
-    const current = this.get<Source>("source", source.id);
-    if (!current || sourceConnectionKey(current) !== sourceConnectionKey(source) || !this.acceptsWindow({ sourceId: source.id, windowId })) return;
-    const id = `${source.id}/${windowId}`, at = this.lastRead = Math.max(Date.now(), this.lastRead + 1);
-    this.db.prepare("INSERT INTO documents(kind,id,body) VALUES('window-read',?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body")
-      .run(id, JSON.stringify({ id, at }));
-    this.changed();
+    const current = this.get<Source>('source', source.id)
+    if (
+      !current ||
+      sourceConnectionKey(current) !== sourceConnectionKey(source) ||
+      !this.acceptsWindow({ sourceId: source.id, windowId })
+    )
+      return
+    const id = `${source.id}/${windowId}`,
+      at = (this.lastRead = Math.max(Date.now(), this.lastRead + 1))
+    this.db
+      .prepare(
+        "INSERT INTO documents(kind,id,body) VALUES('window-read',?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body",
+      )
+      .run(id, JSON.stringify({ id, at }))
+    this.changed()
   }
   composer(target: ComposerTarget): Composer | undefined {
-    return this.get<Composer>('composer', composerKey(target));
+    return this.get<Composer>('composer', composerKey(target))
   }
   composerView(composer: Composer): ComposerView {
-    return { ...composer, attachments: this.noteAttachments(composer.id) };
+    return { ...composer, attachments: this.noteAttachments(composer.id) }
   }
   /** Callers own the transaction; the document is created only when content or files need an owner. */
   private ensureComposer(target: ComposerTarget): Composer {
-    const existing = this.composer(target);
-    if (existing) return existing;
-    const composer: Composer = { id: randomUUID(), sourceId: target.sourceId, windowId: target.windowId, content: '', version: 0 };
-    this.writeComposer(composer);
-    return composer;
+    const existing = this.composer(target)
+    if (existing) return existing
+    const composer: Composer = {
+      id: randomUUID(),
+      sourceId: target.sourceId,
+      windowId: target.windowId,
+      content: '',
+      version: 0,
+    }
+    this.writeComposer(composer)
+    return composer
   }
   private writeComposer(composer: Composer) {
-    this.db.prepare("INSERT INTO documents(kind,id,body) VALUES('composer',?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body")
-      .run(composerKey(composer), JSON.stringify(composer));
+    this.db
+      .prepare(
+        "INSERT INTO documents(kind,id,body) VALUES('composer',?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body",
+      )
+      .run(composerKey(composer), JSON.stringify(composer))
   }
   /** An empty draft without retained files has nothing left to own. */
   private releaseEmptyComposer(composer: Composer): boolean {
-    if (composer.content || this.db.prepare("SELECT 1 FROM note_files WHERE note_id=?").get(composer.id)) return false;
-    this.db.prepare("DELETE FROM documents WHERE kind='composer' AND id=?").run(composerKey(composer));
-    return true;
+    if (
+      composer.content ||
+      this.db.prepare('SELECT 1 FROM note_files WHERE note_id=?').get(composer.id)
+    )
+      return false
+    this.db
+      .prepare("DELETE FROM documents WHERE kind='composer' AND id=?")
+      .run(composerKey(composer))
+    return true
   }
   private removeComposers(matches: (composer: Composer) => boolean): boolean {
-    let removed = false;
+    let removed = false
     for (const composer of this.list<Composer>('composer')) {
-      if (!matches(composer)) continue;
-      this.db.prepare("DELETE FROM note_files WHERE note_id=?").run(composer.id);
-      this.db.prepare("DELETE FROM documents WHERE kind='composer' AND id=?").run(composerKey(composer));
-      removed = true;
+      if (!matches(composer)) continue
+      this.db.prepare('DELETE FROM note_files WHERE note_id=?').run(composer.id)
+      this.db
+        .prepare("DELETE FROM documents WHERE kind='composer' AND id=?")
+        .run(composerKey(composer))
+      removed = true
     }
-    return removed;
+    return removed
   }
   updateComposer(target: ComposerTarget, content: string): ComposerView {
-    this.db.exec("BEGIN IMMEDIATE");
-    let composer: Composer;
+    this.db.exec('BEGIN IMMEDIATE')
+    let composer: Composer
     try {
-      if (!this.acceptsWindow(target)) throw new Error('Window not found');
-      const current = this.composer(target);
-      if (current?.content === content || !current && !content) {
-        this.db.exec("ROLLBACK");
-        return this.composerView(current ?? { id: '', ...target, content: '', version: 0 });
+      if (!this.acceptsWindow(target)) throw new Error('Window not found')
+      const current = this.composer(target)
+      if (current?.content === content || (!current && !content)) {
+        this.db.exec('ROLLBACK')
+        return this.composerView(current ?? { id: '', ...target, content: '', version: 0 })
       }
-      composer = { ...(current ?? { id: randomUUID(), ...target, version: 0 }), content, version: (current?.version ?? 0) + 1 };
-      this.writeComposer(composer);
-      if (this.releaseEmptyComposer(composer)) composer = { ...composer, id: '' };
-      this.db.exec("COMMIT");
-    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-    this.changed();
-    return this.composerView(composer);
+      composer = {
+        ...(current ?? { id: randomUUID(), ...target, version: 0 }),
+        content,
+        version: (current?.version ?? 0) + 1,
+      }
+      this.writeComposer(composer)
+      if (this.releaseEmptyComposer(composer)) composer = { ...composer, id: '' }
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    this.changed()
+    return this.composerView(composer)
   }
-  referenceComposerFiles(target: ComposerTarget, assetIds: readonly string[]): FileAsset[] | undefined {
-    this.db.exec("BEGIN IMMEDIATE");
-    let assets: FileAsset[];
-    let changed = false;
+  referenceComposerFiles(
+    target: ComposerTarget,
+    assetIds: readonly string[],
+  ): FileAsset[] | undefined {
+    this.db.exec('BEGIN IMMEDIATE')
+    let assets: FileAsset[]
+    let changed = false
     try {
-      const existing = [...new Set(assetIds)].map(id => this.fileAsset(id));
-      if (!this.acceptsWindow(target) || existing.some(asset => !asset)) { this.db.exec("ROLLBACK"); return; }
-      assets = existing as FileAsset[];
-      const composer = this.ensureComposer(target);
-      const link = this.db.prepare("INSERT OR IGNORE INTO note_files(note_id,asset_id) VALUES(?,?)");
-      for (const asset of assets) changed = link.run(composer.id, asset.id).changes > 0 || changed;
-      this.db.exec("COMMIT");
-    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-    if (changed) this.changed();
-    return assets;
+      const existing = [...new Set(assetIds)].map((id) => this.fileAsset(id))
+      if (!this.acceptsWindow(target) || existing.some((asset) => !asset)) {
+        this.db.exec('ROLLBACK')
+        return
+      }
+      assets = existing as FileAsset[]
+      const composer = this.ensureComposer(target)
+      const link = this.db.prepare('INSERT OR IGNORE INTO note_files(note_id,asset_id) VALUES(?,?)')
+      for (const asset of assets) changed = link.run(composer.id, asset.id).changes > 0 || changed
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    if (changed) this.changed()
+    return assets
   }
   /** Sending clears exactly the delivered version and releases the files it delivered. */
-  completeComposerSend(target: ComposerTarget, version: number, assetIds: readonly string[]): boolean {
-    this.db.exec("BEGIN IMMEDIATE");
+  completeComposerSend(
+    target: ComposerTarget,
+    version: number,
+    assetIds: readonly string[],
+  ): boolean {
+    this.db.exec('BEGIN IMMEDIATE')
     try {
-      const current = this.composer(target);
-      if (!current || current.version !== version) { this.db.exec("ROLLBACK"); return false; }
-      const composer = { ...current, content: '', version: version + 1 };
-      this.writeComposer(composer);
-      const unlink = this.db.prepare("DELETE FROM note_files WHERE note_id=? AND asset_id=?");
-      for (const id of assetIds) unlink.run(composer.id, id);
-      this.releaseEmptyComposer(composer);
-      this.db.exec("COMMIT");
-    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-    this.changed();
-    return true;
+      const current = this.composer(target)
+      if (!current || current.version !== version) {
+        this.db.exec('ROLLBACK')
+        return false
+      }
+      const composer = { ...current, content: '', version: version + 1 }
+      this.writeComposer(composer)
+      const unlink = this.db.prepare('DELETE FROM note_files WHERE note_id=? AND asset_id=?')
+      for (const id of assetIds) unlink.run(composer.id, id)
+      this.releaseEmptyComposer(composer)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    this.changed()
+    return true
   }
 
   noteAttachments(noteId: string): FileAsset[] {
-    return this.db.prepare("SELECT f.*, o.id IS NOT NULL AS source_preview FROM canvas_files f JOIN note_files n ON n.asset_id=f.id LEFT JOIN documents o ON o.kind='file-origin' AND o.id=f.id WHERE n.note_id=? ORDER BY f.rowid")
-      .all(noteId).map(row => this.fileAssetFromRow(row));
+    return this.db
+      .prepare(
+        "SELECT f.*, o.id IS NOT NULL AS source_preview FROM canvas_files f JOIN note_files n ON n.asset_id=f.id LEFT JOIN documents o ON o.kind='file-origin' AND o.id=f.id WHERE n.note_id=? ORDER BY f.rowid",
+      )
+      .all(noteId)
+      .map((row) => this.fileAssetFromRow(row))
   }
 
   private assetNoteIds(assetId: string): Set<string> {
-    return new Set(this.db.prepare("SELECT note_id FROM note_files WHERE asset_id=?").all(assetId).map(row => String(row.note_id)));
+    return new Set(
+      this.db
+        .prepare('SELECT note_id FROM note_files WHERE asset_id=?')
+        .all(assetId)
+        .map((row) => String(row.note_id)),
+    )
   }
   private nodeReferencesAsset(node: CanvasNode, assetId: string, noteIds: Set<string>): boolean {
-    return node.type === 'file' ? node.assetId === assetId : node.type === 'note' && noteIds.has(node.id);
+    return node.type === 'file'
+      ? node.assetId === assetId
+      : node.type === 'note' && noteIds.has(node.id)
   }
 
   fileAsset(id: string): FileAsset | undefined {
-    const row = this.db.prepare("SELECT f.*, o.id IS NOT NULL AS source_preview FROM canvas_files f LEFT JOIN documents o ON o.kind='file-origin' AND o.id=f.id WHERE f.id=?")
-      .get(id);
-    return row ? this.fileAssetFromRow(row) : undefined;
+    const row = this.db
+      .prepare(
+        "SELECT f.*, o.id IS NOT NULL AS source_preview FROM canvas_files f LEFT JOIN documents o ON o.kind='file-origin' AND o.id=f.id WHERE f.id=?",
+      )
+      .get(id)
+    return row ? this.fileAssetFromRow(row) : undefined
   }
 
   fileAssetForCanvas(id: string, canvasId: string): FileAsset | undefined {
-    const canvas = this.get<Canvas>("canvas", canvasId);
-    const owners = this.assetNoteIds(id);
-    return canvas?.nodes.some(node => this.nodeReferencesAsset(node, id, owners)) ? this.fileAsset(id) : undefined;
+    const canvas = this.get<Canvas>('canvas', canvasId)
+    const owners = this.assetNoteIds(id)
+    return canvas?.nodes.some((node) => this.nodeReferencesAsset(node, id, owners))
+      ? this.fileAsset(id)
+      : undefined
   }
 
   private fileAssetFromRow(row: Record<string, unknown>): FileAsset {
     return {
-      id: String(row.id), filename: String(row.filename), size: Number(row.size),
-      mime: getMimeType(String(row.filename)) || "application/octet-stream",
+      id: String(row.id),
+      filename: String(row.filename),
+      size: Number(row.size),
+      mime: getMimeType(String(row.filename)) || 'application/octet-stream',
       createdAt: Number(row.created_at),
       ...(row.source_preview ? { sourcePreview: true } : {}),
-    };
+    }
   }
 
   fileAssetIds(): string[] {
-    return this.db.prepare("SELECT id FROM canvas_files").all().map(row => String(row.id));
+    return this.db
+      .prepare('SELECT id FROM canvas_files')
+      .all()
+      .map((row) => String(row.id))
   }
 
   fileAssetReferenced(id: string): boolean {
-    const owners = this.assetNoteIds(id);
-    if (this.db.prepare("SELECT 1 FROM note_files n JOIN documents d ON d.kind='composer' AND json_extract(d.body,'$.id')=n.note_id WHERE n.asset_id=?").get(id)) return true;
-    if ([...this.removals.values()].some(item => !item.restored && item.expiresAt > Date.now() && this.nodeReferencesAsset(item.node, id, owners))) return true;
-    const canvases = this.db.prepare("SELECT body FROM documents WHERE kind='canvas'").all()
-      .map(row => JSON.parse(String(row.body)) as Canvas);
-    return canvases.some(canvas => canvas.nodes.some(node => this.nodeReferencesAsset(node, id, owners)));
+    const owners = this.assetNoteIds(id)
+    if (
+      this.db
+        .prepare(
+          "SELECT 1 FROM note_files n JOIN documents d ON d.kind='composer' AND json_extract(d.body,'$.id')=n.note_id WHERE n.asset_id=?",
+        )
+        .get(id)
+    )
+      return true
+    if (
+      [...this.removals.values()].some(
+        (item) =>
+          !item.restored &&
+          item.expiresAt > Date.now() &&
+          this.nodeReferencesAsset(item.node, id, owners),
+      )
+    )
+      return true
+    const canvases = this.db
+      .prepare("SELECT body FROM documents WHERE kind='canvas'")
+      .all()
+      .map((row) => JSON.parse(String(row.body)) as Canvas)
+    return canvases.some((canvas) =>
+      canvas.nodes.some((node) => this.nodeReferencesAsset(node, id, owners)),
+    )
   }
 
   removeFileAssetIfUnreferenced(id: string): boolean {
-    if (this.fileAssetReferenced(id)) return false;
-    const removed = this.db.prepare("DELETE FROM canvas_files WHERE id=?").run(id).changes > 0;
-    this.db.prepare("DELETE FROM documents WHERE kind='file-origin' AND id=?").run(id);
-    return removed;
+    if (this.fileAssetReferenced(id)) return false
+    const removed = this.db.prepare('DELETE FROM canvas_files WHERE id=?').run(id).changes > 0
+    this.db.prepare("DELETE FROM documents WHERE kind='file-origin' AND id=?").run(id)
+    return removed
   }
 
   setCanvasBackground(canvasId: string, data: Uint8Array, opacity: number) {
     this.db
       .prepare(
-        "INSERT INTO canvas_backgrounds(canvas_id,image_id,opacity,data) VALUES(?,?,?,?) ON CONFLICT(canvas_id) DO UPDATE SET image_id=excluded.image_id, opacity=excluded.opacity, data=excluded.data",
+        'INSERT INTO canvas_backgrounds(canvas_id,image_id,opacity,data) VALUES(?,?,?,?) ON CONFLICT(canvas_id) DO UPDATE SET image_id=excluded.image_id, opacity=excluded.opacity, data=excluded.data',
       )
-      .run(canvasId, randomUUID(), opacity, data);
-    this.changed();
+      .run(canvasId, randomUUID(), opacity, data)
+    this.changed()
   }
   setCanvasBackgroundOpacity(canvasId: string, opacity: number) {
     this.db
-      .prepare("UPDATE canvas_backgrounds SET opacity=? WHERE canvas_id=?")
-      .run(opacity, canvasId);
-    this.changed();
+      .prepare('UPDATE canvas_backgrounds SET opacity=? WHERE canvas_id=?')
+      .run(opacity, canvasId)
+    this.changed()
   }
   removeCanvasBackground(canvasId: string) {
-    this.db
-      .prepare("DELETE FROM canvas_backgrounds WHERE canvas_id=?")
-      .run(canvasId);
-    this.changed();
+    this.db.prepare('DELETE FROM canvas_backgrounds WHERE canvas_id=?').run(canvasId)
+    this.changed()
   }
   getBackground(imageId: string): Uint8Array | undefined {
     const result = this.db
-      .prepare("SELECT data FROM canvas_backgrounds WHERE image_id=?")
-      .get(imageId);
-    return result?.data as Uint8Array | undefined;
+      .prepare('SELECT data FROM canvas_backgrounds WHERE image_id=?')
+      .get(imageId)
+    return result?.data as Uint8Array | undefined
   }
   addSession(id: string) {
-    this.db.prepare("DELETE FROM sessions WHERE expires < ?").run(Date.now());
-    this.db
-      .prepare("INSERT INTO sessions VALUES(?,?)")
-      .run(id, Date.now() + 7 * 86400000);
+    this.db.prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now())
+    this.db.prepare('INSERT INTO sessions VALUES(?,?)').run(id, Date.now() + 7 * 86400000)
   }
   hasSession(id: string) {
-    return !!this.db
-      .prepare("SELECT id FROM sessions WHERE id=? AND expires>?")
-      .get(id, Date.now());
+    return !!this.db.prepare('SELECT id FROM sessions WHERE id=? AND expires>?').get(id, Date.now())
   }
   removeSession(id: string) {
-    this.db.prepare("DELETE FROM sessions WHERE id=?").run(id);
-    if (this.cancelRemovals(item => item.sessionId === id)) this.changed();
-    this.emit("sessions");
+    this.db.prepare('DELETE FROM sessions WHERE id=?').run(id)
+    if (this.cancelRemovals((item) => item.sessionId === id)) this.changed()
+    this.emit('sessions')
   }
   removeOtherSessions(id: string) {
-    this.db.prepare('DELETE FROM sessions WHERE id != ?').run(id);
-    if (this.cancelRemovals(item => item.sessionId !== id)) this.changed();
-    this.emit('sessions');
+    this.db.prepare('DELETE FROM sessions WHERE id != ?').run(id)
+    if (this.cancelRemovals((item) => item.sessionId !== id)) this.changed()
+    this.emit('sessions')
   }
   close() {
-    this.cancelRemovals(() => true);
-    this.emit("close");
-    this.removeAllListeners();
-    this.db.close();
+    this.cancelRemovals(() => true)
+    this.emit('close')
+    this.removeAllListeners()
+    this.db.close()
   }
 }

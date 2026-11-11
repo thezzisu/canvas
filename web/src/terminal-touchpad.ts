@@ -14,20 +14,38 @@ interface TouchpadOptions {
 }
 
 /** One browser-local pointer; native pane ownership still goes through terminal input. */
-export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, options: TouchpadOptions) {
+export function bindTerminalTouchpad(
+  surface: HTMLElement,
+  term: Terminal,
+  options: TouchpadOptions,
+) {
   const screen = term.element!.querySelector<HTMLElement>('.xterm-screen')!
   const cursor = document.createElement('div')
   cursor.className = 'terminal-touchpad-cursor'
   cursor.setAttribute('aria-hidden', 'true')
-  cursor.innerHTML = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M3 2l17 12-8 1-4 7z" fill="#fff" stroke="#111317" stroke-width="2" stroke-linejoin="round"/></svg>'
+  cursor.innerHTML =
+    '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M3 2l17 12-8 1-4 7z" fill="#fff" stroke="#111317" stroke-width="2" stroke-linejoin="round"/></svg>'
   screen.appendChild(cursor)
-  Object.assign(cursor.style, { position: 'absolute', pointerEvents: 'none', zIndex: '8', transformOrigin: 'top left' })
-  const position = { x: .5, y: .5 }
-  let left = false, dragged = false, pointing = false, remainderX = 0, remainderY = 0
+  Object.assign(cursor.style, {
+    position: 'absolute',
+    pointerEvents: 'none',
+    zIndex: '8',
+    transformOrigin: 'top left',
+  })
+  const position = { x: 0.5, y: 0.5 }
+  let left = false,
+    dragged = false,
+    pointing = false,
+    remainderX = 0,
+    remainderY = 0
   const active = () => options.enabled() && options.active() && screen.isConnected
   function point() {
     const rect = screen.getBoundingClientRect()
-    return { rect, clientX: rect.left + position.x * rect.width, clientY: rect.top + position.y * rect.height }
+    return {
+      rect,
+      clientX: rect.left + position.x * rect.width,
+      clientY: rect.top + position.y * rect.height,
+    }
   }
   function render() {
     cursor.hidden = !active()
@@ -44,7 +62,10 @@ export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, optio
     code += (modifiers.shift ? 4 : 0) + (modifiers.alt ? 8 : 0) + (modifiers.ctrl ? 16 : 0)
     // The existing client protocol accepts movement and horizontal wheel even
     // when the outer xterm reports only button drags / vertical WheelEvents.
-    term.input(`\x1b[<${code};${Math.min(term.cols - 1, Math.floor(position.x * term.cols)) + 1};${Math.min(term.rows - 1, Math.floor(position.y * term.rows)) + 1}${up ? 'm' : 'M'}`, (code & ~28) !== 35)
+    term.input(
+      `\x1b[<${code};${Math.min(term.cols - 1, Math.floor(position.x * term.cols)) + 1};${Math.min(term.rows - 1, Math.floor(position.y * term.rows)) + 1}${up ? 'm' : 'M'}`,
+      (code & ~28) !== 35,
+    )
   }
   /**
    * xterm's own link detection hit-tests the virtual pointer's cell. The
@@ -57,17 +78,33 @@ export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, optio
     const rect = screen.getBoundingClientRect()
     if (!rect.width || !rect.height) return
     pointing = type !== 'mouseleave'
-    screen.dispatchEvent(new MouseEvent(type, { bubbles: false, cancelable: true, button: 0, buttons: type === 'mousedown' ? 1 : 0,
-      clientX: rect.left + (Math.min(term.cols - 1, Math.floor(position.x * term.cols)) + .5) / term.cols * rect.width,
-      clientY: rect.top + (Math.min(term.rows - 1, Math.floor(position.y * term.rows)) + .5) / term.rows * rect.height }))
+    screen.dispatchEvent(
+      new MouseEvent(type, {
+        bubbles: false,
+        cancelable: true,
+        button: 0,
+        buttons: type === 'mousedown' ? 1 : 0,
+        clientX:
+          rect.left +
+          ((Math.min(term.cols - 1, Math.floor(position.x * term.cols)) + 0.5) / term.cols) *
+            rect.width,
+        clientY:
+          rect.top +
+          ((Math.min(term.rows - 1, Math.floor(position.y * term.rows)) + 0.5) / term.rows) *
+            rect.height,
+      }),
+    )
   }
   function release() {
     if (left) send(0, true)
-    left = false; dragged = false
+    left = false
+    dragged = false
   }
   function pressLeft() {
     if (!active() || left) return false
-    left = true; send(0); return true
+    left = true
+    send(0)
+    return true
   }
   function finishDrag(cancelled: boolean) {
     const copied = dragged && !cancelled
@@ -81,15 +118,40 @@ export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, optio
       const { clientX, clientY } = point()
       const modifiers = options.modifiers()
       // Let the existing right-button preference and pane menu own this gesture.
-      term.element!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerType: 'touch', button: 2, buttons: 2, clientX, clientY }))
-      for (const type of ['mousedown', 'mouseup', 'contextmenu']) term.element!.dispatchEvent(new MouseEvent(type, {
-        bubbles: true, cancelable: true, button: 2, buttons: type === 'mousedown' ? 2 : 0, clientX, clientY,
-        shiftKey: modifiers.shift, ctrlKey: modifiers.ctrl, altKey: modifiers.alt, metaKey: modifiers.meta,
-      }))
+      term.element!.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          pointerType: 'touch',
+          button: 2,
+          buttons: 2,
+          clientX,
+          clientY,
+        }),
+      )
+      for (const type of ['mousedown', 'mouseup', 'contextmenu'])
+        term.element!.dispatchEvent(
+          new MouseEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            button: 2,
+            buttons: type === 'mousedown' ? 2 : 0,
+            clientX,
+            clientY,
+            shiftKey: modifiers.shift,
+            ctrlKey: modifiers.ctrl,
+            altKey: modifiers.alt,
+            metaKey: modifiers.meta,
+          }),
+        )
     } else {
       const code = button === 'left' ? 0 : 1
-      if (button === 'left') { pointLink('mousemove'); pointLink('mousedown') }
-      send(code); send(code, true)
+      if (button === 'left') {
+        pointLink('mousemove')
+        pointLink('mousedown')
+      }
+      send(code)
+      send(code, true)
       if (button === 'left') pointLink('mouseup')
     }
   }
@@ -99,34 +161,67 @@ export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, optio
     if (!rect.width || !rect.height) return
     position.x = Math.max(0, Math.min(1 - 1 / rect.width, position.x + x / rect.width))
     position.y = Math.max(0, Math.min(1 - 1 / rect.height, position.y + y / rect.height))
-    render(); dragged ||= left
+    render()
+    dragged ||= left
     if (!left) pointLink('mousemove')
-    if (left || options.hover() && !term.hasSelection()) send(left ? 32 : 35)
+    if (left || (options.hover() && !term.hasSelection())) send(left ? 32 : 35)
   }
   function scroll(x: number, y: number) {
     if (!active() || left) return
-    const { rect } = point(), step = Math.max(8, rect.height / term.rows)
-    remainderX += x; remainderY += y
-    for (const [delta, positive, negative] of [[remainderX, 67, 66], [remainderY, 65, 64]]) {
+    const { rect } = point(),
+      step = Math.max(8, rect.height / term.rows)
+    remainderX += x
+    remainderY += y
+    for (const [delta, positive, negative] of [
+      [remainderX, 67, 66],
+      [remainderY, 65, 64],
+    ]) {
       const count = Math.trunc(delta! / step)
-      for (let i = 0; i < Math.min(15, Math.abs(count)); i++) send(count > 0 ? positive! : negative!)
+      for (let i = 0; i < Math.min(15, Math.abs(count)); i++)
+        send(count > 0 ? positive! : negative!)
     }
-    remainderX %= step; remainderY %= step
+    remainderX %= step
+    remainderY %= step
   }
-  const gesture = new TouchpadGesture({ move, scroll, tap: click, startDrag: pressLeft, endDrag: finishDrag })
-  const stopEvent = (event: TouchEvent) => { event.preventDefault(); event.stopPropagation() }
-  const fingers = (event: TouchEvent) => [...event.touches].filter(touch => touch.target instanceof Node && surface.contains(touch.target))
+  const gesture = new TouchpadGesture({
+    move,
+    scroll,
+    tap: click,
+    startDrag: pressLeft,
+    endDrag: finishDrag,
+  })
+  const stopEvent = (event: TouchEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+  const fingers = (event: TouchEvent) =>
+    [...event.touches].filter(
+      (touch) => touch.target instanceof Node && surface.contains(touch.target),
+    )
   const touch = (event: TouchEvent) => {
-    if (!active()) { gesture.cancel(); return }
-    stopEvent(event); if (event.type === 'touchstart') options.focus()
+    if (!active()) {
+      gesture.cancel()
+      return
+    }
+    stopEvent(event)
+    if (event.type === 'touchstart') options.focus()
     // A finger holding a virtual button is outside the terminal touch surface.
     gesture.update(fingers(event), performance.now())
   }
   const end = (event: TouchEvent) => {
-    if (!active()) { gesture.cancel(); return }
-    stopEvent(event); gesture.end(fingers(event).length, performance.now())
+    if (!active()) {
+      gesture.cancel()
+      return
+    }
+    stopEvent(event)
+    gesture.end(fingers(event).length, performance.now())
   }
-  function cancel() { gesture.cancel(); release(); remainderX = remainderY = 0; if (pointing) pointLink('mouseleave') }
+  function cancel() {
+    gesture.cancel()
+    release()
+    remainderX = remainderY = 0
+    if (pointing) pointLink('mouseleave')
+  }
   // Terminal sessions outlive their card component when maximization moves hosts.
   const scope = effectScope(true)
   scope.run(() => {
@@ -134,23 +229,39 @@ export function bindTerminalTouchpad(surface: HTMLElement, term: Terminal, optio
     useEventListener(surface, 'touchend', end, { passive: false })
     useEventListener(surface, 'touchcancel', cancel)
     useEventListener(window, 'blur', cancel)
-    useEventListener(document, 'visibilitychange', () => { if (document.hidden) cancel() })
-    useEventListener(surface, 'focusout', () => queueMicrotask(() => { if (!surface.contains(document.activeElement)) cancel() }))
+    useEventListener(document, 'visibilitychange', () => {
+      if (document.hidden) cancel()
+    })
+    useEventListener(surface, 'focusout', () =>
+      queueMicrotask(() => {
+        if (!surface.contains(document.activeElement)) cancel()
+      }),
+    )
     useResizeObserver(screen, render)
   })
   const controller = {
-    refresh() { if (!active()) cancel(); render() },
+    refresh() {
+      if (!active()) cancel()
+      render()
+    },
     cancel,
     control(action: TouchpadControl) {
       gesture.cancel()
-      if (action.type === 'left' && !action.pressed) { finishDrag(!!action.cancelled); return }
+      if (action.type === 'left' && !action.pressed) {
+        finishDrag(!!action.cancelled)
+        return
+      }
       if (!active()) return
       if (!surface.contains(document.activeElement)) options.focus()
       if (action.type === 'left') pressLeft()
       else if (action.type === 'click') click(action.button)
       else scroll(action.x, action.y)
     },
-    dispose() { cancel(); scope.stop(); cursor.remove() },
+    dispose() {
+      cancel()
+      scope.stop()
+      cursor.remove()
+    },
   }
   render()
   return controller

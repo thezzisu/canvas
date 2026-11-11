@@ -2,19 +2,38 @@ import { z } from 'zod'
 import type { ContentFontSettings } from '../shared/settings.ts'
 
 // Each entry is a family name, not an arbitrary CSS declaration or a URL.
-const familyName = z.string().trim().min(1).max(100)
+const familyName = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
   .regex(/^[\p{L}\p{N} _+.\-]+$/u, 'Enter one font family name')
-export const contentFontSchema = z.object({
-  ligatures: z.boolean(),
-  stack: z.array(z.object({ family: familyName }).strict()).min(1).max(12).transform(fonts => {
-    const seen = new Set<string>()
-    return fonts.filter(font => {
-      const id = font.family.toLowerCase()
-      if (seen.has(id)) return false
-      seen.add(id); return true
-    })
-  }),
-}).strict() satisfies z.ZodType<ContentFontSettings>
-export const settingsPatchSchema = z.object({ contentFont: contentFontSchema,
-  terminalCell: z.object({ width: z.number().finite().positive().max(128), height: z.number().finite().positive().max(128) }).strict(),
-}).strict()
+export const contentFontSchema = z
+  .object({
+    ligatures: z.boolean(),
+    stack: z
+      .array(z.object({ family: familyName }).strict())
+      .min(1)
+      .max(12)
+      .transform((fonts) => {
+        const seen = new Set<string>()
+        return fonts.filter((font) => {
+          const id = font.family.toLowerCase()
+          if (seen.has(id)) return false
+          seen.add(id)
+          return true
+        })
+      }),
+  })
+  .strict() satisfies z.ZodType<ContentFontSettings>
+export const settingsPatchSchema = z
+  .object({
+    contentFont: contentFontSchema,
+    terminalCell: z
+      .object({
+        width: z.number().finite().positive().max(128),
+        height: z.number().finite().positive().max(128),
+      })
+      .strict(),
+  })
+  .strict()

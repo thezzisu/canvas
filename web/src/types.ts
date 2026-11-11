@@ -32,7 +32,11 @@ export interface WindowResource {
   status?: ProgramStatus
   panes?: PaneResource[]
 }
-export interface SpaceResource { id: string; name: string; windows: WindowResource[] }
+export interface SpaceResource {
+  id: string
+  name: string
+  windows: WindowResource[]
+}
 export interface SourceResource {
   id: string
   name: string
@@ -76,13 +80,41 @@ export interface FileCanvasNode extends NodeLayout {
   asset: FileAsset
 }
 export type CanvasNode = TerminalCanvasNode | NoteCanvasNode | FileCanvasNode
-export const isTerminalNode = (node: CanvasNode): node is TerminalCanvasNode => node.type === 'terminal'
+export const isTerminalNode = (node: CanvasNode): node is TerminalCanvasNode =>
+  node.type === 'terminal'
 export type NotePatch = Partial<Pick<NoteCanvasNode, 'title' | 'content' | 'color'>>
-export interface Canvas { id: string; name: string; nodes: CanvasNode[]; snapToGrid?: boolean; background?: { url: string; opacity: number } | null }
-export interface WindowSize { width: number; height: number }
+export interface Canvas {
+  id: string
+  name: string
+  nodes: CanvasNode[]
+  snapToGrid?: boolean
+  background?: { url: string; opacity: number } | null
+}
+export interface WindowSize {
+  width: number
+  height: number
+}
 /** A terminal window's draft: a note owned by the native window. */
-export interface ComposerView { id: string; sourceId: string; windowId: string; content: string; version: number; attachments: FileAsset[] }
-export interface SharedState { instanceId: string; revision: number; navigationOrder: NavigationOrder; sources: Source[]; canvases: Canvas[]; overviewBackground: Canvas['background']; windowSizes: Record<string, WindowSize>; composers: Record<string, ComposerView>; windowReads: Record<string, number>; settings: GlobalSettings }
+export interface ComposerView {
+  id: string
+  sourceId: string
+  windowId: string
+  content: string
+  version: number
+  attachments: FileAsset[]
+}
+export interface SharedState {
+  instanceId: string
+  revision: number
+  navigationOrder: NavigationOrder
+  sources: Source[]
+  canvases: Canvas[]
+  overviewBackground: Canvas['background']
+  windowSizes: Record<string, WindowSize>
+  composers: Record<string, ComposerView>
+  windowReads: Record<string, number>
+  settings: GlobalSettings
+}
 export interface TerminalData {
   preferenceKey: string
   sourceId: string
@@ -102,7 +134,10 @@ export interface TerminalData {
   focus: boolean
   mobile?: boolean
   newTab?: { pending(): boolean; create(): void }
-  canvasJump?: { neighbor(direction: CanvasDirection): CanvasEntry | undefined; go(direction: CanvasDirection, focus: 'terminal' | 'button' | undefined): void }
+  canvasJump?: {
+    neighbor(direction: CanvasDirection): CanvasEntry | undefined
+    go(direction: CanvasDirection, focus: 'terminal' | 'button' | undefined): void
+  }
   onAction: (action: string, id: string) => void
   onResize: (id: string, width: number, height: number, x?: number, y?: number) => void
   onResizeStart: (id: string, bounds: Omit<NodeLayout, 'id'>) => void

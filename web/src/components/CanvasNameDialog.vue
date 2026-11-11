@@ -17,17 +17,46 @@ const formId = useId()
 </script>
 
 <template>
-  <UModal :open="true" :title="t(draft.id ? 'app.renameCanvas' : 'app.newCanvas')" :dismissible="!busy"
-    :close="{ 'aria-label': t('app.closeDialog'), disabled: busy }" :ui="{ content: '[--dialog-width:28rem]' }" @update:open="value => { if (!value) emit('close') }">
+  <UModal
+    :open="true"
+    :title="t(draft.id ? 'app.renameCanvas' : 'app.newCanvas')"
+    :dismissible="!busy"
+    :close="{ 'aria-label': t('app.closeDialog'), disabled: busy }"
+    :ui="{ content: '[--dialog-width:28rem]' }"
+    @update:open="
+      (value) => {
+        if (!value) emit('close')
+      }
+    "
+  >
     <template #body>
       <UForm :id="formId" :disabled="busy" class="flex flex-col gap-4" @submit="emit('submit')">
-        <UFormField :label="t('app.canvasName')" required><UInput v-model="draft.name" name="canvasName" :placeholder="t('app.canvasNamePlaceholder')" maxlength="80" autofocus class="w-full" /></UFormField>
-        <UAlert v-if="error" color="error" variant="subtle" :title="error" role="alert" class="[overflow-wrap:anywhere]" />
+        <UFormField :label="t('app.canvasName')" required
+          ><UInput
+            v-model="draft.name"
+            name="canvasName"
+            :placeholder="t('app.canvasNamePlaceholder')"
+            maxlength="80"
+            autofocus
+            class="w-full"
+        /></UFormField>
+        <UAlert
+          v-if="error"
+          color="error"
+          variant="subtle"
+          :title="error"
+          role="alert"
+          class="[overflow-wrap:anywhere]"
+        />
       </UForm>
     </template>
     <template #footer>
-      <UButton color="neutral" variant="outline" :disabled="busy" @click="emit('close')">{{ t('common.cancel') }}</UButton>
-      <UButton type="submit" :form="formId" :loading="busy" :disabled="!draft.name.trim()">{{ t(draft.id ? 'common.save' : 'app.createCanvas') }}</UButton>
+      <UButton color="neutral" variant="outline" :disabled="busy" @click="emit('close')">{{
+        t('common.cancel')
+      }}</UButton>
+      <UButton type="submit" :form="formId" :loading="busy" :disabled="!draft.name.trim()">{{
+        t(draft.id ? 'common.save' : 'app.createCanvas')
+      }}</UButton>
     </template>
   </UModal>
 </template>

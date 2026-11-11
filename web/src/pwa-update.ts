@@ -1,17 +1,20 @@
 /** Checking never activates a waiting worker or reloads the current page. */
-export async function checkPwaRegistration(registration: Pick<ServiceWorkerRegistration, 'update' | 'installing' | 'waiting'>): Promise<boolean> {
+export async function checkPwaRegistration(
+  registration: Pick<ServiceWorkerRegistration, 'update' | 'installing' | 'waiting'>,
+): Promise<boolean> {
   if (!registration.waiting && !registration.installing) await registration.update()
   const worker = registration.installing
-  if (worker) await new Promise<void>((resolve, reject) => {
-    const changed = () => {
-      if (worker.state === 'parsed' || worker.state === 'installing') return
-      worker.removeEventListener('statechange', changed)
-      if (worker.state === 'redundant') reject(new Error('Service worker installation failed'))
-      else resolve()
-    }
-    worker.addEventListener('statechange', changed)
-    changed()
-  })
+  if (worker)
+    await new Promise<void>((resolve, reject) => {
+      const changed = () => {
+        if (worker.state === 'parsed' || worker.state === 'installing') return
+        worker.removeEventListener('statechange', changed)
+        if (worker.state === 'redundant') reject(new Error('Service worker installation failed'))
+        else resolve()
+      }
+      worker.addEventListener('statechange', changed)
+      changed()
+    })
   return !!registration.waiting
 }
 
@@ -29,7 +32,10 @@ export function pwaUpdateActions(options: {
       try {
         if (options.waiting()) await options.activate()
         else options.reload()
-      } catch (error) { requested = false; throw error }
+      } catch (error) {
+        requested = false
+        throw error
+      }
     },
     activated() {
       if (requested) options.reload()

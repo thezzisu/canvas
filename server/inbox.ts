@@ -1,16 +1,26 @@
-import { spawn } from "node:child_process";
-import { sourcePythonCommand } from "./runtimes.ts";
-import type { Source } from "./state.ts";
+import { spawn } from 'node:child_process'
+import { sourcePythonCommand } from './runtimes.ts'
+import type { Source } from './state.ts'
 
-export interface InboxFile { name: string; size: number }
+export interface InboxFile {
+  name: string
+  size: number
+}
 
 export function validateInboxFile(value: InboxFile): void {
-  if (!value || typeof value.name !== "string" || !value.name ||
-      Buffer.byteLength(value.name) > 246 || /[/\\\x00-\x1f\x7f]/u.test(value.name) ||
-      value.name === "." || value.name === ".." ||
-      Buffer.from(value.name).toString() !== value.name ||
-      !Number.isSafeInteger(value.size) || value.size < 0)
-    throw new Error("invalidFile");
+  if (
+    !value ||
+    typeof value.name !== 'string' ||
+    !value.name ||
+    Buffer.byteLength(value.name) > 246 ||
+    /[/\\\x00-\x1f\x7f]/u.test(value.name) ||
+    value.name === '.' ||
+    value.name === '..' ||
+    Buffer.from(value.name).toString() !== value.name ||
+    !Number.isSafeInteger(value.size) ||
+    value.size < 0
+  )
+    throw new Error('invalidFile')
 }
 
 // The same bounded streaming writer runs locally and over the source's SSH
@@ -72,98 +82,156 @@ finally:
  try: os.unlink(partial,dir_fd=directory)
  except FileNotFoundError: pass
  os.close(directory)
-`;
+`
 
-export async function writeInboxFile(source: Source, file: InboxFile, bytes: AsyncIterable<Uint8Array>,
-  signal: AbortSignal, progress: (received: number) => void): Promise<string> {
-  validateInboxFile(file);
-  signal.throwIfAborted();
-  const command = sourcePythonCommand(source, inboxPython, ["write", file.name, String(file.size)]);
-  const child = spawn(command.file, command.args, { env: command.env, stdio: ["pipe", "pipe", "pipe"] });
-  let output = "", received = 0, path: string | undefined, settled = false;
-  let resolve!: (path: string) => void, reject!: (error: Error) => void;
-  const result = new Promise<string>((ok, fail) => { resolve = ok; reject = fail; });
+export async function writeInboxFile(
+  source: Source,
+  file: InboxFile,
+  bytes: AsyncIterable<Uint8Array>,
+  signal: AbortSignal,
+  progress: (received: number) => void,
+): Promise<string> {
+  validateInboxFile(file)
+  signal.throwIfAborted()
+  const command = sourcePythonCommand(source, inboxPython, ['write', file.name, String(file.size)])
+  const child = spawn(command.file, command.args, {
+    env: command.env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  let output = '',
+    received = 0,
+    path: string | undefined,
+    settled = false
+  let resolve!: (path: string) => void, reject!: (error: Error) => void
+  const result = new Promise<string>((ok, fail) => {
+    resolve = ok
+    reject = fail
+  })
   // Attach immediately: a remote process can fail while the caller reads HTTP.
-  void result.catch(() => {});
-  let timer: ReturnType<typeof setTimeout>;
-  let killing: ReturnType<typeof setTimeout> | undefined;
+  void result.catch(() => {})
+  let timer: ReturnType<typeof setTimeout>
+  let killing: ReturnType<typeof setTimeout> | undefined
   const stop = () => {
-    child.stdin.destroy();
-    child.kill("SIGTERM");
-    if (!killing) { killing = setTimeout(() => child.kill("SIGKILL"), 2000); killing.unref(); }
-  };
-  const fail = (error: Error) => {
-    if (settled) return;
-    settled = true; clearTimeout(timer); stop(); reject(error);
-  };
-  const renew = () => { clearTimeout(timer); timer = setTimeout(() => fail(new Error("timeout")), 60_000); timer.unref(); };
-  const abort = () => fail(new Error("cancelled"));
-  signal.addEventListener("abort", abort, { once: true });
-  child.stdin.on("error", () => fail(new Error("interrupted")));
-  child.on("error", () => fail(new Error("unreachable")));
-  child.stderr.on("data", () => {});
-  child.stdout.on("data", (chunk: Buffer) => {
-    output += chunk.toString("utf8");
-    while (output.includes("\n")) {
-      const end = output.indexOf("\n"), line = output.slice(0, end); output = output.slice(end + 1);
-      if (line.length > 32768) { fail(new Error("invalidResponse")); return; }
-      try {
-        const message = JSON.parse(line);
-        if (message.ready === true) { if (!settled) renew(); }
-        else if (Number.isSafeInteger(message.received) && message.received >= received && message.received <= file.size) {
-          received = message.received;
-          if (!settled) { renew(); progress(received); }
-        } else if (typeof message.path === "string" && message.path.startsWith("/") &&
-            !/[\x00-\x1f\x7f]/u.test(message.path) && message.path.endsWith("_" + file.name)) path = message.path;
-        else throw new Error();
-      } catch { fail(new Error("invalidResponse")); }
+    child.stdin.destroy()
+    child.kill('SIGTERM')
+    if (!killing) {
+      killing = setTimeout(() => child.kill('SIGKILL'), 2000)
+      killing.unref()
     }
-    if (output.length > 32768) fail(new Error("invalidResponse"));
-  });
-  child.once("close", code => {
-    clearTimeout(timer); clearTimeout(killing); signal.removeEventListener("abort", abort);
+  }
+  const fail = (error: Error) => {
+    if (settled) return
+    settled = true
+    clearTimeout(timer)
+    stop()
+    reject(error)
+  }
+  const renew = () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => fail(new Error('timeout')), 60_000)
+    timer.unref()
+  }
+  const abort = () => fail(new Error('cancelled'))
+  signal.addEventListener('abort', abort, { once: true })
+  child.stdin.on('error', () => fail(new Error('interrupted')))
+  child.on('error', () => fail(new Error('unreachable')))
+  child.stderr.on('data', () => {})
+  child.stdout.on('data', (chunk: Buffer) => {
+    output += chunk.toString('utf8')
+    while (output.includes('\n')) {
+      const end = output.indexOf('\n'),
+        line = output.slice(0, end)
+      output = output.slice(end + 1)
+      if (line.length > 32768) {
+        fail(new Error('invalidResponse'))
+        return
+      }
+      try {
+        const message = JSON.parse(line)
+        if (message.ready === true) {
+          if (!settled) renew()
+        } else if (
+          Number.isSafeInteger(message.received) &&
+          message.received >= received &&
+          message.received <= file.size
+        ) {
+          received = message.received
+          if (!settled) {
+            renew()
+            progress(received)
+          }
+        } else if (
+          typeof message.path === 'string' &&
+          message.path.startsWith('/') &&
+          !/[\x00-\x1f\x7f]/u.test(message.path) &&
+          message.path.endsWith('_' + file.name)
+        )
+          path = message.path
+        else throw new Error()
+      } catch {
+        fail(new Error('invalidResponse'))
+      }
+    }
+    if (output.length > 32768) fail(new Error('invalidResponse'))
+  })
+  child.once('close', (code) => {
+    clearTimeout(timer)
+    clearTimeout(killing)
+    signal.removeEventListener('abort', abort)
     if (settled) {
       // Cancellation can race the durable rename and final stdout message.
       // Reap a reported completed file after the writer has stopped as well.
-      if (path) void removeInboxFiles(source, [path]).catch(() => {});
-      return;
+      if (path) void removeInboxFiles(source, [path]).catch(() => {})
+      return
     }
-    settled = true;
-    if (code === 0 && path && received === file.size) resolve(path);
+    settled = true
+    if (code === 0 && path && received === file.size) resolve(path)
     else {
-      if (path) void removeInboxFiles(source, [path]).catch(() => {});
-      reject(new Error("failed"));
+      if (path) void removeInboxFiles(source, [path]).catch(() => {})
+      reject(new Error('failed'))
     }
-  });
-  renew();
+  })
+  renew()
   try {
     const sending = (async () => {
-      let sent = 0;
+      let sent = 0
       for await (const chunk of bytes) {
-        signal.throwIfAborted();
-        if (settled) return await result;
-        sent += chunk.byteLength;
-        if (sent > file.size) throw new Error("sizeMismatch");
-        await new Promise<void>((ok, fail) => child.stdin.write(chunk, error => error ? fail(error) : ok()));
+        signal.throwIfAborted()
+        if (settled) return await result
+        sent += chunk.byteLength
+        if (sent > file.size) throw new Error('sizeMismatch')
+        await new Promise<void>((ok, fail) =>
+          child.stdin.write(chunk, (error) => (error ? fail(error) : ok())),
+        )
       }
-      if (sent !== file.size) throw new Error("incomplete");
-      child.stdin.end();
-      return await result;
-    })();
-    return await Promise.race([result, sending]);
+      if (sent !== file.size) throw new Error('incomplete')
+      child.stdin.end()
+      return await result
+    })()
+    return await Promise.race([result, sending])
   } catch (error) {
-    fail(error instanceof Error ? error : new Error("failed"));
-    return await result;
+    fail(error instanceof Error ? error : new Error('failed'))
+    return await result
   }
 }
 
 export async function removeInboxFiles(source: Source, paths: string[]): Promise<void> {
-  if (!paths.length) return;
-  const command = sourcePythonCommand(source, inboxPython, ["remove", JSON.stringify(paths)]);
+  if (!paths.length) return
+  const command = sourcePythonCommand(source, inboxPython, ['remove', JSON.stringify(paths)])
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(command.file, command.args, { env: command.env, stdio: "ignore" });
-    const timer = setTimeout(() => { child.kill(); reject(new Error("cleanupFailed")); }, 15_000); timer.unref();
-    child.once("error", error => { clearTimeout(timer); reject(error); });
-    child.once("close", code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error("cleanupFailed")); });
-  });
+    const child = spawn(command.file, command.args, { env: command.env, stdio: 'ignore' })
+    const timer = setTimeout(() => {
+      child.kill()
+      reject(new Error('cleanupFailed'))
+    }, 15_000)
+    timer.unref()
+    child.once('error', (error) => {
+      clearTimeout(timer)
+      reject(error)
+    })
+    child.once('close', (code) => {
+      clearTimeout(timer)
+      code === 0 ? resolve() : reject(new Error('cleanupFailed'))
+    })
+  })
 }

@@ -8,8 +8,13 @@ export function useCardMenu() {
   const id = Symbol('card menu')
   const open = computed({
     get: () => owner.value === id,
-    set: (value: boolean) => { if (value) owner.value = id; else if (owner.value === id) owner.value = undefined },
+    set: (value: boolean) => {
+      if (value) owner.value = id
+      else if (owner.value === id) owner.value = undefined
+    },
   })
-  onBeforeUnmount(() => { open.value = false })
+  onBeforeUnmount(() => {
+    open.value = false
+  })
   return open
 }

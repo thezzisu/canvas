@@ -1,6 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { containTerminalScale, fitTerminalGrid, styledSize, terminalFrameReady, terminalMetrics } from './terminal-geometry.ts'
+import {
+  containTerminalScale,
+  fitTerminalGrid,
+  styledSize,
+  terminalFrameReady,
+  terminalMetrics,
+} from './terminal-geometry.ts'
 
 test('only the complete matching native frame releases a geometry transition', () => {
   const grid = { cols: 80, rows: 24 }
@@ -9,17 +15,24 @@ test('only the complete matching native frame releases a geometry transition', (
   assert.equal(terminalFrameReady(grid, grid, { start: 2, end: 23 }), false)
   assert.equal(terminalFrameReady(grid, grid, { start: 0, end: 22 }), false)
   assert.equal(terminalFrameReady(grid, grid, { start: 0, end: 23 }), true)
-  assert.equal(terminalFrameReady({ cols: 2, rows: 1 }, { cols: 2, rows: 1 }, { start: 0, end: 0 }), true)
+  assert.equal(
+    terminalFrameReady({ cols: 2, rows: 1 }, { cols: 2, rows: 1 }, { start: 0, end: 0 }),
+    true,
+  )
 })
 
 test('containment includes native pixel rounding and preserves aspect ratio', () => {
-  const available = { width: 273.6, height: 528.8 }, native = { width: 274, height: 528 }
+  const available = { width: 273.6, height: 528.8 },
+    native = { width: 274, height: 528 }
   const scale = containTerminalScale(available, native)
   assert.equal(scale, available.width / native.width)
   assert(scale * native.width <= available.width && scale * native.height <= available.height)
-  assert.equal(containTerminalScale({ width: 400, height: 100 }, { width: 100, height: 200 }), .5)
+  assert.equal(containTerminalScale({ width: 400, height: 100 }, { width: 100, height: 200 }), 0.5)
   assert.equal(containTerminalScale({ width: 400, height: 800 }, { width: 100, height: 200 }), 1)
-  assert.equal(containTerminalScale({ width: 400, height: 800 }, { width: 100, height: 200 }, true), 4)
+  assert.equal(
+    containTerminalScale({ width: 400, height: 800 }, { width: 100, height: 200 }, true),
+    4,
+  )
 })
 
 test('an exact rendered grid retains every cell when resizing, including fractional cell widths', () => {
@@ -30,8 +43,14 @@ test('an exact rendered grid retains every cell when resizing, including fractio
 })
 
 test('large text in a narrow viewport fits below twenty columns without clipping', () => {
-  assert.deepEqual(fitTerminalGrid({ width: 212, height: 70 }, { width: 288, height: 100, cols: 20, rows: 5 }), { cols: 14, rows: 3 })
-  assert.deepEqual(fitTerminalGrid({ width: 1, height: 1 }, { width: 288, height: 100, cols: 20, rows: 5 }), { cols: 2, rows: 1 })
+  assert.deepEqual(
+    fitTerminalGrid({ width: 212, height: 70 }, { width: 288, height: 100, cols: 20, rows: 5 }),
+    { cols: 14, rows: 3 },
+  )
+  assert.deepEqual(
+    fitTerminalGrid({ width: 1, height: 1 }, { width: 288, height: 100, cols: 20, rows: 5 }),
+    { cols: 2, rows: 1 },
+  )
 })
 
 test('rounded DOM widths cannot make a fixed 273.6px viewport alternate between 37 and 38 columns', () => {
@@ -41,7 +60,8 @@ test('rounded DOM widths cannot make a fixed 273.6px viewport alternate between 
   const wide = { width: 274, height: 528, cols: 38, rows: 33 }
   assert.equal(fitTerminalGrid(available, narrow).cols, 38)
   assert.equal(fitTerminalGrid(available, wide).cols, 37)
-  let reference = initial, previous = initial
+  let reference = initial,
+    previous = initial
   for (const rendered of [narrow, wide, narrow, wide, wide]) {
     reference = terminalMetrics(reference, previous, rendered)
     assert.deepEqual(fitTerminalGrid(available, reference), { cols: 38, rows: 33 })
@@ -56,11 +76,21 @@ test('font invalidation and a same-grid size change replace metrics, while an ex
   const newFont = { ...external, width: 304, height: 594 }
   assert.equal(terminalMetrics(original, external, newFont), newFont)
   assert.equal(terminalMetrics(undefined, undefined, newFont), newFont)
-  assert.deepEqual(fitTerminalGrid({ width: 273.6, height: 528.8 }, newFont), { cols: 34, rows: 29 })
+  assert.deepEqual(fitTerminalGrid({ width: 273.6, height: 528.8 }, newFont), {
+    cols: 34,
+    rows: 29,
+  })
 })
 
 test('the rendered screen size comes from the inline size xterm assigns, without reading computed styles', () => {
-  assert.deepEqual(styledSize({ style: { width: '723px', height: '460px' } } as HTMLElement), { width: 723, height: 460 })
-  assert.equal(styledSize({ style: { width: '', height: '460px' } } as HTMLElement), undefined, 'an unmeasured screen has no size')
+  assert.deepEqual(styledSize({ style: { width: '723px', height: '460px' } } as HTMLElement), {
+    width: 723,
+    height: 460,
+  })
+  assert.equal(
+    styledSize({ style: { width: '', height: '460px' } } as HTMLElement),
+    undefined,
+    'an unmeasured screen has no size',
+  )
   assert.equal(styledSize({ style: { width: '0px', height: '0px' } } as HTMLElement), undefined)
 })

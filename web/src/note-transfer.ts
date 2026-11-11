@@ -18,7 +18,8 @@ export function isNoteTransfer(data: DataTransfer | null): data is DataTransfer 
 /** Notes accept ordinary text editing, but not Canvas card transfers. */
 export function rejectNoteCardDrop(event: DragEvent): boolean {
   const data = event.dataTransfer
-  if (!data || !data.types.includes(NOTE_TEXT_TYPE) && !data.types.includes(CANVAS_FILE_TYPE)) return false
+  if (!data || (!data.types.includes(NOTE_TEXT_TYPE) && !data.types.includes(CANVAS_FILE_TYPE)))
+    return false
   event.preventDefault()
   event.stopPropagation()
   data.dropEffect = 'none'

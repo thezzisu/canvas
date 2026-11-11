@@ -3,13 +3,24 @@ import assert from 'node:assert/strict'
 import { BackgroundCache } from './background-cache.ts'
 
 function fixture(load: (path: string, signal: AbortSignal) => Promise<Blob>) {
-  const created: Blob[] = [], revoked: string[] = []
-  const cache = new BackgroundCache(load, { createObjectURL: blob => { created.push(blob as Blob); return `blob:fixture-${created.length}` }, revokeObjectURL: url => revoked.push(url) })
+  const created: Blob[] = [],
+    revoked: string[] = []
+  const cache = new BackgroundCache(load, {
+    createObjectURL: (blob) => {
+      created.push(blob as Blob)
+      return `blob:fixture-${created.length}`
+    },
+    revokeObjectURL: (url) => revoked.push(url),
+  })
   return { cache, created, revoked }
 }
 test('backgrounds share pending loads and reuse the original bytes across canvas switches', async () => {
-  const bytes = new Blob(['original image bytes'], { type: 'image/png' }), calls: string[] = []
-  const { cache, created } = fixture(async path => { calls.push(path); return bytes })
+  const bytes = new Blob(['original image bytes'], { type: 'image/png' }),
+    calls: string[] = []
+  const { cache, created } = fixture(async (path) => {
+    calls.push(path)
+    return bytes
+  })
   const pending = cache.get('/api/backgrounds/a')
   assert.equal(cache.get('/api/backgrounds/a'), pending)
   assert.equal(await pending, 'blob:fixture-1')
@@ -21,7 +32,8 @@ test('backgrounds share pending loads and reuse the original bytes across canvas
 })
 test('replaced or deleted backgrounds release their object URLs without evicting other canvases', async () => {
   const { cache, revoked } = fixture(async () => new Blob(['image']))
-  await cache.get('/api/backgrounds/a'); await cache.get('/api/backgrounds/b')
+  await cache.get('/api/backgrounds/a')
+  await cache.get('/api/backgrounds/b')
   cache.retain(['/api/backgrounds/b', '/api/backgrounds/new-a'])
   assert.deepEqual(revoked, ['blob:fixture-1'])
   assert.equal(cache.peek('/api/backgrounds/a'), undefined)
@@ -32,10 +44,16 @@ test('replaced or deleted backgrounds release their object URLs without evicting
 })
 test('an old session load cannot install a URL after invalidation, even if its loader ignores abort', async () => {
   let complete!: (blob: Blob) => void, oldSignal!: AbortSignal
-  const { cache, created } = fixture((_path, signal) => { oldSignal = signal; return new Promise(resolve => { complete = resolve }) })
+  const { cache, created } = fixture((_path, signal) => {
+    oldSignal = signal
+    return new Promise((resolve) => {
+      complete = resolve
+    })
+  })
   const stale = cache.get('/api/backgrounds/a')
   await Promise.resolve()
-  cache.clear(); assert.equal(oldSignal.aborted, true)
+  cache.clear()
+  assert.equal(oldSignal.aborted, true)
   complete(new Blob(['old session']))
   await assert.rejects(stale, { name: 'AbortError' })
   assert.deepEqual(created, [])
@@ -43,25 +61,36 @@ test('an old session load cannot install a URL after invalidation, even if its l
 })
 test('a failed background can be retried without leaving a rejected cache entry', async () => {
   let calls = 0
-  const { cache } = fixture(async () => { if (++calls === 1) throw new Error('Disconnected'); return new Blob(['image']) })
+  const { cache } = fixture(async () => {
+    if (++calls === 1) throw new Error('Disconnected')
+    return new Blob(['image'])
+  })
   await assert.rejects(cache.get('/api/backgrounds/a'), /Disconnected/)
   assert.equal(await cache.get('/api/backgrounds/a'), 'blob:fixture-1')
   assert.equal(calls, 2)
 })
 test('wallpaper material shares one derivation and is discarded with its original background', async () => {
   const { cache, revoked } = fixture(async () => new Blob(['wallpaper']))
-  let finish!: (value: string) => void, calls = 0
-  const render = async () => { calls++; return await new Promise<string>(resolve => { finish = resolve }) }
+  let finish!: (value: string) => void,
+    calls = 0
+  const render = async () => {
+    calls++
+    return await new Promise<string>((resolve) => {
+      finish = resolve
+    })
+  }
   const first = cache.material('/a', render)
   assert.equal(cache.material('/a', render), first)
-  await cache.get('/a'); await Promise.resolve()
+  await cache.get('/a')
+  await Promise.resolve()
   finish('data:image/png;base64,material')
   assert.equal(await first, 'data:image/png;base64,material')
   assert.equal(await cache.material('/a', render), 'data:image/png;base64,material')
   assert.equal(calls, 1)
 
   const stale = cache.material('/b', render)
-  await cache.get('/b'); await Promise.resolve()
+  await cache.get('/b')
+  await Promise.resolve()
   cache.retain(['/a'])
   finish('stale material')
   await assert.rejects(stale, { name: 'AbortError' })
@@ -71,8 +100,16 @@ test('wallpaper material shares one derivation and is discarded with its origina
 })
 test('failed material derivation retries without downloading the wallpaper again', async () => {
   let loads = 0
-  const { cache } = fixture(async () => { loads++; return new Blob(['wallpaper']) })
-  await assert.rejects(cache.material('/a', async () => { throw new Error('decode failed') }), /decode failed/)
+  const { cache } = fixture(async () => {
+    loads++
+    return new Blob(['wallpaper'])
+  })
+  await assert.rejects(
+    cache.material('/a', async () => {
+      throw new Error('decode failed')
+    }),
+    /decode failed/,
+  )
   assert.equal(await cache.material('/a', async () => 'material'), 'material')
   assert.equal(loads, 1)
 })

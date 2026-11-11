@@ -2,7 +2,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { instanceConfiguration, type CanvasInstance } from './instance-config.ts'
 
-const builtin: CanvasInstance = { id: 'builtin', name: 'frontend.example', base: 'https://frontend.example/', builtin: true }
+const builtin: CanvasInstance = {
+  id: 'builtin',
+  name: 'frontend.example',
+  base: 'https://frontend.example/',
+  builtin: true,
+}
 const custom = { id: 'custom', name: 'Personal', base: 'https://backend.example/canvas/' }
 const savedBuiltin: CanvasInstance = { ...builtin, builtin: true }
 
@@ -15,7 +20,10 @@ test('local builds discover their same-origin default while retaining explicit s
 })
 test('a renamed default retains its saved identity and name after a fresh page load', () => {
   const renamed: CanvasInstance = { ...savedBuiltin, name: 'Home' }
-  const reloaded = instanceConfiguration([renamed, custom], renamed.id, { ...builtin, id: 'new-page-default' })
+  const reloaded = instanceConfiguration([renamed, custom], renamed.id, {
+    ...builtin,
+    id: 'new-page-default',
+  })
   assert.deepEqual(reloaded.instances, [renamed, custom])
   assert.equal(reloaded.active, renamed)
   assert.equal(reloaded.active.builtin, true)

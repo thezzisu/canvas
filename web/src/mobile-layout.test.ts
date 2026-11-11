@@ -29,13 +29,26 @@ test('explicit input modes override capabilities and unknown preferences use aut
 test('phone and tablet browser hints retain touch layout with a fine or hovering primary pointer', () => {
   const pointer = { coarsePointer: false, noHover: false, touchPoints: 5 }
   const devices = [
-    { userAgent: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36' },
-    { userAgent: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/152.0.0.0 Mobile Safari/537.36 Vivaldi/7.0' },
-    { userAgent: 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/152.0.0.0 Safari/537.36' },
+    {
+      userAgent:
+        'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Mobile Safari/537.36',
+    },
+    {
+      userAgent:
+        'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/152.0.0.0 Mobile Safari/537.36 Vivaldi/7.0',
+    },
+    {
+      userAgent:
+        'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/152.0.0.0 Safari/537.36',
+    },
     { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)' },
     { userAgent: 'Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X)' },
     { userAgent: 'Mozilla/5.0 (iPod touch; CPU iPhone OS 15_0 like Mac OS X)' },
-    { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15', platform: 'MacIntel' },
+    {
+      userAgent:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15',
+      platform: 'MacIntel',
+    },
     { userAgentData: { mobile: true, platform: '' } },
     { userAgentData: { mobile: false, platform: 'Android' } },
     { userAgentData: { mobile: false, platform: 'iOS' } },
@@ -43,28 +56,58 @@ test('phone and tablet browser hints retain touch layout with a fine or hovering
   for (const device of devices) {
     assert.equal(isMobileLayout({ ...pointer, ...device }), true, JSON.stringify(device))
     assert.equal(isMobileLayout({ ...pointer, ...device }, 'keyboard'), false)
-    assert.equal(isMobileLayout({ ...pointer, ...device, touchPoints: 0 }), false, 'a user agent alone does not provide touch input')
+    assert.equal(
+      isMobileLayout({ ...pointer, ...device, touchPoints: 0 }),
+      false,
+      'a user agent alone does not provide touch input',
+    )
   }
 })
 
 test('desktop and unrecognized device hints keep capability fallback without model or size guesses', () => {
   const fine = { coarsePointer: false, noHover: false, touchPoints: 10 }
   for (const device of [
-    { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', platform: 'Win32', userAgentData: { mobile: false, platform: 'Windows' } },
-    { userAgent: 'Mozilla/5.0 (X11; Linux x86_64)', platform: 'Linux x86_64', userAgentData: { mobile: false, platform: 'Linux' } },
-    { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)', platform: 'MacIntel', touchPoints: 0 },
-    { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)', platform: 'MacIntel', userAgentData: { mobile: false, platform: 'macOS' } },
+    {
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      platform: 'Win32',
+      userAgentData: { mobile: false, platform: 'Windows' },
+    },
+    {
+      userAgent: 'Mozilla/5.0 (X11; Linux x86_64)',
+      platform: 'Linux x86_64',
+      userAgentData: { mobile: false, platform: 'Linux' },
+    },
+    {
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)',
+      platform: 'MacIntel',
+      touchPoints: 0,
+    },
+    {
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)',
+      platform: 'MacIntel',
+      userAgentData: { mobile: false, platform: 'macOS' },
+    },
     { userAgent: 'Unknown', platform: 'Unknown' },
   ]) {
     assert.equal(isMobileLayout({ ...fine, ...device }), false)
     assert.equal(isMobileLayout({ ...fine, ...device }, 'touch'), true)
   }
-  assert.equal(isMobileLayout({ ...fine, coarsePointer: true, noHover: true, userAgent: 'Unknown' }), true)
+  assert.equal(
+    isMobileLayout({ ...fine, coarsePointer: true, noHover: true, userAgent: 'Unknown' }),
+    true,
+  )
   assert.equal(isMobileLayout({ ...fine, touchPoints: 1, platform: 'MacIntel' }), false)
 })
 
 test('shared layout reacts to preferences and media changes, persists choices and releases its readers', () => {
-  execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', String.raw`
+  execFileSync(
+    process.execPath,
+    [
+      '--import',
+      'tsx',
+      '--input-type=module',
+      '-e',
+      String.raw`
     import assert from 'node:assert/strict'
     const values = new Map([['canvas:input-mode', 'invalid']])
     class Storage {
@@ -115,47 +158,103 @@ test('shared layout reacts to preferences and media changes, persists choices an
     await nextTick(); assert.equal(inputMode.value, 'auto'); assert.equal(first.value, true)
     a.stop(); b.stop(); assert.equal(coarse.listeners.size, 1); assert.equal(hover.listeners.size, 1)
     c.stop(); assert.equal(coarse.listeners.size, 0); assert.equal(hover.listeners.size, 0)
-  `, new URL('./mobile-layout.ts', import.meta.url).href], { cwd: process.cwd(), stdio: 'pipe' })
+  `,
+      new URL('./mobile-layout.ts', import.meta.url).href,
+    ],
+    { cwd: process.cwd(), stdio: 'pipe' },
+  )
 })
 
 test('CSS content geometry ignores a visual viewport that subtracts the keyboard twice', () => {
   const layout = { width: 384, height: 487.2 }
   const visual = { width: 384, height: 199.2, offsetTop: 0, offsetLeft: 0 }
   assert.deepEqual(viewportFrame(layout, visual), { width: 384, height: 487.2, top: 0, left: 0 })
-  assert.deepEqual(viewportFrame(layout, { ...visual, offsetTop: 36 }), { width: 384, height: 487.2, top: 0, left: 0 })
+  assert.deepEqual(viewportFrame(layout, { ...visual, offsetTop: 36 }), {
+    width: 384,
+    height: 487.2,
+    top: 0,
+    left: 0,
+  })
 })
 
 test('explicit visual geometry retains keyboard height and browser pan offsets with a CSS fallback', () => {
   const layout = { width: 384, height: 823.47 }
   const visual = { width: 384, height: 535.47, offsetTop: 36, offsetLeft: 0 }
-  assert.deepEqual(viewportFrame(layout, visual, 'resizes-visual'), { width: 384, height: 535.47, top: 36, left: 0 })
-  assert.deepEqual(viewportFrame(layout, undefined, 'resizes-visual'), { width: 384, height: 823.47, top: 0, left: 0 })
-  assert.deepEqual(viewportFrame(layout, { width: NaN, height: 0, offsetTop: -2, offsetLeft: NaN }, 'resizes-visual'),
-    { width: 384, height: 823.47, top: 0, left: 0 })
+  assert.deepEqual(viewportFrame(layout, visual, 'resizes-visual'), {
+    width: 384,
+    height: 535.47,
+    top: 36,
+    left: 0,
+  })
+  assert.deepEqual(viewportFrame(layout, undefined, 'resizes-visual'), {
+    width: 384,
+    height: 823.47,
+    top: 0,
+    left: 0,
+  })
+  assert.deepEqual(
+    viewportFrame(
+      layout,
+      { width: NaN, height: 0, offsetTop: -2, offsetLeft: NaN },
+      'resizes-visual',
+    ),
+    { width: 384, height: 823.47, top: 0, left: 0 },
+  )
 })
 
 test('overlay geometry uses the CSS keyboard-inset result without subtracting visual occlusion again', () => {
   const measured = { width: 384, height: 520.8 }
-  assert.deepEqual(viewportFrame(measured, { width: 384, height: 823.47, offsetTop: 0, offsetLeft: 0 }, 'overlays-content'),
-    { width: 384, height: 520.8, top: 0, left: 0 })
-  assert.deepEqual(viewportFrame(measured, { width: 384, height: 199.2, offsetTop: 34, offsetLeft: 0 }, 'overlays-content'),
-    { width: 384, height: 520.8, top: 0, left: 0 })
+  assert.deepEqual(
+    viewportFrame(
+      measured,
+      { width: 384, height: 823.47, offsetTop: 0, offsetLeft: 0 },
+      'overlays-content',
+    ),
+    { width: 384, height: 520.8, top: 0, left: 0 },
+  )
+  assert.deepEqual(
+    viewportFrame(
+      measured,
+      { width: 384, height: 199.2, offsetTop: 34, offsetLeft: 0 },
+      'overlays-content',
+    ),
+    { width: 384, height: 520.8, top: 0, left: 0 },
+  )
 })
 
-test('canvas camera geometry uses its actual surface without visual viewport compensation', t => {
+test('canvas camera geometry uses its actual surface without visual viewport compensation', (t) => {
   const original = Object.getOwnPropertyDescriptor(globalThis, 'window')
-  t.after(() => { if (original) Object.defineProperty(globalThis, 'window', original); else Reflect.deleteProperty(globalThis, 'window') })
-  const window = { innerWidth: 384, innerHeight: 487, visualViewport: { width: 384, height: 199.2 } }
+  t.after(() => {
+    if (original) Object.defineProperty(globalThis, 'window', original)
+    else Reflect.deleteProperty(globalThis, 'window')
+  })
+  const window = {
+    innerWidth: 384,
+    innerHeight: 487,
+    visualViewport: { width: 384, height: 199.2 },
+  }
   Object.defineProperty(globalThis, 'window', { configurable: true, value: window })
   const surface = { clientWidth: 384, clientHeight: 443 }
-  assert.deepEqual(canvasFrame(surface as HTMLElement), { layoutWidth: 384, width: 384, height: 443 })
+  assert.deepEqual(canvasFrame(surface as HTMLElement), {
+    layoutWidth: 384,
+    width: 384,
+    height: 443,
+  })
   window.visualViewport.height = 487.2
-  assert.deepEqual(canvasFrame(surface as HTMLElement), { layoutWidth: 384, width: 384, height: 443 })
+  assert.deepEqual(canvasFrame(surface as HTMLElement), {
+    layoutWidth: 384,
+    width: 384,
+    height: 443,
+  })
 })
 
 test('touch navigation pans in screen pixels and pinches around the moving two-finger midpoint', () => {
-  const view = { x: 20, y: -30, zoom: .5 }
-  assert.deepEqual(touchViewport(view, { x: 100, y: 120 }, { x: 130, y: 145 }, 0, 0), { x: 50, y: -5, zoom: .5 })
+  const view = { x: 20, y: -30, zoom: 0.5 }
+  assert.deepEqual(touchViewport(view, { x: 100, y: 120 }, { x: 130, y: 145 }, 0, 0), {
+    x: 50,
+    y: -5,
+    zoom: 0.5,
+  })
   const zoomed = touchViewport(view, { x: 100, y: 120 }, { x: 110, y: 140 }, 80, 160)
   assert.deepEqual(zoomed, { x: -50, y: -160, zoom: 1 })
   assert.equal((110 - zoomed.x) / zoomed.zoom, (100 - view.x) / view.zoom)
@@ -166,10 +265,11 @@ test('touch navigation pans in screen pixels and pinches around the moving two-f
 test('layout rotation preserves the world center for visible and restored canvas cameras', () => {
   const portrait = { layoutWidth: 390, width: 390, height: 800 }
   const landscape = { layoutWidth: 844, width: 844, height: 346 }
-  const camera = { x: -110, y: 27, zoom: .6 }
-  const expected = { x: 117, y: -200, zoom: .6 }
+  const camera = { x: -110, y: 27, zoom: 0.6 }
+  const expected = { x: 117, y: -200, zoom: 0.6 }
   const worldCenter = (view: typeof camera, frame: typeof portrait) => ({
-    x: (frame.width / 2 - view.x) / view.zoom, y: (frame.height / 2 - view.y) / view.zoom,
+    x: (frame.width / 2 - view.x) / view.zoom,
+    y: (frame.height / 2 - view.y) / view.zoom,
   })
   assert.deepEqual(preserveCanvasCenter(camera, portrait, landscape), expected)
   // Restoring a camera after focused-terminal rotation uses its saved frame.
@@ -182,7 +282,7 @@ test('layout rotation preserves the world center for visible and restored canvas
 })
 
 test('keyboard height changes and legacy viewport records never move the camera', () => {
-  const camera = { x: 20, y: 40, zoom: .8 }
+  const camera = { x: 20, y: 40, zoom: 0.8 }
   const before = { layoutWidth: 390, width: 390, height: 800 }
   const keyboard = { layoutWidth: 390, width: 390, height: 380 }
   assert.equal(preserveCanvasCenter(camera, before, keyboard), camera)

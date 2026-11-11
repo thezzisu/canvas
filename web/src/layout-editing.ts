@@ -1,4 +1,12 @@
-import { computed, inject, onBeforeUnmount, onUpdated, watch, type InjectionKey, type Ref } from 'vue'
+import {
+  computed,
+  inject,
+  onBeforeUnmount,
+  onUpdated,
+  watch,
+  type InjectionKey,
+  type Ref,
+} from 'vue'
 
 export interface LayoutEditing {
   active: Readonly<Ref<boolean>>
@@ -11,12 +19,26 @@ export const layoutEditingKey: InjectionKey<LayoutEditing> = Symbol('layout-edit
 export function useLayoutCard(root: Ref<HTMLElement | undefined>) {
   const layout = inject(layoutEditingKey, undefined)
   const editing = computed(() => !!layout?.active.value)
-  const properties = ['position', 'width', 'height', 'left', 'top', 'right', 'bottom', 'flex', 'visibility'] as const
-  const frozen = new Map<HTMLElement, { styles: Array<{ name: string; value: string; priority: string }>; inert: boolean }>()
+  const properties = [
+    'position',
+    'width',
+    'height',
+    'left',
+    'top',
+    'right',
+    'bottom',
+    'flex',
+    'visibility',
+  ] as const
+  const frozen = new Map<
+    HTMLElement,
+    { styles: Array<{ name: string; value: string; priority: string }>; inert: boolean }
+  >()
   function restore() {
     for (const [element, value] of frozen) {
       for (const { name, value: original, priority } of value.styles) {
-        if (original) element.style.setProperty(name, original, priority); else element.style.removeProperty(name)
+        if (original) element.style.setProperty(name, original, priority)
+        else element.style.removeProperty(name)
       }
       element.inert = value.inert
     }
@@ -27,15 +49,49 @@ export function useLayoutCard(root: Ref<HTMLElement | undefined>) {
   function freezeNewContent() {
     const element = root.value
     if (!editing.value || !element) return
-    const contents = [...element.querySelectorAll<HTMLElement>(':scope > .card-content, :scope > .terminal-body, :scope > .capture-toolbar')].filter(node => !frozen.has(node))
-    const measurements = contents.map(node => ({ node, width: node.offsetWidth, height: node.offsetHeight, left: node.offsetLeft, top: node.offsetTop }))
+    const contents = [
+      ...element.querySelectorAll<HTMLElement>(
+        ':scope > .card-content, :scope > .terminal-body, :scope > .capture-toolbar',
+      ),
+    ].filter((node) => !frozen.has(node))
+    const measurements = contents.map((node) => ({
+      node,
+      width: node.offsetWidth,
+      height: node.offsetHeight,
+      left: node.offsetLeft,
+      top: node.offsetTop,
+    }))
     for (const { node, width, height, left, top } of measurements) {
-      frozen.set(node, { styles: properties.map(name => ({ name, value: node.style.getPropertyValue(name), priority: node.style.getPropertyPriority(name) })), inert: node.inert })
-      Object.assign(node.style, { position: 'absolute', width: `${width}px`, height: `${height}px`, left: `${left}px`, top: `${top}px`, right: 'auto', bottom: 'auto', flex: 'none', visibility: 'hidden' })
+      frozen.set(node, {
+        styles: properties.map((name) => ({
+          name,
+          value: node.style.getPropertyValue(name),
+          priority: node.style.getPropertyPriority(name),
+        })),
+        inert: node.inert,
+      })
+      Object.assign(node.style, {
+        position: 'absolute',
+        width: `${width}px`,
+        height: `${height}px`,
+        left: `${left}px`,
+        top: `${top}px`,
+        right: 'auto',
+        bottom: 'auto',
+        flex: 'none',
+        visibility: 'hidden',
+      })
       node.inert = true
     }
   }
-  watch([editing, root], () => { restore(); freezeNewContent() }, { flush: 'sync' })
+  watch(
+    [editing, root],
+    () => {
+      restore()
+      freezeNewContent()
+    },
+    { flush: 'sync' },
+  )
   // A late capture/connection can add a host while editing; freeze only that new
   // direct child, without moving or remeasuring already retained content.
   onUpdated(freezeNewContent)

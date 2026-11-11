@@ -11,6 +11,12 @@ export function filePreview(file: { filename: string; mime?: string }): FilePrev
   if (mime.startsWith('audio/')) return 'audio'
   if (mime.startsWith('video/')) return 'video'
   if (mime === 'application/pdf') return 'pdf'
-  if (mime.startsWith('text/') || /^application\/(?:json|javascript|xml|yaml|toml|x-sh|x-shellscript|x-httpd-php)$|\+(?:json|xml)$/.test(mime)) return 'text'
+  if (
+    mime.startsWith('text/') ||
+    /^application\/(?:json|javascript|xml|yaml|toml|x-sh|x-shellscript|x-httpd-php)$|\+(?:json|xml)$/.test(
+      mime,
+    )
+  )
+    return 'text'
   return mime === 'application/octet-stream' && !registered ? 'text' : 'file'
 }

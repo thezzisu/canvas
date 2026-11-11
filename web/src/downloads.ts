@@ -3,8 +3,14 @@ import { apiFetch, apiUrl } from './api'
 import { downloadMedia } from './media'
 import { filePreview, type FilePreview } from './file-preview'
 
-export interface DownloadContext { canvasId?: string; anchorId?: string }
-export interface DownloadResource { sourceId: string; windowId: string }
+export interface DownloadContext {
+  canvasId?: string
+  anchorId?: string
+}
+export interface DownloadResource {
+  sourceId: string
+  windowId: string
+}
 export interface DownloadPreview {
   id: string
   filename: string
@@ -18,13 +24,15 @@ export interface DownloadPreview {
 const previews = shallowRef<DownloadPreview[]>([])
 export const downloadPreview = computed(() => previews.value[0])
 export const downloadPreviewCount = computed(() => previews.value.length)
-export function dismissDownloadPreview() { previews.value = previews.value.slice(1) }
+export function dismissDownloadPreview() {
+  previews.value = previews.value.slice(1)
+}
 
 /** Present an already-staged file in the browser that requested it. */
 export async function presentDownload(file: Omit<DownloadPreview, 'preview'>, download = false) {
   const preview = filePreview(file)
   if (!download && preview !== 'file') {
-    if (previews.value.some(item => item.id === file.id && item.url === file.url)) return
+    if (previews.value.some((item) => item.id === file.id && item.url === file.url)) return
     previews.value = [...previews.value, { ...file, preview }]
     return
   }
@@ -33,9 +41,12 @@ export async function presentDownload(file: Omit<DownloadPreview, 'preview'>, do
 
 const requests = new Map<AbortController, WebSocket>()
 let received = new WeakMap<WebSocket, Set<string>>()
-let getDownloadContext: (resource: DownloadResource) => DownloadContext | undefined = () => undefined
+let getDownloadContext: (resource: DownloadResource) => DownloadContext | undefined = () =>
+  undefined
 
-export function setDownloadContext(getter?: (resource: DownloadResource) => DownloadContext | undefined) {
+export function setDownloadContext(
+  getter?: (resource: DownloadResource) => DownloadContext | undefined,
+) {
   getDownloadContext = getter || (() => undefined)
 }
 
@@ -55,8 +66,10 @@ async function prepare(socket: WebSocket, path: string, context: DownloadContext
   const timeout = setTimeout(() => controller.abort(), 10_000)
   try {
     await apiFetch(path, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(context), signal: controller.signal,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(context),
+      signal: controller.signal,
     })
   } catch {
     // The server expires an unprepared transfer and reports the failure to its
@@ -68,11 +81,19 @@ async function prepare(socket: WebSocket, path: string, context: DownloadContext
 }
 
 /** Bind staging to the receiving tab's canvas without a browser decision. */
-export function receiveDownload(socket: WebSocket, message: Record<string, unknown>, resource: DownloadResource): boolean {
+export function receiveDownload(
+  socket: WebSocket,
+  message: Record<string, unknown>,
+  resource: DownloadResource,
+): boolean {
   if (message.type !== 'file-context' && message.type !== 'download') return false
   if (typeof message.id !== 'string' || !message.id || message.id.length > 256) return true
   let path: string
-  try { path = `/api/downloads/${encodeURIComponent(message.id)}` } catch { return true }
+  try {
+    path = `/api/downloads/${encodeURIComponent(message.id)}`
+  } catch {
+    return true
+  }
   if (message.type === 'file-context') {
     if (!firstMessage(socket, message.type, message.id)) return true
     const context = { ...getDownloadContext(resource) }
@@ -81,12 +102,22 @@ export function receiveDownload(socket: WebSocket, message: Record<string, unkno
   }
   if (typeof message.url !== 'string' || typeof message.filename !== 'string') return true
   let url: URL
-  try { url = apiUrl(message.url) } catch { return true }
+  try {
+    url = apiUrl(message.url)
+  } catch {
+    return true
+  }
   if (url.href !== apiUrl(path).href || url.search) return true
   if (!firstMessage(socket, message.type, message.id)) return true
   if (Number.isSafeInteger(message.size) && (message.size as number) >= 0) {
-    void presentDownload({ id: message.id, filename: message.filename,
-      size: message.size as number, mime: typeof message.mime === 'string' ? message.mime : undefined, sourcePreview: message.sourcePreview === true, url: path }).catch(reportDownloadError)
+    void presentDownload({
+      id: message.id,
+      filename: message.filename,
+      size: message.size as number,
+      mime: typeof message.mime === 'string' ? message.mime : undefined,
+      sourcePreview: message.sourcePreview === true,
+      url: path,
+    }).catch(reportDownloadError)
     return true
   }
   void downloadMedia(url.href, message.filename).catch(reportDownloadError)
@@ -95,7 +126,10 @@ export function receiveDownload(socket: WebSocket, message: Record<string, unkno
 
 export function disconnectDownloads(socket: WebSocket) {
   for (const [controller, owner] of requests) {
-    if (owner === socket) { controller.abort(); requests.delete(controller) }
+    if (owner === socket) {
+      controller.abort()
+      requests.delete(controller)
+    }
   }
   received.delete(socket)
 }

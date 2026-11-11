@@ -27,29 +27,47 @@ const updates = pwaUpdateActions({
   notify: () => updateReady(),
 })
 function updateReady() {
-  updateAvailable.value = true; updateDismissed.value = false
+  updateAvailable.value = true
+  updateDismissed.value = false
   void fetch(new URL('build-info.json', document.baseURI), { cache: 'no-store' })
-    .then(response => response.ok ? response.json() : undefined)
-    .then(value => { if (isBuildInfo(value)) updateBuild.value = value })
+    .then((response) => (response.ok ? response.json() : undefined))
+    .then((value) => {
+      if (isBuildInfo(value)) updateBuild.value = value
+    })
     .catch(() => {})
 }
 export function initializePwa() {
-  if (started || !import.meta.env.PROD || !window.isSecureContext || !('serviceWorker' in navigator)) return
+  if (
+    started ||
+    !import.meta.env.PROD ||
+    !window.isSecureContext ||
+    !('serviceWorker' in navigator)
+  )
+    return
   started = true
-  window.addEventListener('beforeinstallprompt', event => {
+  window.addEventListener('beforeinstallprompt', (event) => {
     event.preventDefault()
     installPrompt.value = event as InstallPrompt
-    canInstall.value = !matchMedia('(display-mode: standalone), (display-mode: window-controls-overlay)').matches
+    canInstall.value = !matchMedia(
+      '(display-mode: standalone), (display-mode: window-controls-overlay)',
+    ).matches
   })
-  window.addEventListener('appinstalled', () => { installPrompt.value = undefined; canInstall.value = false })
+  window.addEventListener('appinstalled', () => {
+    installPrompt.value = undefined
+    canInstall.value = false
+  })
   updateWorker = registerSW({
     onNeedRefresh: updateReady,
     onNeedReload: () => updates.activated(),
-    onRegisteredSW: (_url, value) => { registration.value = value },
+    onRegisteredSW: (_url, value) => {
+      registration.value = value
+    },
     // Offline/unavailable registration leaves the ordinary web application usable.
     onRegisterError: () => {},
   })
-  const check = () => { if (!document.hidden) void registration.value?.update().catch(() => {}) }
+  const check = () => {
+    if (!document.hidden) void registration.value?.update().catch(() => {})
+  }
   document.addEventListener('visibilitychange', check)
   setInterval(check, 60 * 60_000)
 }
@@ -61,19 +79,33 @@ export async function checkPwaUpdates() {
     const waiting = await checkPwaRegistration(current)
     // The plugin installs its activation listener before onNeedRefresh exposes Reload.
     updateCheck.value = waiting || updateAvailable.value ? 'idle' : 'current'
-  } catch { updateCheck.value = 'failed' }
+  } catch {
+    updateCheck.value = 'failed'
+  }
 }
 export async function installPwa() {
   const prompt = installPrompt.value
   if (!prompt || pwaBusy.value) return
-  pwaBusy.value = true; pwaFailure.value = false
-  try { await prompt.prompt(); installPrompt.value = undefined; canInstall.value = false }
-  catch { pwaFailure.value = true }
-  finally { pwaBusy.value = false }
+  pwaBusy.value = true
+  pwaFailure.value = false
+  try {
+    await prompt.prompt()
+    installPrompt.value = undefined
+    canInstall.value = false
+  } catch {
+    pwaFailure.value = true
+  } finally {
+    pwaBusy.value = false
+  }
 }
 export async function applyPwaUpdate() {
   if (pwaBusy.value) return
-  pwaBusy.value = true; pwaFailure.value = false
-  try { await updates.apply() }
-  catch { pwaFailure.value = true; pwaBusy.value = false }
+  pwaBusy.value = true
+  pwaFailure.value = false
+  try {
+    await updates.apply()
+  } catch {
+    pwaFailure.value = true
+    pwaBusy.value = false
+  }
 }

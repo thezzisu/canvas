@@ -3,14 +3,44 @@ import assert from 'node:assert/strict'
 import { pickerChecked, pickerGroups, updatePickerSelection } from './window-picker.ts'
 
 test('window picker retains configured connection order and excludes added windows from group selection after space moves', () => {
-  const sources = [{ id: 'b', name: 'Second machine', transport: 'local' as const }, { id: 'a', name: 'First machine', transport: 'local' as const }]
-  const resources = [{ id: 'a', name: 'First machine', status: 'connected', spaces: [{ id: 'space', name: 'Work', windows: [{ id: 'w', name: 'Agent' }] }] },
-    { id: 'b', name: 'Second machine', status: 'connected', spaces: [{ id: 'moved', name: 'Work', windows: [{ id: 'existing', name: 'Editor' }, { id: 'new', name: 'Agent' }] }] }]
+  const sources = [
+    { id: 'b', name: 'Second machine', transport: 'local' as const },
+    { id: 'a', name: 'First machine', transport: 'local' as const },
+  ]
+  const resources = [
+    {
+      id: 'a',
+      name: 'First machine',
+      status: 'connected',
+      spaces: [{ id: 'space', name: 'Work', windows: [{ id: 'w', name: 'Agent' }] }],
+    },
+    {
+      id: 'b',
+      name: 'Second machine',
+      status: 'connected',
+      spaces: [
+        {
+          id: 'moved',
+          name: 'Work',
+          windows: [
+            { id: 'existing', name: 'Editor' },
+            { id: 'new', name: 'Agent' },
+          ],
+        },
+      ],
+    },
+  ]
   const groups = pickerGroups(sources, resources, '', new Set(['b/existing']))
-  assert.deepEqual(groups.map(group => group.id), ['b', 'a'])
+  assert.deepEqual(
+    groups.map((group) => group.id),
+    ['b', 'a'],
+  )
   assert.deepEqual(groups[0]!.eligible, ['b/moved/new'])
   assert.equal(groups[0]!.spaces[0]!.windows[0]!.added, true)
-  assert.deepEqual(pickerGroups(sources, resources, 'editor', new Set(['b/existing']))[0]!.eligible, [])
+  assert.deepEqual(
+    pickerGroups(sources, resources, 'editor', new Set(['b/existing']))[0]!.eligible,
+    [],
+  )
   assert.equal(pickerGroups(sources, resources, 'first machine', new Set()).length, 1)
 })
 
@@ -20,20 +50,53 @@ test('tri-state bulk selection modifies only eligible visible keys and preserves
   assert.equal(pickerChecked(keys, new Set(['first'])), 'indeterminate')
   assert.equal(pickerChecked(keys, new Set(keys)), true)
   assert.equal(pickerChecked([], new Set(['first'])), false)
-  assert.deepEqual(updatePickerSelection(['outside', 'first'], keys, true), ['outside', 'first', 'second'])
+  assert.deepEqual(updatePickerSelection(['outside', 'first'], keys, true), [
+    'outside',
+    'first',
+    'second',
+  ])
   assert.deepEqual(updatePickerSelection(['outside', 'first'], keys, false), ['outside'])
 })
 
 test('window search includes the displayed active terminal title and follows title changes', () => {
   const sources = [{ id: 'source', name: 'Machine', transport: 'local' as const }]
-  const window = { id: 'tab', name: '3', panes: [
-    { id: 'first', name: '1', active: false, status: 'idle' as const, terminalTitle: 'Hidden task' },
-    { id: 'second', name: '2', active: true, status: 'working' as const, terminalTitle: '分析 Canvas' },
-  ] }
-  const resources = [{ id: 'source', name: 'Machine', status: 'online', spaces: [{ id: 'space', name: 'Work', windows: [window] }] }]
-  assert.equal(pickerGroups(sources, resources, '分析 canvas', new Set())[0]?.eligible[0], 'source/space/tab')
+  const window = {
+    id: 'tab',
+    name: '3',
+    panes: [
+      {
+        id: 'first',
+        name: '1',
+        active: false,
+        status: 'idle' as const,
+        terminalTitle: 'Hidden task',
+      },
+      {
+        id: 'second',
+        name: '2',
+        active: true,
+        status: 'working' as const,
+        terminalTitle: '分析 Canvas',
+      },
+    ],
+  }
+  const resources = [
+    {
+      id: 'source',
+      name: 'Machine',
+      status: 'online',
+      spaces: [{ id: 'space', name: 'Work', windows: [window] }],
+    },
+  ]
+  assert.equal(
+    pickerGroups(sources, resources, '分析 canvas', new Set())[0]?.eligible[0],
+    'source/space/tab',
+  )
   assert.equal(pickerGroups(sources, resources, 'hidden task', new Set()).length, 0)
   window.panes[1]!.terminalTitle = 'Next task'
   assert.equal(pickerGroups(sources, resources, '分析 canvas', new Set()).length, 0)
-  assert.deepEqual(pickerGroups(sources, resources, 'NEXT TASK', new Set(['source/tab']))[0]?.eligible, [])
+  assert.deepEqual(
+    pickerGroups(sources, resources, 'NEXT TASK', new Set(['source/tab']))[0]?.eligible,
+    [],
+  )
 })

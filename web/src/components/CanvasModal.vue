@@ -7,7 +7,11 @@ let inheritedTrigger: HTMLElement | undefined
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useForwardPropsEmits } from 'reka-ui'
-import UModal, { type ModalProps, type ModalEmits, type ModalSlots } from '@nuxt/ui/components/Modal.vue'
+import UModal, {
+  type ModalProps,
+  type ModalEmits,
+  type ModalSlots,
+} from '@nuxt/ui/components/Modal.vue'
 import { registerNotificationSurface } from '../notification-surface'
 
 defineOptions({ inheritAttrs: false })
@@ -19,12 +23,18 @@ const uncontrolledOpen = ref(!!props.defaultOpen)
 const element = shallowRef<HTMLElement>()
 const open = computed(() => forwarded.value.open ?? uncontrolledOpen.value)
 const active = document.activeElement
-const trigger = active instanceof HTMLElement && active !== document.body && active.isConnected ? active : inheritedTrigger
+const trigger =
+  active instanceof HTMLElement && active !== document.body && active.isConnected
+    ? active
+    : inheritedTrigger
 onBeforeUnmount(() => {
   inheritedTrigger = trigger
-  setTimeout(() => { if (inheritedTrigger === trigger) inheritedTrigger = undefined }, 0)
+  setTimeout(() => {
+    if (inheritedTrigger === trigger) inheritedTrigger = undefined
+  }, 0)
 })
-const content = computed(() => ({ ...props.content,
+const content = computed(() => ({
+  ...props.content,
   onOpenAutoFocus(event: Event) {
     if (event.target instanceof HTMLElement) element.value = event.target
     props.content?.onOpenAutoFocus?.(event)
@@ -33,20 +43,31 @@ const content = computed(() => ({ ...props.content,
     element.value = undefined
     props.content?.onCloseAutoFocus?.(event)
     if (event.defaultPrevented || !trigger?.isConnected) return
-    event.preventDefault(); trigger.focus({ preventScroll: true })
+    event.preventDefault()
+    trigger.focus({ preventScroll: true })
   },
 }))
 
 // Put notifications inside the active dialog's native focus/ARIA boundary.
-watch([element, open], ([node, active], _previous, cleanup) => {
-  if (node && active) cleanup(registerNotificationSurface(node))
-}, { flush: 'sync' })
+watch(
+  [element, open],
+  ([node, active], _previous, cleanup) => {
+    if (node && active) cleanup(registerNotificationSurface(node))
+  },
+  { flush: 'sync' },
+)
 </script>
 
 <template>
-  <UModal v-bind="{ ...forwarded, ...$attrs }" :content="content" @update:open="uncontrolledOpen = $event">
+  <UModal
+    v-bind="{ ...forwarded, ...$attrs }"
+    :content="content"
+    @update:open="uncontrolledOpen = $event"
+  >
     <template v-if="slots.default" #default="scope"><slot v-bind="scope" /></template>
-    <template v-if="slots.content" #content="scope"><slot name="content" v-bind="scope" /></template>
+    <template v-if="slots.content" #content="scope"
+      ><slot name="content" v-bind="scope"
+    /></template>
     <template v-if="slots.header" #header="scope"><slot name="header" v-bind="scope" /></template>
     <template v-if="slots.title" #title><slot name="title" /></template>
     <template v-if="slots.description" #description><slot name="description" /></template>
