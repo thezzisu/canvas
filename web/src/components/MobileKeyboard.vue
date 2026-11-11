@@ -8,6 +8,7 @@ import type { TouchpadControl } from '../touchpad-gesture'
 import Icon from './Icon.vue'
 import UModal from './CanvasModal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
+import UIcon from '@nuxt/ui/components/Icon.vue'
 import { useReducedMotion } from '../reduced-motion'
 
 const { t } = useI18n()
@@ -354,7 +355,7 @@ onBeforeUnmount(() => { textRequest?.abort(); pendingFiles?.dispose(); pendingFi
       @update:open="value => { if (!value) closeSheet() }">
       <template #body>
         <div v-if="loadingText || textFailed" class="mobile-text-status" :role="textFailed ? 'alert' : 'status'">
-          <template v-if="loadingText"><span class="spinner" />{{ t('common.loading') }}</template>
+          <template v-if="loadingText"><UIcon name="i-lucide-loader-circle" class="spinner size-3.5 shrink-0 motion-safe:animate-spin" />{{ t('common.loading') }}</template>
           <template v-else><span>{{ t('panels.scan.incomplete') }}</span><UButton type="button" color="neutral" variant="ghost" class="min-h-[44px]" @click="loadText">{{ t('common.retry') }}</UButton></template>
         </div>
         <textarea v-else ref="textArea" :value="snapshot" readonly inputmode="none" :aria-label="t('terminal.keyboard.terminalText')" spellcheck="false" @select="updateSelection" @pointerup="updateSelection" @keyup="updateSelection" />
