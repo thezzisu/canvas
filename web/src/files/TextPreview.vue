@@ -269,7 +269,7 @@ watch(
     <pre
       v-else-if="!renderMarkdown"
       ref="readingElement"
-      class="text-preview-source"
+      class="text-preview-source outline-primary/25 -outline-offset-3 focus-visible:outline-3"
       :class="{ 'text-preview-wrap': wrap }"
       :aria-label="filename"
       tabindex="0"
@@ -277,7 +277,7 @@ watch(
     <div
       v-else
       ref="readingElement"
-      class="text-preview-markdown"
+      class="text-preview-markdown outline-primary/25 -outline-offset-3 focus-visible:outline-3"
       :aria-label="filename"
       tabindex="0"
     >
@@ -327,7 +327,6 @@ watch(
   -webkit-user-select: text;
   touch-action: pan-x pan-y;
   scrollbar-width: thin;
-  outline: none;
 }
 .text-preview-source {
   font-family: var(--content-font-family, monospace);
@@ -393,7 +392,7 @@ watch(
   justify-content: center;
   gap: 8px;
   min-height: 80px;
-  color: #8392a5;
-  font-size: 11px;
+  color: var(--ui-text-muted);
+  font-size: var(--text-xs);
 }
 </style>

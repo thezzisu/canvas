@@ -7,8 +7,8 @@ import { headerShortcuts } from '../lib/header-capacity'
 import UModal from '../components/CanvasModal.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
+import UTheme from '@nuxt/ui/components/Theme.vue'
 import { DialogTitle } from 'reka-ui'
-import Icon from '../components/Icon.vue'
 import FileIcon from './FileIcon.vue'
 import ImagePreview from './ImagePreview.vue'
 import MediaPreview from './MediaPreview.vue'
@@ -279,77 +279,82 @@ onBeforeUnmount(() => request?.abort())
           :class="{ 'cutout-actions': mobileHeader && expanded }"
           :style="{ '--header-actions-width': `${(textShortcuts.length + 3) * 44}px` }"
         >
-          <template v-for="key in textShortcuts" :key="key"
-            ><TextPreviewActions
-              v-if="showShortcut(key)"
-              :only="key"
-              :filename="downloadPreview.filename"
-              v-model:rendered="rendered"
-              v-model:wrap="wrap"
-              v-model:formatted="formatted"
-              v-model:highlighted="highlighted"
-              :source-preview="downloadPreview.sourcePreview"
-              :preview-busy="previewBusy"
-              @preview="previewSite"
-          /></template>
-          <UButton
-            v-if="!preparing && showShortcut('download')"
-            type="button"
-            color="neutral"
-            variant="ghost"
-            class="download-preview-button download-preview-download"
-            :aria-label="t('panels.file.download')"
-            :title="t('panels.file.download')"
-            @click="download"
-            ><Icon name="download" :size="16"
-          /></UButton>
-          <UDropdownMenu
-            v-if="mobileHeader && !preparing"
-            v-model:open="menuOpen"
-            :modal="false"
-            :items="menu"
-            :content="{ align: 'end', ...menuDismiss }"
-            :ui="{ content: 'card-action-menu download-preview-menu min-w-[160px]' }"
+          <UTheme
+            :props="{
+              button: {
+                color: 'neutral',
+                variant: 'ghost',
+                activeColor: 'primary',
+                activeVariant: 'soft',
+                size: mobileHeader ? 'xl' : 'md',
+                square: true,
+                class: mobileHeader
+                  ? 'min-w-[44px] min-h-[44px] flex-none justify-center'
+                  : undefined,
+              },
+            }"
           >
+            <template v-for="key in textShortcuts" :key="key"
+              ><TextPreviewActions
+                v-if="showShortcut(key)"
+                :only="key"
+                :filename="downloadPreview.filename"
+                v-model:rendered="rendered"
+                v-model:wrap="wrap"
+                v-model:formatted="formatted"
+                v-model:highlighted="highlighted"
+                :source-preview="downloadPreview.sourcePreview"
+                :preview-busy="previewBusy"
+                @preview="previewSite"
+            /></template>
             <UButton
-              ref="menuTrigger"
-              type="button"
-              color="neutral"
-              variant="ghost"
-              class="download-preview-button"
-              :aria-label="t('common.more')"
-              :title="t('common.more')"
-              ><Icon name="more" :size="17"
-            /></UButton>
-          </UDropdownMenu>
-          <UButton
-            v-else-if="!preparing"
-            type="button"
-            color="neutral"
-            variant="ghost"
-            class="download-preview-button download-preview-expand"
-            :aria-label="
-              t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')
-            "
-            :title="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')"
-            :aria-pressed="expanded"
-            @click="expanded = !expanded"
-            ><Icon :name="expanded ? 'collapse' : 'expand'" :size="16"
-          /></UButton>
-          <UButton
-            type="button"
-            color="neutral"
-            variant="ghost"
-            class="download-preview-button download-preview-close"
-            :aria-label="
-              t(mobile && expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.close')
-            "
-            :title="
-              t(mobile && expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.close')
-            "
-            @click="mobile && expanded ? (expanded = false) : dismissDownloadPreview()"
-            ><Icon :name="mobile && expanded ? 'collapse' : 'close'" :size="17"
-          /></UButton>
+              v-if="!preparing && showShortcut('download')"
+              class="download-preview-download"
+              icon="i-lucide-download"
+              :aria-label="t('panels.file.download')"
+              :title="t('panels.file.download')"
+              @click="download"
+            />
+            <UDropdownMenu
+              v-if="mobileHeader && !preparing"
+              v-model:open="menuOpen"
+              :modal="false"
+              :items="menu"
+              :content="{ align: 'end', ...menuDismiss }"
+              :ui="{ content: 'card-action-menu download-preview-menu min-w-[160px]' }"
+            >
+              <UButton
+                ref="menuTrigger"
+                icon="i-lucide-ellipsis"
+                :active="menuOpen"
+                :aria-label="t('common.more')"
+                :title="t('common.more')"
+              />
+            </UDropdownMenu>
+            <UButton
+              v-else-if="!preparing"
+              class="download-preview-expand"
+              :icon="expanded ? 'i-lucide-minimize' : 'i-lucide-maximize'"
+              :active="expanded"
+              :aria-label="
+                t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')
+              "
+              :title="t(expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.fullscreen')"
+              :aria-pressed="expanded"
+              @click="expanded = !expanded"
+            />
+            <UButton
+              class="download-preview-close"
+              :icon="mobile && expanded ? 'i-lucide-minimize' : 'i-lucide-x'"
+              :aria-label="
+                t(mobile && expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.close')
+              "
+              :title="
+                t(mobile && expanded ? 'panels.preview.exitFullscreen' : 'panels.preview.close')
+              "
+              @click="mobile && expanded ? (expanded = false) : dismissDownloadPreview()"
+            />
+          </UTheme>
         </div>
       </header>
     </template>
@@ -527,14 +532,13 @@ onBeforeUnmount(() => request?.abort())
 }
 .download-preview-header {
   container-type: inline-size;
-  --header-action-size: 28px;
   display: flex;
   align-items: center;
   height: 44px;
   min-height: 44px;
   padding: 0 8px 0 12px;
   gap: 0;
-  border-bottom: 1px solid #343a43;
+  border-bottom: 1px solid var(--ui-border);
 }
 .download-preview-title {
   display: block;
@@ -549,45 +553,27 @@ onBeforeUnmount(() => request?.abort())
   color: #d6dce5;
 }
 .download-preview-count {
-  font-size: 10px;
-  color: #8290a1;
+  font-size: var(--text-xs);
+  color: var(--ui-text-muted);
   font-variant-numeric: tabular-nums;
 }
 .download-preview-actions {
   display: flex;
   flex: none;
-  gap: 0;
+  gap: 2px;
   align-items: center;
-}
-.download-preview-button {
-  position: static;
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--header-action-size);
-  min-width: var(--header-action-size);
-  height: var(--header-action-size);
-  padding: 0;
-  color: #93a1b4;
-  border-radius: 5px;
-}
-.download-preview-button:hover {
-  background: #ffffff08;
-  color: #d4dfec;
 }
 .download-preview-mobile .download-preview-header {
-  container-type: inline-size;
-  --header-action-size: 44px;
   padding: 0;
 }
 .download-preview-mobile .download-preview-title {
   padding-left: 12px;
 }
 .download-preview-mobile .download-preview-actions {
+  gap: 0;
   min-width: 0;
   justify-content: flex-end;
-  width: min(var(--header-actions-width), max(88px, calc(100cqw - 88px)));
+  width: min(var(--header-actions-width), max(88px, round(down, 50cqw, 44px)));
 }
 .download-preview-modal {
   container-type: inline-size;
@@ -626,8 +612,8 @@ onBeforeUnmount(() => request?.abort())
   position: absolute;
   inset: 0;
   padding: 16px;
-  color: #8d9aaa;
-  font-size: 12px;
+  color: var(--ui-text-muted);
+  font-size: var(--text-sm);
   text-align: center;
   z-index: 1;
 }
@@ -644,9 +630,9 @@ onBeforeUnmount(() => request?.abort())
 
 .download-preview-truncated {
   padding: 7px 12px;
-  border-top: 1px solid #303947;
+  border-top: 1px solid var(--ui-border);
   flex: none;
-  font-size: 10px;
-  color: #8190a3;
+  font-size: var(--text-xs);
+  color: var(--ui-text-muted);
 }
 </style>

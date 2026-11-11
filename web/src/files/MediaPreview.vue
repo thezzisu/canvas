@@ -139,7 +139,7 @@ onBeforeUnmount(() => {
   gap: 12px;
   padding: 20px;
   text-align: center;
-  font-size: 12px;
-  color: #96a0af;
+  font-size: var(--text-sm);
+  color: var(--ui-text-muted);
 }
 </style>

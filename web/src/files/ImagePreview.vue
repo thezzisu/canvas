@@ -2,7 +2,8 @@
 import { useI18n } from 'vue-i18n'
 import { useMobileLayout } from '../lib/mobile-layout'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import Icon from '../components/Icon.vue'
+import UButton from '@nuxt/ui/components/Button.vue'
+import UTheme from '@nuxt/ui/components/Theme.vue'
 
 const { t, n } = useI18n()
 const touch = useMobileLayout()
@@ -315,35 +316,43 @@ onBeforeUnmount(() => {
       @mousedown.prevent.stop
       @dblclick.stop
     >
-      <button
-        type="button"
-        :aria-label="t('panels.image.zoomOut')"
-        :title="t('panels.image.zoomOut')"
-        :disabled="scale <= minimumScale + 0.00001"
-        @click="zoom(scale / 1.25)"
+      <UTheme
+        :props="{
+          button: {
+            color: 'neutral',
+            variant: 'ghost',
+            size: touch ? 'xl' : 'md',
+            square: true,
+            class: touch ? 'min-w-[44px] min-h-[44px] justify-center' : undefined,
+          },
+        }"
       >
-        <Icon name="minus" :size="16" />
-      </button>
-      <button
-        type="button"
-        :aria-label="t('panels.image.fit')"
-        :title="t('panels.image.fit')"
-        @click="fit"
-      >
-        <Icon name="fit" :size="16" />
-      </button>
-      <output class="image-preview-scale" :aria-label="t('panels.image.scale')">{{
-        percentage
-      }}</output>
-      <button
-        type="button"
-        :aria-label="t('panels.image.zoomIn')"
-        :title="t('panels.image.zoomIn')"
-        :disabled="scale >= maximumScale"
-        @click="zoom(scale * 1.25)"
-      >
-        <Icon name="plus" :size="16" />
-      </button>
+        <UButton
+          icon="i-lucide-minus"
+          :aria-label="t('panels.image.zoomOut')"
+          :title="t('panels.image.zoomOut')"
+          :disabled="scale <= minimumScale + 0.00001"
+          @click="zoom(scale / 1.25)"
+        />
+        <UButton
+          icon="i-lucide-fullscreen"
+          :aria-label="t('panels.image.fit')"
+          :title="t('panels.image.fit')"
+          @click="fit"
+        />
+        <output
+          class="image-preview-scale min-w-10 px-1 text-center text-xs text-muted tabular-nums"
+          :aria-label="t('panels.image.scale')"
+          >{{ percentage }}</output
+        >
+        <UButton
+          icon="i-lucide-plus"
+          :aria-label="t('panels.image.zoomIn')"
+          :title="t('panels.image.zoomIn')"
+          :disabled="scale >= maximumScale"
+          @click="zoom(scale * 1.25)"
+        />
+      </UTheme>
     </div>
   </div>
 </template>
@@ -392,53 +401,13 @@ onBeforeUnmount(() => {
 }
 .image-preview-tools {
   display: flex;
-  flex: 0 0 40px;
+  flex: none;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  height: 40px;
+  gap: 2px;
   padding: 3px;
-  border-top: 1px solid #303947;
-  background: #191f27;
-  color: #bdc9d8;
+  border-top: 1px solid var(--ui-border);
+  background: var(--ui-bg-muted);
   touch-action: manipulation;
-}
-.image-preview-tools button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-}
-.image-preview-tools button:hover:not(:disabled) {
-  background: #ffffff0d;
-  color: #e5c9b3;
-}
-.image-preview-tools button:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-.image-preview-tools button:focus-visible {
-  outline: 1px solid #d4ac8e;
-  outline-offset: 0;
-}
-.image-preview-scale {
-  min-width: 39px;
-  padding: 0 3px;
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-  color: #a1afc0;
-}
-.image-preview-touch .image-preview-tools button {
-  width: 44px;
-  min-width: 44px;
-  height: 44px;
 }
 </style>
