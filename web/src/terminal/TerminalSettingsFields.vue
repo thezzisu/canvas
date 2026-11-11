@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import UTabs from '@nuxt/ui/components/Tabs.vue'
+import USelect from '@nuxt/ui/components/Select.vue'
 import UFormField from '@nuxt/ui/components/FormField.vue'
 import UInputNumber from '@nuxt/ui/components/InputNumber.vue'
 import type { TerminalOverrides, TerminalSettings } from './terminal-settings'
@@ -43,18 +43,16 @@ const rows = computed(() =>
     },
   ].map((row) => ({
     ...row,
-    inherited:
-      props.defaults && props.modelValue[row.key] === undefined
-        ? t('terminal.settings.defaultValue', {
-            value: row.items.find((item) => item.value === String(props.defaults![row.key]))!.label,
-          })
-        : undefined,
+    // An inherited row has no value of its own: its placeholder names the default in effect.
+    inherited: props.defaults
+      ? row.items.find((item) => item.value === String(props.defaults![row.key]))!.label
+      : undefined,
     items: props.defaults
       ? [{ value: '__default', label: t('terminal.settings.inherit') }, ...row.items]
       : row.items,
   })),
 )
-function update(key: 'rightClick' | 'shiftPaste' | 'mouseHover', value: string | number) {
+function update(key: 'rightClick' | 'shiftPaste' | 'mouseHover', value: string) {
   const next = { ...props.modelValue }
   if (value === '__default') delete next[key]
   else Object.assign(next, { [key]: key === 'mouseHover' ? value === 'true' : value })
@@ -63,7 +61,6 @@ function update(key: 'rightClick' | 'shiftPaste' | 'mouseHover', value: string |
 const field = {
   root: 'items-center gap-4 @max-[360px]:flex-col @max-[360px]:items-stretch @max-[360px]:gap-2',
   container: 'w-60 shrink-0 @max-[360px]:w-full',
-  help: 'mt-1 text-xs',
 }
 </script>
 
@@ -73,25 +70,20 @@ const field = {
       v-for="row in rows"
       :key="row.key"
       :label="row.label"
-      :help="row.inherited"
       orientation="horizontal"
       :ui="field"
-      role="group"
-      :aria-label="row.label"
     >
-      <UTabs
-        :model-value="modelValue[row.key] === undefined ? '__default' : String(modelValue[row.key])"
+      <USelect
+        :model-value="modelValue[row.key] === undefined ? undefined : String(modelValue[row.key])"
         :items="row.items"
-        :content="false"
-        color="neutral"
-        variant="pill"
-        size="sm"
-        :ui="{
-          list: 'w-full',
-          trigger: 'flex-1 min-w-0 justify-center',
-          label: 'whitespace-normal text-center',
-        }"
+        :placeholder="row.inherited"
         :aria-label="row.label"
+        :title="
+          row.items.find((item) => item.value === String(modelValue[row.key]))?.label ??
+          row.inherited
+        "
+        color="neutral"
+        class="w-full"
         @update:model-value="(value) => update(row.key, value)"
       />
     </UFormField>
@@ -111,7 +103,6 @@ const field = {
         :format-options="{ style: 'unit', unit: 'percent' }"
         class="w-full"
         color="neutral"
-        size="sm"
         @update:model-value="
           (value) => emit('update:modelValue', { ...modelValue, maximizedZoom: value })
         "

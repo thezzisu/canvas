@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
+import UButton from '@nuxt/ui/components/Button.vue'
 import UModal from '../components/CanvasModal.vue'
 import TerminalSettingsFields from './TerminalSettingsFields.vue'
 import { useTerminalDefaults, type TerminalOverrides } from './terminal-settings'
@@ -42,6 +43,9 @@ function update(value: TerminalOverrides) {
         :defaults="defaults"
         @update:model-value="update"
       />
+    </template>
+    <template #footer>
+      <UButton @click="emit('close')">{{ t('common.done') }}</UButton>
     </template>
   </UModal>
 </template>
