@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import UIcon from '@nuxt/ui/components/Icon.vue'
+import UButton from '@nuxt/ui/components/Button.vue'
 import { useI18n } from 'vue-i18n'
 import type { NodeProps } from '@vue-flow/core'
-import Icon from '../components/Icon.vue'
 
 const { t } = useI18n()
 
@@ -19,9 +18,19 @@ defineProps<
 </script>
 
 <template>
-  <button
-    class="overview-create nodrag nopan"
-    :class="data.spaceId ? 'overview-create-tab' : 'overview-create-space'"
+  <UButton
+    color="neutral"
+    variant="ghost"
+    class="overview-create nodrag nopan size-full"
+    :class="
+      data.spaceId
+        ? 'overview-create-tab flex-col justify-center gap-2.5 border border-dashed border-accented'
+        : 'overview-create-space'
+    "
+    :size="data.spaceId ? 'md' : 'xs'"
+    :icon="data.spaceId ? 'i-lucide-square-plus' : 'i-lucide-layers'"
+    :label="t(data.spaceId ? 'panels.overview.newTab' : 'panels.overview.newSpace')"
+    :ui="{ label: 'flex-none', leadingIcon: data.spaceId ? 'size-6' : undefined }"
     :data-source-id="data.sourceId"
     :data-space-id="data.spaceId"
     :aria-label="
@@ -30,22 +39,17 @@ defineProps<
         context: data.context,
       })
     "
-    :aria-busy="data.pending()"
+    :loading="data.pending()"
     :disabled="!data.available || data.pending()"
     :title="data.available ? undefined : t('panels.overview.unavailable')"
     @pointerdown.stop
     @click.stop="data.create()"
     @dblclick.stop
   >
-    <UIcon
-      v-if="data.pending()"
-      name="i-lucide-loader-circle"
-      class="spinner size-3.5 shrink-0 motion-safe:animate-spin"
-    />
-    <Icon v-else :name="data.spaceId ? 'tab-plus' : 'layers'" :size="data.spaceId ? 22 : 15" />
-    <span>{{ t(data.spaceId ? 'panels.overview.newTab' : 'panels.overview.newSpace') }}</span>
-    <i v-if="!data.spaceId" />
-  </button>
+    <template v-if="!data.spaceId" #trailing
+      ><span class="ms-1 flex-1 border-t border-dashed border-default"
+    /></template>
+  </UButton>
 </template>
 
 <style scoped>
@@ -54,46 +58,5 @@ defineProps<
   border: 0;
   background: transparent;
   pointer-events: auto !important;
-}
-.overview-create {
-  width: 100%;
-  height: 100%;
-  color: #80909f;
-  cursor: pointer;
-}
-.overview-create:hover:not(:disabled),
-.overview-create:focus-visible {
-  color: #dfbb9b;
-}
-.overview-create:focus-visible {
-  outline: 2px solid #c59d7c;
-  outline-offset: 3px;
-}
-.overview-create:disabled {
-  cursor: default;
-  opacity: 0.45;
-}
-.overview-create-tab {
-  flex-direction: column;
-  gap: 10px;
-  border: 1px dashed #46505b;
-  border-radius: 8px;
-  background: #1b202633;
-  font-size: 12px;
-}
-.overview-create-tab:hover:not(:disabled) {
-  background: #29262055;
-  border-color: #967f68;
-}
-.overview-create-space {
-  justify-content: flex-start;
-  gap: 8px;
-  font-size: 10px;
-  border-radius: 4px;
-}
-.overview-create-space i {
-  flex: 1;
-  border-top: 1px dashed #45505c66;
-  margin-left: 4px;
 }
 </style>

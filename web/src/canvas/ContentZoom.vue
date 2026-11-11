@@ -4,7 +4,6 @@ import { useEventListener } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
-import Icon from '../components/Icon.vue'
 import { contentZoomLimits } from './content-zoom'
 import type { ZoomReset } from './content-zoom-menu'
 
@@ -44,15 +43,18 @@ useEventListener(
   },
   { capture: true },
 )
+const touchTarget = computed(() => (props.mobile ? 'min-w-[44px] min-h-[44px] justify-center' : ''))
 function change(value: number) {
   emit('update:modelValue', Math.max(contentZoomLimits.min, Math.min(contentZoomLimits.max, value)))
 }
 </script>
 
 <template>
-  <UPopover v-model:open="open" :content="content" :ui="{ content: 'content-zoom-popover' }">
+  <UPopover v-model:open="open" :content="content" :ui="{ content: 'p-1' }">
     <UButton
-      class="content-zoom-trigger"
+      class="content-zoom-trigger tabular-nums"
+      :icon="mobile ? 'i-lucide-zoom-in' : undefined"
+      :label="mobile ? undefined : percentage"
       :active="open"
       data-preserve-content-focus
       :title="label"
@@ -60,11 +62,10 @@ function change(value: number) {
       :aria-expanded="open"
       @pointerdown.stop.prevent="pointer = true"
       @keydown="pointer = false"
-      ><Icon v-if="mobile" name="zoom-in" :size="18" /><span v-else>{{ percentage }}</span></UButton
-    >
+    />
     <template #content
       ><div
-        class="content-zoom-controls"
+        class="content-zoom-controls flex items-center gap-0.5"
         data-preserve-content-focus
         role="group"
         :aria-label="label"
@@ -75,82 +76,42 @@ function change(value: number) {
         <UButton
           color="neutral"
           variant="ghost"
+          :size="mobile ? 'xl' : 'md'"
+          square
+          icon="i-lucide-minus"
+          :class="touchTarget"
           :disabled="disabled || modelValue <= contentZoomLimits.min"
           :aria-label="t('common.zoomOut')"
           :title="t('common.zoomOut')"
           @pointerdown.prevent
           @click="change(modelValue - contentZoomLimits.step)"
-          ><Icon name="minus" :size="17"
-        /></UButton>
+        />
         <UButton
           color="neutral"
           variant="ghost"
-          class="content-zoom-reset"
+          :size="mobile ? 'xl' : 'md'"
+          class="content-zoom-reset min-w-14 justify-center tabular-nums"
+          :class="touchTarget"
+          :label="percentage"
           :disabled="disabled"
           :aria-label="resetLabel || t('common.resetZoom')"
           :title="resetLabel || t('common.resetZoom')"
           @pointerdown.prevent
           @click="reset ? reset() : change(100)"
-          >{{ percentage }}</UButton
-        >
+        />
         <UButton
           color="neutral"
           variant="ghost"
+          :size="mobile ? 'xl' : 'md'"
+          square
+          icon="i-lucide-plus"
+          :class="touchTarget"
           :disabled="disabled || modelValue >= contentZoomLimits.max"
           :aria-label="t('common.zoomIn')"
           :title="t('common.zoomIn')"
           @pointerdown.prevent
           @click="change(modelValue + contentZoomLimits.step)"
-          ><Icon name="plus" :size="17"
-        /></UButton></div
+        /></div
     ></template>
   </UPopover>
 </template>
-
-<style scoped>
-.content-zoom-trigger {
-  flex-basis: auto;
-  width: 43px;
-  min-width: 43px;
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-}
-.mobile-layout .content-zoom-trigger {
-  width: 44px;
-  min-width: 44px;
-  height: 44px;
-}
-</style>
-
-<style>
-.content-zoom-popover {
-  padding: 4px;
-  background: #252b34;
-  border: 1px solid #414b59;
-  border-radius: 8px;
-  box-shadow: 0 8px 24px #0005;
-}
-.content-zoom-controls {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-.content-zoom-controls > button {
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  padding: 0;
-  color: #bac6d6;
-  border-radius: 5px;
-}
-.content-zoom-controls > .content-zoom-reset {
-  width: 60px;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-.mobile-layout .content-zoom-controls > button {
-  height: 44px;
-  min-width: 44px;
-}
-</style>

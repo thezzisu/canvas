@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import UButton from '@nuxt/ui/components/Button.vue'
+import UInput from '@nuxt/ui/components/Input.vue'
+import UPopover from '@nuxt/ui/components/Popover.vue'
 import { useI18n } from 'vue-i18n'
 import { computed, defineAsyncComponent, nextTick, ref, watch } from 'vue'
 import type { NodeProps } from '@vue-flow/core'
 import { NodeResizer } from '@vue-flow/node-resizer'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import type { NoteData, NotePatch } from '../api/types'
-import Icon from '../components/Icon.vue'
 import CardLayoutControls from '../canvas/CardLayoutControls.vue'
 import { useLayoutCard } from '../canvas/layout-editing'
 import { noteText } from './note-document'
@@ -79,10 +80,23 @@ const colors = ['yellow', 'blue', 'green', 'pink', 'neutral'] as const
 const title = ref(props.data.title)
 const content = ref(props.data.content)
 const editingTitle = ref(false)
-const titleInput = ref<HTMLInputElement>()
+const titleField = ref<{ inputRef: HTMLInputElement | null }>()
+const titleInput = computed(() => titleField.value?.inputRef)
 const colorOpen = ref(false)
-const colorPicker = ref<HTMLElement>()
-usePointerDismiss(colorOpen, colorPicker)
+const colorTrigger = ref<{ $el: HTMLElement }>()
+// Below the header's start, so the open picker never covers the title.
+const colorContent = {
+  side: 'bottom' as const,
+  align: 'start' as const,
+  sideOffset: 6,
+  ...usePointerDismiss(
+    colorOpen,
+    computed(() => colorTrigger.value?.$el),
+  ),
+}
+const touchTarget = computed(() =>
+  props.data.mobile && props.data.focus ? 'min-w-[44px] min-h-[44px] justify-center' : '',
+)
 const color = computed(() => (colors.includes(props.data.color) ? props.data.color : 'yellow'))
 // Pending fields are merged above remote snapshots by the parent. Fields edited
 // in another browser can therefore update here without replacing a local draft.
@@ -119,12 +133,6 @@ function escapeTitle(event: KeyboardEvent) {
   event.preventDefault()
   event.stopPropagation()
   titleInput.value?.blur()
-}
-function escapeColors(event: KeyboardEvent) {
-  if (!colorOpen.value || event.isComposing || event.keyCode === 229) return
-  event.preventDefault()
-  event.stopPropagation()
-  colorOpen.value = false
 }
 function setColor(value: (typeof colors)[number]) {
   emitChange({ color: value })
@@ -190,48 +198,67 @@ function dragNote(event: DragEvent) {
       :inert="mobilePreview || undefined"
       :aria-hidden="mobilePreview || undefined"
     >
-      <div
-        ref="colorPicker"
-        class="note-color-picker nodrag"
-        :class="{ 'cutout-status': data.focus }"
-      >
-        <button
-          class="note-color-dot"
+      <UPopover v-model:open="colorOpen" :content="colorContent" :ui="{ content: 'p-1' }">
+        <UButton
+          ref="colorTrigger"
+          color="neutral"
+          variant="ghost"
+          :size="data.mobile && data.focus ? 'xl' : 'md'"
+          square
+          class="note-color-trigger nodrag"
+          :class="[touchTarget, { 'cutout-status': data.focus }]"
+          :active="colorOpen"
           :title="t('panels.note.color')"
           :aria-label="t('panels.note.color')"
-          :aria-expanded="colorOpen"
-          @click.stop="colorOpen = !colorOpen"
-          @keydown.esc="escapeColors"
-        />
-        <div
-          v-if="colorOpen"
-          class="note-colors"
-          role="group"
-          :aria-label="t('panels.note.color')"
           @pointerdown.stop
-          @keydown.esc="escapeColors"
-        >
-          <button
-            v-for="item in colors"
-            :key="item"
-            class="note-color-choice"
-            :style="{ background: noteColor(item) }"
-            :aria-label="t(`panels.note.colors.${item}`)"
-            :title="t(`panels.note.colors.${item}`)"
-            :aria-pressed="color === item"
-            @click="setColor(item)"
-          />
-        </div>
-      </div>
-      <input
+          @click.stop
+          ><span class="grid size-5 place-items-center"
+            ><span
+              class="note-color-dot size-2.5 rounded-full ring ring-white/15"
+              :style="{ background: noteColor(color) }" /></span
+        ></UButton>
+        <template #content
+          ><div
+            class="flex items-center gap-0.5"
+            role="group"
+            :aria-label="t('panels.note.color')"
+            @pointerdown.stop
+          >
+            <UButton
+              v-for="item in colors"
+              :key="item"
+              color="neutral"
+              variant="ghost"
+              active-variant="soft"
+              :size="data.mobile ? 'xl' : 'md'"
+              square
+              :class="data.mobile ? 'min-w-[44px] min-h-[44px] justify-center' : ''"
+              :active="color === item"
+              :aria-label="t(`panels.note.colors.${item}`)"
+              :title="t(`panels.note.colors.${item}`)"
+              :aria-pressed="color === item"
+              @click="setColor(item)"
+              ><span class="size-3.5 rounded-full" :style="{ background: noteColor(item) }"
+            /></UButton></div
+        ></template>
+      </UPopover>
+      <UInput
         v-if="editingTitle"
-        ref="titleInput"
+        ref="titleField"
         v-model="title"
-        class="note-title nodrag"
+        variant="none"
+        size="xs"
+        class="note-title-input nodrag min-w-0 flex-1"
         :class="{ 'cutout-title': data.focus }"
+        :ui="{
+          base: [
+            'px-0 text-xs font-medium selection:bg-primary/30',
+            data.mobile && 'px-1.5 text-[16px]/5',
+          ],
+        }"
         :aria-label="t('panels.note.title')"
         maxlength="200"
-        @input="emitChange({ title })"
+        @update:model-value="emitChange({ title })"
         @blur="finishTitle"
         @keydown.enter.stop.prevent="titleInput?.blur()"
         @keydown.esc="escapeTitle"
@@ -266,15 +293,15 @@ function dragNote(event: DragEvent) {
         <template #copy
           ><UButton
             class="note-copy"
+            icon="i-lucide-copy"
             :disabled="!content"
             :draggable="!!content"
-            :title="t('panels.note.copyOrDrag')"
+            :title="t('panels.note.copy')"
             :aria-label="t('panels.note.copy')"
             @pointerdown.stop
             @click="copyNote"
             @dragstart="dragNote"
-            ><Icon name="copy" :size="15" /></UButton
-        ></template>
+        /></template>
       </CardHeaderActions>
     </header>
     <div
@@ -335,8 +362,5 @@ function dragNote(event: DragEvent) {
 }
 .note-content:has(.note-file-dropcursor) {
   box-shadow: inset 0 0 0 2px var(--ui-primary);
-}
-.note-copy:disabled {
-  cursor: default;
 }
 </style>

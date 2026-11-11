@@ -6,7 +6,6 @@ import { useI18n } from 'vue-i18n'
 import UDropdownMenu, { type DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UTheme from '@nuxt/ui/components/Theme.vue'
-import Icon from '../components/Icon.vue'
 import { usePointerDismiss } from '../lib/pointer-dismiss'
 import { useCardMenu } from './card-menu'
 
@@ -127,7 +126,8 @@ useEventListener(
     @click.stop
     @dblclick.stop
   >
-    <!-- Every header action is a ghost UButton that turns primary (the card's color) while active. -->
+    <!-- Every header action is a ghost UButton that turns primary (the card's color) while active;
+         a focused phone card gives each a 44px touch target. -->
     <UTheme
       :props="{
         button: {
@@ -135,8 +135,9 @@ useEventListener(
           variant: 'ghost',
           activeColor: 'primary',
           activeVariant: 'soft',
-          size: 'xs',
+          size: mobile ? 'xl' : 'md',
           square: true,
+          class: mobile ? 'min-w-[44px] min-h-[44px] flex-none justify-center' : undefined,
         },
       }"
     >
@@ -146,11 +147,11 @@ useEventListener(
       <UButton
         v-if="visible('add')"
         class="card-add"
+        icon="i-lucide-layers"
         :title="addLabel"
         :aria-label="addLabel"
         @click="emit('add')"
-        ><Icon name="layers" :size="15"
-      /></UButton>
+      />
       <template v-for="key in trailing" :key="key"
         ><slot v-if="shortcuts?.includes(key) && visible(key)" :name="key"
       /></template>
@@ -164,16 +165,17 @@ useEventListener(
         <UButton
           ref="triggerButton"
           class="card-more"
+          icon="i-lucide-ellipsis"
           :active="open"
           :aria-label="moreLabel || t('common.more')"
           :title="moreLabel || t('common.more')"
           @pointerdown="pointerOpen"
           @keydown="preserveInput = false"
-          ><Icon name="more" :size="15"
-        /></UButton>
+        />
       </UDropdownMenu>
       <UButton
         class="card-maximize"
+        :icon="expanded ? 'i-lucide-minimize' : 'i-lucide-maximize'"
         :disabled="disabled"
         :title="
           expanded
@@ -186,16 +188,15 @@ useEventListener(
             : maximizeLabel || t('common.maximize')
         "
         @click="emit('toggle')"
-        ><Icon :name="expanded ? 'collapse' : 'expand'" :size="15"
-      /></UButton>
+      />
       <UButton
         v-if="removable && visible('remove')"
         class="card-remove"
+        icon="i-lucide-x"
         :title="removeLabel || t('common.close')"
         :aria-label="removeLabel || t('common.close')"
         @click="emit('remove')"
-        ><Icon name="close" :size="15"
-      /></UButton>
+      />
     </UTheme>
   </div>
 </template>
@@ -211,40 +212,27 @@ useEventListener(
   pointer-events: none;
   transition: opacity 0.12s;
 }
-:is(.terminal-card, .note-card, .file-card):is(:hover, :focus-within) .card-header-actions,
+:is(.terminal-card, .note-card, .file-card):focus-within .card-header-actions,
 .vue-flow__node.selected .card-header-actions,
 .terminal-card.focused .card-header-actions,
-.card-focused .card-header-actions {
-  opacity: 1;
-  pointer-events: auto;
-}
-.card-header-actions > button {
-  justify-content: center;
-  flex: 0 0 24px;
-  width: 24px;
-  min-width: 24px;
-  height: 24px;
-  -webkit-tap-highlight-color: transparent;
-}
-.card-header-mobile {
-  --header-action-size: 44px;
-  --text-preview-action-gap: 0px;
-  gap: 0;
-  opacity: 1;
-  pointer-events: auto;
-  justify-content: flex-end;
-  min-width: 0;
-  width: min(var(--header-actions-width), max(88px, calc(100cqw - 88px)));
-}
-.card-header-mobile > button {
-  width: 44px;
-  min-width: 44px;
-  height: 44px;
-  flex-basis: 44px;
-}
+.card-focused .card-header-actions,
 .mobile-layout .card-header-actions {
   opacity: 1;
   pointer-events: auto;
+}
+/* A focused phone card: 44px touch targets, and the title keeps at least half the header;
+   shortcuts that do not fit move into the overflow menu. */
+.card-header-mobile {
+  gap: 0;
+  justify-content: flex-end;
+  min-width: 0;
+  width: min(var(--header-actions-width), max(88px, round(down, 50cqw, 44px)));
+}
+@media (hover: hover) {
+  :is(.terminal-card, .note-card, .file-card):hover .card-header-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .card-header-actions {

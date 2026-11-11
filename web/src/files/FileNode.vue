@@ -7,7 +7,6 @@ import type { NodeProps } from '@vue-flow/core'
 import { NodeResizer } from '@vue-flow/node-resizer'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import type { FileData } from '../api/types'
-import Icon from '../components/Icon.vue'
 import FileIcon from './FileIcon.vue'
 import CardLayoutControls from '../canvas/CardLayoutControls.vue'
 import { useLayoutCard } from '../canvas/layout-editing'
@@ -296,19 +295,19 @@ const size = computed(() => {
         <template #copy
           ><UButton
             class="file-copy"
+            icon="i-lucide-copy"
             draggable="true"
-            :title="t('fileTransfer.copyOrDrag')"
+            :title="t('fileTransfer.copy')"
             :aria-label="t('fileTransfer.copy')"
             @pointerdown.stop
             @click="copyFile"
             @dragstart="dragFile"
-            ><Icon name="copy" :size="15" /></UButton
-        ></template>
+        /></template>
       </CardHeaderActions>
     </header>
     <div
       ref="fileBody"
-      class="file-body card-content nodrag nopan"
+      class="file-body card-content nodrag nopan outline-primary/25 -outline-offset-3 focus-visible:outline-3"
       :style="{ '--content-zoom': data.focus ? zoom / 100 : 1 }"
       :data-content-active="contentActive"
       :tabindex="mobilePreview ? -1 : 0"
@@ -329,7 +328,9 @@ const size = computed(() => {
       >
         <template v-if="ticketError"
           ><span>{{ t('panels.preview.unavailable') }}</span
-          ><button type="button" @click="retryTicket">{{ t('common.retry') }}</button></template
+          ><UButton variant="link" size="xs" @click="retryTicket">{{
+            t('common.retry')
+          }}</UButton></template
         >
         <template v-else
           ><UIcon
@@ -366,7 +367,7 @@ const size = computed(() => {
         </div>
         <div v-else-if="textError" class="file-text-status" role="alert">
           <span>{{ textError instanceof Error ? textError.message : t(textError) }}</span
-          ><button type="button" @click="loadText">{{ t('common.retry') }}</button>
+          ><UButton variant="link" size="xs" @click="loadText">{{ t('common.retry') }}</UButton>
         </div>
         <TextPreview
           v-else
@@ -382,14 +383,16 @@ const size = computed(() => {
         />
         <div v-if="truncated" class="file-text-truncated">
           <span>{{ t('panels.preview.truncated') }}</span
-          ><button type="button" @click="download">{{ t('panels.file.downloadOriginal') }}</button>
+          ><UButton variant="link" size="xs" class="shrink-0 p-0" @click="download">{{
+            t('panels.file.downloadOriginal')
+          }}</UButton>
         </div>
       </div>
       <template v-else-if="preview === 'pdf' && pdfPreview && url">
         <div ref="pdfHost" class="file-preview-host" />
         <div
           v-if="!data.mobile && !contentActive"
-          class="file-preview-activate card-content-activate"
+          class="file-preview-activate card-content-activate outline-primary/25 -outline-offset-3 focus-visible:outline-3"
           role="button"
           tabindex="0"
           :aria-label="t('common.openCard', { name: data.asset.filename })"
@@ -398,15 +401,17 @@ const size = computed(() => {
           @keydown.space.stop.prevent="focusContent"
         />
       </template>
-      <button
+      <UButton
         v-else
-        type="button"
-        class="file-download"
-        @click="download"
+        color="neutral"
+        variant="ghost"
+        icon="i-lucide-file"
+        :label="data.asset.filename"
+        class="file-download min-w-0 flex-1 flex-col justify-center gap-3.5 rounded-none p-6"
+        :ui="{ leadingIcon: 'size-10', label: 'max-w-full' }"
         :aria-label="t('panels.file.downloadNamed', { name: data.asset.filename })"
-      >
-        <Icon name="file" :size="42" /><span>{{ data.asset.filename }}</span>
-      </button>
+        @click="download"
+      />
     </div>
     <CardPreview
       v-if="mobilePreview && !editing"
@@ -425,15 +430,13 @@ const size = computed(() => {
 
 <style scoped>
 .file-card {
-  --header-action-size: 24px;
-  --text-preview-action-gap: 2px;
   position: relative;
   height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   border: 1px solid #3a3d46;
-  border-radius: 7px;
+  border-radius: calc(var(--ui-radius) * 2);
   background: #1b1d23;
   box-shadow: 0 5px 18px #0003;
 }
@@ -468,10 +471,6 @@ const size = computed(() => {
 .file-copy:active {
   cursor: grabbing;
 }
-.file-download:focus-visible {
-  outline: 2px solid #8c9ef8;
-  outline-offset: -2px;
-}
 .file-body {
   flex: 1;
   min-height: 0;
@@ -505,12 +504,8 @@ const size = computed(() => {
   justify-content: center;
   gap: 8px;
   padding: 12px;
-  color: #8b98a9;
-  font-size: 11px;
-}
-.file-text-status button {
-  color: #d4ac8e;
-  font-size: 11px;
+  color: var(--ui-text-muted);
+  font-size: var(--text-xs);
 }
 .file-text-truncated {
   display: flex;
@@ -519,37 +514,9 @@ const size = computed(() => {
   gap: 8px;
   flex: 0 0 auto;
   padding: 7px 10px;
-  border-top: 1px solid #303947;
-  font-size: 10px;
-  color: #7f8da1;
-}
-.file-text-truncated button {
-  flex-shrink: 0;
-  color: #c7aa93;
-  text-decoration: none;
-}
-.file-download {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 14px;
-  padding: 24px;
-  color: #a9b0be;
-  text-decoration: none;
-}
-.file-download:hover {
-  color: #e0e3ea;
-  background: #ffffff04;
-}
-.file-download span {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
+  border-top: 1px solid var(--ui-border);
+  font-size: var(--text-xs);
+  color: var(--ui-text-muted);
 }
 .card-focused .file-header {
   cursor: default;

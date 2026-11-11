@@ -35,7 +35,7 @@ const icons = {
 <template>
   <template v-if="layout?.active.value || waiting">
     <div
-      class="card-layout-mask"
+      class="card-layout-mask outline-primary/25 -outline-offset-3 focus-visible:outline-3"
       :class="{ 'layout-selected': selected, 'layout-waiting': !layout?.active.value }"
       :style="{ '--layout-pixel': `${1 / zoom}px` }"
       :role="layout?.active.value ? 'button' : 'status'"
@@ -104,11 +104,10 @@ const icons = {
   display: grid;
   place-items: center;
   background: var(--terminal-transition-background, #1b1f26);
-  border-radius: 7px;
+  border-radius: calc(var(--ui-radius) * 2);
   touch-action: none;
-  color: #b8c3d0;
+  color: var(--ui-text-muted);
   cursor: grab;
-  outline: none;
   pointer-events: auto;
 }
 .card-layout-mask.layout-selected {

@@ -35,7 +35,12 @@ const shown = computed(() =>
 </script>
 
 <template>
-  <div class="text-preview-actions nodrag nopan" @pointerdown.stop @click.stop @dblclick.stop>
+  <div
+    class="text-preview-actions nodrag nopan flex flex-none items-center gap-0.5"
+    @pointerdown.stop
+    @click.stop
+    @dblclick.stop
+  >
     <UButton
       v-for="item in shown"
       :key="item.slot"
@@ -43,7 +48,7 @@ const shown = computed(() =>
       :icon="item.icon"
       :color="item.checked ? 'primary' : 'neutral'"
       :variant="item.checked ? 'soft' : 'ghost'"
-      size="xs"
+      square
       class="text-preview-action"
       :aria-label="item.label"
       :title="item.title || item.label"
@@ -57,23 +62,3 @@ const shown = computed(() =>
     />
   </div>
 </template>
-
-<style scoped>
-.text-preview-actions {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: var(--text-preview-action-gap, 0);
-}
-.text-preview-action {
-  display: flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: var(--header-action-size, 24px);
-  min-width: var(--header-action-size, 24px);
-  height: var(--header-action-size, 24px);
-  padding: 0;
-  border-radius: 5px;
-}
-</style>

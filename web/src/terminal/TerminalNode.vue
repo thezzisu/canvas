@@ -14,7 +14,6 @@ import type { NodeProps } from '@vue-flow/core'
 import UButton from '@nuxt/ui/components/Button.vue'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import { NodeResizer } from '@vue-flow/node-resizer'
-import Icon from '../components/Icon.vue'
 import UploadProgress from '../components/UploadProgress.vue'
 import CardLayoutControls from '../canvas/CardLayoutControls.vue'
 import { useLayoutCard } from '../canvas/layout-editing'
@@ -768,20 +767,18 @@ async function resized(event: { params: { width: number; height: number; x: numb
         <template v-for="jump in canvasJumps" :key="jump.direction" #[jump.direction]
           ><UButton
             :class="`card-${jump.direction}-canvas`"
+            :icon="jump.direction === 'next' ? 'i-lucide-chevron-down' : 'i-lucide-chevron-up'"
             data-preserve-content-focus
             :disabled="!jump.target"
             :title="jump.label"
             :aria-label="jump.label"
             @pointerdown.prevent
             @click="jumpCanvas(jump.direction, $event)"
-            ><Icon
-              name="down"
-              :size="15"
-              :style="{ transform: jump.direction === 'next' ? '' : 'rotate(180deg)' }" /></UButton
-        ></template>
+        /></template>
         <template #keyboard
           ><UButton
             class="terminal-keyboard"
+            icon="i-lucide-keyboard"
             :title="
               status.keyboardRequested
                 ? t('terminal.action.hideKeyboard')
@@ -796,11 +793,11 @@ async function resized(event: { params: { width: number; height: number; x: numb
             :aria-pressed="!!status.keyboardRequested"
             @pointerdown.prevent
             @click="toggleKeyboard"
-            ><Icon name="keyboard" :size="18" /></UButton
-        ></template>
+        /></template>
         <template #composer
           ><UButton
             class="terminal-composer-toggle"
+            icon="i-lucide-square-pen"
             :class="{ 'has-draft': composerDraft }"
             :title="composerLabel"
             :aria-label="composerLabel"
@@ -808,8 +805,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
             :aria-pressed="composerOpen"
             @pointerdown.prevent
             @click="toggleComposer"
-            ><Icon name="compose" :size="15" /></UButton
-        ></template>
+        /></template>
         <template #zoom
           ><ContentZoom
             v-model="zoom"
@@ -880,7 +876,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
         v-if="app"
         v-show="showApp && trustedApp"
         ref="captureBody"
-        class="capture-body card-content nodrag nopan nowheel"
+        class="capture-body card-content nodrag nopan nowheel outline-primary/25 -outline-offset-3 focus-visible:outline-3"
         :data-content-active="captureActive"
         :tabindex="mobilePreview ? -1 : 0"
         :inert="mobilePreview || editing || undefined"
@@ -893,7 +889,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
         <div ref="captureHost" class="capture-host" />
         <div
           v-if="!data.mobile && !captureActive"
-          class="capture-activate card-content-activate"
+          class="capture-activate card-content-activate outline-primary/25 -outline-offset-3 focus-visible:outline-3"
           role="button"
           tabindex="0"
           :aria-label="t('common.openCard', { name: app.title })"
@@ -907,7 +903,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
         class="capture-trust-prompt card-content"
         :inert="mobilePreview || editing || undefined"
       >
-        <Icon name="globe" :size="32" /><span>{{ app?.title }}</span
+        <UIcon name="i-lucide-globe" class="size-8" /><span>{{ app?.title }}</span
         ><UButton v-if="!mobilePreview" color="neutral" variant="outline" @click="activateApp">{{
           t('terminal.capture.app')
         }}</UButton>
@@ -1030,7 +1026,9 @@ async function resized(event: { params: { width: number; height: number; x: numb
       </div>
       <div v-if="closed" class="terminal-closed" role="status">{{ t('terminal.closed') }}</div>
       <div v-else-if="!keepTerminal" class="terminal-unavailable">
-        <Icon name="terminal" :size="28" /><strong>{{ t('terminal.unavailable') }}</strong>
+        <UIcon name="i-lucide-terminal" class="size-7" /><strong>{{
+          t('terminal.unavailable')
+        }}</strong>
       </div>
       <div
         v-if="!closed && data.available && status.status === 'disconnected'"
@@ -1044,7 +1042,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
           variant="link"
           size="xs"
           icon="i-lucide-refresh-cw"
-          class="terminal-reconnect"
+          class="terminal-reconnect shrink-0"
           @click.stop="action('reconnect')"
           >{{ t('terminal.connection.reconnect') }}</UButton
         >
@@ -1073,7 +1071,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     </div>
     <div
       v-if="mobilePreview && !closed && !editing"
-      class="terminal-preview-button"
+      class="terminal-preview-button outline-primary/25 -outline-offset-3 focus-visible:outline-3"
       role="button"
       tabindex="0"
       :aria-label="t('terminal.action.openWindow', { name: label })"
@@ -1228,11 +1226,6 @@ async function resized(event: { params: { width: number; height: number; x: numb
   flex-direction: column;
   gap: 10px;
 }
-.terminal-maximized > button {
-  padding: 5px 9px;
-  gap: 5px;
-  min-height: 28px;
-}
 .terminal-drop-target {
   outline: 1px solid var(--ui-primary);
   outline-offset: -3px;
@@ -1248,7 +1241,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
   border-radius: 4px;
   background: #242930f2;
   color: #b6c0ce;
-  font-size: 10px;
+  font-size: var(--text-xs);
   pointer-events: none;
 }
 .terminal-copy-notice.copy-failed {
@@ -1287,12 +1280,8 @@ async function resized(event: { params: { width: number; height: number; x: numb
   z-index: 4;
   pointer-events: auto;
   cursor: pointer;
-  outline: none;
   touch-action: none;
   -webkit-tap-highlight-color: transparent;
-}
-.terminal-preview-button:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--ui-primary);
 }
 .terminal-mobile-preview .terminal-host {
   pointer-events: none;
@@ -1328,9 +1317,8 @@ async function resized(event: { params: { width: number; height: number; x: numb
   container-type: inline-size;
 }
 .terminal-mobile.focused :deep(.terminal-status-trigger) {
-  width: 44px;
-  height: 44px;
   min-width: 44px;
+  min-height: 44px;
 }
 .terminal-mobile.focused .terminal-host {
   min-height: 0;
@@ -1389,7 +1377,6 @@ async function resized(event: { params: { width: number; height: number; x: numb
   z-index: 5;
   inset: 0;
   background: #fff;
-  outline: none;
 }
 .capture-host,
 .capture-body :deep(.capture-frame) {
@@ -1402,7 +1389,6 @@ async function resized(event: { params: { width: number; height: number; x: numb
   position: absolute;
   inset: 0;
   cursor: pointer;
-  outline: none;
 }
 .terminal-mobile.focused .capture-toolbar {
   flex-basis: 44px;
