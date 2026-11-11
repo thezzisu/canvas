@@ -75,6 +75,9 @@ function addConnection() {
 <template>
   <DefineNavigation>
     <div class="sidebar-navigation">
+      <div class="nav-section-label">
+        <span>{{ t('app.features') }}</span>
+      </div>
       <nav class="feature-nav" :aria-label="t('app.features')">
         <CanvasNavItem
           class="feature-nav-item"
