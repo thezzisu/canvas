@@ -40,23 +40,27 @@ export function replaceNoteDocument(state: EditorState, content: string): Transa
   return tr.replace(start, a, next.slice(start, b))
 }
 
-/** Keep a pending range on the same content while the editor changes around it. */
+/**
+ * Keep a pending range on the same content while the editor changes around it. Both ends
+ * keep to the text before them, so text typed at the insertion point lands after the
+ * pending files, as it would after the final chips.
+ */
 export function mapNoteRange(range: NoteRange, tr: Transaction) {
   const before = notePosition(tr.before, range.offset), end = notePosition(tr.before, range.end)
-  range.offset = noteOffset(tr.doc, tr.mapping.map(before))
+  range.offset = noteOffset(tr.doc, tr.mapping.map(before, -1))
   range.end = Math.max(range.offset, noteOffset(tr.doc, tr.mapping.map(end, -1)))
 }
 
 /**
- * Display-only chips where a pending upload will insert its files. Text typed at
- * that point maps in front of the insertion, so the widget follows the caret.
+ * Display-only chips where a pending upload will insert its files. Like the final
+ * chips they are drawn before a caret at that point, which types after them.
  */
 export function uploadPlaceholder(doc: ProseMirrorNode, upload: { offset: number; files: readonly string[] } | undefined,
   render: (files: readonly string[]) => HTMLElement, destroy: (dom: Node) => void) {
   if (!upload?.files.length) return DecorationSet.empty
   const files = upload.files
   return DecorationSet.create(doc, [Decoration.widget(notePosition(doc, upload.offset), () => render(files),
-    { key: `upload:${JSON.stringify(files)}`, side: 1, destroy })])
+    { key: `upload:${JSON.stringify(files)}`, side: -1, destroy })])
 }
 
 /** Uploads replace their original range without taking a newer caret or selection. */
