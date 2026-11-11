@@ -2033,8 +2033,8 @@ export function mountTerminal(
       }
       current.keyboard?.composer(editor, lost)
     },
-    setKeyboardMinHeight(height: number) {
-      if (current.host === host) current.keyboard?.setBuiltinMinHeight(height * uiZoom.value)
+    setKeyboardHeight(height: number) {
+      if (current.host === host) current.keyboard?.setBuiltinHeight(height * uiZoom.value)
     },
     setModifiers(modifiers: Partial<TerminalModifiers>) {
       setModifiers(current, modifiers)

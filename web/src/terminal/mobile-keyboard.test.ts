@@ -130,7 +130,7 @@ function fixture(
     finishEditing,
   })
   // The built-in keys report their natural height once mounted.
-  control.setBuiltinMinHeight(260)
+  control.setBuiltinHeight(260)
   t.after(() => {
     control.dispose()
     viewportPolicy.value = previousPolicy
@@ -1304,7 +1304,7 @@ test('with the VirtualKeyboard API the IME overlays the page and the area reserv
 for (const ime of [340, 220])
   test(`each overlay switch between a ${ime}px IME and the built-in keys changes the area once`, (t) => {
     const f = fixture(t, { api: true })
-    f.control.setBuiltinMinHeight(258)
+    f.control.setBuiltinHeight(258)
     f.control.focus(true)
     f.keyboard(ime)
     // The areas published from `start` on, without repeats.
@@ -1338,7 +1338,7 @@ for (const ime of [340, 220])
 
 test('the built-in keys keep their own height whatever system keyboards were shown', (t) => {
   const f = fixture(t, { api: true })
-  f.control.setBuiltinMinHeight(258)
+  f.control.setBuiltinHeight(258)
   f.control.focus(true)
   for (const ime of [300, 500, 200]) {
     f.keyboard(ime)
@@ -1360,7 +1360,7 @@ test('the built-in keys keep their own height whatever system keyboards were sho
 
 test('a system keyboard of another height is simply followed', (t) => {
   const f = fixture(t, { api: true })
-  f.control.setBuiltinMinHeight(258)
+  f.control.setBuiltinHeight(258)
   f.control.focus(true)
   f.keyboard(340)
   f.control.switchMode()
@@ -1377,7 +1377,7 @@ test('a system keyboard of another height is simply followed', (t) => {
 
 test('a built-in switch whose IME stops reporting geometry still ends and releases native resizing', (t) => {
   const f = fixture(t, { api: true })
-  f.control.setBuiltinMinHeight(258)
+  f.control.setBuiltinHeight(258)
   f.control.focus(true)
   f.keyboard(340)
   f.control.switchMode()
@@ -1390,7 +1390,7 @@ test('a built-in switch whose IME stops reporting geometry still ends and releas
 test('the built-in keys open at their own height without requesting the IME', (t) => {
   const f = fixture(t, { api: true })
   f.storage.set('canvas:mobile-keyboard-mode', 'builtin')
-  f.control.setBuiltinMinHeight(258)
+  f.control.setBuiltinHeight(258)
   f.control.focus(true)
   assert.equal(f.control.state.dockHeight, 258)
   assert.equal(f.virtualKeyboard.overlaysContent, true)
@@ -1620,7 +1620,7 @@ test('a blur that leaves the overlay IME up releases the held area after confirm
 
 test('an overlay built-in deck is capped while the window is short', (t) => {
   const f = fixture(t, { api: true })
-  f.control.setBuiltinMinHeight(258)
+  f.control.setBuiltinHeight(258)
   f.control.focus(true)
   f.keyboard(400)
   f.control.switchMode()
@@ -1775,7 +1775,7 @@ test('the text sheet borrows focus from an overlay IME and the area holds until 
 
 test('the text sheet over the overlay built-in keys keeps them and never asks for the IME', async (t) => {
   const f = fixture(t, { api: true })
-  f.control.setBuiltinMinHeight(258)
+  f.control.setBuiltinHeight(258)
   f.control.focus(true)
   f.keyboard(340)
   f.control.switchMode()
@@ -1850,7 +1850,7 @@ test('an overlay IME refused after a hidden page turns the keyboard and the over
 test('a hidden page leaves the overlay built-in keys as they are', (t) => {
   const f = fixture(t, { api: true })
   f.storage.set('canvas:mobile-keyboard-mode', 'builtin')
-  f.control.setBuiltinMinHeight(258)
+  f.control.setBuiltinHeight(258)
   f.control.focus(true)
   f.document.hidden = true
   f.document.dispatchEvent(new Event('visibilitychange'))
@@ -1902,7 +1902,7 @@ test('rotation that closes the overlay IME turns the stale intent off', (t) => {
 
 test('rotation caps the overlay built-in keys in the landscape frame', (t) => {
   const f = fixture(t, { api: true })
-  f.control.setBuiltinMinHeight(258)
+  f.control.setBuiltinHeight(258)
   f.control.focus(true)
   f.keyboard(340)
   f.control.switchMode()

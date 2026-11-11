@@ -575,7 +575,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     },
     refreshViewport: observe,
     /** The measured natural height of the built-in keys. */
-    setBuiltinMinHeight(height: number) {
+    setBuiltinHeight(height: number) {
       if (!(height > 0) || !Number.isFinite(height) || Math.abs(height - deckHeight) < 1) return
       deckHeight = height
       publish()

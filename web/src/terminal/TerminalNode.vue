@@ -448,7 +448,7 @@ function switchKeyboard() {
 let keyboardNaturalHeight = 0
 function keyboardMeasured(height: number) {
   keyboardNaturalHeight = height
-  terminal?.setKeyboardMinHeight(height)
+  terminal?.setKeyboardHeight(height)
 }
 function readText(signal: AbortSignal) {
   return terminal?.readText(signal) ?? Promise.reject(new Error(t('terminal.unavailable')))
@@ -546,7 +546,7 @@ function mount() {
     )
   terminal?.setAppShowing(showApp.value)
   terminal?.setEditing(editing.value)
-  if (keyboardNaturalHeight) terminal?.setKeyboardMinHeight(keyboardNaturalHeight)
+  if (keyboardNaturalHeight) terminal?.setKeyboardHeight(keyboardNaturalHeight)
   if (mobileFocus.value && !showApp.value) {
     if (status.value.touchMode === 'select') terminal?.setTouchMode('scroll')
     terminal?.focus({ keyboard: false })
@@ -568,7 +568,7 @@ watch([zoom, () => props.data.focus], () => {
 })
 watch(settings, (value) => terminal?.setSettings(value), { flush: 'sync' })
 watch(uiZoom, () => {
-  if (keyboardNaturalHeight) terminal?.setKeyboardMinHeight(keyboardNaturalHeight)
+  if (keyboardNaturalHeight) terminal?.setKeyboardHeight(keyboardNaturalHeight)
 })
 watch([keepTerminal, () => props.data.mobile, () => props.data.focus], async () => {
   terminal?.dispose()
