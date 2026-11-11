@@ -36,6 +36,13 @@ const confirmDelay = 900
 const settleDelay = 500
 const resting = (element: Element | null) => !element || element === document.body || element === document.documentElement
 let owner: ReturnType<typeof bindMobileKeyboard> | undefined
+// The page has one IME policy; only the keyboard owner changes it, so a new owner inherits it.
+let overlaid = false
+function setOverlay(api: VirtualKeyboard, value: boolean) {
+  overlaid = value
+  try { api.overlaysContent = value } catch { /* The page then resizes as without the API. */ }
+  document.documentElement.toggleAttribute('data-keyboard-overlay', value)
+}
 export function hideMobileKeyboard() { owner?.blur() }
 export function dismissMobileKeyboard() { owner?.dismiss() }
 export function refreshMobileKeyboardViewport() { owner?.refreshViewport() }
@@ -55,8 +62,8 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   let requested = false, mode = preferredMode()
   let changingFocus = false, suspended = false
   let picker: { returned: boolean } | undefined
-  // `inset` is the IME's height over the page bottom; with `overlay` the page does not resize for it.
-  let overlay = false, inset = 0
+  // `inset` is the IME's height over the page bottom; while `overlaid` the page does not resize for it.
+  let inset = 0
   // A handoff keeps `hold` reserved until the incoming keyboard covers it (system) or the
   // replaced IME has closed (built-in); `bridge` keeps the built-in keys shown meanwhile.
   let hold = 0, bridge = false, switching = false
@@ -71,33 +78,27 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   // `keep` makes a refused IME leave it open with the keyboard off (picker return, explicit reopen).
   let composer: { element: HTMLElement; prior?: MobileKeyboardMode; lost?: () => void; shown?: boolean; keep?: boolean } | undefined
   const input = () => composer?.element || textarea
-  const occluded = (height: number) => overlay ? height > 0 : height > Math.max(80, baseline.height * .15)
-  const measure = () => overlay ? Math.max(0, api!.boundingRect.height) : Math.max(0, baseline.height - read().height)
+  const occluded = (height: number) => overlaid ? height > 0 : height > Math.max(80, baseline.height * .15)
+  const measure = () => overlaid && api ? Math.max(0, api.boundingRect.height) : Math.max(0, baseline.height - read().height)
   const area = () => !requested ? inset : Math.max(inset, hold, mode === 'builtin' ? builtinHeight : 0)
   function state(): MobileKeyboardState {
     // Without the overlay the page already shrank by the IME; the area only adds what it does not cover.
-    return { mode, dockHeight: Math.max(0, area() - (overlay ? 0 : inset)), deck: requested && (mode === 'builtin' || bridge),
+    return { mode, dockHeight: Math.max(0, area() - (overlaid ? 0 : inset)), deck: requested && (mode === 'builtin' || bridge),
       switching: switching || suspended || !!picker || requested && document.hidden, composer: !!composer }
   }
-  function setOverlay(value: boolean) {
-    if (!api || overlay === value) return
-    overlay = value
-    try { api.overlaysContent = value } catch { /* The page then resizes as without the API. */ }
-    document.documentElement.toggleAttribute('data-keyboard-overlay', value)
-    inset = measure()
-  }
-  // The IME overlays the page while this terminal owns input, and until its own IME has closed.
+  // The IME overlays the page while this terminal owns input, and until the IME it overlays has closed.
   function syncOverlay() {
+    if (!api || owner !== controller) return
     const active = document.activeElement
-    setOverlay(owner === controller && options.active() && (active === input() || active === textarea || resting(active)) &&
-      (requested || overlay && inset > 0))
+    const value = options.active() && (active === input() || active === textarea || resting(active)) && (requested || overlaid && inset > 0)
+    if (value !== overlaid) { setOverlay(api, value); inset = measure() }
   }
   function publish() {
     syncOverlay()
     if (owner === controller) {
       mobileKeyboardOpen.value = requested && options.active()
       mobileKeyboardVisible.value = options.active() && !document.hidden && occluded(inset)
-      mobileKeyboardInset.value = overlay ? inset : 0
+      mobileKeyboardInset.value = overlaid ? inset : 0
     }
     const next = state(), signature = JSON.stringify([requested, next])
     if (signature === published) return
@@ -127,6 +128,11 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
   function fitHeight(height: number) {
     const maximum = Math.max(0, Math.min(460 * scale(), baseline.height - 160 * scale()))
     return Math.min(maximum, Math.max(Math.min(builtinMinHeight, maximum), height))
+  }
+  /** Take keyboard ownership from another terminal, whose IME may still be on screen. */
+  function claim() {
+    if (owner === controller) return
+    owner?.blur(); owner = controller; inset = measure()
   }
   function clearTimers() {
     clearTimeout(confirmTimer); confirmTimer = undefined
@@ -203,6 +209,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     // An area outside the built-in bounds changes once, after the IME under it has closed.
     hold = switching ? replaced : 0
     hideNative(true); publish()
+    if (switching) settle()
   }
   /** Move the system IME to input(), holding the current area until the IME covers it. */
   function toSystem(reserve: number) {
@@ -249,7 +256,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       builtinHeight = fitHeight(builtinHeight); inset = measure()
       if (requested && mode === 'system' && !picker && !suspended && !document.hidden) confirm()
     }
-    if (overlay || !requested && !occluded(baseline.height - frame.height)) baseline.height = Math.max(window.innerHeight, frame.height)
+    if (overlaid || !requested && !occluded(baseline.height - frame.height)) baseline.height = Math.max(window.innerHeight, frame.height)
     else if (requested && mode === 'builtin' && !switching && !suspended && !picker && frame.height !== baseline.height) {
       // Without native input this is the full available frame, not a newly opened IME.
       baseline.height = frame.height; builtinHeight = fitHeight(builtinHeight)
@@ -334,7 +341,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     },
     switchMode() {
       if (!options.active() || composer) return
-      if (owner !== controller) { owner?.blur(); owner = controller }
+      claim()
       if (!requested) mode = preferredMode()
       const next = mode === 'system' ? 'builtin' : 'system', reserve = requested ? area() : 0
       baseline.height = Math.max(baseline.height, window.innerHeight, read().height)
@@ -356,7 +363,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
         return
       }
       if (!options.active()) return
-      if (owner !== controller) { owner?.blur(); owner = controller }
+      claim()
       if (composer?.element === element) {
         // Tapping the editor while its IME is off asks for it again.
         if (lost) composer.lost = lost
@@ -407,7 +414,7 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     focus(value?: boolean) {
       if (!options.active()) return
       if (value === false && composer) controller.blur()
-      if (owner !== controller) { owner?.blur(); owner = controller }
+      claim()
       // The keyboard button over a composer without its IME asks for it again.
       if (value && composer) { if (!requested) { composer.keep = true; openSystem() } return }
       if (!requested) mode = preferredMode()
@@ -441,7 +448,8 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     dispose() {
       controller.blur()
       if (owner === controller) {
-        owner = undefined; setOverlay(false)
+        owner = undefined
+        if (api && overlaid) setOverlay(api, false)
         mobileKeyboardVisible.value = false; mobileKeyboardOpen.value = false; mobileKeyboardInset.value = 0
       }
       if (api) textarea.removeAttribute('virtualkeyboardpolicy')

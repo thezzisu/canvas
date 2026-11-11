@@ -795,6 +795,14 @@ test('an oversized overlay IME replaced by the built-in keys changes the area on
   assert.deepEqual([...new Set(f.states.slice(switches).map(state => state.dockHeight))], [600, 460])
 })
 
+test('a built-in switch whose IME stops reporting geometry still ends and releases native resizing', t => {
+  const f = fixture(t, { api: true }); f.control.setBuiltinMinHeight(258); f.control.focus(true); f.keyboard(340)
+  f.control.switchMode()
+  assert.equal(f.control.state.switching, true)
+  t.mock.timers.tick(500)
+  assert.equal(f.control.state.switching, false); assert.equal(f.control.state.dockHeight, 340)
+})
+
 test('without a measured system keyboard the built-in keys use their minimum rows', t => {
   const f = fixture(t, { api: true }); f.storage.set('canvas:mobile-keyboard-mode', 'builtin')
   f.control.setBuiltinMinHeight(258); f.control.focus(true)
@@ -878,6 +886,20 @@ test('a keyboard-less terminal focus hides an open overlay IME', t => {
   f.control.focus(false)
   assert.equal(f.virtualKeyboard.hides, 1, 'a manual keyboard policy does not hide on blur alone')
   assert.equal(f.requested(), false); assert.equal(f.document.activeElement, f.textarea)
+})
+
+test('another terminal taking the keyboard inherits and ends the page overlay', t => {
+  const f = fixture(t, { api: true }); f.control.focus(true); f.keyboard(340)
+  const other = Object.assign(new EventTarget(), { inputMode: 'text', readOnly: false, setAttribute() {}, removeAttribute() {},
+    focus() { f.document.activeElement = other }, blur() { if (f.document.activeElement === other) f.document.activeElement = f.document.body } })
+  const second = bindMobileKeyboard(other as unknown as HTMLElement, { active: () => true, changed() {} })
+  second.focus(false)
+  assert.equal(f.virtualKeyboard.hides, 1, 'the previous terminal closes its IME')
+  assert.equal(f.virtualKeyboard.overlaysContent, true, 'its closing IME still overlays the page')
+  f.keyboard(0)
+  assert.equal(f.virtualKeyboard.overlaysContent, false, 'the new owner ends the overlay once that IME closed')
+  assert(!f.root.attributes.has('data-keyboard-overlay'))
+  second.dispose()
 })
 
 test('disposing the overlay owner restores the page policy', t => {
