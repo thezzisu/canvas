@@ -6,6 +6,7 @@ import UButton from '@nuxt/ui/components/Button.vue'
 import USelect from '@nuxt/ui/components/Select.vue'
 import USlider from '@nuxt/ui/components/Slider.vue'
 import USwitch from '@nuxt/ui/components/Switch.vue'
+import FeaturesDialog from './FeaturesDialog.vue'
 import UTabs from '@nuxt/ui/components/Tabs.vue'
 import UFormField from '@nuxt/ui/components/FormField.vue'
 import USeparator from '@nuxt/ui/components/Separator.vue'
@@ -143,7 +144,7 @@ const canReload = computed(() => fontEditor.canReload)
 function reloadPage() {
   if (canReload.value) window.location.reload()
 }
-const subdialog = ref<'terminal' | 'font'>()
+const subdialog = ref<'terminal' | 'font' | 'features'>()
 // One row layout for every setting; status text sits under the label.
 const field = {
   root: 'items-center gap-4',
@@ -211,6 +212,7 @@ defineExpose({ close })
     v-if="open"
     :open="true"
     :title="t('common.settings')"
+    :description="t('settings.thisBrowser')"
     :ui="{ content: 'settings-modal [--dialog-width:28rem]', footer: 'justify-between' }"
     @update:open="close"
   >
@@ -237,11 +239,7 @@ defineExpose({ close })
             class="w-36 max-w-full"
             :aria-label="t('settings.uiScale')"
         /></UFormField>
-        <UFormField
-          :label="t('terminal.settings.defaults')"
-          :description="t('settings.thisBrowser')"
-          orientation="horizontal"
-          :ui="field"
+        <UFormField :label="t('terminal.settings.defaults')" orientation="horizontal" :ui="field"
           ><UButton color="neutral" variant="outline" size="sm" @click="subdialog = 'terminal'">{{
             t('common.open')
           }}</UButton></UFormField
@@ -251,12 +249,14 @@ defineExpose({ close })
             t('common.open')
           }}</UButton></UFormField
         >
+        <UFormField :label="t('settings.features')" orientation="horizontal" :ui="field"
+          ><UButton color="neutral" variant="outline" size="sm" @click="subdialog = 'features'">{{
+            t('common.open')
+          }}</UButton></UFormField
+        >
       </section>
       <template v-if="mobile && hasDisplayCutout">
-        <USeparator
-          :label="`${t('settings.cutout')} · ${t('settings.thisBrowser')}`"
-          :ui="separator"
-        />
+        <USeparator :label="t('settings.cutout')" :ui="separator" />
         <section class="settings-section" :aria-label="t('settings.cutout')">
           <UFormField :label="t('settings.position')" orientation="horizontal" :ui="field"
             ><UTabs
@@ -283,10 +283,7 @@ defineExpose({ close })
           </UFormField>
         </section>
       </template>
-      <USeparator
-        :label="`${t('settings.notifications')} · ${t('settings.thisBrowser')}`"
-        :ui="separator"
-      />
+      <USeparator :label="t('settings.notifications')" :ui="separator" />
       <section class="settings-section" :aria-label="t('settings.notifications')">
         <UFormField
           :label="t('settings.notificationSound')"
@@ -466,6 +463,7 @@ defineExpose({ close })
       }}</UButton>
     </template>
   </UModal>
+  <FeaturesDialog v-if="open && subdialog === 'features'" @close="subdialog = undefined" />
   <TerminalSettingsDialog
     :open="open && subdialog === 'terminal'"
     defaults-mode

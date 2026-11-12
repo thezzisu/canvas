@@ -25,7 +25,6 @@ function update(value: TerminalOverrides) {
     v-if="open"
     :open="true"
     :title="t(defaultsMode ? 'terminal.settings.defaults' : 'terminal.settings.title')"
-    :description="defaultsMode ? t('settings.thisBrowser') : undefined"
     :ui="{ content: 'terminal-settings-dialog [--dialog-width:28rem]' }"
     @update:open="
       (value) => {

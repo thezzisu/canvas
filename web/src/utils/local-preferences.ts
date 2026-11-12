@@ -13,6 +13,7 @@ const browserViews = new Set([
   'canvas:view:minimap',
   'canvas:view:navigation',
   'canvas:view:auto-yield-controls',
+  'canvas:view:features',
 ])
 
 /** Storage cleanup is an explicit lifecycle operation, not another reactive mirror. */

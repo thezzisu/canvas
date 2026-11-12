@@ -15,6 +15,7 @@ export default {
   noUpdate: '检查完成，没有更新',
   checkUpdateFailed: '检查更新失败，请重试',
   close: '关闭设置',
+  features: '启用的功能',
   thisBrowser: '仅此浏览器',
   cutout: '顶部避让',
   position: '位置',

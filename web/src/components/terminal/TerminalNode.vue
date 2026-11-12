@@ -27,6 +27,11 @@ import { windowLabel } from '../../utils/workspace/window-title'
 import PaneIndicators from './PaneIndicators.vue'
 import MobileKeyboard from './MobileKeyboard.vue'
 import { useHeld } from '../../composables/held'
+import {
+  immediateStart,
+  terminalStarts,
+  type TerminalStart,
+} from '../../utils/terminal/terminal-starts'
 import { statusColor } from '../../utils/status'
 import { claimNoteDrop, readNoteTransfer } from '../../utils/notes/note-transfer'
 import { isFileReference, readFileReference } from '../../utils/files/file-reference'
@@ -543,8 +548,25 @@ function dropNote(event: DragEvent) {
   terminal.focus({ keyboard: false })
   terminal.pasteText(text)
 }
+let start: TerminalStart | undefined
+function inView() {
+  const box = host.value?.getBoundingClientRect()
+  return (
+    !!box &&
+    box.bottom > 0 &&
+    box.right > 0 &&
+    box.top < window.innerHeight &&
+    box.left < window.innerWidth
+  )
+}
+/** A maximized terminal starts at once; cards in view start before the ones outside it. */
+const startRank = () => (props.data.focus ? immediateStart : inView() ? 1 : 2)
 function mount() {
-  if (host.value && keepTerminal.value)
+  start?.cancel()
+  start = undefined
+  if (!host.value || !keepTerminal.value) return
+  start = terminalStarts.request(startRank, (current) => {
+    if (!host.value) return current.done()
     terminal = mountTerminal(
       host.value,
       props.data,
@@ -552,6 +574,13 @@ function mount() {
         const superseded = ownedPresentation && state.presentation && !state.presentation.owned
         ownedPresentation = props.data.focus && state.presentation?.owned === true
         status.value = state
+        // The next terminal starts once this one has painted or failed. One outside the
+        // view receives no frame until it is scrolled to, and does not hold a place.
+        if (
+          state.screenReady ||
+          (state.status !== 'connecting' && (state.status !== 'connected' || !inView()))
+        )
+          current.done()
         if (superseded) props.data.onAction('unfocus', props.id)
       },
       {
@@ -562,12 +591,13 @@ function mount() {
         settings: settings.value,
       },
     )
-  terminal?.setAppShowing(showApp.value)
-  terminal?.setEditing(editing.value)
-  if (mobileFocus.value && !showApp.value) {
-    if (status.value.touchMode === 'select') terminal?.setTouchMode('scroll')
-    terminal?.focus({ keyboard: false })
-  }
+    terminal.setAppShowing(showApp.value)
+    terminal.setEditing(editing.value)
+    if (mobileFocus.value && !showApp.value) {
+      if (status.value.touchMode === 'select') terminal.setTouchMode('scroll')
+      terminal.focus({ keyboard: false })
+    }
+  })
 }
 onMounted(() => {
   mount()
@@ -585,6 +615,7 @@ watch([zoom, () => props.data.focus], () => {
 })
 watch(settings, (value) => terminal?.setSettings(value), { flush: 'sync' })
 watch([keepTerminal, () => props.data.mobile, () => props.data.focus], async () => {
+  start?.cancel()
   terminal?.dispose()
   terminal = undefined
   await nextTick()
@@ -592,6 +623,7 @@ watch([keepTerminal, () => props.data.mobile, () => props.data.focus], async () 
 })
 onBeforeUnmount(() => {
   clearPreviewTap()
+  start?.cancel()
   terminal?.dispose()
   document.removeEventListener('dragend', clearNoteDrag)
   window.removeEventListener('blur', clearNoteDrag)

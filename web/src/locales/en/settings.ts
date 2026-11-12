@@ -15,6 +15,7 @@ export default {
   noUpdate: 'Check complete. No updates found.',
   checkUpdateFailed: 'Could not check for updates. Try again.',
   close: 'Close settings',
+  features: 'Enabled features',
   thisBrowser: 'This browser',
   cutout: 'Display cutout',
   position: 'Position',

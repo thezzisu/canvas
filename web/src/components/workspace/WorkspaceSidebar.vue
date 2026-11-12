@@ -75,25 +75,28 @@ function addConnection() {
 <template>
   <DefineNavigation>
     <div class="sidebar-navigation">
-      <div class="nav-section-label">
-        <span>{{ t('app.features') }}</span>
-      </div>
-      <nav class="feature-nav" :aria-label="t('app.features')">
-        <CanvasNavItem
-          class="feature-nav-item"
-          icon="i-lucide-clock-fading"
-          :fresh="workspace.freshStatuses"
-          :name="t('app.workingSet')"
-          :active="current === 'working-set'"
-          :indicator="workspace.workingSetIndicator"
-          v-bind="agentList('working-set')"
-          :agents="() => workspace.workingSetEntries"
-          :actions-available="scene.reveal.available.value"
-          @go="scene.reveal.goToWindow"
-          @select="scene.visit('working-set')"
-        />
-      </nav>
-      <div class="sidebar-divider" role="separator" />
+      <template v-if="view.features.length">
+        <div class="nav-section-label">
+          <span>{{ t('app.features') }}</span>
+        </div>
+        <nav class="feature-nav" :aria-label="t('app.features')">
+          <CanvasNavItem
+            v-if="view.features.includes('working-set')"
+            class="feature-nav-item"
+            icon="i-lucide-clock-fading"
+            :fresh="workspace.freshStatuses"
+            :name="t('app.workingSet')"
+            :active="current === 'working-set'"
+            :indicator="workspace.workingSetIndicator"
+            v-bind="agentList('working-set')"
+            :agents="() => workspace.workingSetEntries"
+            :actions-available="scene.reveal.available.value"
+            @go="scene.reveal.goToWindow"
+            @select="scene.visit('working-set')"
+          />
+        </nav>
+        <div class="sidebar-divider" role="separator" />
+      </template>
       <div class="nav-section-label">
         <span>{{ t('app.canvases') }}</span>
         <UButton

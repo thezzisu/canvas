@@ -11,12 +11,16 @@ import {
 import type { ProgramStatus } from '../../../shared/status'
 
 const local = { listenToStorageChanges: false, writeDefaults: false }
+export const allFeatures = ['working-set'] as const
+export type Feature = (typeof allFeatures)[number]
 
 /** How this browser shows canvases. Filters hide windows; arrangement never does. */
 export const useViewStore = defineStore('view', () => {
   const minimap = useLocalStorage('canvas:view:minimap', true, local)
   const navigation = useLocalStorage('canvas:view:navigation', true, local)
   const autoYieldControls = useLocalStorage('canvas:view:auto-yield-controls', true, local)
+  /** The optional features the sidebar offers. */
+  const features = useLocalStorage<Feature[]>('canvas:view:features', [...allFeatures], local)
 
   const overviewKey = (name: string) => () => `canvas:overview:${activeInstance.value.id}:${name}`
   // Filters: which windows Overview lists.
@@ -56,6 +60,7 @@ export const useViewStore = defineStore('view', () => {
     minimap,
     navigation,
     autoYieldControls,
+    features,
     statuses,
     scope,
     order,
