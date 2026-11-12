@@ -113,6 +113,8 @@ interface FocusResize {
   token: string
   suspended: boolean
   requested?: TerminalGrid
+  /** A size that has not held still long enough to be asked for. */
+  pending?: { size: TerminalGrid; timer: ReturnType<typeof setTimeout> }
 }
 interface CompletionFrame {
   generation: number
@@ -1138,6 +1140,8 @@ async function connect(session: Session, probe: boolean) {
 }
 // The server answers a native resize well within this; a view never waits on it for longer.
 const nativeResizeLimit = 500
+// A size is asked for natively once it has not changed for this long.
+const resizeStillness = 200
 function awaitNativeResize(session: Session) {
   clearTimeout(session.nativeResize)
   session.nativeResize = setTimeout(() => nativeResizeSettled(session), nativeResizeLimit)
@@ -1246,12 +1250,31 @@ function updateFocusSize(session: Session) {
     return
   }
   const request = session.focusResize
-  if (proposed.cols === request.requested?.cols && proposed.rows === request.requested?.rows) return
-  request.requested = proposed
-  session.socket.send(
-    JSON.stringify({ type: 'focus-resize-update', token: request.token, ...proposed }),
-  )
-  if (sameTerminalGrid(proposed, session.term)) return
+  if (sameTerminalGrid(proposed, request.requested)) {
+    // Back at the size already asked for, as when a keyboard comes and goes at once.
+    if (request.pending) {
+      clearTimeout(request.pending.timer)
+      request.pending = undefined
+      nativeResizeSettled(session)
+    }
+    return
+  }
+  if (sameTerminalGrid(proposed, request.pending?.size)) return
+  // Every native resize makes the program redraw. A size that is still changing, as while a
+  // keyboard slides or is toggled twice, is asked for once it has held still.
+  clearTimeout(request.pending?.timer)
+  request.pending = {
+    size: proposed,
+    timer: setTimeout(() => {
+      request.pending = undefined
+      if (session.focusResize !== request || session.socket?.readyState !== WebSocket.OPEN) return
+      request.requested = proposed
+      session.socket.send(
+        JSON.stringify({ type: 'focus-resize-update', token: request.token, ...proposed }),
+      )
+      if (session.nativeResize !== undefined) awaitNativeResize(session)
+    }, resizeStillness),
+  }
   session.settling = !coversResize({
     covered: !!session.covered,
     prompted: !!session.resizePrompted,
@@ -1264,6 +1287,7 @@ function updateFocusSize(session: Session) {
 function endFocusSize(session: Session) {
   const request = session.focusResize
   if (!request) return
+  clearTimeout(request.pending?.timer)
   session.focusResize = undefined
   if (session.socket?.readyState === WebSocket.OPEN) {
     session.socket.send(JSON.stringify({ type: 'focus-resize-end', token: request.token }))
