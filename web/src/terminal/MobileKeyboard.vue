@@ -604,7 +604,6 @@ onBeforeUnmount(() => {
     class="mobile-keyboard"
     :class="{
       'has-dock': hasDock,
-      'keyboard-open': keyboardOpen,
       'reduced-motion': reducedMotion,
     }"
     @pointerdown.stop
@@ -948,11 +947,8 @@ onBeforeUnmount(() => {
   min-width: 0;
   border-top: 1px solid #353c47;
   background: #1a1e25;
-  padding: 4px 4px max(4px, var(--mobile-safe-bottom, 0px));
-}
-/* An open keyboard sits directly under the tools. */
-.mobile-keyboard.keyboard-open {
-  padding-bottom: 0;
+  /* Nothing below the tools but the safe area: an open keyboard sits directly under them. */
+  padding: 4px 4px var(--mobile-safe-bottom, 0px);
   color: #cbd2dd;
   z-index: 6;
   touch-action: manipulation;
