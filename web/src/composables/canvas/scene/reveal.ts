@@ -187,7 +187,7 @@ export function useWindowReveal(scene: CanvasScene) {
         target.canvasId === scene.route.canvasId.value &&
         ready?.sourceId === target.sourceId &&
         ready.windowId === target.windowId &&
-        focusWindow(target.sourceId, target.spaceId, target.windowId, false)
+        focusWindow(target.sourceId, target.spaceId, target.windowId)
       )
         focus.value = undefined
     },

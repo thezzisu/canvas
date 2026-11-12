@@ -763,16 +763,21 @@ function focusTerminal(session: Session, keyboard?: boolean) {
   else session.term.focus()
   session.keyboardLock?.refresh(true)
 }
+/**
+ * Give a window's terminal the focus; `keyboard` true also opens its mobile keyboard. Returns
+ * whether the terminal took it. A touch terminal takes focus through its keyboard, which
+ * finishes any composition first, so there the answer does not wait for `activeElement`.
+ */
 export function focusWindow(
   sourceId: string,
   spaceId: string,
   windowId: string,
-  keyboard?: boolean,
+  keyboard?: true,
 ): boolean {
   const session = sessions.get(key(sourceId, spaceId, windowId))
   if (!session?.host?.isConnected || !interactive(session)) return false
   focusTerminal(session, keyboard)
-  return session.term.element?.contains(document.activeElement) === true
+  return session.mobile || session.term.element?.contains(document.activeElement) === true
 }
 function schedulePresentation(session: Session) {
   if (session.presentationFrame !== undefined) return
