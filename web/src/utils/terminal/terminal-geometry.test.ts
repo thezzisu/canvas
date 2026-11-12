@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  reflowsTerminal,
   containTerminalScale,
   fitTerminalGrid,
   styledSize,
@@ -93,4 +94,13 @@ test('the rendered screen size comes from the inline size xterm assigns, without
     'an unmeasured screen has no size',
   )
   assert.equal(styledSize({ style: { width: '0px', height: '0px' } } as HTMLElement), undefined)
+})
+
+test('only a change of columns or of many rows counts as a visible reflow', () => {
+  const grid = { cols: 80, rows: 24 }
+  assert.equal(reflowsTerminal(undefined, grid), true)
+  assert.equal(reflowsTerminal(grid, grid), false)
+  assert.equal(reflowsTerminal(grid, { cols: 80, rows: 27 }), false)
+  assert.equal(reflowsTerminal(grid, { cols: 80, rows: 28 }), true)
+  assert.equal(reflowsTerminal(grid, { cols: 81, rows: 24 }), true)
 })

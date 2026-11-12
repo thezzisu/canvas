@@ -242,13 +242,8 @@ const inputFocused = computed(
 const frameStatus = computed(() =>
   !closed.value && !props.data.sourceOffline ? props.data.status : 'unknown',
 )
-// The cover over an unsettled frame stays long enough to be seen as one, spans a resize that
-// arrives in steps, and then fades.
-const covered = useHeld(
-  () => !!(status.value.transitioning || status.value.layoutRestoring),
-  240,
-  200,
-)
+// The cover over an unsettled frame stays long enough to be seen as one, then fades.
+const covered = useHeld(() => !!(status.value.transitioning || status.value.layoutRestoring), 240)
 // A terminal that had no frame stays under the loading panel until its first settled one, so
 // loading and a cover that follows it are one.
 const loaded = ref(adopted)

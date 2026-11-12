@@ -72,6 +72,7 @@ import type { CanvasFileReference } from '../../utils/files/file-reference'
 import {
   containTerminalScale,
   fitTerminalGrid,
+  reflowsTerminal,
   sameTerminalGrid,
   styledSize,
   terminalFrameReady,
@@ -1152,7 +1153,7 @@ function present(session: Session) {
   if (!session.host?.isConnected || !session.opened) return
   const requested = session.focusResize?.requested,
     painted = session.paintedGrid
-  // Cover every frame that is not the settled one: a card being resized, a grid xterm has not
+  // Cover a frame that would be seen to reflow: a card being resized, a grid xterm has not
   // painted yet, and an old frame waiting for the native resize this view asked for.
   const transitioning =
     session.state.status === 'connected' &&
@@ -1160,7 +1161,7 @@ function present(session: Session) {
     !session.appShowing &&
     (!!session.resizing ||
       session.nativeResize !== undefined ||
-      !sameTerminalGrid(painted, session.term))
+      reflowsTerminal(painted, session.term))
   if (session.state.transitioning !== transitioning)
     setState(session, { ...session.state, transitioning })
   if (
@@ -1241,7 +1242,7 @@ function updateFocusSize(session: Session) {
     session.socket.send(
       JSON.stringify({ type: 'focus-resize-begin', token: session.focusResize.token, ...proposed }),
     )
-    if (!sameTerminalGrid(proposed, session.term)) awaitNativeResize(session)
+    if (reflowsTerminal(session.term, proposed)) awaitNativeResize(session)
     return
   }
   const request = session.focusResize
@@ -1250,7 +1251,7 @@ function updateFocusSize(session: Session) {
   session.socket.send(
     JSON.stringify({ type: 'focus-resize-update', token: request.token, ...proposed }),
   )
-  if (!sameTerminalGrid(proposed, session.term)) awaitNativeResize(session)
+  if (reflowsTerminal(session.term, proposed)) awaitNativeResize(session)
 }
 function endFocusSize(session: Session) {
   const request = session.focusResize
@@ -1259,7 +1260,7 @@ function endFocusSize(session: Session) {
   if (session.socket?.readyState === WebSocket.OPEN) {
     session.socket.send(JSON.stringify({ type: 'focus-resize-end', token: request.token }))
     // The window returns to the size it had before this view asked for its own.
-    if (!request.suspended && !sameTerminalGrid(request.shared, session.term))
+    if (!request.suspended && reflowsTerminal(session.term, request.shared))
       awaitNativeResize(session)
   }
   setState(session, { ...session.state, focusResize: undefined })

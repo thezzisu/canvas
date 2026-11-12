@@ -1,3 +1,4 @@
+import { longFrames } from '../../utils/long-frames'
 import { systemKeyboardVisible } from '../terminal/mobile-keyboard'
 import type { GlobalSettings } from '../../../../shared/settings'
 import {
@@ -102,7 +103,8 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
     probe.remove()
   }
   return {
-    version: 3,
+    version: 4,
+    longFrames: longFrames(),
     settings: {
       developerMode: developerMode.value,
       viewportFit: viewportFit.value,

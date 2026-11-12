@@ -44,7 +44,7 @@ test('terminals start two at a time, the nearest first, and the maximized one at
   assert.deepEqual(started, ['a', 'b', 'max', 'e', 'd'])
 })
 
-test('a start that never reports back gives its place up', (t) => {
+test('a terminal that is slow to answer does not keep the next one waiting', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const starts = createTerminalStarts(1),
     started: string[] = []
@@ -53,7 +53,7 @@ test('a start that never reports back gives its place up', (t) => {
       () => 1,
       () => started.push(name),
     )
-  t.mock.timers.tick(2999)
+  t.mock.timers.tick(299)
   assert.deepEqual(started, ['a'])
   t.mock.timers.tick(1)
   t.mock.timers.tick(0)

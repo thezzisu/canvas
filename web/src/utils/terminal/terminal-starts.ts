@@ -17,8 +17,9 @@ interface Entry {
 
 /** A rank that starts at once, whatever is already starting: the terminal the user is looking at alone. */
 export const immediateStart = 0
-// A start that never reports back gives its place up after this.
-const startLimit = 3000
+// A place is for the work of starting, not for waiting on the network: a terminal that has not
+// painted by then lets the next one start.
+const startLimit = 300
 
 export function createTerminalStarts(concurrency = 2) {
   const waiting: Entry[] = [],

@@ -58,6 +58,13 @@ export interface RenderedTerminalGrid {
 }
 export type TerminalGrid = Pick<RenderedTerminalGrid, 'cols' | 'rows'>
 
+/**
+ * A change of grid that redraws the screen visibly: other columns rewrap every line, and many
+ * rows move the content. A few rows more or fewer, as when a keyboard settles, do not.
+ */
+export function reflowsTerminal(from: TerminalGrid | undefined, to: TerminalGrid): boolean {
+  return !from || from.cols !== to.cols || Math.abs(from.rows - to.rows) > 3
+}
 export function sameTerminalGrid(
   a: TerminalGrid | undefined,
   b: TerminalGrid | undefined,

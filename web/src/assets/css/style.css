@@ -119,6 +119,8 @@ body,
 }
 html {
   zoom: var(--ui-zoom);
+  /* What shows wherever the page is briefly not covered, as while an IME settles. */
+  background: #14161a;
 }
 #app {
   position: fixed;
@@ -590,13 +592,16 @@ html {
   --mobile-height: var(--ui-viewport-height);
   --mobile-top: 0px;
   --mobile-left: 0px;
-  position: fixed;
-  left: var(--mobile-left, 0);
-  top: var(--mobile-top, 0);
-  width: var(--mobile-width, 100%);
-  height: var(--mobile-height, var(--ui-viewport-height));
   min-height: 0;
   overscroll-behavior: none;
+}
+/* The shell fills the layout viewport by its inset, with no viewport unit that could lag behind
+   it. Only the developer viewport policies place it explicitly. */
+:root:not([data-interactive-widget='resizes-content'])
+  .mobile-layout:is(.app-shell, .login-screen) {
+  inset: var(--mobile-top) auto auto var(--mobile-left);
+  width: var(--mobile-width);
+  height: var(--mobile-height);
 }
 .mobile-layout .workspace {
   min-height: 0;

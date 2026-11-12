@@ -8,6 +8,7 @@ import { initializePwa } from './plugins/pwa'
 import { i18n, watchDocumentLocale } from './plugins/i18n'
 import { initializeStatusPulse } from './utils/status-pulse'
 import { initializeUiScale } from './composables/ui-scale'
+import { recordLongFrames } from './utils/long-frames'
 import './assets/css/ui.css'
 import 'virtual:canvas-fonts.css'
 import '@vue-flow/core/dist/style.css'
@@ -19,6 +20,7 @@ import './assets/css/style.css'
 import './assets/css/card-presentation.css'
 
 document.documentElement.classList.add('dark')
+recordLongFrames()
 initializeViewportPolicy()
 initializeUiScale()
 initializePwa()
