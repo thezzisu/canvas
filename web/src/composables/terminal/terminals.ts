@@ -1249,20 +1249,13 @@ function endFocusSize(session: Session) {
   const request = session.focusResize
   if (!request) return
   session.focusResize = undefined
-  const owned = !request.suspended && session.socket?.readyState === WebSocket.OPEN
-  if (session.socket?.readyState === WebSocket.OPEN)
+  if (session.socket?.readyState === WebSocket.OPEN) {
     session.socket.send(JSON.stringify({ type: 'focus-resize-end', token: request.token }))
-  // The server answers the owner's release with a fresh snapshot of the window at its shared
-  // size. The view stays covered until that snapshot has painted, whatever size it has.
-  if (owned) {
-    session.resumePaint = (session.paintRevision || 0) + 1
-    session.resumeReset = false
+    // The server answers the owner's release with a snapshot of the window at its shared size.
+    // The view stays covered until that arrives, whatever size it has.
+    if (!request.suspended) awaitNativeResize(session)
   }
-  setState(session, {
-    ...session.state,
-    focusResize: undefined,
-    layoutRestoring: session.resumePaint !== undefined,
-  })
+  setState(session, { ...session.state, focusResize: undefined })
 }
 function claimFocus(session: Session) {
   if (!interactive(session)) return
