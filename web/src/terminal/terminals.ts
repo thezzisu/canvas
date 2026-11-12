@@ -1800,7 +1800,8 @@ export function mountTerminal(
         keyboardDeck: state.deck,
         keyboardComposer: state.composer,
       })
-      schedulePresentation(current)
+      // The keyboard area changes the host's size; size the native grid once that is measured.
+      requestAnimationFrame(() => schedulePresentation(current))
     }
     session.keyboard = bindMobileKeyboard(input.element, {
       active: () => current.mobile && current.magnified && !!current.host?.isConnected,

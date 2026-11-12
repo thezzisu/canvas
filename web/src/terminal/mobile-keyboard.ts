@@ -51,6 +51,8 @@ function saveMode(mode: MobileKeyboardMode) {
 const arrivalLimit = 900
 // An IME asked to close that still reports itself after this is laid out as it is.
 const departureLimit = 600
+// An IME whose height has not changed for this long has finished moving.
+const steadyDelay = 150
 // An IME that vanishes and is back within this was changing, not dismissed.
 const dismissalGrace = 300
 const resting = (element: Element | null) =>
@@ -107,11 +109,12 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     shrink = 0
   // The IME has been on screen for the current system keyboard; losing it then is a dismissal.
   let seen = false
-  // What the keyboards are waiting for: the IME to arrive, to leave, or to return after it vanished.
+  // What the keyboards are waiting for: the IME to arrive, to stop moving, to leave, or to
+  // return after it vanished.
   // `fromDeck` keeps the built-in keys painted until the IME that replaces them is there.
   let pending:
     | {
-        for: 'arrival' | 'departure' | 'return'
+        for: 'arrival' | 'steady' | 'departure' | 'return'
         timer: ReturnType<typeof setTimeout>
         fromDeck: boolean
       }
@@ -230,7 +233,11 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
     clearTimeout(pending?.timer)
     pending = undefined
   }
-  function wait(what: 'arrival' | 'departure' | 'return', limit: number, fromDeck = false) {
+  function wait(
+    what: 'arrival' | 'steady' | 'departure' | 'return',
+    limit: number,
+    fromDeck = false,
+  ) {
     settle()
     pending = { for: what, timer: setTimeout(expired, limit), fromDeck }
   }
@@ -380,15 +387,22 @@ export function bindMobileKeyboard(textarea: HTMLElement, options: KeyboardOptio
       (open && mode === 'builtin' && !pending)
     )
       baseline.height = height
+    const before = inset
     measure()
-    const here = present()
+    const here = present(),
+      changed = Math.abs(inset - before) > 0.5
     if (open && !interrupted()) {
-      if (pending?.for === 'arrival' && here) settle()
-      else if (pending?.for === 'departure' && gone()) settle()
-      else if (pending?.for === 'return' && here) settle()
-      // The IME left without being asked to. It may only be changing; otherwise it was dismissed.
-      else if (!pending && mode === 'system' && seen && !here) wait('return', dismissalGrace)
-      if (here && mode === 'system') seen = true
+      if (mode === 'builtin') {
+        if (pending?.for === 'departure' && gone()) settle()
+      } else if (here) {
+        seen = true
+        // An IME reports its rise and fall in steps: the keyboards have changed places once
+        // its height has stopped changing.
+        if (pending ? pending.for !== 'steady' || changed : changed)
+          wait('steady', steadyDelay, !!pending?.fromDeck)
+      } else if (seen && pending?.for !== 'return')
+        // The IME left without being asked to. It may only be changing; otherwise it was dismissed.
+        wait('return', dismissalGrace)
     }
     publish()
   }

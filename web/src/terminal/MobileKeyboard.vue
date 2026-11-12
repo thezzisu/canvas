@@ -944,7 +944,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   border-top: 1px solid #353c47;
   background: #1a1e25;
-  padding: 4px 4px var(--mobile-safe-bottom, 0px);
+  padding: 4px 4px max(4px, var(--mobile-safe-bottom, 0px));
   color: #cbd2dd;
   z-index: 6;
   touch-action: manipulation;
@@ -960,7 +960,6 @@ onBeforeUnmount(() => {
   gap: 3px;
   overflow: hidden;
   min-height: 40px;
-  margin-bottom: 4px;
   background: #1a1e25;
 }
 .mobile-keyboard button {
@@ -1046,9 +1045,7 @@ onBeforeUnmount(() => {
 .mobile-key-dock.blank > * {
   visibility: hidden;
 }
-.mobile-keyboard.has-dock:has(.mobile-key-dock.blank) .mobile-key-row {
-  margin-bottom: 0;
-}
+
 /* The deck has the height of its rows and scrolls where a short frame caps the dock. A row grows
    with the deck width, as the key labels do, up to a full touch target. */
 .mobile-key-deck {
