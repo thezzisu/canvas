@@ -1,4 +1,4 @@
-import { mobileKeyboardVisible } from '../terminal/mobile-keyboard'
+import { systemKeyboardVisible } from '../terminal/mobile-keyboard'
 import type { GlobalSettings } from '../../../shared/settings'
 import {
   developerMode,
@@ -190,12 +190,9 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
             viewportPolicy.value.interactiveWidget === 'resizes-visual' &&
             app?.classList.contains('mobile-layout')
               ? 'visual-viewport'
-              : viewportPolicy.value.interactiveWidget !== 'overlays-content'
-                ? 'css'
-                : // A terminal overlaying its own IME reserves the inset in its keyboard area instead.
-                  document.documentElement.hasAttribute('data-keyboard-overlay')
-                  ? 'keyboard-overlay'
-                  : 'css-keyboard-inset',
+              : viewportPolicy.value.interactiveWidget === 'overlays-content'
+                ? 'css-keyboard-inset'
+                : 'css',
         }
       : null,
     keyboard: {
@@ -203,7 +200,7 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
         query('.focus-overlay .terminal-actions button[aria-pressed]')?.getAttribute(
           'aria-pressed',
         ) === 'true',
-      visible: mobileKeyboardVisible.value,
+      visible: systemKeyboardVisible.value,
       virtual: keyboard
         ? { rect: rect(keyboard.boundingRect), overlaysContent: keyboard.overlaysContent === true }
         : null,

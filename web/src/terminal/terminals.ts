@@ -49,7 +49,6 @@ import { defaultContentFont, type ContentFontSettings } from '../../../shared/se
 import { applyTerminalFontFeatures, type FontPresentation } from '../settings/fonts'
 import { bindMobileKeyboard, type MobileKeyboardState } from './mobile-keyboard'
 import { bindMobileInput } from './mobile-input'
-import { uiZoom } from '../app/ui-scale'
 import { loadCanvasFile } from '../files/file-transfer'
 import {
   readNoteClipboard,
@@ -94,7 +93,6 @@ export type TerminalStatus = {
   touchMode?: TerminalTouchMode
   keyboardRequested?: boolean
   keyboardMode?: 'system' | 'builtin'
-  keyboardDockHeight?: number
   keyboardDeck?: boolean
   keyboardComposer?: boolean
   retryAttempt?: number
@@ -1187,7 +1185,6 @@ function updateFocusSize(session: Session) {
     session.socket?.readyState !== WebSocket.OPEN
   )
     return
-  if (session.keyboard?.state.switching) return
   const proposed = proposedSize(session)
   if (!proposed) return
   if (!session.focusResize) {
@@ -1791,26 +1788,22 @@ export function mountTerminal(
       focus: () => current.term.textarea?.dispatchEvent(new FocusEvent('focus')),
       blur: () => current.term.textarea?.dispatchEvent(new FocusEvent('blur')),
     }))
-    const keyboardChanged = (requested: boolean, state: MobileKeyboardState) => {
-      current.keyboardRequested = requested
+    const keyboardChanged = (state: MobileKeyboardState) => {
+      current.keyboardRequested = state.open
       setState(current, {
         ...current.state,
         keyboardMode: state.mode,
-        keyboardDockHeight: state.dockHeight,
         keyboardDeck: state.deck,
         keyboardComposer: state.composer,
       })
-      // The keyboard area changes the host's size; size the native grid once that is measured.
-      requestAnimationFrame(() => schedulePresentation(current))
     }
     session.keyboard = bindMobileKeyboard(input.element, {
       active: () => current.mobile && current.magnified && !!current.host?.isConnected,
       changed: keyboardChanged,
-      scale: () => uiZoom.value,
       setEditable: input.setEditable,
       finishEditing: input.finishEditing,
     })
-    keyboardChanged(current.keyboardRequested, session.keyboard.state)
+    keyboardChanged(session.keyboard.state)
   }
   if (session.term.textarea) {
     // xterm internally focuses its textarea on mouse presses. Disable that
@@ -2030,11 +2023,11 @@ export function mountTerminal(
       if (value) current.touchpad?.cancel()
       current.keyboard?.suspend(value)
     },
-    /** The open composer editor owns the system IME; `lost` collapses it when that IME cannot stay. */
     /** The composer's file picker borrows foreground without ending the keyboard's open intent. */
     holdKeyboardForPicker() {
       return current.host === host ? current.keyboard?.filePicker() : undefined
     },
+    /** The open composer editor owns native input; `lost` collapses it when the keyboard closes. */
     composerKeyboard(editor?: HTMLElement, lost?: () => void) {
       if (current.host !== host || !isCurrentApi(mountingContext)) return
       if (editor) {
@@ -2042,9 +2035,6 @@ export function mountTerminal(
         setModifiers(current)
       }
       current.keyboard?.composer(editor, lost)
-    },
-    setKeyboardHeight(height: number) {
-      if (current.host === host) current.keyboard?.setBuiltinHeight(height * uiZoom.value)
     },
     setModifiers(modifiers: Partial<TerminalModifiers>) {
       setModifiers(current, modifiers)

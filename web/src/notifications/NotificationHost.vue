@@ -52,7 +52,6 @@ useEventListener(document, 'fullscreenchange', () => {
   position: fixed;
   inset: calc(
       var(--mobile-top, 0px) + var(--mobile-height, var(--ui-viewport-height)) -
-        var(--mobile-keyboard-inset, 0px) -
         max(12px, var(--mobile-safe-bottom, var(--ui-safe-bottom)))
     )
     max(12px, var(--ui-safe-right)) auto auto;

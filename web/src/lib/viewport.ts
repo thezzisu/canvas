@@ -1,12 +1,7 @@
 import { computed, ref, type Ref } from 'vue'
 import { useEventListener, useResizeObserver } from '@vueuse/core'
 import type { CanvasViewport } from './mobile-layout'
-import {
-  mobileKeyboardInset,
-  mobileKeyboardOpen,
-  mobileKeyboardVisible,
-  refreshMobileKeyboardViewport,
-} from '../terminal/mobile-keyboard'
+import { systemKeyboardVisible } from '../terminal/mobile-keyboard'
 import { viewportPolicy } from '../app/developer-mode'
 import { logicalViewportFrame, readViewportFrame, viewportProbe } from './viewport-frame'
 import { uiZoom } from '../app/ui-scale'
@@ -64,8 +59,6 @@ export function useMobileViewport(mobile: Ref<boolean>) {
       next.left !== previous.left
     )
       measured.value = next
-    // CSS keyboard insets can change without a window or VisualViewport event.
-    refreshMobileKeyboardViewport()
   }
   useResizeObserver(viewportProbe(), update)
   useEventListener(window, ['resize', 'orientationchange'], update)
@@ -89,10 +82,8 @@ export function useMobileViewport(mobile: Ref<boolean>) {
       '--mobile-safe-top': override
         ? `max(0px, calc((env(safe-area-inset-top) - ${measured.value.top}px) / var(--ui-zoom)))`
         : 'var(--ui-safe-top)',
-      '--mobile-safe-bottom':
-        mobileKeyboardOpen.value || mobileKeyboardVisible.value ? '0px' : 'var(--ui-safe-bottom)',
-      // An overlaying IME covers the page bottom; bottom-anchored notices stay above it.
-      '--mobile-keyboard-inset': `${mobileKeyboardInset.value / uiZoom.value}px`,
+      // An IME covers the bottom safe area.
+      '--mobile-safe-bottom': systemKeyboardVisible.value ? '0px' : 'var(--ui-safe-bottom)',
     }
   })
   return { viewport, style }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRafFn, useResizeObserver } from '@vueuse/core'
+import { useRafFn } from '@vueuse/core'
 import type { TerminalModifiers } from './terminal-input'
 import type { TerminalTouchMode } from './terminal-touch'
 import type { TouchpadControl } from '../lib/touchpad-gesture'
@@ -28,8 +28,7 @@ const props = defineProps<{
   keyboardOpen: boolean
   /** The composer owns input: helper keys and the keyboard switch stay in place, disabled. */
   composing?: boolean
-  /** The bottom keyboard area shared with the system IME; `deck` shows the built-in keys in it. */
-  dockHeight: number
+  /** Show the tools and the built-in keys under the helper row. */
   deck?: boolean
   modifiers: TerminalModifiers
   touchMode: TouchMode
@@ -45,11 +44,7 @@ const emit = defineEmits<{
   reading: [active: boolean]
   pointer: [action: TouchpadControl]
   switchKeyboard: []
-  naturalHeight: [height: number]
 }>()
-const deckElement = ref<HTMLElement>(),
-  actions = ref<HTMLElement>(),
-  safeArea = ref<HTMLElement>()
 const switchLabel = computed(() =>
   t(
     props.keyboardMode === 'system'
@@ -57,7 +52,6 @@ const switchLabel = computed(() =>
       : 'terminal.keyboard.switchToSystem',
   ),
 )
-const hasDock = computed(() => props.dockHeight > 0)
 // Disabled buttons still receive pointer events; presses check this as well.
 const inactive = computed(() => props.disabled || props.composing)
 const caps = ref(false)
@@ -523,28 +517,6 @@ function reset(clearFileSelection = true) {
   closeSheet()
   emit('modifiers', { shift: false, ctrl: false, alt: false, meta: false })
 }
-// The dock's own height: the tools and every key row at the size the deck width gives it. It
-// never follows a system keyboard.
-function measureHeight() {
-  const deck = deckElement.value
-  if (!deck || !actions.value) return
-  const style = getComputedStyle(deck),
-    rows = [...deck.children]
-  const keys =
-    rows.reduce((sum, row) => sum + parseFloat(getComputedStyle(row).height), 0) +
-    parseFloat(style.rowGap) * Math.max(0, rows.length - 1)
-  emit(
-    'naturalHeight',
-    Math.ceil(
-      keys +
-        parseFloat(style.paddingTop) +
-        parseFloat(style.paddingBottom) +
-        actions.value.offsetHeight +
-        (safeArea.value?.offsetHeight || 0) +
-        1,
-    ),
-  )
-}
 // Keep leaving flex items at their painted position while the remaining items move.
 function pinLeavingTool(element: Element) {
   const button = element as HTMLElement
@@ -584,7 +556,6 @@ watch(
     if (!props.keyboardOpen) closeSheet()
   },
 )
-useResizeObserver([actions, safeArea], measureHeight)
 onMounted(() => {
   window.addEventListener('blur', cancelPress)
   document.addEventListener('visibilitychange', visibilityChanged)
@@ -602,15 +573,11 @@ onBeforeUnmount(() => {
 <template>
   <section
     class="mobile-keyboard"
-    :class="{
-      'has-dock': hasDock,
-      'reduced-motion': reducedMotion,
-    }"
+    :class="{ 'reduced-motion': reducedMotion }"
     @pointerdown.stop
     @mousedown.stop
     @keydown.esc.stop.prevent="escape"
   >
-    <div ref="safeArea" class="mobile-key-safe" aria-hidden="true" />
     <div
       class="mobile-key-row"
       role="toolbar"
@@ -656,17 +623,13 @@ onBeforeUnmount(() => {
       </button>
     </div>
     <div
+      v-if="deck"
       class="mobile-key-dock"
-      :class="{ blank: !deck }"
-      :style="{ height: `${Math.max(0, dockHeight)}px` }"
-      :inert="!hasDock || !deck"
-      :aria-hidden="!hasDock || !deck"
       role="region"
       :aria-label="t('terminal.keyboard.builtin')"
       @wheel.stop
     >
       <div
-        ref="actions"
         class="mobile-key-actions"
         role="toolbar"
         :aria-label="t('terminal.keyboard.actions')"
@@ -802,7 +765,6 @@ onBeforeUnmount(() => {
         </TransitionGroup>
       </div>
       <div
-        ref="deckElement"
         class="mobile-key-deck"
         role="group"
         :aria-label="t('terminal.keyboard.full')"
@@ -942,13 +904,17 @@ onBeforeUnmount(() => {
 .mobile-keyboard {
   --key-on: color-mix(in srgb, var(--ui-primary) 55%, #1c1f25);
   --key-on-fg: color-mix(in srgb, var(--ui-primary) 30%, #fff);
+  --key-gap: 5px;
   position: relative;
   flex: 0 0 auto;
   min-width: 0;
   border-top: 1px solid #353c47;
   background: #1a1e25;
-  /* Nothing below the tools but the safe area: an open keyboard sits directly under them. */
-  padding: 4px 4px var(--mobile-safe-bottom, 0px);
+  /* One gutter around every row and one gap between rows. */
+  display: flex;
+  flex-direction: column;
+  gap: var(--key-gap);
+  padding: var(--key-gap) var(--key-gap) calc(var(--key-gap) + var(--mobile-safe-bottom, 0px));
   color: #cbd2dd;
   z-index: 6;
   touch-action: manipulation;
@@ -959,9 +925,6 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 3px;
-  overflow: hidden;
-  min-height: 40px;
-  background: #1a1e25;
 }
 .mobile-keyboard button {
   min-height: 44px;
@@ -970,7 +933,7 @@ onBeforeUnmount(() => {
   border: 1px solid #3a4350;
   border-bottom-color: #48515e;
   border-radius: 5px;
-  background: rgb(43 50 61 / var(--key-fill, 1));
+  background: rgb(43 50 61);
   box-shadow:
     inset 0 1px 0 #ffffff05,
     0 1px 1px #0003;
@@ -1013,52 +976,24 @@ onBeforeUnmount(() => {
   font-size: 21px;
   font-family: system-ui, sans-serif;
 }
-.mobile-key-safe {
-  position: absolute;
-  width: 0;
-  height: var(--ui-safe-bottom, 0px);
-  visibility: hidden;
-  pointer-events: none;
-}
 .mobile-key-dock {
-  --key-fill: 0.5;
-  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  /* Keys in an area an IME still makes taller sit at its top, directly under the tools. */
-  justify-content: flex-start;
+  gap: var(--key-gap);
   min-height: 0;
-  margin: 0 -4px;
-  overflow: hidden;
-  padding-bottom: var(--ui-safe-bottom, 0px);
-  border-top: 1px solid #48515e;
-  background: #181d258c;
-}
-.mobile-keyboard:not(.has-dock) .mobile-key-dock {
-  visibility: hidden;
-  padding-bottom: 0;
-  border-top-width: 0;
-}
-/* Under the system keyboard the area is only reserved space: nothing of it shows above the IME. */
-.mobile-key-dock.blank {
-  border-top-width: 0;
-}
-.mobile-key-dock.blank > * {
-  visibility: hidden;
 }
 
-/* The deck has the height of its rows and scrolls where a short frame caps the dock. A row grows
-   with the deck width, as the key labels do, up to a full touch target. */
+/* The deck has the height of its rows and scrolls where a short frame leaves it less. A row
+   grows with the deck width, as the key labels do, up to a full touch target. */
 .mobile-key-deck {
   container-type: inline-size;
   flex: 0 1 auto;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-height: 0;
+  max-height: max(88px, calc(var(--mobile-height, var(--ui-viewport-height)) - 300px));
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 6px;
   overscroll-behavior: contain;
   touch-action: pan-y;
   scrollbar-width: thin;
@@ -1103,18 +1038,16 @@ onBeforeUnmount(() => {
   font-size: clamp(14px, 4cqw, 20px);
 }
 .mobile-key-deck :is(.shift-key, .backspace-key, .enter-key):not([aria-pressed='true']) {
-  background: rgb(37 44 54 / var(--key-fill, 1));
+  background: rgb(37 44 54);
 }
 .mobile-key-actions {
   position: relative;
   flex: 0 0 auto;
   display: flex;
   gap: 3px;
-  padding: 6px;
-  border-bottom: 1px solid #3c4552;
 }
 .mobile-key-actions button:not([aria-pressed='true']) {
-  background: rgb(37 45 55 / var(--key-fill, 1));
+  background: rgb(37 45 55);
   border-color: #35414f;
   color: #b7c3d2;
 }
@@ -1161,12 +1094,6 @@ onBeforeUnmount(() => {
   .mobile-keyboard button:hover:not(:disabled):not([aria-pressed='true']):not(.active) {
     background: #37414e;
     border-color: #526071;
-  }
-}
-@media (prefers-reduced-transparency: reduce) {
-  .mobile-key-dock {
-    --key-fill: 1;
-    background: #20252d;
   }
 }
 </style>

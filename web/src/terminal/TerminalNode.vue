@@ -40,7 +40,6 @@ import type { TerminalTouchMode } from './terminal-touch'
 import type { TouchpadControl } from '../lib/touchpad-gesture'
 import { cutoutPosition, cutoutWidth } from '../lib/display-cutout'
 import { useDocumentFocus } from '../lib/document-focus'
-import { uiZoom } from '../app/ui-scale'
 import { useTerminalSettings } from './terminal-settings'
 import TerminalSettingsDialog from './TerminalSettingsDialog.vue'
 import ContentZoom from '../canvas/ContentZoom.vue'
@@ -445,11 +444,6 @@ function toggleKeyboard() {
 function switchKeyboard() {
   terminal?.switchKeyboard()
 }
-let keyboardNaturalHeight = 0
-function keyboardMeasured(height: number) {
-  keyboardNaturalHeight = height
-  terminal?.setKeyboardHeight(height)
-}
 function readText(signal: AbortSignal) {
   return terminal?.readText(signal) ?? Promise.reject(new Error(t('terminal.unavailable')))
 }
@@ -546,7 +540,6 @@ function mount() {
     )
   terminal?.setAppShowing(showApp.value)
   terminal?.setEditing(editing.value)
-  if (keyboardNaturalHeight) terminal?.setKeyboardHeight(keyboardNaturalHeight)
   if (mobileFocus.value && !showApp.value) {
     if (status.value.touchMode === 'select') terminal?.setTouchMode('scroll')
     terminal?.focus({ keyboard: false })
@@ -567,9 +560,6 @@ watch([zoom, () => props.data.focus], () => {
   terminal?.setZoom(zoom.value)
 })
 watch(settings, (value) => terminal?.setSettings(value), { flush: 'sync' })
-watch(uiZoom, () => {
-  if (keyboardNaturalHeight) terminal?.setKeyboardHeight(keyboardNaturalHeight)
-})
 watch([keepTerminal, () => props.data.mobile, () => props.data.focus], async () => {
   terminal?.dispose()
   terminal = undefined
@@ -1092,13 +1082,11 @@ async function resized(event: { params: { width: number; height: number; x: numb
       :keyboard-mode="status.keyboardMode || 'system'"
       :keyboard-open="!!status.keyboardRequested"
       :composing="!!status.keyboardComposer"
-      :dock-height="(status.keyboardDockHeight || 0) / uiZoom"
       :deck="!!status.keyboardDeck"
       :read-text="readText"
       :copy-text="copyText"
       :prepare-files="prepareFiles"
       @switch-keyboard="switchKeyboard"
-      @natural-height="keyboardMeasured"
       @key="mobileKey"
       @modifiers="mobileModifiers"
       @mode="mobileMode"

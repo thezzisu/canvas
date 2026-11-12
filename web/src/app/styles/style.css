@@ -16,8 +16,7 @@
   --content-font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
   --content-font-features: 'liga' 0, 'calt' 0;
 }
-/* While a terminal overlays its own IME, its keyboard area reserves the inset instead. */
-:root[data-interactive-widget='overlays-content']:not([data-keyboard-overlay]) {
+:root[data-interactive-widget='overlays-content'] {
   --canvas-viewport-height: max(0px, calc(100dvh - env(keyboard-inset-height, 0px)));
 }
 .app-shell .note-content,
