@@ -1,16 +1,16 @@
 import { defineStore } from 'pinia'
 import { createEventHook } from '@vueuse/core'
 import { apiContext, isCurrentApi, orderedWrite, requireCurrentApi, segment } from '../api/api'
-import { createAutosave } from '../lib/autosave'
-import { notify } from '../lib/notify'
-import { createKeepaliveCopies, guardPageExit, pendingWrites } from '../lib/pending-writes'
-import { createLayoutSaves, type LayoutPatch } from '../canvas/layout-saves'
+import { createAutosave } from '../utils/autosave'
+import { notify } from '../composables/notify'
+import { createKeepaliveCopies, guardPageExit, pendingWrites } from '../composables/pending-writes'
+import { createLayoutSaves, type LayoutPatch } from '../utils/canvas/layout-saves'
 import {
   createPendingEdits,
   mergeNoteEdits,
   retargetNoteEdit,
   type NoteEdit,
-} from '../canvas/pending-edits'
+} from '../utils/canvas/pending-edits'
 import type { Canvas, NotePatch } from '../api/types'
 import { useWorkspaceStore } from './workspace'
 

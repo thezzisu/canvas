@@ -1,9 +1,9 @@
 import { ref, watch } from 'vue'
-import { t } from '../app/i18n'
-import { activeInstance } from '../instances/instances'
-import { resolveApiUrl } from '../instances/instance-url'
-import { sessionToken, storeSessionToken, tokenKey } from '../instances/instance-session'
-import { keepaliveFetch, pendingWrites } from '../lib/pending-writes'
+import { t } from '../plugins/i18n'
+import { activeInstance } from '../composables/instances/instances'
+import { resolveApiUrl } from '../utils/instances/instance-url'
+import { sessionToken, storeSessionToken, tokenKey } from '../utils/instances/instance-session'
+import { keepaliveFetch, pendingWrites } from '../composables/pending-writes'
 
 export class ApiError extends Error {
   constructor(

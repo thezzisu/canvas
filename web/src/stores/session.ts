@@ -12,20 +12,20 @@ import {
   write,
   ApiError,
 } from '../api/api'
-import { t } from '../app/i18n'
+import { t } from '../plugins/i18n'
 import {
   activeInstance,
   hasActiveInstance,
   invalidInstanceLink,
   rememberInstance,
   rememberInstanceUsername,
-} from '../instances/instances'
-import { isCanvasSession } from '../instances/instance-url'
+} from '../composables/instances/instances'
+import { isCanvasSession } from '../utils/instances/instance-url'
 import {
   instanceBuild,
   observeInstanceBuild,
   staleInstanceBuild,
-} from '../instances/instance-builds'
+} from '../composables/instances/instance-builds'
 import { useEditsStore } from './edits'
 import { useWorkspaceStore } from './workspace'
 

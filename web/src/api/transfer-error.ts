@@ -1,4 +1,4 @@
-import { t, te } from '../app/i18n'
+import { t, te } from '../plugins/i18n'
 
 /** Server transfer failures are stable codes; anything else is shown as received. */
 export function transferError(value: unknown): string {

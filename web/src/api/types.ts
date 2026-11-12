@@ -2,7 +2,7 @@ import type { GlobalSettings } from '../../../shared/settings'
 import type { NavigationOrder } from '../../../shared/navigation-order'
 import type { ProgramStatus } from '../../../shared/status'
 import type { CompletionToken } from '../../../shared/completion'
-import type { CanvasDirection, CanvasEntry } from '../canvas/canvas-jump'
+import type { CanvasDirection, CanvasEntry } from '../utils/canvas/canvas-jump'
 export type { ProgramStatus } from '../../../shared/status'
 
 export interface Source {
@@ -152,7 +152,7 @@ export interface NoteData extends NoteCanvasNode {
   onResize: (id: string, width: number, height: number, x?: number, y?: number) => void
   onResizeStart: (id: string, bounds: Omit<NodeLayout, 'id'>) => void
   onChange: (id: string, patch: NotePatch) => void
-  onAttachment: (value: import('../notes/note-uploads').NoteInsertion) => void
+  onAttachment: (value: import('../composables/notes/note-uploads').NoteInsertion) => void
   onFlush: () => void
   onAction: (action: string, id: string) => void
 }

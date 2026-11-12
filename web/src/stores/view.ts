@@ -1,13 +1,13 @@
 import { computed } from 'vue'
 import { defineStore } from 'pinia'
 import { useLocalStorage } from '@vueuse/core'
-import { activeInstance } from '../instances/instances'
+import { activeInstance } from '../composables/instances/instances'
 import {
   overviewFocusStatuses,
   overviewStatuses,
   type OverviewOrder,
   type OverviewScope,
-} from '../canvas/overview'
+} from '../utils/canvas/overview'
 import type { ProgramStatus } from '../../../shared/status'
 
 const local = { listenToStorageChanges: false, writeDefaults: false }

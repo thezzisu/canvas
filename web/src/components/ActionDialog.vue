@@ -7,8 +7,8 @@ import UButton from '@nuxt/ui/components/Button.vue'
 import UForm from '@nuxt/ui/components/Form.vue'
 import UFormField from '@nuxt/ui/components/FormField.vue'
 import UInput from '@nuxt/ui/components/Input.vue'
-import { useSubmit } from '../lib/use-submit'
-import type { ActionRequest } from '../workspace/dialogs'
+import { useSubmit } from '../composables/use-submit'
+import type { ActionRequest } from '../composables/workspace/dialogs'
 
 // A confirmation, optionally with one name field. It runs the request's action itself.
 const props = defineProps<ActionRequest>()

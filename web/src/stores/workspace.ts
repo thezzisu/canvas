@@ -3,21 +3,21 @@ import { defineStore } from 'pinia'
 import { createEventHook, useDocumentVisibility, useIntervalFn, useNow } from '@vueuse/core'
 import { api, apiContext, apiRevision, isCurrentApi, requireCurrentApi } from '../api/api'
 import { subscribeState } from '../api/state-events'
-import { t } from '../app/i18n'
-import { notify } from '../lib/notify'
-import { agentIndicator, canvasIndicators } from '../workspace/canvas-status'
+import { t } from '../plugins/i18n'
+import { notify } from '../composables/notify'
+import { agentIndicator, canvasIndicators } from '../utils/workspace/canvas-status'
 import {
   focusedCompletionStatus,
   projectFocusedResources,
   type FocusedStatus,
-} from '../workspace/completion-focus'
-import { mergeLiveResources } from '../workspace/live-resources'
-import { orderedItems, useSidebarOrder } from '../workspace/sidebar-order'
-import { workingSet } from '../workspace/working-set'
-import { retainBackgrounds } from '../workspace/backgrounds'
-import { applyComposers } from '../terminal/composers'
-import { clearCaptureTrust } from '../terminal/capture-trust'
-import { hideMobileKeyboard } from '../terminal/mobile-keyboard'
+} from '../utils/workspace/completion-focus'
+import { mergeLiveResources } from '../utils/workspace/live-resources'
+import { orderedItems, useSidebarOrder } from '../composables/workspace/sidebar-order'
+import { workingSet } from '../utils/workspace/working-set'
+import { retainBackgrounds } from '../composables/workspace/backgrounds'
+import { applyComposers } from '../composables/terminal/composers'
+import { clearCaptureTrust } from '../composables/terminal/capture-trust'
+import { hideMobileKeyboard } from '../composables/terminal/mobile-keyboard'
 import {
   acknowledgeTerminalMetadata,
   clearTerminals,
@@ -25,9 +25,9 @@ import {
   liveTerminalMetadata,
   retainTerminalMetadata,
   terminalReadFocus,
-} from '../terminal/terminals'
-import { closeTrustedPreview } from '../files/trusted-preview'
-import { applyContentFont, resetContentFont } from '../settings/content-font'
+} from '../composables/terminal/terminals'
+import { closeTrustedPreview } from '../composables/files/trusted-preview'
+import { applyContentFont, resetContentFont } from '../composables/settings/content-font'
 import { defaultWindowSize } from '../../../shared/window-size'
 import {
   isTerminalNode,
