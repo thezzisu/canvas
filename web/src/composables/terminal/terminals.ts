@@ -1145,18 +1145,8 @@ function terminalGeometry(session: Session) {
 /** A view is a scaled projection of the shared native window, not its size owner. */
 function present(session: Session) {
   if (!session.host?.isConnected || !session.opened) return
-  if (
-    session.state.presentation?.maximized &&
-    (!session.state.presentation.owned || !session.magnified)
-  )
-    return
-  const geometry = terminalGeometry(session)
-  if (!geometry) return
-  // xterm's scrollbar overlays the grid; it does not reserve a permanent gutter.
-  const { width, height } = geometry
   const requested = session.focusResize?.requested,
     painted = session.paintedGrid
-  const desired = session.magnified ? proposedSize(session) : undefined
   // Cover every frame that is not the settled one: a card being resized, a grid xterm has not
   // painted yet, and an old frame waiting for the native resize this view asked for.
   const transitioning =
@@ -1168,6 +1158,16 @@ function present(session: Session) {
       !sameTerminalGrid(painted, session.term))
   if (session.state.transitioning !== transitioning)
     setState(session, { ...session.state, transitioning })
+  if (
+    session.state.presentation?.maximized &&
+    (!session.state.presentation.owned || !session.magnified)
+  )
+    return
+  const geometry = terminalGeometry(session)
+  if (!geometry) return
+  // xterm's scrollbar overlays the grid; it does not reserve a permanent gutter.
+  const { width, height } = geometry
+  const desired = session.magnified ? proposedSize(session) : undefined
   // Keep the complete old frame fitted while the native resize is in flight.
   // Geometry acknowledgements alone do not mean xterm has painted that grid.
   const native =
@@ -1717,6 +1717,8 @@ export function mountTerminal(
   }
   setModifiers(session)
   host.appendChild(session.surface)
+  // A frame fitted to the previous host stays covered until this host has been measured.
+  present(session)
   if (!session.opened) {
     session.term.open(session.surface)
     session.opened = true
@@ -1973,6 +1975,8 @@ export function mountTerminal(
     const box = entries.at(-1)?.contentRect
     if (current.host !== host || !box) return
     current.available = { width: box.width, height: box.height }
+    // Ask for the new grid now, so the old frame is covered before this size is painted.
+    updateFocusSize(current)
     present(current)
     schedulePresentation(current)
     current.touchpad?.refresh()
