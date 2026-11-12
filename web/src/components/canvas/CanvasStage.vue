@@ -28,7 +28,6 @@ const { workspace, shell, view, camera, graph, layout, paging, focus, morph } = 
 const { nodes, getViewport } = scene.flow
 const navigation = camera.navigation
 const fileDrop = useTemplateRef('fileDrop')
-defineExpose({ fileDrop })
 
 /** System canvases share one background; each custom canvas has its own. */
 const background = computed(() =>
@@ -37,7 +36,7 @@ const background = computed(() =>
 const { url: backgroundUrl, material } = useBackgroundUrl(() => background.value?.url, {
   material: true,
 })
-/** What a terminal shows before its first frame: the wallpaper as seen through the canvas. */
+/** What covers a terminal with no settled frame: the wallpaper as seen through the canvas. */
 const terminalMaterial = computed(() => {
   const tint = `rgb(27 31 38 / ${1 - (background.value?.opacity ?? 0)})`
   return {
@@ -46,6 +45,8 @@ const terminalMaterial = computed(() => {
       : '#1b1f26',
   }
 })
+// A maximized card is outside this stage and takes the material from here.
+defineExpose({ fileDrop, terminalMaterial })
 const status = computed(() =>
   workspace.pending ||
   (!contentFontReady.value && (nodes.value.length || focus.maximized.value)) ||

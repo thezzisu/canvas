@@ -100,7 +100,10 @@ watch(
         { 'card-focus-overlay': focus.card.value },
         morph.state.value && `canvas-morph-${morph.state.value.phase}`,
       ]"
-      :style="morph.state.value && { '--canvas-morph-shift': `${morph.state.value.shift}px` }"
+      :style="[
+        stage?.terminalMaterial,
+        morph.state.value && { '--canvas-morph-shift': `${morph.state.value.shift}px` },
+      ]"
     >
       <TerminalNode
         v-if="focus.terminal.value"
