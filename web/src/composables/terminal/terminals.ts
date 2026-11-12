@@ -72,7 +72,6 @@ import type { CanvasFileReference } from '../../utils/files/file-reference'
 import {
   containTerminalScale,
   fitTerminalGrid,
-  reflowsTerminal,
   sameTerminalGrid,
   styledSize,
   terminalFrameReady,
@@ -113,8 +112,6 @@ interface FocusResize {
   token: string
   suspended: boolean
   requested?: TerminalGrid
-  /** The grid before this view asked for its own. */
-  shared: TerminalGrid
 }
 interface CompletionFrame {
   generation: number
@@ -1153,7 +1150,7 @@ function present(session: Session) {
   if (!session.host?.isConnected || !session.opened) return
   const requested = session.focusResize?.requested,
     painted = session.paintedGrid
-  // Cover a frame that would be seen to reflow: a card being resized, a grid xterm has not
+  // Cover every frame that is not the settled one: a card being resized, a grid xterm has not
   // painted yet, and an old frame waiting for the native resize this view asked for.
   const transitioning =
     session.state.status === 'connected' &&
@@ -1161,7 +1158,7 @@ function present(session: Session) {
     !session.appShowing &&
     (!!session.resizing ||
       session.nativeResize !== undefined ||
-      reflowsTerminal(painted, session.term))
+      !sameTerminalGrid(painted, session.term))
   if (session.state.transitioning !== transitioning)
     setState(session, { ...session.state, transitioning })
   if (
@@ -1232,17 +1229,12 @@ function updateFocusSize(session: Session) {
   const proposed = proposedSize(session)
   if (!proposed) return
   if (!session.focusResize) {
-    session.focusResize = {
-      token: uuid(),
-      suspended: false,
-      requested: proposed,
-      shared: { cols: session.term.cols, rows: session.term.rows },
-    }
+    session.focusResize = { token: uuid(), suspended: false, requested: proposed }
     claimFocus(session)
     session.socket.send(
       JSON.stringify({ type: 'focus-resize-begin', token: session.focusResize.token, ...proposed }),
     )
-    if (reflowsTerminal(session.term, proposed)) awaitNativeResize(session)
+    if (!sameTerminalGrid(proposed, session.term)) awaitNativeResize(session)
     return
   }
   const request = session.focusResize
@@ -1251,19 +1243,26 @@ function updateFocusSize(session: Session) {
   session.socket.send(
     JSON.stringify({ type: 'focus-resize-update', token: request.token, ...proposed }),
   )
-  if (reflowsTerminal(session.term, proposed)) awaitNativeResize(session)
+  if (!sameTerminalGrid(proposed, session.term)) awaitNativeResize(session)
 }
 function endFocusSize(session: Session) {
   const request = session.focusResize
   if (!request) return
   session.focusResize = undefined
-  if (session.socket?.readyState === WebSocket.OPEN) {
+  const owned = !request.suspended && session.socket?.readyState === WebSocket.OPEN
+  if (session.socket?.readyState === WebSocket.OPEN)
     session.socket.send(JSON.stringify({ type: 'focus-resize-end', token: request.token }))
-    // The window returns to the size it had before this view asked for its own.
-    if (!request.suspended && reflowsTerminal(session.term, request.shared))
-      awaitNativeResize(session)
+  // The server answers the owner's release with a fresh snapshot of the window at its shared
+  // size. The view stays covered until that snapshot has painted, whatever size it has.
+  if (owned) {
+    session.resumePaint = (session.paintRevision || 0) + 1
+    session.resumeReset = false
   }
-  setState(session, { ...session.state, focusResize: undefined })
+  setState(session, {
+    ...session.state,
+    focusResize: undefined,
+    layoutRestoring: session.resumePaint !== undefined,
+  })
 }
 function claimFocus(session: Session) {
   if (!interactive(session)) return
