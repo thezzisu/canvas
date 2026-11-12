@@ -2012,16 +2012,16 @@ export function mountTerminal(
       return current.mouseDefaults?.allowsContextMenu() ?? true
     },
     async paneContext(x: number, y: number, signal: AbortSignal): Promise<PaneContext | null> {
+      // A frame xterm is still painting has no usable layout yet. A menu asked for in that
+      // moment waits for it, for a second at most, instead of reporting nothing there.
+      const painted = () =>
+        !!current.paintedLayout &&
+        !current.resizing &&
+        sameTerminalGrid(current.paintedGrid, current.term)
+      for (let frames = 0; !painted() && frames < 60 && !signal.aborted; frames++)
+        await new Promise(requestAnimationFrame)
       const layout = current.paintedLayout
-      // Only a frame xterm has not painted has no usable layout; a cover that is merely
-      // waiting or fading still shows the painted one.
-      if (
-        !canPasteText() ||
-        !layout ||
-        current.resizing ||
-        !sameTerminalGrid(current.paintedGrid, current.term)
-      )
-        return null
+      if (!canPasteText() || !layout || !painted() || signal.aborted) return null
       const rect = current.term.element?.querySelector('.xterm-screen')?.getBoundingClientRect()
       if (
         !rect?.width ||
