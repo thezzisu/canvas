@@ -47,6 +47,7 @@ import { captureToolbarHeight } from '../../../../shared/capture'
 import { api } from '../../api/api'
 import {
   cachedTerminalView,
+  hasTerminalFrame,
   mountTerminal,
   type TerminalStatus,
 } from '../../composables/terminal/terminals'
@@ -153,7 +154,11 @@ const {
   resetZoom,
 } = useTerminalSettings(() => props.data.preferenceKey)
 const settingsOpen = ref(false)
-const status = ref<TerminalStatus>({ status: 'connecting' })
+// A card adopting a painted terminal shows it from its first render.
+const adopted = hasTerminalFrame(props.data)
+const status = ref<TerminalStatus>(
+  adopted ? { status: 'connected', screenReady: true } : { status: 'connecting' },
+)
 const noteDrag = ref(false)
 const fileDrag = ref(false)
 const closed = computed(() => props.data.closed || status.value.status === 'closed')
@@ -244,13 +249,13 @@ const covered = useHeld(
   240,
   200,
 )
-// Until its first settled frame a terminal stays under the loading panel, so loading and a
-// cover that follows it are one.
-const unrevealed = ref(true)
+// A terminal that had no frame stays under the loading panel until its first settled one, so
+// loading and a cover that follows it are one.
+const loaded = ref(adopted)
 watchEffect(() => {
-  if (!status.value.screenReady) unrevealed.value = true
-  else if (!covered.value) unrevealed.value = false
+  if (status.value.screenReady && !covered.value) loaded.value = true
 })
+const firstFrame = computed(() => !status.value.screenReady || !loaded.value)
 const resizeState = computed(() =>
   !props.data.focus
     ? 'passive'
@@ -559,8 +564,9 @@ function inView() {
     box.left < window.innerWidth
   )
 }
-/** A maximized terminal starts at once; cards in view start before the ones outside it. */
-const startRank = () => (props.data.focus ? immediateStart : inView() ? 1 : 2)
+/** A maximized or already painted terminal starts at once; cards in view start before the rest. */
+const startRank = () =>
+  props.data.focus || hasTerminalFrame(props.data) ? immediateStart : inView() ? 1 : 2
 function mount() {
   start?.cancel()
   start = undefined
@@ -1100,10 +1106,10 @@ async function resized(event: { params: { width: number; height: number; x: numb
             !closed &&
             keepTerminal &&
             !maximizedElsewhere &&
-            (status.status === 'connecting' || (status.status === 'connected' && unrevealed))
+            (status.status === 'connecting' || (status.status === 'connected' && firstFrame))
           "
           class="terminal-loading nodrag"
-          :class="{ 'terminal-loading-initial': unrevealed }"
+          :class="{ 'terminal-loading-initial': firstFrame }"
           role="status"
         >
           <span class="terminal-loading-label"
@@ -1295,6 +1301,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
   }
 }
 .terminal-loading-leave-active {
+  pointer-events: none;
   transition: opacity 160ms ease-out;
 }
 .terminal-loading-leave-to {

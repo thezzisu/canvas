@@ -541,6 +541,11 @@ export function hasLiveTerminal(sourceId: string, windowId: string): boolean {
       session.state.status !== 'closed',
   )
 }
+/** The window already has a painted terminal that a new card only adopts. */
+export function hasTerminalFrame(resource: Session['resource']): boolean {
+  return !!sessions.get(key(resource.sourceId, resource.spaceId, resource.windowId))?.state
+    .screenReady
+}
 export function cachedTerminalView(sourceId: string, windowId: string) {
   const session = [...sessions.values()].find(
     (session) =>
