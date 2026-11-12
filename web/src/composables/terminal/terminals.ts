@@ -79,6 +79,7 @@ import {
   type RenderedTerminalGrid,
   type TerminalGrid,
 } from '../../utils/terminal/terminal-geometry'
+import { coversResize } from '../../utils/terminal/resize-cover'
 import { TerminalReconnect, terminalInputHasFocus } from '../../utils/terminal/terminal-reconnect'
 import { normalizeContentZoom } from '../canvas/content-zoom'
 import { fillTerminalBackground } from '../../utils/terminal/terminal-background'
@@ -169,6 +170,12 @@ interface Session {
   parsedGrid?: TerminalGrid
   /** A native resize this view asked for is on its way; the old frame stays covered until then. */
   nativeResize?: ReturnType<typeof setTimeout>
+  /** What decides whether the next resize is covered; see `coversResize`. */
+  covered?: boolean
+  uncoveredAt?: number
+  resizePrompted?: boolean
+  /** The grid is changing without a cover, as the page settles. */
+  settling?: boolean
   paintedGrid?: TerminalGrid
   paintRevision?: number
   resetPending?: boolean
@@ -1158,7 +1165,7 @@ function present(session: Session) {
     !session.appShowing &&
     (!!session.resizing ||
       session.nativeResize !== undefined ||
-      !sameTerminalGrid(painted, session.term))
+      (!session.settling && !sameTerminalGrid(painted, session.term)))
   if (session.state.transitioning !== transitioning)
     setState(session, { ...session.state, transitioning })
   if (
@@ -1201,6 +1208,7 @@ function present(session: Session) {
 function setTerminalZoom(session: Session, percent: number) {
   const fontSize = (12 * (session.magnified ? normalizeContentZoom(percent) : 100)) / 100
   if (session.term.options.fontSize === fontSize) return
+  session.resizePrompted = true
   session.rendered = undefined
   session.metrics = undefined
   session.paintedGrid = undefined
@@ -1243,7 +1251,15 @@ function updateFocusSize(session: Session) {
   session.socket.send(
     JSON.stringify({ type: 'focus-resize-update', token: request.token, ...proposed }),
   )
-  if (!sameTerminalGrid(proposed, session.term)) awaitNativeResize(session)
+  if (sameTerminalGrid(proposed, session.term)) return
+  session.settling = !coversResize({
+    covered: !!session.covered,
+    prompted: !!session.resizePrompted,
+    sinceUncovered:
+      session.uncoveredAt === undefined ? undefined : performance.now() - session.uncoveredAt,
+  })
+  session.resizePrompted = false
+  if (!session.settling) awaitNativeResize(session)
 }
 function endFocusSize(session: Session) {
   const request = session.focusResize
@@ -1487,6 +1503,7 @@ export function mountTerminal(
           claimFocus(current)
       }
       if (frameReady) {
+        current.settling = false
         current.paintedGrid = { cols: term.cols, rows: term.rows }
         current.paintedLayout = current.parsedLayout
         current.paintedCompletion = current.parsedCompletion
@@ -1838,6 +1855,7 @@ export function mountTerminal(
       blur: () => current.term.textarea?.dispatchEvent(new FocusEvent('blur')),
     }))
     const keyboardChanged = (state: MobileKeyboardState) => {
+      current.resizePrompted = true
       current.keyboardRequested = state.open
       setState(current, {
         ...current.state,
@@ -2054,6 +2072,12 @@ export function mountTerminal(
     setEditing(value: boolean) {
       if (current.host === host && isCurrentApi(mountingContext))
         setContentHidden(current, 'editing', value)
+    },
+    /** The card reports whether its cover is on screen. */
+    setCovered(value: boolean) {
+      if (current.host !== host) return
+      if (current.covered && !value) current.uncoveredAt = performance.now()
+      current.covered = value
     },
     setAppShowing(value: boolean) {
       if (current.host === host && isCurrentApi(mountingContext))
