@@ -211,12 +211,11 @@ export function bindMobileKeyboard(input: HTMLElement, options: KeyboardOptions)
         else void attach(true, true)
       }
     },
-    /** Focus the terminal; `true` opens its keyboard and `false` closes it. */
-    focus(value?: boolean) {
+    /** Focus the terminal for hardware keys; `show` also opens its keyboard. */
+    focus(show = false) {
       if (!options.active()) return
-      if (value === false) controller.blur()
       claim()
-      if (value) open = true
+      if (show) open = true
       void attach(true, open && !systemKeyboardVisible.value)
       layout()
     },

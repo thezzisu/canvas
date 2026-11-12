@@ -28,7 +28,7 @@ export function useWindowReveal(scene: CanvasScene) {
   const { nodes, getViewport, getNodesInitialized } = flow
   /** A window to bring into view on a canvas, once that canvas and its nodes are there. */
   const reveal = shallowRef<{ canvasId: string; target: WindowFocus; pending: boolean }>()
-  /** A terminal that takes keyboard focus as soon as it is connected and visible. */
+  /** A desktop terminal that takes keyboard focus as soon as it is connected and visible. */
   const focus = shallowRef<{
     canvasId: string
     sourceId: string
@@ -141,8 +141,9 @@ export function useWindowReveal(scene: CanvasScene) {
     else await scene.camera.show(card)
     if (reveal.value !== settled) return
     scene.focus.selected.value = request.target
-    focus.value = { canvasId: request.canvasId, ...request.target, spaceId: card.data.spaceId }
+    // A touch terminal is used maximized, and takes focus itself when that view opens.
     if (shell.mobile) scene.cards.terminalAction('focus', card.id)
+    else focus.value = { canvasId: request.canvasId, ...request.target, spaceId: card.data.spaceId }
   }
   /** Open the notification's window maximized where the user is, without changing canvas. */
   async function open(event: CanvasNotification) {

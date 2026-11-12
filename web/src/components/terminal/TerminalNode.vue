@@ -118,8 +118,7 @@ function returnToTerminal() {
   const current = terminal
   setCaptureVisible(props.data.sourceId, props.data.windowId, false)
   nextTick(() => {
-    if (!showApp.value && host.value?.isConnected && terminal === current)
-      current?.focus({ keyboard: false })
+    if (!showApp.value && host.value?.isConnected && terminal === current) current?.focus()
   })
 }
 const stoppingAppId = ref('')
@@ -546,7 +545,7 @@ function dropNote(event: DragEvent) {
   clearNoteDrag()
   const text = readNoteTransfer(event.dataTransfer)
   if (!text || !noteDropAvailable.value || !terminal?.canPasteText()) return
-  terminal.focus({ keyboard: false })
+  terminal.focus()
   terminal.pasteText(text)
 }
 let start: TerminalStart | undefined
@@ -598,7 +597,7 @@ function mount() {
     terminal.setCovered(covered.value)
     if (mobileFocus.value && !showApp.value) {
       if (status.value.touchMode === 'select') terminal.setTouchMode('scroll')
-      terminal.focus({ keyboard: false })
+      terminal.focus()
     }
   })
 }
@@ -1253,8 +1252,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-transition :deep(.xterm-rows),
 .terminal-transition :deep(.xterm-selection),
 .terminal-transition :deep(.xterm-viewport),
-.terminal-transition :deep(.xterm-decoration-container),
-.terminal-transition :deep(.xterm-overview-ruler) {
+.terminal-transition :deep(.xterm-decoration-container) {
   opacity: 0;
 }
 .terminal-host[data-content-active='false'] :deep(.xterm) {

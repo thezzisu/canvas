@@ -113,8 +113,6 @@ interface FocusResize {
   token: string
   suspended: boolean
   requested?: TerminalGrid
-  /** A size that has not held still long enough to be asked for. */
-  pending?: { size: TerminalGrid; timer: ReturnType<typeof setTimeout> }
 }
 interface CompletionFrame {
   generation: number
@@ -590,7 +588,6 @@ export function setContentFont(settings: ContentFontSettings, presentation: Font
     schedulePresentation(session)
   }
 }
-const scrollbarWidth = 6
 let mouseOwner: Session | undefined
 let terminalEventsInstalled = false
 const mouseEvents = ['mousedown', 'mousemove', 'mouseup', 'wheel'] as const
@@ -756,28 +753,24 @@ function setModifiers(session: Session, modifiers: Partial<TerminalModifiers> = 
   }
   setState(session, { ...session.state, modifiers: session.modifiers })
 }
-function focusTerminal(session: Session, keyboard?: boolean) {
+/** Give the terminal the focus; `keyboard` also opens its touch keyboard. */
+function focusTerminal(session: Session, keyboard = false) {
   if (!contentFocusable(session) || session.state.status === 'closed') return
   claimFocus(session)
   if (session.mobile) session.keyboard?.focus(keyboard)
   else session.term.focus()
   session.keyboardLock?.refresh(true)
 }
-/**
- * Give a window's terminal the focus; `keyboard` true also opens its mobile keyboard. Returns
- * whether the terminal took it. A touch terminal takes focus through its keyboard, which
- * finishes any composition first, so there the answer does not wait for `activeElement`.
- */
 export function focusWindow(
   sourceId: string,
   spaceId: string,
   windowId: string,
-  keyboard?: true,
+  keyboard = false,
 ): boolean {
   const session = sessions.get(key(sourceId, spaceId, windowId))
   if (!session?.host?.isConnected || !interactive(session)) return false
   focusTerminal(session, keyboard)
-  return session.mobile || session.term.element?.contains(document.activeElement) === true
+  return session.term.element?.contains(document.activeElement) === true
 }
 function schedulePresentation(session: Session) {
   if (session.presentationFrame !== undefined) return
@@ -1104,12 +1097,8 @@ async function connect(session: Session, probe: boolean) {
             if (session.resumeReset) session.resumePaint = session.paintRevision
           }
           // A grid on the way to the one this view asked for stays covered.
-          const request = session.focusResize?.suspended ? undefined : session.focusResize
-          // The cover waits for the size this view asked for, or is still about to ask for.
-          if (
-            !request?.requested ||
-            (!request.pending && sameTerminalGrid(request.requested, message as TerminalGrid))
-          ) {
+          const asked = session.focusResize?.suspended ? undefined : session.focusResize?.requested
+          if (!asked || sameTerminalGrid(asked, message as TerminalGrid)) {
             clearTimeout(session.nativeResize)
             session.nativeResize = undefined
           }
@@ -1127,12 +1116,7 @@ async function connect(session: Session, probe: boolean) {
           const revoked = !message.owned && message.reason === 'superseded'
           if (message.token !== request.token && !revoked) return
           request.suspended = message.owned !== true
-          if (request.suspended) {
-            // Whoever owns the window now sets its size; this view asks afresh if it owns it again.
-            clearTimeout(request.pending?.timer)
-            request.pending = request.requested = undefined
-            nativeResizeSettled(session)
-          }
+          if (request.suspended) nativeResizeSettled(session)
           setState(session, { ...session.state, focusResize: { owned: message.owned === true } })
           schedulePresentation(session)
         }
@@ -1154,8 +1138,6 @@ async function connect(session: Session, probe: boolean) {
 }
 // The server answers a native resize well within this; a view never waits on it for longer.
 const nativeResizeLimit = 500
-// A size is asked for natively once it has not changed for this long.
-const resizeStillness = 200
 function awaitNativeResize(session: Session) {
   clearTimeout(session.nativeResize)
   session.nativeResize = setTimeout(() => nativeResizeSettled(session), nativeResizeLimit)
@@ -1264,36 +1246,12 @@ function updateFocusSize(session: Session) {
     return
   }
   const request = session.focusResize
-  if (sameTerminalGrid(proposed, request.requested)) {
-    // Back at the size already asked for, as when a keyboard comes and goes at once.
-    if (request.pending) {
-      clearTimeout(request.pending.timer)
-      request.pending = undefined
-      nativeResizeSettled(session)
-    }
-    return
-  }
-  if (sameTerminalGrid(proposed, request.pending?.size)) return
-  // Every native resize makes the program redraw. A size that is still changing, as while a
-  // keyboard slides or is toggled twice, is asked for once it has held still.
-  clearTimeout(request.pending?.timer)
-  request.pending = {
-    size: proposed,
-    timer: setTimeout(() => {
-      request.pending = undefined
-      if (
-        session.focusResize !== request ||
-        request.suspended ||
-        session.socket?.readyState !== WebSocket.OPEN
-      )
-        return
-      request.requested = proposed
-      session.socket.send(
-        JSON.stringify({ type: 'focus-resize-update', token: request.token, ...proposed }),
-      )
-      if (session.nativeResize !== undefined) awaitNativeResize(session)
-    }, resizeStillness),
-  }
+  if (proposed.cols === request.requested?.cols && proposed.rows === request.requested?.rows) return
+  request.requested = proposed
+  session.socket.send(
+    JSON.stringify({ type: 'focus-resize-update', token: request.token, ...proposed }),
+  )
+  if (sameTerminalGrid(proposed, session.term)) return
   session.settling = !coversResize({
     covered: !!session.covered,
     prompted: !!session.resizePrompted,
@@ -1306,7 +1264,6 @@ function updateFocusSize(session: Session) {
 function endFocusSize(session: Session) {
   const request = session.focusResize
   if (!request) return
-  clearTimeout(request.pending?.timer)
   session.focusResize = undefined
   if (session.socket?.readyState === WebSocket.OPEN) {
     session.socket.send(JSON.stringify({ type: 'focus-resize-end', token: request.token }))
@@ -1383,7 +1340,6 @@ export function mountTerminal(
       fontFamily: fontPresentation.family,
       lineHeight: 1,
       scrollback: 5000,
-      overviewRuler: { width: scrollbarWidth },
       allowProposedApi: true,
       linkHandler: terminalLinkHandler(
         {
@@ -1405,7 +1361,6 @@ export function mountTerminal(
           !!session?.host?.isConnected && (!event.isTrusted || !session.term.hasSelection()),
       ),
       theme: {
-        overviewRulerBorder: 'transparent',
         background: '#111317',
         foreground: '#d5d7dd',
         cursor: '#e8b183',
