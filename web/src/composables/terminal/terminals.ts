@@ -167,6 +167,8 @@ interface Session {
   metrics?: RenderedTerminalGrid
   resizing?: boolean
   parsedGrid?: TerminalGrid
+  /** A native resize this view asked for is on its way; the old frame stays covered until then. */
+  nativeResize?: ReturnType<typeof setTimeout>
   paintedGrid?: TerminalGrid
   paintRevision?: number
   resetPending?: boolean
@@ -797,6 +799,8 @@ function disconnect(session: Session) {
     socket.close()
   }
   session.uploads.disconnected()
+  clearTimeout(session.nativeResize)
+  session.nativeResize = undefined
   session.presentationRevision = (session.presentationRevision || 0) + 1
   setState(session, {
     ...session.state,
@@ -1080,6 +1084,8 @@ async function connect(session: Session, probe: boolean) {
             session.paintRevision = (session.paintRevision || 0) + 1
             if (session.resumeReset) session.resumePaint = session.paintRevision
           }
+          clearTimeout(session.nativeResize)
+          session.nativeResize = undefined
           session.term.resize(message.cols, message.rows)
           // A replay normally repeats the current size before its reset bytes; repainting
           // then would only redraw the screen those bytes are about to replace.
@@ -1094,6 +1100,7 @@ async function connect(session: Session, probe: boolean) {
           const revoked = !message.owned && message.reason === 'superseded'
           if (message.token !== request.token && !revoked) return
           request.suspended = message.owned !== true
+          if (request.suspended) nativeResizeSettled(session)
           setState(session, { ...session.state, focusResize: { owned: message.owned === true } })
           schedulePresentation(session)
         }
@@ -1112,6 +1119,18 @@ async function connect(session: Session, probe: boolean) {
       connectionFailed(session)
     }
   }
+}
+// The server answers a native resize well within this; a view never waits on it for longer.
+const nativeResizeLimit = 500
+function awaitNativeResize(session: Session) {
+  clearTimeout(session.nativeResize)
+  session.nativeResize = setTimeout(() => nativeResizeSettled(session), nativeResizeLimit)
+}
+function nativeResizeSettled(session: Session) {
+  if (session.nativeResize === undefined) return
+  clearTimeout(session.nativeResize)
+  session.nativeResize = undefined
+  present(session)
 }
 function terminalGeometry(session: Session) {
   const screen = session.term.element?.querySelector<HTMLElement>('.xterm-screen')
@@ -1132,13 +1151,15 @@ function present(session: Session) {
   const requested = session.focusResize?.requested,
     painted = session.paintedGrid
   const desired = session.magnified ? proposedSize(session) : undefined
-  // Mask local renderer changes only. Pending native geometry keeps the old
-  // frame contained; it must never make visual readiness depend on the server.
+  // Cover every frame that is not the settled one: a card being resized, a grid xterm has not
+  // painted yet, and an old frame waiting for the native resize this view asked for.
   const transitioning =
     session.state.status === 'connected' &&
     !!session.state.screenReady &&
     !session.appShowing &&
-    (!!session.resizing || !sameTerminalGrid(painted, session.term))
+    (!!session.resizing ||
+      session.nativeResize !== undefined ||
+      !sameTerminalGrid(painted, session.term))
   if (session.state.transitioning !== transitioning)
     setState(session, { ...session.state, transitioning })
   // Keep the complete old frame fitted while the native resize is in flight.
@@ -1204,6 +1225,7 @@ function updateFocusSize(session: Session) {
     session.socket.send(
       JSON.stringify({ type: 'focus-resize-begin', token: session.focusResize.token, ...proposed }),
     )
+    if (!sameTerminalGrid(proposed, session.term)) awaitNativeResize(session)
     return
   }
   const request = session.focusResize
@@ -1212,13 +1234,17 @@ function updateFocusSize(session: Session) {
   session.socket.send(
     JSON.stringify({ type: 'focus-resize-update', token: request.token, ...proposed }),
   )
+  if (!sameTerminalGrid(proposed, session.term)) awaitNativeResize(session)
 }
 function endFocusSize(session: Session) {
   const request = session.focusResize
   if (!request) return
   session.focusResize = undefined
-  if (session.socket?.readyState === WebSocket.OPEN)
+  if (session.socket?.readyState === WebSocket.OPEN) {
     session.socket.send(JSON.stringify({ type: 'focus-resize-end', token: request.token }))
+    // The window returns to its shared size.
+    if (request.suspended === false) awaitNativeResize(session)
+  }
   setState(session, { ...session.state, focusResize: undefined })
 }
 function claimFocus(session: Session) {
