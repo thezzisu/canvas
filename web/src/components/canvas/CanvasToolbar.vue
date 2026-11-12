@@ -38,9 +38,9 @@ async function toggleSnap() {
     notify.error(reason)
   }
 }
-/** Stock toolbar buttons; a switched-on mode is shown filled. */
+/** Stock toolbar buttons; a switched-on mode is tinted, which a neutral fill on this bar is not. */
 const control = (pressed?: boolean) => ({
-  color: 'neutral' as const,
+  color: pressed ? ('primary' as const) : ('neutral' as const),
   variant: pressed ? ('soft' as const) : ('ghost' as const),
   size: size.value,
   square: true,
