@@ -2008,7 +2008,15 @@ export function mountTerminal(
     },
     async paneContext(x: number, y: number, signal: AbortSignal): Promise<PaneContext | null> {
       const layout = current.paintedLayout
-      if (!canPasteText() || !layout || current.state.transitioning) return null
+      // Only a frame xterm has not painted has no usable layout; a cover that is merely
+      // waiting or fading still shows the painted one.
+      if (
+        !canPasteText() ||
+        !layout ||
+        current.resizing ||
+        !sameTerminalGrid(current.paintedGrid, current.term)
+      )
+        return null
       const rect = current.term.element?.querySelector('.xterm-screen')?.getBoundingClientRect()
       if (
         !rect?.width ||
