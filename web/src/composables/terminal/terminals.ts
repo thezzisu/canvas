@@ -1099,8 +1099,12 @@ async function connect(session: Session, probe: boolean) {
             if (session.resumeReset) session.resumePaint = session.paintRevision
           }
           // A grid on the way to the one this view asked for stays covered.
-          const asked = session.focusResize?.suspended ? undefined : session.focusResize?.requested
-          if (!asked || sameTerminalGrid(asked, message as TerminalGrid)) {
+          const request = session.focusResize?.suspended ? undefined : session.focusResize
+          // The cover waits for the size this view asked for, or is still about to ask for.
+          if (
+            !request?.requested ||
+            (!request.pending && sameTerminalGrid(request.requested, message as TerminalGrid))
+          ) {
             clearTimeout(session.nativeResize)
             session.nativeResize = undefined
           }
@@ -1118,7 +1122,12 @@ async function connect(session: Session, probe: boolean) {
           const revoked = !message.owned && message.reason === 'superseded'
           if (message.token !== request.token && !revoked) return
           request.suspended = message.owned !== true
-          if (request.suspended) nativeResizeSettled(session)
+          if (request.suspended) {
+            // Whoever owns the window now sets its size; this view asks afresh if it owns it again.
+            clearTimeout(request.pending?.timer)
+            request.pending = request.requested = undefined
+            nativeResizeSettled(session)
+          }
           setState(session, { ...session.state, focusResize: { owned: message.owned === true } })
           schedulePresentation(session)
         }
@@ -1267,7 +1276,12 @@ function updateFocusSize(session: Session) {
     size: proposed,
     timer: setTimeout(() => {
       request.pending = undefined
-      if (session.focusResize !== request || session.socket?.readyState !== WebSocket.OPEN) return
+      if (
+        session.focusResize !== request ||
+        request.suspended ||
+        session.socket?.readyState !== WebSocket.OPEN
+      )
+        return
       request.requested = proposed
       session.socket.send(
         JSON.stringify({ type: 'focus-resize-update', token: request.token, ...proposed }),
