@@ -264,6 +264,16 @@ test('a composer opened over a closed keyboard is the open keyboard until it lea
   assert.equal(document.activeElement, document.body)
 })
 
+test('a file picker over the composer returns focus to its editor', (t) => {
+  const { keyboard, document, Element } = fixture(t)
+  const editor = new Element('textarea')
+  keyboard.composer(editor as unknown as HTMLElement)
+  const finish = keyboard.filePicker()
+  editor.blur()
+  finish?.(true)
+  assert.equal(document.activeElement, editor)
+})
+
 test('one terminal owns the keyboard', async (t) => {
   const first = fixture(t)
   const second = first.bind()

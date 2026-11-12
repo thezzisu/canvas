@@ -111,7 +111,9 @@ export type TerminalStatus = {
 interface FocusResize {
   token: string
   suspended: boolean
-  requested?: { cols: number; rows: number }
+  requested?: TerminalGrid
+  /** The grid before this view asked for its own. */
+  shared: TerminalGrid
 }
 interface CompletionFrame {
   generation: number
@@ -1084,8 +1086,12 @@ async function connect(session: Session, probe: boolean) {
             session.paintRevision = (session.paintRevision || 0) + 1
             if (session.resumeReset) session.resumePaint = session.paintRevision
           }
-          clearTimeout(session.nativeResize)
-          session.nativeResize = undefined
+          // A grid on the way to the one this view asked for stays covered.
+          const asked = session.focusResize?.suspended ? undefined : session.focusResize?.requested
+          if (!asked || sameTerminalGrid(asked, message as TerminalGrid)) {
+            clearTimeout(session.nativeResize)
+            session.nativeResize = undefined
+          }
           session.term.resize(message.cols, message.rows)
           // A replay normally repeats the current size before its reset bytes; repainting
           // then would only redraw the screen those bytes are about to replace.
@@ -1220,7 +1226,12 @@ function updateFocusSize(session: Session) {
   const proposed = proposedSize(session)
   if (!proposed) return
   if (!session.focusResize) {
-    session.focusResize = { token: uuid(), suspended: false, requested: proposed }
+    session.focusResize = {
+      token: uuid(),
+      suspended: false,
+      requested: proposed,
+      shared: { cols: session.term.cols, rows: session.term.rows },
+    }
     claimFocus(session)
     session.socket.send(
       JSON.stringify({ type: 'focus-resize-begin', token: session.focusResize.token, ...proposed }),
@@ -1242,8 +1253,9 @@ function endFocusSize(session: Session) {
   session.focusResize = undefined
   if (session.socket?.readyState === WebSocket.OPEN) {
     session.socket.send(JSON.stringify({ type: 'focus-resize-end', token: request.token }))
-    // The window returns to its shared size.
-    if (request.suspended === false) awaitNativeResize(session)
+    // The window returns to the size it had before this view asked for its own.
+    if (!request.suspended && !sameTerminalGrid(request.shared, session.term))
+      awaitNativeResize(session)
   }
   setState(session, { ...session.state, focusResize: undefined })
 }

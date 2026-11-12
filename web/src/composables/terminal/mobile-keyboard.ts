@@ -206,8 +206,9 @@ export function bindMobileKeyboard(input: HTMLElement, options: KeyboardOptions)
       return (restore: boolean) => {
         if (!paused) return
         paused = false
-        if (restore) void attach(true, true)
-        else controller.blur()
+        if (!restore) controller.blur()
+        else if (composer) composer.element.focus({ preventScroll: true })
+        else void attach(true, true)
       }
     },
     /** Focus the terminal; `true` opens its keyboard and `false` closes it. */
