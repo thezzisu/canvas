@@ -1502,7 +1502,7 @@ export function mountTerminal(
         current.host?.isConnected &&
         terminalFrameReady(current.parsedGrid, term, event)
       ) {
-        setState(current, { ...current.state, screenReady: true, transitioning: true })
+        setState(current, { ...current.state, screenReady: true })
       }
       present(current)
       refreshReadFocus()

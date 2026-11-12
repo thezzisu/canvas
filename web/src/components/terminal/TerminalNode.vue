@@ -9,6 +9,7 @@ import {
   onMounted,
   ref,
   watch,
+  watchEffect,
 } from 'vue'
 import type { NodeProps } from '@vue-flow/core'
 import UButton from '@nuxt/ui/components/Button.vue'
@@ -231,8 +232,20 @@ const inputFocused = computed(
 const frameStatus = computed(() =>
   !closed.value && !props.data.sourceOffline ? props.data.status : 'unknown',
 )
-// The cover over an unsettled frame stays long enough to be seen as one, then fades.
-const covered = useHeld(() => !!(status.value.transitioning || status.value.layoutRestoring), 240)
+// The cover over an unsettled frame stays long enough to be seen as one, spans a resize that
+// arrives in steps, and then fades.
+const covered = useHeld(
+  () => !!(status.value.transitioning || status.value.layoutRestoring),
+  240,
+  200,
+)
+// Until its first settled frame a terminal stays under the loading panel, so loading and a
+// cover that follows it are one.
+const unrevealed = ref(true)
+watchEffect(() => {
+  if (!status.value.screenReady) unrevealed.value = true
+  else if (!covered.value) unrevealed.value = false
+})
 const resizeState = computed(() =>
   !props.data.focus
     ? 'passive'
@@ -1048,27 +1061,31 @@ async function resized(event: { params: { width: number; height: number; x: numb
           >{{ t('terminal.connection.reconnect') }}</UButton
         >
       </div>
-      <div
-        v-if="
-          !showApp &&
-          !closed &&
-          keepTerminal &&
-          !maximizedElsewhere &&
-          (status.status === 'connecting' || (status.status === 'connected' && !status.screenReady))
-        "
-        class="terminal-loading nodrag"
-        :class="{ 'terminal-loading-initial': !status.screenReady }"
-        role="status"
-      >
-        <UIcon
-          name="i-lucide-loader-circle"
-          class="spinner size-3.5 shrink-0 motion-safe:animate-spin"
-        />{{
-          status.retryAttempt
-            ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt })
-            : t('common.loading')
-        }}
-      </div>
+      <Transition name="terminal-loading">
+        <div
+          v-if="
+            !showApp &&
+            !closed &&
+            keepTerminal &&
+            !maximizedElsewhere &&
+            (status.status === 'connecting' || (status.status === 'connected' && unrevealed))
+          "
+          class="terminal-loading nodrag"
+          :class="{ 'terminal-loading-initial': unrevealed }"
+          role="status"
+        >
+          <span class="terminal-loading-label"
+            ><UIcon
+              name="i-lucide-loader-circle"
+              class="spinner size-3.5 shrink-0 motion-safe:animate-spin"
+            />{{
+              status.retryAttempt
+                ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt })
+                : t('common.loading')
+            }}</span
+          >
+        </div>
+      </Transition>
     </div>
     <div
       v-if="mobilePreview && !closed && !editing"
@@ -1226,9 +1243,35 @@ async function resized(event: { params: { width: number; height: number; x: numb
   background: #11131799;
   color: #b0b8c5;
 }
+/* Before its first frame a terminal is covered by the same material as during a resize, so the
+   two read as one cover. A load that is quick shows no label at all. */
 .terminal-loading-initial {
   z-index: 12;
-  background: #111317;
+  background: var(--terminal-transition-background, #1b1f26);
+}
+.terminal-loading-label {
+  display: inline-flex;
+  align-items: center;
+  gap: inherit;
+}
+.terminal-loading-initial .terminal-loading-label {
+  animation: terminal-loading-label 160ms ease-out 400ms both;
+}
+@keyframes terminal-loading-label {
+  from {
+    opacity: 0;
+  }
+}
+.terminal-loading-leave-active {
+  transition: opacity 160ms ease-out;
+}
+.terminal-loading-leave-to {
+  opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .terminal-loading-leave-active {
+    transition: none;
+  }
 }
 .terminal-maximized {
   inset: 0;
