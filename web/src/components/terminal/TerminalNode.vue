@@ -25,6 +25,7 @@ import WindowTitle from '../workspace/WindowTitle.vue'
 import { windowLabel } from '../../utils/workspace/window-title'
 import PaneIndicators from './PaneIndicators.vue'
 import MobileKeyboard from './MobileKeyboard.vue'
+import { useHeld } from '../../composables/held'
 import { statusColor } from '../../utils/status'
 import { claimNoteDrop, readNoteTransfer } from '../../utils/notes/note-transfer'
 import { isFileReference, readFileReference } from '../../utils/files/file-reference'
@@ -230,6 +231,8 @@ const inputFocused = computed(
 const frameStatus = computed(() =>
   !closed.value && !props.data.sourceOffline ? props.data.status : 'unknown',
 )
+// The cover over an unsettled frame stays long enough to be seen as one, then fades.
+const covered = useHeld(() => !!(status.value.transitioning || status.value.layoutRestoring), 240)
 const resizeState = computed(() =>
   !props.data.focus
     ? 'passive'
@@ -684,7 +687,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     :class="[
       {
         selected,
-        'terminal-transition': status.transitioning || status.layoutRestoring,
+        'terminal-transition': covered,
         unavailable: !closed && !keepTerminal,
         focused: data.focus,
         'input-focused': inputFocused || captureActive,
@@ -1178,11 +1181,22 @@ async function resized(event: { params: { width: number; height: number; x: numb
   inset: 0;
   z-index: 3;
   pointer-events: none;
-  display: none;
+  visibility: hidden;
+  opacity: 0;
   background: var(--terminal-transition-background, #1b1f26);
+  transition:
+    opacity 160ms ease-out,
+    visibility 0s 160ms;
 }
 .terminal-transition .terminal-transition-surface {
-  display: block;
+  visibility: visible;
+  opacity: 1;
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .terminal-transition-surface {
+    transition: none;
+  }
 }
 .terminal-transition :deep(.xterm-rows),
 .terminal-transition :deep(.xterm-selection),

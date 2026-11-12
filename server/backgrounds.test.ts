@@ -343,6 +343,18 @@ test('JPEG and WebP backgrounds are served unchanged; overview backgrounds persi
   }
   assert.equal(state.canvases.length, 2)
   assert.deepEqual(state.overviewBackground, overviewCanvas.background)
+  // The working set keeps a background of its own and stays out of the canvas list.
+  const workingSet = await f.upload(await png(), '?opacity=0.3', {}, 'working-set')
+  assert.equal(workingSet.status, 200)
+  const workingSetBackground = ((await workingSet.json()) as CanvasView).background
+  assert.notEqual(workingSetBackground?.url, overviewCanvas.background?.url)
+  assert.deepEqual(f.store.snapshot().workingSetBackground, workingSetBackground)
+  assert.deepEqual(f.store.snapshot().overviewBackground, overviewCanvas.background)
+  assert.equal(f.store.snapshot().canvases.length, 2)
+  assert.equal(
+    (await f.request('/api/canvases/working-set', 'PATCH', '{"name":"Changed"}')).status,
+    403,
+  )
   f.reopen()
   assert.deepEqual(f.store.snapshot().overviewBackground, overviewCanvas.background)
   assert.equal(

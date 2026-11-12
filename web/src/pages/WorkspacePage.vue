@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useTemplateRef, watch } from 'vue'
+import { isSystemCanvas } from '../../../shared/system-canvases'
 import { useI18n } from 'vue-i18n'
 import UAlert from '@nuxt/ui/components/Alert.vue'
 import UButton from '@nuxt/ui/components/Button.vue'
@@ -47,7 +48,7 @@ watch(
     const editing = shell.backgroundCanvas
     if (
       editing &&
-      editing.id !== 'overview' &&
+      !isSystemCanvas(editing.id) &&
       !workspace.canvases.some((canvas) => canvas.id === editing.id)
     )
       shell.backgroundCanvas = null

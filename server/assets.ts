@@ -1,3 +1,4 @@
+import { isSystemCanvas } from '../shared/system-canvases.ts'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, mkdir, open, readdir, rename, rm, type FileHandle } from 'node:fs/promises'
@@ -107,7 +108,7 @@ export class AssetStore {
         if (written !== input.size) throw new Error('File transfer ended before declared length')
         const id = randomUUID()
         const temporary =
-          !('composer' in context) && (!context.canvasId || context.canvasId === 'overview')
+          !('composer' in context) && (!context.canvasId || isSystemCanvas(context.canvasId))
         const directoryPath = temporary ? this.staged : this.directory
         const path = join(directoryPath, id)
         try {

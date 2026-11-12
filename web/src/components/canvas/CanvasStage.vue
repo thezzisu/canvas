@@ -29,9 +29,11 @@ const { nodes, getViewport } = scene.flow
 const navigation = camera.navigation
 const fileDrop = useTemplateRef('fileDrop')
 
-/** System canvases share one background; each custom canvas has its own. */
+/** Every canvas has its own background. */
 const background = computed(() =>
-  scene.custom.value ? scene.canvas.value?.background : workspace.overviewBackground,
+  scene.kind.value === 'custom'
+    ? scene.canvas.value?.background
+    : workspace.systemBackgrounds[scene.kind.value],
 )
 const { url: backgroundUrl, material } = useBackgroundUrl(() => background.value?.url, {
   material: true,

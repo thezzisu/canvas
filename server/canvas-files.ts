@@ -1,3 +1,4 @@
+import { isSystemCanvas } from '../shared/system-canvases.ts'
 import type { AssetStore, AssetUpload } from './assets.ts'
 import type { FileAssetContext, Store } from './state.ts'
 
@@ -74,7 +75,7 @@ export function receiveCanvasFile(
     },
     () =>
       !!store.get('canvas', canvasId) &&
-      canvasId !== 'overview' &&
+      !isSystemCanvas(canvasId) &&
       (!('noteId' in input) || store.hasNote(canvasId, input.noteId)),
     request,
     session,

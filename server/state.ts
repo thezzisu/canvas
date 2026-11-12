@@ -1,3 +1,4 @@
+import { isSystemCanvas, systemCanvases } from '../shared/system-canvases.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
@@ -188,6 +189,7 @@ export type SharedState = {
   sources: Source[]
   canvases: CanvasView[]
   overviewBackground: CanvasBackground | null
+  workingSetBackground: CanvasBackground | null
   windowSizes: Record<string, WindowSize>
   composers: Record<string, ComposerView>
   windowReads: Record<string, number>
@@ -210,11 +212,12 @@ export class Store extends EventEmitter {
     this.db.exec(
       "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (kind TEXT, id TEXT, body TEXT, PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER); CREATE TABLE IF NOT EXISTS canvas_backgrounds (canvas_id TEXT PRIMARY KEY, image_id TEXT NOT NULL UNIQUE, opacity REAL NOT NULL CHECK(opacity >= 0 AND opacity <= 1), data BLOB NOT NULL, document_kind TEXT NOT NULL DEFAULT 'canvas' CHECK(document_kind = 'canvas'), FOREIGN KEY(document_kind, canvas_id) REFERENCES documents(kind, id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS canvas_files (id TEXT PRIMARY KEY, canvas_id TEXT NOT NULL, filename TEXT NOT NULL, size INTEGER NOT NULL CHECK(size >= 0), mime TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS note_files (note_id TEXT NOT NULL, asset_id TEXT NOT NULL REFERENCES canvas_files(id) ON DELETE CASCADE, PRIMARY KEY(note_id,asset_id)); CREATE INDEX IF NOT EXISTS note_files_asset ON note_files(asset_id);",
     )
-    // The overview only owns its background. Its name and generated window
+    // A system canvas only owns its background. Its name and generated window
     // layout never enter the editable canvas collection.
-    this.db
-      .prepare("INSERT OR IGNORE INTO documents(kind,id,body) VALUES('canvas','overview',?)")
-      .run(JSON.stringify({ id: 'overview', name: 'overview', nodes: [] }))
+    const system = this.db.prepare(
+      "INSERT OR IGNORE INTO documents(kind,id,body) VALUES('canvas',?,?)",
+    )
+    for (const id of systemCanvases) system.run(id, JSON.stringify({ id, name: id, nodes: [] }))
     this.lastRead =
       Number(
         this.db
@@ -227,7 +230,7 @@ export class Store extends EventEmitter {
   list<T>(kind: string): T[] {
     return this.db
       .prepare(
-        "SELECT body FROM documents WHERE kind=? AND NOT(kind='canvas' AND id='overview') ORDER BY rowid",
+        "SELECT body FROM documents WHERE kind=? AND NOT(kind='canvas' AND id IN ('overview','working-set')) ORDER BY rowid",
       )
       .all(kind)
       .map((r) => JSON.parse(String(r.body)))
@@ -337,7 +340,7 @@ export class Store extends EventEmitter {
     nodeId: string,
     sessionId: string,
   ): CardRemovalResponse<Canvas> | undefined {
-    if (canvasId === 'overview' || !this.hasSession(sessionId)) return
+    if (isSystemCanvas(canvasId) || !this.hasSession(sessionId)) return
     const canvas = this.get<Canvas>('canvas', canvasId)
     if (!canvas) return
     const index = canvas.nodes.findIndex((node) => node.id === nodeId)
@@ -399,7 +402,7 @@ export class Store extends EventEmitter {
     )
       return
     const canvas = this.get<Canvas>('canvas', canvasId)
-    if (!canvas || canvasId === 'overview') return
+    if (!canvas || isSystemCanvas(canvasId)) return
     if (item.restored) return canvas
     const node = item.node
     if (node.type === 'terminal') {
@@ -453,6 +456,7 @@ export class Store extends EventEmitter {
       sources: this.list<Source>('source'),
       canvases: this.list<Canvas>('canvas').map((canvas) => this.canvasView(canvas)),
       overviewBackground: this.canvasView(this.get<Canvas>('canvas', 'overview')!).background,
+      workingSetBackground: this.canvasView(this.get<Canvas>('canvas', 'working-set')!).background,
       windowSizes: Object.fromEntries(
         this.list<WindowSize & { id: string }>('window-size').map(({ id, width, height }) => [
           id,
@@ -479,7 +483,7 @@ export class Store extends EventEmitter {
     const ids = (kind: string) =>
       this.db
         .prepare(
-          "SELECT id FROM documents WHERE kind=? AND NOT(kind='canvas' AND id='overview') ORDER BY rowid",
+          "SELECT id FROM documents WHERE kind=? AND NOT(kind='canvas' AND id IN ('overview','working-set')) ORDER BY rowid",
         )
         .all(kind)
         .map((row) => String(row.id))
@@ -705,8 +709,8 @@ export class Store extends EventEmitter {
     targetCanvasId: string,
     position: { x: number; y: number },
   ): { canvas: Canvas; added: boolean } {
-    if (sourceCanvasId === 'overview' || targetCanvasId === 'overview')
-      throw new Error('Overview is read-only')
+    if (isSystemCanvas(sourceCanvasId) || isSystemCanvas(targetCanvasId))
+      throw new Error('System canvases are read-only')
     const coordinates = nodeLayoutSchema.pick({ x: true, y: true }).parse(position)
     this.db.exec('BEGIN IMMEDIATE')
     let canvas: Canvas,
@@ -768,7 +772,7 @@ export class Store extends EventEmitter {
       return true
     }
     const canvasId = context.canvasId
-    if (!canvasId || canvasId === 'overview') return false
+    if (!canvasId || isSystemCanvas(canvasId)) return false
     this.db.exec('BEGIN IMMEDIATE')
     try {
       const row = this.db

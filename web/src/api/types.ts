@@ -110,6 +110,7 @@ export interface SharedState {
   sources: Source[]
   canvases: Canvas[]
   overviewBackground: Canvas['background']
+  workingSetBackground?: Canvas['background']
   windowSizes: Record<string, WindowSize>
   composers: Record<string, ComposerView>
   windowReads: Record<string, number>

@@ -1,5 +1,6 @@
 import type { CanvasViewport } from '../../composables/mobile-layout'
 import { retainPage, type OverviewPage } from './overview-paging'
+import { systemCanvases, type SystemCanvas } from '../../../../shared/system-canvases'
 
 export interface CanvasCamera {
   x: number
@@ -7,8 +8,7 @@ export interface CanvasCamera {
   zoom: number
 }
 /** Overview lists every native window; the working set is a ring of the recently used ones. */
-export const systemCanvases = ['overview', 'working-set'] as const
-export type SystemCanvas = (typeof systemCanvases)[number]
+export { systemCanvases, type SystemCanvas }
 export interface CanvasLocation {
   instance: string
   canvas: string

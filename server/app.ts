@@ -1,3 +1,4 @@
+import { isSystemCanvas } from '../shared/system-canvases.ts'
 import { LayoutConflict } from './state.ts'
 import type { CompletionReads } from './completion-reads.ts'
 import { Hono } from 'hono'
@@ -296,7 +297,7 @@ export function createApp(
   })
   app.post('/api/canvases/:id/files', async (c) => {
     const id = c.req.param('id')
-    if (id === 'overview') return c.json({ error: 'Overview is read-only' }, 403)
+    if (isSystemCanvas(id)) return c.json({ error: 'System canvases are read-only' }, 403)
     if (!store.get('canvas', id) || !options.assets)
       return c.json({ error: 'Canvas not found' }, 404)
     const input = z
@@ -836,7 +837,7 @@ export function createApp(
   })
   app.on(['PUT', 'PATCH'], '/api/canvases/:id', async (c) => {
     const id = c.req.param('id')
-    if (id === 'overview') return c.json({ error: 'Overview is read-only' }, 403)
+    if (isSystemCanvas(id)) return c.json({ error: 'System canvases are read-only' }, 403)
     const patch = await c.req.json()
     const canvas = store.get<Canvas>('canvas', id)
     if (!canvas) return c.json({ error: 'Canvas not found' }, 404)
@@ -854,13 +855,14 @@ export function createApp(
     )
   })
   app.delete('/api/canvases/:id', (c) => {
-    if (c.req.param('id') === 'overview') return c.json({ error: 'Overview is read-only' }, 403)
+    if (isSystemCanvas(c.req.param('id')))
+      return c.json({ error: 'System canvases are read-only' }, 403)
     store.remove('canvas', c.req.param('id'))
     return c.json({ ok: true })
   })
   app.post('/api/canvases/:id/nodes', async (c) => {
     const id = c.req.param('id')
-    if (id === 'overview') return c.json({ error: 'Overview is read-only' }, 403)
+    if (isSystemCanvas(id)) return c.json({ error: 'System canvases are read-only' }, 403)
     const { nodes } = nodeListSchema.parse(await c.req.json())
     const canvas = store.get<Canvas>('canvas', id)
     if (!canvas) return c.json({ error: 'Canvas not found' }, 404)
@@ -880,7 +882,7 @@ export function createApp(
   })
   app.post('/api/canvases/:id/notes', async (c) => {
     const id = c.req.param('id')
-    if (id === 'overview') return c.json({ error: 'Overview is read-only' }, 403)
+    if (isSystemCanvas(id)) return c.json({ error: 'System canvases are read-only' }, 403)
     const value = noteCreateSchema.parse(await c.req.json())
     const canvas = store.get<Canvas>('canvas', id)
     if (!canvas) return c.json({ error: 'Canvas not found' }, 404)
@@ -903,8 +905,8 @@ export function createApp(
       })
       .strict()
       .parse(await c.req.json())
-    if (id === 'overview' || input.sourceCanvasId === 'overview')
-      return c.json({ error: 'Overview is read-only' }, 403)
+    if (isSystemCanvas(id) || isSystemCanvas(input.sourceCanvasId))
+      return c.json({ error: 'System canvases are read-only' }, 403)
     const sourceCanvas = store.get<Canvas>('canvas', input.sourceCanvasId)
     if (!sourceCanvas || !store.get<Canvas>('canvas', id))
       return c.json({ error: 'Canvas not found' }, 404)
@@ -921,7 +923,7 @@ export function createApp(
       nodeId = c.req.param('node'),
       mark = parseWriteMark(c.req.header('canvas-write')),
       resource = `note/${nodeId}`
-    if (id === 'overview') return c.json({ error: 'Overview is read-only' }, 403)
+    if (isSystemCanvas(id)) return c.json({ error: 'System canvases are read-only' }, 403)
     const patch = notePatchSchema.parse(await c.req.json())
     const canvas = store.get<Canvas>('canvas', id)
     if (!canvas) return c.json({ error: 'Canvas not found' }, 404)
@@ -937,7 +939,7 @@ export function createApp(
   app.patch('/api/canvases/:id/layout', async (c) => {
     const id = c.req.param('id'),
       mark = parseWriteMark(c.req.header('canvas-write'))
-    if (id === 'overview') return c.json({ error: 'Overview is read-only' }, 403)
+    if (isSystemCanvas(id)) return c.json({ error: 'System canvases are read-only' }, 403)
     const { nodes } = layoutSchema.parse(await c.req.json())
     const cards = store.get<Canvas>('canvas', id)?.nodes ?? []
     // Every canvas showing a window shares its size, so that is ordered per window.
@@ -977,7 +979,7 @@ export function createApp(
   })
   app.delete('/api/canvases/:id/nodes/:node', (c) => {
     const id = c.req.param('id')
-    if (id === 'overview') return c.json({ error: 'Overview is read-only' }, 403)
+    if (isSystemCanvas(id)) return c.json({ error: 'System canvases are read-only' }, 403)
     const result = store.removeCard(
       id,
       c.req.param('node'),

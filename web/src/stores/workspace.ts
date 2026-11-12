@@ -69,7 +69,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const canvases = ref<Canvas[]>([])
   const windowSizes = ref<Record<string, WindowSize>>({})
   const settings = computed(() => state.value?.settings)
-  const overviewBackground = computed(() => state.value?.overviewBackground ?? null)
+  /** Each system canvas has its own background. */
+  const systemBackgrounds = computed(() => ({
+    overview: state.value?.overviewBackground ?? null,
+    'working-set': state.value?.workingSetBackground ?? null,
+  }))
 
   const polledResources = ref<SourceResource[]>([])
   const rawResources = computed(() =>
@@ -205,6 +209,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     retainBackgrounds(
       [
         snapshot.overviewBackground,
+        snapshot.workingSetBackground,
         ...snapshot.canvases.map((canvas) => canvas.background),
       ].flatMap((background) => (background ? [background.url] : [])),
     )
@@ -387,7 +392,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     canvases,
     windowSizes,
     settings,
-    overviewBackground,
+    systemBackgrounds,
     polledResources,
     rawResources,
     resources,

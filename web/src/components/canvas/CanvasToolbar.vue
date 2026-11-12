@@ -69,7 +69,7 @@ const control = (pressed?: boolean) => ({
     />
     <UButton
       v-bind="control(fullscreen)"
-      :icon="fullscreen ? 'i-lucide-minimize' : 'i-lucide-maximize'"
+      :icon="fullscreen ? 'i-lucide-shrink' : 'i-lucide-expand'"
       :title="t(fullscreen ? 'app.exitFullscreen' : 'app.fullscreen')"
       :aria-label="t(fullscreen ? 'app.exitFullscreen' : 'app.fullscreen')"
       @click="camera.navigation.toggleFullscreen"
@@ -112,6 +112,7 @@ const control = (pressed?: boolean) => ({
       @click="camera.zoomOut"
     />
     <UButton
+      v-if="scene.kind.value !== 'working-set'"
       v-bind="control()"
       class="canvas-fit"
       :icon="fitIcon"

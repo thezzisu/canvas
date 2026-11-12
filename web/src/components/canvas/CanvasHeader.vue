@@ -90,12 +90,16 @@ const toggle = (
   },
 })
 function editBackground() {
-  shell.backgroundCanvas = scene.canvas.value || {
-    id: 'overview',
-    name: t('app.overview'),
-    nodes: [],
-    background: workspace.overviewBackground,
-  }
+  const kind = scene.kind.value
+  shell.backgroundCanvas =
+    kind === 'custom'
+      ? (scene.canvas.value ?? null)
+      : {
+          id: kind,
+          name: workspace.canvasName(kind),
+          nodes: [],
+          background: workspace.systemBackgrounds[kind],
+        }
 }
 async function deleteCanvas() {
   const canvas = scene.canvas.value
