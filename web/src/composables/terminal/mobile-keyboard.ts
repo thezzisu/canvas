@@ -78,7 +78,8 @@ export function bindMobileKeyboard(input: HTMLElement, options: KeyboardOptions)
     deck = false
   // A dialog or file picker has borrowed focus; the keyboard returns when it is done.
   let paused = false
-  let composer: { element: HTMLElement; lost?: () => void } | undefined
+  // `opened` marks a composer that opened the keyboard itself and closes it again when it leaves.
+  let composer: { element: HTMLElement; opened: boolean; lost?: () => void } | undefined
   let swap: ReturnType<typeof setTimeout> | undefined
   let resume: ReturnType<typeof setTimeout> | undefined
   let revision = 0
@@ -167,6 +168,7 @@ export function bindMobileKeyboard(input: HTMLElement, options: KeyboardOptions)
       if (!element) {
         if (!composer) return
         const editor = composer.element
+        if (composer.opened) open = false
         composer = undefined
         const typing = open && mode === 'system'
         if (!typing && document.activeElement === editor) editor.blur()
@@ -176,7 +178,8 @@ export function bindMobileKeyboard(input: HTMLElement, options: KeyboardOptions)
       }
       if (!options.active()) return
       claim()
-      composer = { element, lost }
+      composer = { element, lost, opened: composer ? composer.opened : !open }
+      open = true
       void attach(false)
       element.focus({ preventScroll: true })
       layout(deck)

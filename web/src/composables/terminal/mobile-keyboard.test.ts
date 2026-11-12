@@ -253,6 +253,17 @@ test('the composer editor owns native input and returns the prior keyboard', asy
   assert.deepEqual(keyboard.state, { open: false, mode: 'builtin', deck: false, composer: false })
 })
 
+test('a composer opened over a closed keyboard is the open keyboard until it leaves', async (t) => {
+  const { keyboard, document, Element } = fixture(t)
+  const editor = new Element('textarea')
+  keyboard.composer(editor as unknown as HTMLElement)
+  assert.deepEqual(keyboard.state, { open: true, mode: 'system', deck: false, composer: true })
+  keyboard.composer()
+  await tick()
+  assert.deepEqual(keyboard.state, { open: false, mode: 'system', deck: false, composer: false })
+  assert.equal(document.activeElement, document.body)
+})
+
 test('one terminal owns the keyboard', async (t) => {
   const first = fixture(t)
   const second = first.bind()
