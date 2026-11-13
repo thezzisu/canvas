@@ -13,7 +13,7 @@ import { needsAttention, type CanvasIndicator } from '../../utils/workspace/canv
 import type { CanvasAgent } from '../../utils/workspace/canvas-agents'
 
 defineOptions({ inheritAttrs: false })
-// One sidebar row: a counted item whose status dot lists its agents, or an
+// One sidebar row: a counted item whose status dot lists its agents when it has any, or an
 // unavailable item whose dashed indicator explains why.
 const props = defineProps<{
   name: string
@@ -46,6 +46,8 @@ const triggerButton = ref<{ $el: HTMLElement }>(),
   pinned = ref(false)
 const open = computed({ get: () => !!props.open, set: (value) => emit('update:open', value) })
 const panelId = useId()
+/** A row without windows shows the dot of a window that reports nothing. */
+const status = computed(() => props.indicator?.status ?? 'unknown')
 const currentAgents = computed(() => props.agents()),
   openedKeys = shallowRef<string[]>([])
 // Live labels/status remain reactive, but a row cannot move under an active
@@ -112,9 +114,9 @@ function go(agent: CanvasAgent) {
   emit('go', { sourceId: agent.sourceId, windowId: agent.windowId })
 }
 watch(
-  () => props.indicator?.status,
-  (value) => {
-    if (!value) close()
+  () => currentAgents.value.length,
+  (count) => {
+    if (!count) close()
   },
 )
 const content = computed(() => ({
@@ -168,9 +170,12 @@ const content = computed(() => ({
         :title="unavailable"
         ><UIcon name="i-lucide-circle-dashed" class="size-2.5"
       /></span>
+      <span v-else-if="indicator && !currentAgents.length" class="canvas-nav-status col-start-3"
+        ><i class="program-dot" :style="{ '--program-color': statusColor(status) }"
+      /></span>
     </UButton>
     <UButton
-      v-if="indicator?.status"
+      v-if="indicator && currentAgents.length"
       ref="triggerButton"
       color="neutral"
       variant="ghost"
@@ -188,8 +193,8 @@ const content = computed(() => ({
     >
       <i
         class="program-dot"
-        :data-status-pulse="fresh && needsAttention(indicator.status)"
-        :style="{ '--program-color': statusColor(indicator.status) }"
+        :data-status-pulse="fresh && needsAttention(status)"
+        :style="{ '--program-color': statusColor(status) }"
       />
     </UButton>
     <UPopover
