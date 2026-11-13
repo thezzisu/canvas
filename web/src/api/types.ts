@@ -134,9 +134,12 @@ export interface TerminalData {
   overview: boolean
   focus: boolean
   mobile?: boolean
-  newTab?: { pending(): boolean; create(): void }
+  /** `spaceId` is the space that holds the window now, where the new tab opens. */
+  newTab?: { spaceId: string; pending(): boolean; create(): void }
   canvasJump?: {
-    neighbor(direction: CanvasDirection): CanvasEntry | undefined
+    /** The canvases beside this one that also hold the window. */
+    previous?: CanvasEntry
+    next?: CanvasEntry
     go(direction: CanvasDirection, focus: 'terminal' | 'button' | undefined): void
   }
   onAction: (action: string, id: string) => void

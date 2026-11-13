@@ -14,7 +14,7 @@ import { noteScrollKey } from '../../notes/note-scroll'
 import { liveTerminalMetadata } from '../../terminal/terminal-metadata'
 import { cachedTerminalView } from '../../terminal/terminals'
 import { terminalIdentityKey } from '../../../utils/terminal/terminal-identity'
-import { adjacentCanvas, type CanvasDirection } from '../../../utils/canvas/canvas-jump'
+import { adjacentCanvas } from '../../../utils/canvas/canvas-jump'
 import { cardZoomKey } from '../../../utils/canvas/card-zoom'
 import { useOrderTransition } from '../order-transition'
 import {
@@ -98,6 +98,7 @@ export function useCanvasGraph(scene: CanvasScene) {
     const found = workspace.resourceFor(node)
     const config = workspace.sources.find((source) => source.id === node.sourceId)
     const canvasId = scene.canvas.value?.id
+    const canvases = workspace.windowCanvases(node.sourceId, node.windowId)
     const visual = windowVisualState(found.source, found.window, workspace.freshStatuses)
     const closed = windowIsClosed(
       found.source,
@@ -111,6 +112,7 @@ export function useCanvasGraph(scene: CanvasScene) {
         : '',
       newTab: canvasId
         ? {
+            spaceId: found.spaceId,
             pending: () =>
               scene.windows.creating.has(scene.windows.creationId(node.sourceId, found.spaceId)),
             create: () =>
@@ -122,12 +124,8 @@ export function useCanvasGraph(scene: CanvasScene) {
           }
         : undefined,
       canvasJump: {
-        neighbor: (direction: CanvasDirection) =>
-          adjacentCanvas(
-            workspace.windowCanvases(node.sourceId, node.windowId),
-            scene.route.canvasId.value,
-            direction,
-          ),
+        previous: adjacentCanvas(canvases, scene.route.canvasId.value, 'previous'),
+        next: adjacentCanvas(canvases, scene.route.canvasId.value, 'next'),
         go: (direction, focus) => void scene.reveal.jump(node.id, direction, focus),
       },
       status: visual.status,
@@ -446,17 +444,22 @@ export function useCanvasGraph(scene: CanvasScene) {
       ),
     )
   }
-  /** New card data on the nodes already laid out; their geometry does not change. */
+  /**
+   * New card data on the nodes already laid out; their geometry does not change. A card whose
+   * data says the same keeps the object it has, so one window's news renders one card, not all:
+   * a card's functions only use what its data says, and the comparison leaves them out.
+   */
   function refreshData(next: Node[]) {
     const updated = new Map(next.map((node) => [node.id, node.data]))
-    setNodes(
-      nodes.value.map((node) => ({
-        ...node,
-        data: updated.has(node.id)
-          ? { ...updated.get(node.id), width: node.data.width, height: node.data.height }
-          : node.data,
-      })),
-    )
+    let changed = false
+    const refreshed = nodes.value.map((node) => {
+      if (!updated.has(node.id)) return node
+      const data = { ...updated.get(node.id), width: node.data.width, height: node.data.height }
+      if (JSON.stringify(data) === JSON.stringify(node.data)) return node
+      changed = true
+      return { ...node, data }
+    })
+    if (changed) setNodes(refreshed)
   }
   const customNodes = () => (scene.canvas.value?.nodes || []).map(canvasNode)
 
@@ -582,6 +585,18 @@ export function useCanvasGraph(scene: CanvasScene) {
     },
   )
   watch(() => workspace.freshStatuses, refresh)
+  // The canvases a card can jump to follow every canvas's windows, name and place in the list.
+  watch(
+    () =>
+      JSON.stringify(
+        workspace.orderedCanvases.map((canvas) => [
+          canvas.id,
+          canvas.name,
+          canvas.nodes.filter(isTerminalNode).map(windowKey),
+        ]),
+      ),
+    refresh,
+  )
   watch(locale, () => {
     ariaLiveMessage.value = ''
     if (workspace.resourcesLoaded) commit(layouts[scene.kind.value]())

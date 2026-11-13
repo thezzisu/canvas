@@ -301,7 +301,7 @@ const canvasJumps = computed(() =>
   props.data.focus || props.data.mobile || !props.data.canvasJump
     ? []
     : (['previous', 'next'] as const).map((direction) => {
-        const target = props.data.canvasJump!.neighbor(direction),
+        const target = props.data.canvasJump![direction],
           action = t(`terminal.action.${direction}Canvas`)
         return {
           direction,
