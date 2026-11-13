@@ -48,6 +48,7 @@
 //   presentation-cancel { token, lease }
 //   completion-fence  { generation }, completion-read { generation, paneId, bootId, sequence }
 //   ping              { id }
+//   cell-error        { message }, a cell message did not apply; the browser opens the channel again
 //
 // Uploads and downloads put their own JSON messages on this channel (uploads.ts, open-download.ts).
 import { CompletionReads } from './completion-reads.ts'
@@ -417,6 +418,13 @@ export class LiveTerminal {
     ws.on('message', (msg) => {
       if (this.closed || ws.readyState !== 1 || !this.clients.has(ws)) return
       try {
+        if (msg.type === 'cell-error') {
+          console.warn(
+            `Terminal ${this.key}: a browser could not read a cell message:`,
+            String(msg.message).slice(0, 200),
+          )
+          return
+        }
         if (msg.type === 'ping') {
           if (typeof msg.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(msg.id))
             json(ws, { type: 'pong', id: msg.id })

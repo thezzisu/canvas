@@ -438,6 +438,7 @@ class CoreWindowClient implements HerdrClientTransport {
     const firstPaint = new Promise<void>((resolve) => {
       painted = resolve
     })
+    console.log(`Core pane ${id}: attaching at ${cols}x${rows}`)
     // No reply reaches the program from here: the core answers its queries itself.
     const engine = new GhosttyTerminal(Math.max(1, cols), Math.max(1, rows), HISTORY, {
       bell: () => this.bell(),
@@ -893,7 +894,13 @@ class CoreWindowClient implements HerdrClientTransport {
       // Anything but hovering returns the pane to its latest output.
       const scroll = pane.engine.scroll,
         scrolled = active && scroll.top < scroll.max
-      if (scrolled) pane.engine.scrollTo(scroll.max)
+      if (scrolled) {
+        pane.engine.scrollTo(scroll.max)
+        console.log(
+          `Core pane ${input.pane_id}: input returned it to its latest output:`,
+          input.events.map((event) => Object.keys(event)[0]).join(),
+        )
+      }
       for (const event of input.events) {
         const bytes = coreInput(event, pane.engine, pane.win32.on)
         if (bytes.length) pane.stream.write(Buffer.from(bytes))
