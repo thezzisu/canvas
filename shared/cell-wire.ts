@@ -29,6 +29,7 @@
 //   replace whole rows, in ascending order; the other rows stay.
 // - Links and styles are append-only tables. A message carries the entries its rows need that
 //   earlier messages since the last FRAME did not; indices count from that FRAME.
+// - Neither table holds more than 65536 entries; an encoder starts over with a FRAME first.
 // - The runs of a row cover every column exactly once. The second column of a wide cell has no
 //   cell of its own.
 // - A decoder rejects anything else and keeps what it had.
@@ -37,6 +38,8 @@ const FRAME = 1
 const PATCH = 2
 const MAX_SIDE = 4096
 const MAX_CELLS = 1_000_000
+/** Entries either table may hold between two FRAMEs. */
+export const MAX_TABLE = 65_536
 
 /** Style attribute bits; `(attrs & UNDERLINE_MASK) >> UNDERLINE_SHIFT` is the underline style. */
 export const ATTR = {
@@ -113,7 +116,7 @@ export class CellWireError extends Error {
 }
 
 const utf8Encoder = new TextEncoder()
-const utf8Decoder = new TextDecoder('utf-8', { fatal: true })
+const utf8Decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
 
 class Writer {
   private bytes = new Uint8Array(1024)
@@ -220,7 +223,8 @@ export class RowEncoder {
 
   /** An empty `text` is a blank. */
   cell(style: number, text: string, wide: boolean) {
-    const glyph = text || ' ',
+    // A lone surrogate would pair with its neighbour in a joined run.
+    const glyph = text.toWellFormed() || ' ',
       clusters = !isCodePoint(glyph)
     if (
       this.glyphs.length &&
@@ -480,6 +484,8 @@ export class CellMirror {
       styles.push(style)
     }
 
+    if (knownLinks + links.length > MAX_TABLE || knownStyles + styles.length > MAX_TABLE)
+      throw new CellWireError('table too large')
     const count = r.count('rows', 2)
     if (frame ? count !== rows : count > rows) throw new CellWireError('wrong number of rows')
     const changed: number[] = [],

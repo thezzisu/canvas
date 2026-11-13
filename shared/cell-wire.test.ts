@@ -6,6 +6,7 @@ import {
   CellTables,
   CellWireError,
   DEFAULT_COLOUR,
+  MAX_TABLE,
   PALETTE_COLOUR,
   RowEncoder,
   UNDERLINE_MASK,
@@ -412,4 +413,27 @@ test('tables hand out stable indices and start over when cleared', () => {
   assert.equal(tables.style(0, 1, 2, 3, 'https://b.example'), 0)
   assert.deepEqual(tables.links, ['https://b.example'])
   assert.deepEqual(tables.styles, [{ attrs: 0, fg: 1, bg: 2, underline: 3, link: 1 }])
+})
+
+test('a byte order mark and lone surrogates keep their cells', () => {
+  const mirror = new CellMirror()
+  mirror.apply(
+    frame([[{ text: '\ufeff' }, { text: '\ud83d' }, { text: '\ude00' }, { text: 'é' }]], 4),
+  )
+  assert.deepEqual(
+    cells(mirror, 0).map((cell) => cell.text),
+    ['\ufeff', '\ufffd', '\ufffd', 'é'],
+  )
+})
+
+test('a table past its limit is rejected', () => {
+  const mirror = new CellMirror()
+  const styles = Array.from({ length: MAX_TABLE }, (_, fg) => ({ ...plain, fg }))
+  mirror.apply(frame([letters('ab')], 2, styles))
+  rejects(
+    mirror,
+    encodePatch({ revision: 2, base: 1, cursor: hidden, links: [], styles: [plain], lines: [] }),
+    /table too large/,
+  )
+  assert.equal(mirror.styles.length, MAX_TABLE)
 })
