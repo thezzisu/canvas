@@ -4,7 +4,7 @@ import { createCoreClient, coreHyperlink } from './client.ts'
 import { CoreLayout, type CoreDocument } from './layout.ts'
 import { CoreRpc, CoreRpcError, CoreStream, type CoreNotification } from './rpc.ts'
 import { SELECTED } from '../herdr/screen.ts'
-import { watch } from '../test-grid.ts'
+import { gridColumns, watch } from '../test-grid.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
@@ -1148,6 +1148,79 @@ test('a delayed older document cannot remove a window already restored by a newe
       'Current title',
       'same-document live metadata keeps updating',
     )
+  } finally {
+    client.kill()
+  }
+})
+
+test("a core pane keeps its last column for herdr's scrollbar, drawn while there is history", async () => {
+  const f = fixture()
+  const opening = createCoreClient({
+    rpc: f.rpc,
+    layout: f.layout,
+    spaceId: 'space',
+    tabId: 'tab',
+    cols: 20,
+    rows: 6,
+  })
+  await tick()
+  f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?9001l' + report('working')) })
+  const client = await opening
+  try {
+    const seen = watch(client),
+      asked = () =>
+        f.sent
+          .filter((frame) => frame.kind === 3)
+          .at(-1)!
+          .data.readUInt16LE(0),
+      bar = () => seen.grid!.cells.filter((_, index) => index % 20 === 19)
+    f.stream.receive({ kind: 'resize', cols: 19, rows: 6 })
+    f.stream.receive({ kind: 'data', data: Buffer.from('0123456789012345678') })
+    await tick()
+    assert.deepEqual(gridColumns(seen.grid!, 18)[0], '8 ', 'no bar without history')
+
+    f.stream.receive({ kind: 'data', data: Buffer.from('\r\nline'.repeat(17)) })
+    await tick()
+    // Six rows of twenty-three: a two-row thumb, at the bottom of the focused pane's track.
+    assert.equal(
+      bar()
+        .map((cell) => cell.symbol)
+        .join(''),
+      '▕▕▕▕▐▐',
+    )
+    assert.deepEqual(
+      bar().map((cell) => cell.fg & 0xffffff),
+      [0x6c7086, 0x6c7086, 0x6c7086, 0x6c7086, 0x7f849c, 0x7f849c],
+    )
+    for (let step = 0; step < 8; step++) client.write('\x1b[<64;5;3M')
+    await tick()
+    await tick()
+    assert.equal(
+      bar()
+        .map((cell) => cell.symbol)
+        .join(''),
+      '▐▐▕▕▕▕',
+      'the top, and no further',
+    )
+    assert.equal(gridColumns(seen.grid!, 0, 19)[0], '0123456789012345678')
+    // A press on the track below the thumb moves it there.
+    client.write('\x1b[<0;20;6M\x1b[<0;20;6m')
+    await tick()
+    await tick()
+    assert.equal(
+      bar()
+        .map((cell) => cell.symbol)
+        .join(''),
+      '▕▕▕▕▐▐',
+    )
+
+    f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?1049h') })
+    await tick()
+    assert.equal(asked(), 20, 'the alternate screen has the whole pane')
+    f.stream.receive({ kind: 'resize', cols: 20, rows: 6 })
+    f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[H01234567890123456789') })
+    await tick()
+    assert.equal(gridColumns(seen.grid!)[0], '01234567890123456789')
   } finally {
     client.kill()
   }

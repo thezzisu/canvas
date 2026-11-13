@@ -452,7 +452,8 @@ function top(pane: PaneSurfacePane) {
     ? Math.max(0, pane.scroll.max_offset_from_bottom - pane.scroll.offset_from_bottom)
     : 0
 }
-function thumb(pane: PaneSurfacePane) {
+/** The scrollbar's thumb in its track, as herdr sizes and places it. */
+export function thumb(pane: Pick<PaneSurfacePane, 'scrollbar_rect' | 'scroll'>) {
   const track = pane.scrollbar_rect,
     metrics = pane.scroll
   if (!track || !metrics || !metrics.max_offset_from_bottom || !track.height) return

@@ -5,7 +5,7 @@ import type { NativeNotification } from '../../shared/notification.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import { cellWidth } from '../ghostty/module.ts'
 import { GhosttyTerminal } from '../ghostty/terminal.ts'
-import { HerdrInputRouter } from '../herdr/input.ts'
+import { HerdrInputRouter, thumb } from '../herdr/input.ts'
 import { SELECTED, type ScreenSelection } from '../herdr/screen.ts'
 import { windowContent, type NativeContentPane } from '../herdr/content.ts'
 import type { HerdrClientExit, HerdrClientTransport } from '../herdr/client.ts'
@@ -43,6 +43,16 @@ const cell = (symbol: string): CellData => ({
   hyperlink: null,
 })
 const BLANK = Object.freeze(cell(' '))
+/**
+ * A pane's scrollbar is herdr's: the pane keeps its last column for it, except in a narrow pane or
+ * on the alternate screen, and it is drawn there while there is history to scroll.
+ */
+const paneColumns = (width: number, alternate: boolean) =>
+  width > 4 && !alternate ? width - 1 : width
+const SCROLLBAR = {
+  focused: { track: 0x2000000 | 0x6c7086, thumb: 0x2000000 | 0x7f849c, symbol: '▐' },
+  unfocused: { track: 0x2000000 | 0x1e1e2e, thumb: 0x2000000 | 0x6c7086, symbol: '▕' },
+}
 /** OSC 8 permits Unicode and spaces; emit a valid URI without losing the target. */
 export function coreHyperlink(value: unknown): string | undefined {
   if (typeof value !== 'string' || value.length > 8192 || /[\x00-\x1f\x7f-\x9f]/u.test(value))
@@ -108,6 +118,8 @@ interface CorePane {
   painted(): void
   disposed: boolean
   subscriptions: Subscription[]
+  /** The pane's place in the window, and the grid last asked of its terminal for it. */
+  place: { width: number; height: number }
   wanted: { cols: number; rows: number }
   parsedTurn: number
   parsedState?: string
@@ -333,8 +345,8 @@ class CoreWindowClient implements HerdrClientTransport {
         try {
           const attached = await this.options.rpc.attach({
             terminal: pane.address,
-            cols: projected.rect.width,
-            rows: projected.rect.height,
+            cols: pane.wanted.cols,
+            rows: pane.wanted.rows,
             history: HISTORY,
             resumed: true,
             display: { cell: [CORE_CELL.width, CORE_CELL.height] },
@@ -392,8 +404,11 @@ class CoreWindowClient implements HerdrClientTransport {
                 if (pane.disposed) return
                 // The core ends its first paint by saying whether the program wants win32 keys.
                 if (pane.win32.scan(data)) pane.paintComplete = true
+                const alternate = pane.engine.alternateScreen
                 pane.engine.write(data)
                 pane.revision++
+                // The scrollbar's column is the program's on the alternate screen.
+                if (pane.engine.alternateScreen !== alternate) this.resizeStreams(pane)
                 if (pane.paintComplete) {
                   pane.ready = true
                   pane.painted()
@@ -416,7 +431,9 @@ class CoreWindowClient implements HerdrClientTransport {
     this.render()
   }
 
-  private makePane(id: string, address: string, cols: number, rows: number): CorePane {
+  /** A pane for a place `width` columns wide; its program starts beside the scrollbar. */
+  private makePane(id: string, address: string, width: number, rows: number): CorePane {
+    const cols = paneColumns(width, false)
     let painted!: () => void
     const firstPaint = new Promise<void>((resolve) => {
       painted = resolve
@@ -447,6 +464,7 @@ class CoreWindowClient implements HerdrClientTransport {
       painted,
       disposed: false,
       subscriptions: [],
+      place: { width, height: rows },
       wanted: { cols, rows },
       parsedTurn: 0,
       rootReport: false,
@@ -669,11 +687,28 @@ class CoreWindowClient implements HerdrClientTransport {
         const engine = pane.engine,
           rows = engine.read(),
           cursor = engine.cursor(),
-          scroll = engine.scroll
+          alternate = engine.alternateScreen,
+          focused = projected.id === this.focused
+        // A terminal that kept a wider grid than it was asked for shows it whole, without the bar.
+        const inner = {
+          ...rect,
+          width: Math.min(rect.width, Math.max(paneColumns(rect.width, alternate), engine.cols)),
+        }
+        const scroll = alternate
+          ? null
+          : {
+              offset_from_bottom: engine.scroll.max - engine.scroll.top,
+              max_offset_from_bottom: engine.scroll.max,
+              viewport_rows: engine.rows,
+            }
+        const track =
+          scroll?.max_offset_from_bottom && inner.width < rect.width
+            ? { ...rect, x: rect.x + inner.width, width: 1 }
+            : null
         const linkIndexes = new Map<string, number>()
-        for (let y = 0; y < rect.height; y++) {
+        for (let y = 0; y < inner.height; y++) {
           const row = rows[y]
-          for (let x = 0; x < rect.width; x++) {
+          for (let x = 0; x < inner.width; x++) {
             let rendered = row?.cells[x] ?? BLANK
             const uri = coreHyperlink(row?.links?.get(x))
             if (uri) {
@@ -687,30 +722,33 @@ class CoreWindowClient implements HerdrClientTransport {
             frame.cells[(rect.y + y) * this.cols + rect.x + x] = rendered
           }
         }
-        const alternate = engine.alternateScreen
-        const focused = projected.id === this.focused
+        const bar = thumb({ scrollbar_rect: track, scroll })
+        if (track && bar) {
+          const look = focused ? SCROLLBAR.focused : SCROLLBAR.unfocused
+          for (let y = track.y; y < track.y + track.height; y++) {
+            const held = y >= bar.top && y < bar.top + bar.length
+            frame.cells[y * this.cols + track.x] = {
+              ...cell(held ? look.symbol : '▕'),
+              fg: held ? look.thumb : look.track,
+            }
+          }
+        }
         surfacePanes.push({
           pane_id: projected.id,
           content_revision: pane.revision,
           rect,
-          inner_rect: rect,
-          scrollbar_rect: null,
-          scroll: alternate
-            ? null
-            : {
-                offset_from_bottom: scroll.max - scroll.top,
-                max_offset_from_bottom: scroll.max,
-                viewport_rows: engine.rows,
-              },
+          inner_rect: inner,
+          scrollbar_rect: track,
+          scroll,
           focused,
           mouse_reporting: engine.mouseReporting,
           sgr_pixel_mouse: engine.mode(1016),
           alternate_screen_active: alternate,
-          pixel_width: rect.width * CORE_CELL.width,
-          pixel_height: rect.height * CORE_CELL.height,
+          pixel_width: inner.width * CORE_CELL.width,
+          pixel_height: inner.height * CORE_CELL.height,
         })
         // The engine has no cursor to show while its viewport is scrolled away from it.
-        if (focused && cursor && cursor.x < rect.width && cursor.y < rect.height)
+        if (focused && cursor && cursor.x < inner.width && cursor.y < inner.height)
           frame.cursor = {
             x: rect.x + cursor.x,
             y: rect.y + cursor.y,
@@ -1137,20 +1175,27 @@ class CoreWindowClient implements HerdrClientTransport {
   write(data: string | Buffer) {
     if (!this.closed && this.initialized) this.input.write(data)
   }
-  private resizeStreams() {
+  /**
+   * Sizes each pane's terminal for its place in the window. A pane whose place is unchanged is
+   * left alone, so another viewer's grid is taken over only when this window is resized. With
+   * `screen`, that pane's program changed screens: it gets or gives back the scrollbar's column
+   * while its grid is still the one this view asked for.
+   */
+  private resizeStreams(screen?: CorePane) {
     if (!this.tab) return
     for (const projected of projectTab(this.tab, this.cols, this.rows, this.zoomed).panes) {
       const pane = this.attached.get(projected.id)
-      if (
-        !pane ||
-        pane.disposed ||
-        (pane.wanted.cols === projected.rect.width && pane.wanted.rows === projected.rect.height)
-      )
-        continue
-      pane.wanted = { cols: projected.rect.width, rows: projected.rect.height }
-      pane.engine.resize(Math.max(1, projected.rect.width), Math.max(1, projected.rect.height))
+      if (!pane || pane.disposed) continue
+      const { width, height } = projected.rect,
+        moved = pane.place.width !== width || pane.place.height !== height,
+        owned = pane.engine.cols === pane.wanted.cols && pane.engine.rows === pane.wanted.rows
+      if (!moved && !(pane === screen && owned)) continue
+      pane.place = { width, height }
+      const cols = paneColumns(width, pane.engine.alternateScreen)
+      pane.wanted = { cols, rows: height }
+      pane.engine.resize(Math.max(1, cols), Math.max(1, height))
       pane.revision++
-      pane.stream?.resize(projected.rect.width, projected.rect.height)
+      pane.stream?.resize(cols, height)
     }
     this.render()
   }

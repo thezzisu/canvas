@@ -265,7 +265,8 @@ test(
       }
     }, 'native Unicode input did not cross SSH')
     client.resize(100, 30)
-    await until(() => text().includes('100x30'), 'native resize did not cross SSH')
+    // The pane keeps its last column for the scrollbar.
+    await until(() => text().includes('99x30'), 'native resize did not cross SSH')
     const selected = join(remoteHome, 'source 中文.txt'),
       bytes = Buffer.from('Source-bound exact bytes\0\xff中文')
     await writeFile(selected, bytes)
