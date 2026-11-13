@@ -13,58 +13,9 @@ export interface ScreenSelection {
   anchor: { row: number; col: number }
   cursor: { row: number; col: number }
 }
-const ESC = '\x1b'
-const controls = /[\x00-\x1f\x7f-\x9f]/gu
+/** A modifier bit herdr leaves unused: the cell is inside the Canvas text selection. */
+export const SELECTED = 1 << 9
 
-function color(value: number, background: boolean): string {
-  const base = background ? 40 : 30
-  if (value >>> 24 === 2)
-    return `${background ? 48 : 38};2;${(value >>> 16) & 255};${(value >>> 8) & 255};${value & 255}`
-  if (value >>> 24 === 1) return `${background ? 48 : 38};5;${value & 255}`
-  const named = value & 255
-  return String(
-    named === 0 || named > 16
-      ? background
-        ? 49
-        : 39
-      : named <= 8
-        ? base + named - 1
-        : base + 60 + named - 9,
-  )
-}
-function sgr(cell: CellData): string {
-  const parts = ['0', color(cell.fg, false), color(cell.bg, true)]
-  for (const [bit, code] of [
-    [1, '1'],
-    [2, '2'],
-    [4, '3'],
-    [16, '5'],
-    [32, '6'],
-    [64, '7'],
-    [128, '8'],
-    [256, '9'],
-  ] as const)
-    if (cell.modifier & bit) parts.push(code)
-  if (cell.modifier & 8) {
-    const style = cell.modifier >>> 12
-    parts.push(style >= 2 && style <= 5 ? `4:${style}` : '4')
-  }
-  return `${ESC}[${parts.join(';')}m`
-}
-function link(frame: FrameData, cell: CellData): string {
-  const value = cell.hyperlink === null ? '' : frame.hyperlinks[cell.hyperlink] || ''
-  return value.length <= 8192 && !/[\x00-\x20\x7f-\x9f]/u.test(value) ? value : ''
-}
-function sameCell(a: CellData, b: CellData, left: FrameData, right: FrameData): boolean {
-  return (
-    a.symbol === b.symbol &&
-    a.fg === b.fg &&
-    a.bg === b.bg &&
-    a.modifier === b.modifier &&
-    a.skip === b.skip &&
-    link(left, a) === link(right, b)
-  )
-}
 function inFrame(rect: SurfaceRect, frame: FrameData): boolean {
   return rect.x + rect.width <= frame.width && rect.y + rect.height <= frame.height
 }
@@ -162,7 +113,8 @@ export function popupInnerRect(surface: PaneSurfaceFrame): SurfaceRect | undefin
   }
 }
 
-function composedFrame(surface: PaneSurfaceFrame, selection?: ScreenSelection): FrameData {
+/** The grid a browser shows: the surface with the selection marked and any popup drawn over it. */
+export function composedFrame(surface: PaneSurfaceFrame, selection?: ScreenSelection): FrameData {
   const frame = {
     ...surface.frame,
     cells: surface.frame.cells.slice(),
@@ -183,7 +135,7 @@ function composedFrame(surface: PaneSurfaceFrame, selection?: ScreenSelection): 
           inner.x +
           (position % inner.width)
         const cell = frame.cells[index]
-        if (cell) frame.cells[index] = { ...cell, modifier: cell.modifier ^ 64 }
+        if (cell) frame.cells[index] = { ...cell, modifier: cell.modifier | SELECTED }
       }
     }
   }
@@ -243,59 +195,4 @@ function composedFrame(surface: PaneSurfaceFrame, selection?: ScreenSelection): 
       : null
   }
   return frame
-}
-
-export class HerdrScreen {
-  private previous?: FrameData
-  reset() {
-    this.previous = undefined
-  }
-  render(surface: PaneSurfaceFrame, selection?: ScreenSelection): string {
-    const frame = composedFrame(surface, selection),
-      previous = this.previous
-    const full = !previous || previous.width !== frame.width || previous.height !== frame.height
-    const output = [`${ESC}[?2026h${ESC}[?25l${ESC}[?7l${ESC}]8;;${ESC}\\`]
-    if (full) output.push(`${ESC}[0m${ESC}[2J`)
-    let currentStyle = '',
-      activeLink = ''
-    for (let y = 0; y < frame.height; y++) {
-      const offset = y * frame.width
-      if (
-        !full &&
-        frame.cells
-          .slice(offset, offset + frame.width)
-          .every((cell, x) => sameCell(cell, previous.cells[offset + x]!, frame, previous))
-      )
-        continue
-      // Entire changed rows avoid stale trailing halves after wide-character edits.
-      for (let x = 0; x < frame.width; x++) {
-        const cell = frame.cells[offset + x]!
-        if (cell.skip) continue
-        const uri = link(frame, cell)
-        if (uri !== activeLink) {
-          output.push(`${ESC}]8;;${uri}${ESC}\\`)
-          activeLink = uri
-        }
-        const style = sgr(cell)
-        if (style !== currentStyle) {
-          output.push(style)
-          currentStyle = style
-        }
-        const symbol = cell.symbol.replace(controls, ' ') || ' '
-        output.push(`${ESC}[${y + 1};${x + 1}H`, symbol)
-        x += Math.max(1, cellWidth(symbol)) - 1
-      }
-    }
-    output.push(`${ESC}]8;;${ESC}\\${ESC}[0m`)
-    const cursor = frame.cursor
-    if (cursor && cursor.x < frame.width && cursor.y < frame.height) {
-      output.push(
-        `${ESC}[${cursor.y + 1};${cursor.x + 1}H${ESC}[${cursor.shape <= 6 ? cursor.shape : 0} q`,
-      )
-      if (cursor.visible) output.push(`${ESC}[?25h`)
-    }
-    output.push(`${ESC}[?2026l`)
-    this.previous = frame
-    return output.join('')
-  }
 }

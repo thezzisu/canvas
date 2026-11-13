@@ -164,23 +164,3 @@ test('an attachment resolving during retirement never joins its waiting browser'
   assert.equal(terminal.clients.size, 0)
   assert.equal(manager.entries.size, 0)
 })
-
-test('retirement starting during browser join invalidates that join', async (t) => {
-  const manager = new TerminalManager(),
-    terminal = entry(manager),
-    joining = gate(),
-    ready = gate()
-  t.after(() => manager.closeAll())
-  t.after(ready.resolve)
-  terminal.join = async () => {
-    joining.resolve()
-    await ready.promise
-  }
-  const connecting = manager.connect(source, target, socket())
-  const rejected = assert.rejects(connecting, /detached while connecting/)
-  await joining.promise
-  await manager.closeSource(source.id)
-  ready.resolve()
-  await rejected
-  assert.equal(manager.entries.size, 0)
-})

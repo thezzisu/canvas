@@ -4,7 +4,6 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import headless from '@xterm/headless'
 import {
   closeRuntimeConnections,
   closeSpace,
@@ -21,6 +20,8 @@ import {
 import { CoreRpc } from './core/rpc.ts'
 import { CoreLayout } from './core/layout.ts'
 import type { HerdrClientTransport } from './herdr/client.ts'
+import type { FrameData } from './herdr/wire.ts'
+import { gridText } from './test-grid.ts'
 import type { WindowMetadata } from '../shared/window-metadata.ts'
 import type { PaneContext } from '../shared/pane-context.ts'
 
@@ -89,12 +90,8 @@ test(
       transport: 'local',
       herdrSocket: socket,
     }
-    const screen = new headless.Terminal({ cols: 90, rows: 25, allowProposedApi: true })
-    const screenText = () =>
-      Array.from(
-        { length: screen.buffer.active.length },
-        (_, i) => screen.buffer.active.getLine(i)?.translateToString(true) || '',
-      ).join('\n')
+    let screen: FrameData | undefined
+    const screenText = () => (screen ? gridText(screen).join('\n') : '')
     const records = async (): Promise<
       Array<{
         terminal: string
@@ -147,7 +144,6 @@ test(
       }
       rpc?.close()
       await stop(core)
-      screen.dispose()
       await rm(root, { recursive: true, force: true })
     })
     await until(
@@ -188,7 +184,7 @@ test(
     const client = await handle.connect(90, 25)
     clients.push(client)
     let frame: WindowMetadata | undefined
-    client.onData((data) => screen.write(data))
+    client.onScreen((value) => (screen = value))
     client.onFrame((metadata) => {
       frame = metadata
     })
@@ -344,7 +340,6 @@ test(
       ).size,
       2,
     )
-    screen.resize(110, 32)
     client.resize(110, 32)
     await until(
       async () =>
@@ -426,9 +421,9 @@ test(
     handles.push(cloneHandle)
     const cloneClient = await cloneHandle.connect(2, 32)
     clients.push(cloneClient)
-    const cloneScreen = new headless.Terminal({ cols: 110, rows: 32, allowProposedApi: true })
-    t.after(() => cloneScreen.dispose())
-    cloneClient.onData((data) => cloneScreen.write(data))
+    let cloneScreen: FrameData | undefined
+    const cloneText = () => (cloneScreen ? gridText(cloneScreen).join('\n') : '')
+    cloneClient.onScreen((value) => (cloneScreen = value))
     await until(
       async () => (await cloneClient.content())?.length === 1,
       'the narrow initial view should expose one pane',
@@ -442,13 +437,7 @@ test(
       'expanding the initial narrow viewport must attach and paint both panes without another layout event',
     )
     await until(
-      () =>
-        Array.from(
-          { length: cloneScreen.buffer.active.length },
-          (_, i) => cloneScreen.buffer.active.getLine(i)?.translateToString(true) || '',
-        )
-          .join('\n')
-          .includes('CORE_NATIVE_FIXTURE'),
+      () => cloneText().includes('CORE_NATIVE_FIXTURE'),
       'a fresh source connection did not reattach the existing layout',
     )
     assert.deepEqual(
@@ -475,13 +464,7 @@ test(
       (item) => item.address === terminalId,
     )!.pid
     await until(
-      () =>
-        Array.from(
-          { length: cloneScreen.buffer.active.length },
-          (_, i) => cloneScreen.buffer.active.getLine(i)?.translateToString(true) || '',
-        )
-          .join('\n')
-          .includes(`PID=${recoveredPid}`),
+      () => cloneText().includes(`PID=${recoveredPid}`),
       'restarted terminal did not reattach its new program paint',
     )
     assert.equal(cloneExit, false, 'kept recovery does not close the Canvas window')

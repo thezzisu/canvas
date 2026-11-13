@@ -1,12 +1,18 @@
 import { createConnection, type Socket } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { HerdrInputRouter } from './input.ts'
-import { HerdrScreen, applySurfacePatch, validateSurface, type ScreenSelection } from './screen.ts'
+import {
+  applySurfacePatch,
+  composedFrame,
+  validateSurface,
+  type ScreenSelection,
+} from './screen.ts'
 import {
   FrameReader,
   encodeClientMessage,
   type ClientMessage,
   type ClientShellSnapshot,
+  type FrameData,
   type PaneSurfaceFrame,
   type ServerMessage,
 } from './wire.ts'
@@ -15,14 +21,22 @@ import { windowMetadata } from './metadata.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import type { NativeNotification } from '../../shared/notification.ts'
 import type { PaneAction, PaneContext, PanePoint } from '../../shared/pane-context.ts'
-import { isTerminalHoverInput, terminalSurfaceModes } from '../../shared/terminal-mouse.ts'
+import { isTerminalHoverInput } from '../../shared/terminal-mouse.ts'
 
 export interface HerdrClientTransport {
-  onData(listener: (data: string) => void): { dispose(): void }
+  /** The composed grid of the window. A new listener is first given the current one. */
+  onScreen(listener: (screen: FrameData) => void): { dispose(): void }
+  onBell(listener: () => void): { dispose(): void }
+  /** Base64 text a pane or a Canvas selection copied. */
+  onClipboard(listener: (data: string) => void): { dispose(): void }
   onPaneFocus(listener: (paneId: string | undefined) => void): { dispose(): void }
   onSnapshot(listener: () => void): { dispose(): void }
   completionSnapshot():
     { windows: WindowMetadata[]; state: { bootId: string; revision: number } } | undefined
+  /**
+   * The metadata a screen painted, once it is safe to acknowledge, after that screen's
+   * listeners ran. A new listener is first given the current screen's.
+   */
   onFrame(listener: (metadata: WindowMetadata) => void): { dispose(): void }
   onMetadata(listener: (metadata: WindowMetadata) => void): { dispose(): void }
   onNotification(listener: (notification: NativeNotification) => void): { dispose(): void }
@@ -37,8 +51,6 @@ export interface HerdrClientTransport {
   paneAction(context: PaneContext, action: PaneAction, authorized?: () => boolean): Promise<unknown>
   write(data: string | Buffer): void
   resize(cols: number, rows: number): void
-  pause(): void
-  resume(): void
   kill(): void
 }
 
@@ -62,10 +74,6 @@ interface Request {
   timer: ReturnType<typeof setTimeout>
 }
 const MAX_BUFFER = 8 * 1024 * 1024
-// Semantic surfaces always use cell-based SGR mouse reports. Native pane modes
-// are handled by the input router and never alter this outer terminal encoding.
-export const HERDR_MOUSE_ENCODING = '\x1b[?1016l\x1b[?1006h'
-
 function dimensions(cols: number, rows: number) {
   if (
     !Number.isInteger(cols) ||
@@ -103,8 +111,12 @@ function parseSnapshot(data: string): ClientShellSnapshot {
 class HerdrClient implements HerdrClientTransport {
   private readonly socket: Socket
   private readonly reader = new FrameReader()
-  private readonly screen = new HerdrScreen()
-  private readonly dataListeners = new Set<(data: string) => void>()
+  private readonly screenListeners = new Set<(screen: FrameData) => void>()
+  private readonly bellListeners = new Set<() => void>()
+  private readonly clipboardListeners = new Set<(data: string) => void>()
+  private screen?: FrameData
+  /** Metadata of the current screen, when it is safe to acknowledge. */
+  private painted?: WindowMetadata
   private readonly paneFocusListeners = new Set<(paneId: string | undefined) => void>()
   private readonly snapshotListeners = new Set<() => void>()
   private readonly frameListeners = new Set<(metadata: WindowMetadata) => void>()
@@ -128,10 +140,6 @@ class HerdrClient implements HerdrClientTransport {
   private renderedContent?: { surface: PaneSurfaceFrame; snapshot: ClientShellSnapshot }
   private layout = { signature: '', token: '' }
   private selection?: ScreenSelection
-  private output: Array<{ data: string; frame?: WindowMetadata }> = []
-  private outputBytes = 0
-  private paused = false
-  private flushing = false
   private welcomed = false
   private focusRequested = false
   private focusReady = false
@@ -173,11 +181,7 @@ class HerdrClient implements HerdrClientTransport {
         this.selection = selection
         this.render()
       },
-      onError: () => {
-        this.emit('\x07')
-        this.screen.reset()
-        this.render()
-      },
+      onError: () => this.bell(),
     })
     this.socket = createConnection(options.socketPath)
     this.deadline = setTimeout(
@@ -486,7 +490,7 @@ class HerdrClient implements HerdrClientTransport {
     else if (message.type === 'notification') {
       if (this.initialized)
         for (const listener of this.notificationListeners) listener(message.notification)
-    } else if (message.type === 'bell') this.emit('\x07'.repeat(Math.min(message.count, 16)))
+    } else if (message.type === 'bell') this.bell()
     else if (message.type === 'shutdown') this.finish({ exitCode: 0 })
     else if (message.type === 'error') throw new Error(message.message)
   }
@@ -512,7 +516,6 @@ class HerdrClient implements HerdrClientTransport {
       for (const listener of this.paneFocusListeners) listener(paneId)
     }
     this.input.refresh()
-    const rendered = this.screen.render(surface, this.selection)
     this.renderedContent = { surface, snapshot: this.snapshot! }
     const signature = JSON.stringify([
       surface.boot_id,
@@ -526,18 +529,18 @@ class HerdrClient implements HerdrClientTransport {
     if (!this.initialized) {
       this.initialized = true
       clearTimeout(this.deadline)
-      this.emit(terminalSurfaceModes)
       this.resolve(this)
     }
     this.renderedMetadata = this.metadata
       ? { ...this.metadata, layout: this.layout.token, ...(surface.popup ? { panes: [] } : {}) }
       : undefined
-    this.emit(
-      rendered,
+    const screen = (this.screen = composedFrame(surface, this.selection))
+    const painted = (this.painted =
       !this.pendingInputBytes && !this.inputFocusPending && this.input.focusSettled
         ? this.renderedMetadata
-        : undefined,
-    )
+        : undefined)
+    for (const listener of this.screenListeners) listener(screen)
+    if (painted) for (const listener of this.frameListeners) listener(painted)
     this.flushInput()
   }
   async content() {
@@ -622,37 +625,35 @@ class HerdrClient implements HerdrClientTransport {
   private clipboard(data: string) {
     if (!this.initialized || data.length > 2 * 1024 * 1024 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data))
       return
-    this.emit(`\x1b]52;c;${data}\x07`)
+    for (const listener of this.clipboardListeners) listener(data)
   }
-  private emit(data: string, frame?: WindowMetadata) {
-    if ((!data && !frame) || this.closed) return
-    this.output.push({ data, frame })
-    this.outputBytes += Buffer.byteLength(data)
-    if (this.outputBytes > MAX_BUFFER) {
-      this.fail(new Error('Herdr display buffer exceeded its limit'))
-      return
-    }
-    this.scheduleFlush()
+  private bell() {
+    for (const listener of this.bellListeners) listener()
   }
-  private scheduleFlush() {
-    if (this.flushing || this.paused || !this.dataListeners.size || this.closed) return
-    this.flushing = true
+  onScreen(listener: (screen: FrameData) => void) {
+    this.screenListeners.add(listener)
     queueMicrotask(() => {
-      this.flushing = false
-      while (!this.closed && !this.paused && this.dataListeners.size && this.output.length) {
-        const { data, frame } = this.output.shift()!
-        this.outputBytes -= Buffer.byteLength(data)
-        if (data) for (const listener of this.dataListeners) listener(data)
-        if (frame) for (const listener of this.frameListeners) listener(frame)
-      }
+      if (!this.closed && this.screen && this.screenListeners.has(listener)) listener(this.screen)
     })
-  }
-  onData(listener: (data: string) => void) {
-    this.dataListeners.add(listener)
-    this.scheduleFlush()
     return {
       dispose: () => {
-        this.dataListeners.delete(listener)
+        this.screenListeners.delete(listener)
+      },
+    }
+  }
+  onBell(listener: () => void) {
+    this.bellListeners.add(listener)
+    return {
+      dispose: () => {
+        this.bellListeners.delete(listener)
+      },
+    }
+  }
+  onClipboard(listener: (data: string) => void) {
+    this.clipboardListeners.add(listener)
+    return {
+      dispose: () => {
+        this.clipboardListeners.delete(listener)
       },
     }
   }
@@ -690,6 +691,12 @@ class HerdrClient implements HerdrClientTransport {
     }
   }
   onFrame(listener: (metadata: WindowMetadata) => void) {
+    queueMicrotask(() => {
+      if (!this.closed && this.painted && this.frameListeners.has(listener)) listener(this.painted)
+    })
+    return this.laterFrames(listener)
+  }
+  private laterFrames(listener: (metadata: WindowMetadata) => void) {
     this.frameListeners.add(listener)
     return {
       dispose: () => {
@@ -789,7 +796,7 @@ class HerdrClient implements HerdrClientTransport {
     await this.input.settled()
     if (this.closed) return
     return new Promise((resolve) => {
-      const frame = this.onFrame((metadata) => {
+      const frame = this.laterFrames((metadata) => {
         if (
           metadata !== this.renderedMetadata ||
           !this.input.focusSettled ||
@@ -825,16 +832,6 @@ class HerdrClient implements HerdrClientTransport {
       },
     })
   }
-  pause() {
-    this.paused = true
-    this.socket.pause()
-  }
-  resume() {
-    if (this.closed) return
-    this.paused = false
-    this.socket.resume()
-    this.scheduleFlush()
-  }
   kill() {
     if (this.closed) return
     try {
@@ -861,8 +858,6 @@ class HerdrClient implements HerdrClientTransport {
       request.reject(error)
     }
     this.requests.clear()
-    this.output = []
-    this.outputBytes = 0
     this.writeQueue = []
     this.writeBytes = 0
     this.notificationListeners.clear()

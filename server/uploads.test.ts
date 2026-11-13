@@ -11,6 +11,7 @@ import { UploadService } from './uploads.ts'
 import { Store, sourceConnectionKey, type Source } from './state.ts'
 import { createApp } from './app.ts'
 import { PASTE_SETTLE_QUIET_MS, TerminalManager } from './terminals.ts'
+import { gridText } from './test-grid.ts'
 import type { SourceResource } from './runtimes.ts'
 import { closeWindow, createSpace, listResources, shellQuote } from './runtimes.ts'
 import type { writeInboxFile } from './inbox.ts'
@@ -793,8 +794,9 @@ test('real native terminal receives no upload paths until the whole batch succee
         readyState = 1
         bufferedAmount = 0
         messages: Record<string, unknown>[] = []
-        send(value: string | Buffer) {
+        send(value: string | Uint8Array, sent?: () => void) {
           if (typeof value === 'string') this.messages.push(JSON.parse(value))
+          sent?.()
         }
         close() {
           this.readyState = 3
@@ -807,12 +809,7 @@ test('real native terminal receives no upload paths until the whole batch succee
       await manager.connect(source, { sourceId: source.id, spaceId: space.id, windowId }, socket)
       const terminal = (await manager.entries.get(`${source.id}/${windowId}`))!
       await waitFor(
-        () =>
-          Array.from({ length: terminal.emulator.buffer.active.length }, (_, row) =>
-            terminal.emulator.buffer.active.getLine(row)?.translateToString(true),
-          )
-            .join('\n')
-            .includes('UPLOAD_READY'),
+        () => !!terminal.grid && gridText(terminal.grid).join('\n').includes('UPLOAD_READY'),
         'Native receiver is ready',
       )
       client.emit('message', Buffer.from(JSON.stringify({ type: 'focus' })), false)

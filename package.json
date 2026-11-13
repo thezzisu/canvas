@@ -25,7 +25,6 @@
   },
   "dependencies": {
     "@hono/node-server": "^2.1.6",
-    "@xterm/addon-serialize": "^0.14.0",
     "@xterm/addon-unicode-graphemes": "0.4.0",
     "@xterm/headless": "^6.0.0",
     "hono": "^4.13.16",

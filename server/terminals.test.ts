@@ -7,23 +7,50 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { WebSocket } from 'ws'
-import headless from '@xterm/headless'
-import { terminalUnicodeAddon } from '../shared/terminal-unicode.ts'
+import { CellMirror } from '../shared/cell-wire.ts'
+import { gridText, mirrorText } from './test-grid.ts'
 import { terminalInputChunks } from '../web/src/utils/terminal/terminal-input-chunks.ts'
 import { Store, sourceConnectionKey, type Canvas, type TerminalNode } from './state.ts'
 import { CompletionReads } from './completion-reads.ts'
 import { CaptureService } from './capture.ts'
-import { PASTE_SETTLE_QUIET_MS, TerminalManager } from './terminals.ts'
+import { LiveTerminal, PASTE_SETTLE_QUIET_MS, TerminalManager } from './terminals.ts'
+import type { HerdrClientTransport } from './herdr/client.ts'
+import type { FrameData } from './herdr/wire.ts'
+import type { WindowMetadata } from '../shared/window-metadata.ts'
 import { createSpace, createWindow, listResources, shellQuote, type Source } from './runtimes.ts'
 import type { CanvasNotification } from '../shared/notification.ts'
 import { herdrApiRequest } from './herdr/api.ts'
 
+/** One cell message, as the browser's mirror stood after applying it. */
+interface Cells {
+  frame: boolean
+  cols: number
+  rows: number
+  text: string
+}
 class Client extends EventEmitter {
   readyState = 1
   bufferedAmount = 0
-  received: (string | Buffer)[] = []
-  send(data: string | Buffer) {
-    this.received.push(data)
+  received: (string | Cells)[] = []
+  mirror = new CellMirror()
+  /** While set, cell messages stay in flight, as on a socket that cannot drain. */
+  stalled?: (() => void)[]
+  send(data: string | Uint8Array, sent?: () => void) {
+    if (typeof data === 'string') this.received.push(data)
+    else {
+      const { frame } = this.mirror.apply(data)
+      const { cols, rows } = this.mirror
+      this.received.push({ frame, cols, rows, text: mirrorText(this.mirror).join('\n') })
+    }
+    if (sent) {
+      if (this.stalled) this.stalled.push(sent)
+      else queueMicrotask(sent)
+    }
+  }
+  drain() {
+    const sent = this.stalled ?? []
+    this.stalled = undefined
+    for (const done of sent) done()
   }
   close() {
     this.readyState = 3
@@ -45,15 +72,9 @@ const presentation = (client: Client) =>
   messages(client)
     .filter((item) => item.type === 'presentation')
     .at(-1)
-const size = (client: Client) =>
-  messages(client)
-    .filter((item) => item.type === 'resize')
-    .at(-1)
-const output = (client: Client) =>
-  client.received
-    .filter(Buffer.isBuffer)
-    .map((data) => data.toString())
-    .join('')
+const cells = (values: readonly (string | Cells)[]) =>
+  values.filter((data): data is Cells => typeof data !== 'string')
+const size = (client: Client) => ({ cols: client.mirror.cols, rows: client.mirror.rows })
 async function waitFor(check: () => boolean | Promise<boolean>, label: string) {
   for (let i = 0; i < 200; i++) {
     if (await check()) return
@@ -169,12 +190,7 @@ async function fixture(
   const target = { sourceId: source.id, spaceId: space.id, windowId: space.windows[0]!.id }
   const text = async () => {
     const terminal = await manager.entries.get(`${source.id}/${target.windowId}`)
-    return terminal
-      ? Array.from(
-          { length: terminal.emulator.buffer.active.length },
-          (_, row) => terminal.emulator.buffer.active.getLine(row)?.translateToString(true) || '',
-        ).join('\n')
-      : ''
+    return terminal?.grid ? gridText(terminal.grid).join('\n') : ''
   }
   const ready = () =>
     waitFor(
@@ -193,7 +209,7 @@ async function fixture(
   }
   const assertSize = async (client: Client, cols: number, rows: number) => {
     await waitFor(
-      () => size(client)?.cols === cols && size(client)?.rows === rows,
+      () => size(client).cols === cols && size(client).rows === rows,
       'client viewport did not reach requested size',
     )
     assert.equal(
@@ -250,40 +266,35 @@ async function fixture(
   }
 }
 
-test('geometry controls cannot overtake queued terminal output', async (t) => {
+test('a new size reaches browsers only as a frame of that size', async (t) => {
   const f = await fixture(t)
   if (!f) return
   const client = new Client()
   await f.manager.connect(f.source, f.target, client.socket)
   await f.ready()
+  const { frame, cols, rows } = cells(client.received)[0]!
+  assert.deepEqual({ frame, cols, rows }, { frame: true, cols: 100, rows: 30 })
   const terminal = (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!
-  let release!: () => void
-  const gate = new Promise<void>((resolve) => {
-    release = resolve
-  })
   const mark = client.received.length
-  terminal.queue = terminal.queue.then(() => gate)
-  try {
-    f.setNormalSize(83, 27)
-    await terminal.geometry.drain()
-    assert(
-      !client.received
-        .slice(mark)
-        .some((value) => typeof value === 'string' && JSON.parse(value).type === 'resize'),
-    )
-    assert.notEqual(terminal.emulator.cols, 83, 'queued old output retains its original grid')
-  } finally {
-    release()
-  }
-  await waitFor(
-    () =>
-      messages(client).some(
-        (message) => message.type === 'resize' && message.cols === 83 && message.rows === 27,
-      ),
-    'ordered resize',
+  f.setNormalSize(83, 27)
+  await terminal.geometry.drain()
+  assert.equal(terminal.grid, undefined, 'the grid of the previous size is never sent again')
+  const late = new Client()
+  await f.manager.connect(f.source, f.target, late.socket)
+  assert.deepEqual(cells(late.received), [], 'a joining browser waits for the new size')
+  await waitFor(() => size(client).cols === 83 && size(late).cols === 83, 'resized frame')
+  const resized = cells(client.received.slice(mark))
+  assert.deepEqual(
+    resized.map(({ frame, cols, rows }) => ({ frame, cols, rows })),
+    [{ frame: true, cols: 83, rows: 27 }],
   )
-  assert.equal(terminal.emulator.cols, 83)
+  assert.deepEqual(size(late), { cols: 83, rows: 27 })
+  assert(
+    !messages(client).some((message) => ['reset', 'resize'].includes(message.type)),
+    'size and replacement travel in the frame alone',
+  )
   client.close()
+  late.close()
 })
 
 test('normal geometry starts from shared state and changes without browser focus or resize authority', async (t) => {
@@ -296,8 +307,8 @@ test('normal geometry starts from shared state and changes without browser focus
   await f.ready()
   await f.manager.connect(f.source, f.target, peer.socket)
   const terminal = (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!
-  assert.deepEqual(size(first), { type: 'resize', cols: 150, rows: 40 })
-  assert.deepEqual(size(peer), { type: 'resize', cols: 150, rows: 40 })
+  assert.deepEqual(size(first), { cols: 150, rows: 40 })
+  assert.deepEqual(size(peer), { cols: 150, rows: 40 })
   assert.equal(
     messages(peer)
       .filter((message) => message.type === 'status')
@@ -321,26 +332,26 @@ test('normal geometry starts from shared state and changes without browser focus
   )
   f.setNormalSize(120, 32)
   await terminal.geometry.drain()
-  await waitFor(() => size(peer)?.cols === 120, 'shared edit reaches the passive browser')
+  await waitFor(() => size(peer).cols === 120, 'shared edit reaches the passive browser')
   assert.deepEqual(writes, [{ cols: 120, rows: 32 }])
   assert.equal(terminal.controller, first.socket)
   assert.equal(await f.manager.downloadRecipient(f.source.id, f.target.windowId), undefined)
   const token = randomUUID()
   peer.command({ type: 'focus-resize-begin', token, cols: 90, rows: 25 })
-  await waitFor(() => size(peer)?.cols === 90, 'temporary view owns its maximized size')
+  await waitFor(() => size(peer).cols === 90, 'temporary view owns its maximized size')
   first.command({ type: 'view-visible', visible: false })
   f.setNormalSize(160, 44)
   await terminal.geometry.drain()
   assert.equal(
-    size(peer)?.cols,
+    size(peer).cols,
     90,
     'normal shared edit updates only the restore baseline during maximization',
   )
   peer.command({ type: 'focus-resize-end', token })
-  await waitFor(() => size(peer)?.cols === 160, 'restoration uses the latest shared normal size')
+  await waitFor(() => size(peer).cols === 160, 'restoration uses the latest shared normal size')
   const late = new Client()
   await f.manager.connect(f.source, f.target, late.socket)
-  assert.deepEqual(size(late), { type: 'resize', cols: 160, rows: 44 })
+  assert.deepEqual(size(late), { cols: 160, rows: 44 })
   assert.equal(
     existsSync(f.bytes) ? readFileSync(f.bytes).length : 0,
     0,
@@ -541,31 +552,6 @@ test('native agent metadata reaches both viewers and late joiners without resour
   assert.equal(notifications.find((value) => value.kind === 'attention')!.paneId, paneId)
 })
 
-test('a transport closing during queued browser join rejects the connection', async () => {
-  const manager = new TerminalManager(),
-    client = new Client()
-  const source: Source = { id: 'join-race', name: 'Join race', transport: 'local' }
-  const terminal = {
-    closed: false,
-    connectionKey: sourceConnectionKey(source),
-    spaceId: 'space',
-    async join() {
-      await Promise.resolve()
-      this.closed = true
-    },
-  }
-  manager.entries.set('join-race/window', Promise.resolve(terminal) as never)
-  await assert.rejects(
-    manager.connect(
-      source,
-      { sourceId: source.id, spaceId: 'space', windowId: 'window' },
-      client.socket,
-    ),
-    /detached while connecting/,
-  )
-  manager.entries.clear()
-})
-
 test('native shell EOF removes every viewer before maximized cleanup without a reconnect status', async (t) => {
   const f = await fixture(t)
   if (!f) return
@@ -576,7 +562,7 @@ test('native shell EOF removes every viewer before maximized cleanup without a r
   await f.manager.connect(f.source, f.target, maximized.socket)
   await f.ready()
   maximized.command({ type: 'focus-resize-begin', token: randomUUID(), cols: 130, rows: 40 })
-  await waitFor(() => size(maximized)?.cols === 130, 'maximized viewport did not settle')
+  await waitFor(() => size(maximized).cols === 130, 'maximized viewport did not settle')
   const terminal = (await f.manager.entries.get(`${f.source.id}/${f.target.windowId}`))!
   const close = terminal.geometry.close.bind(terminal.geometry)
   let release!: () => void
@@ -771,7 +757,7 @@ test('unfocused, hidden, covered and disconnected viewers preserve confirmed clo
       if (mode === 'hidden') peer.command({ type: 'view-visible', visible: false, focused: true })
       if (mode === 'covered') {
         controller.command({ type: 'focus-resize-begin', token: randomUUID(), cols: 130, rows: 40 })
-        await waitFor(() => size(controller)?.cols === 130, 'maximized owner did not settle')
+        await waitFor(() => size(controller).cols === 130, 'maximized owner did not settle')
       }
       if (mode === 'disconnected') {
         peer.close()
@@ -890,17 +876,14 @@ test('one native window has one maximized view, pauses peers and restores comple
   )
   assert.ok(!(await f.text()).includes('BLOCKED_VIEW'))
   assert.equal(size(first).cols, 130)
-  assert.ok(
-    second.received
-      .slice(secondMark)
-      .every((data) => typeof data === 'string' && JSON.parse(data).type !== 'resize'),
+  assert.deepEqual(
+    cells(second.received.slice(secondMark)),
+    [],
     'paused viewer received output or size',
   )
   await manager.connect(source, target, late.socket)
   assert.equal(manager.entries.size, 1)
-  assert.ok(
-    late.received.every((data) => typeof data === 'string' && JSON.parse(data).type !== 'resize'),
-  )
+  assert.deepEqual(cells(late.received), [])
   assert.equal(presentation(late).maximized, true)
   await createWindow(source, target.spaceId, 'Independent')
   const other = (await listResources(source)).spaces
@@ -920,11 +903,8 @@ test('one native window has one maximized view, pauses peers and restores comple
   assert.equal(presentation(first).owned, false)
   await waitFor(() => presentation(second)?.owned === true, 'second view could not take over')
   const takeover = second.received.slice(takeoverMark)
-  const resetIndex = takeover.findIndex(
-    (data) => typeof data === 'string' && JSON.parse(data).type === 'reset',
-  )
   const replayIndex = takeover.findIndex(
-    (data) => Buffer.isBuffer(data) && data.toString().includes('CURRENT_SCREEN'),
+    (data) => typeof data !== 'string' && data.frame && data.text.includes('CURRENT_SCREEN'),
   )
   const shownIndex = takeover.findIndex(
     (data) =>
@@ -932,10 +912,7 @@ test('one native window has one maximized view, pauses peers and restores comple
       JSON.parse(data).type === 'presentation' &&
       JSON.parse(data).owned,
   )
-  assert.ok(
-    resetIndex >= 0 && replayIndex > resetIndex && shownIndex > replayIndex,
-    'takeover preceded its complete reset/snapshot',
-  )
+  assert.ok(replayIndex >= 0 && shownIndex > replayIndex, 'takeover preceded its complete frame')
   await f.assertSize(second, 144, 44)
   first.command({ type: 'focus-resize-end', token: firstToken })
   first.command({ type: 'focus-resize-update', token: firstToken, cols: 80, rows: 24 })
@@ -945,17 +922,18 @@ test('one native window has one maximized view, pauses peers and restores comple
   second.command({ type: 'focus-resize-end', token: secondToken })
   await waitFor(() => presentation(late)?.maximized === false, 'paused viewer did not resume')
   const resumed = late.received.slice(resumeMark)
-  const resume = resumed.slice(
-    resumed.findIndex((data) => typeof data === 'string' && JSON.parse(data).type === 'reset'),
+  const resume = resumed.slice(resumed.findIndex((data) => typeof data !== 'string'))
+  const restored = resume[0] as Cells
+  assert.deepEqual(
+    { frame: restored.frame, cols: restored.cols, rows: restored.rows },
+    { frame: true, cols: 100, rows: 30 },
+    'a resumed view starts from a frame of the restored size',
   )
-  assert.deepEqual(JSON.parse(resume[0] as string), { type: 'reset' })
-  assert.deepEqual(JSON.parse(resume[1] as string), { type: 'resize', cols: 100, rows: 30 })
-  assert.ok(Buffer.isBuffer(resume[2]) && resume[2].toString().includes('CURRENT_SCREEN'))
+  assert.ok(restored.text.includes('CURRENT_SCREEN'))
   assert.deepEqual(
     JSON.parse(
       resume.find(
-        (data, index) =>
-          index > 2 && typeof data === 'string' && JSON.parse(data).type === 'presentation',
+        (data) => typeof data === 'string' && JSON.parse(data).type === 'presentation',
       ) as string,
     ),
     { type: 'presentation', maximized: false, owned: false },
@@ -995,7 +973,7 @@ test('a paused peer cancels the observed maximization without input, focus takeo
   await f.ready()
   const token = randomUUID()
   owner.command({ type: 'focus-resize-begin', token, cols: 130, rows: 40 })
-  await waitFor(() => size(owner)?.cols === 130, 'owner did not maximize')
+  await waitFor(() => size(owner).cols === 130, 'owner did not maximize')
   const observed = presentation(peer)
   assert(observed.maximized && !observed.owned && Number.isSafeInteger(observed.lease))
   f.setNormalSize(112, 34)
@@ -1035,7 +1013,6 @@ test('visibility resumes and late viewers stay paused until maximized restoratio
   const token = randomUUID()
   owner.command({ type: 'focus-resize-begin', token, cols: 130, rows: 40 })
   await terminal.geometry.drain()
-  await terminal.queue
   assert.equal(presentation(owner).owned, true)
 
   const end = terminal.geometry.end.bind(terminal.geometry)
@@ -1060,20 +1037,15 @@ test('visibility resumes and late viewers stay paused until maximized restoratio
     owner.command({ type: 'view-visible', visible: false })
     owner.command({ type: 'view-visible', visible: true })
     await f.manager.connect(f.source, f.target, late.socket)
-    await terminal.queue
     for (const [client, mark] of [
       [owner, ownerMark],
       [peer, peerMark],
       [late, 0],
     ] as const) {
-      assert(
-        client.received
-          .slice(mark)
-          .every(
-            (value) =>
-              typeof value === 'string' && !['reset', 'resize'].includes(JSON.parse(value).type),
-          ),
-        'restoring view received a premature frame or geometry',
+      assert.deepEqual(
+        cells(client.received.slice(mark)).filter((value) => value.cols !== 130),
+        [],
+        'restoring view received a premature frame',
       )
       assert.equal(presentation(client).maximized, true)
     }
@@ -1091,20 +1063,15 @@ test('visibility resumes and late viewers stay paused until maximized restoratio
     [late, 0],
   ] as const) {
     const received = client.received.slice(mark)
-    const reset = received.findIndex(
-      (value) => typeof value === 'string' && JSON.parse(value).type === 'reset',
+    const restored = received.findIndex(
+      (value) => typeof value !== 'string' && value.frame && value.cols === 100,
     )
-    assert(reset >= 0)
-    assert.deepEqual(JSON.parse(received[reset + 1] as string), {
-      type: 'resize',
-      cols: 100,
-      rows: 30,
-    })
-    assert(Buffer.isBuffer(received[reset + 2]))
+    assert(restored >= 0)
+    assert.equal((received[restored] as Cells).rows, 30)
     assert.deepEqual(
       JSON.parse(
         received
-          .slice(reset + 3)
+          .slice(restored + 1)
           .find(
             (data) => typeof data === 'string' && JSON.parse(data).type === 'presentation',
           ) as string,
@@ -1129,7 +1096,6 @@ test('a narrow maximized viewport reaches the native pane exactly and restores i
   await terminal.geometry.drain()
   assert.deepEqual(terminal.geometry.current, { cols: 14, rows: 3 })
   await f.assertSize(owner, 14, 3)
-  assert.deepEqual([terminal.emulator.cols, terminal.emulator.rows], [14, 3])
   assert.equal(presentation(peer).owned, false)
   owner.command({ type: 'focus-resize-update', token, cols: '20', rows: null })
   await terminal.geometry.drain()
@@ -1144,7 +1110,7 @@ test('a narrow maximized viewport reaches the native pane exactly and restores i
     'narrow maximization did not restore both viewers',
   )
   await f.assertSize(owner, 100, 30)
-  assert.deepEqual(size(peer), { type: 'resize', cols: 100, rows: 30 })
+  assert.deepEqual(size(peer), { cols: 100, rows: 30 })
   assert.equal(f.manager.entries.size, 1)
 })
 
@@ -1159,7 +1125,7 @@ test('stale peer cancellation cannot end a replacement lease or a takeover queue
   await f.ready()
   const token = randomUUID()
   owner.command({ type: 'focus-resize-begin', token, cols: 130, rows: 40 })
-  await waitFor(() => size(owner)?.cols === 130, 'initial maximization failed')
+  await waitFor(() => size(owner).cols === 130, 'initial maximization failed')
   const stale = presentation(peer)
   owner.command({ type: 'focus-resize-begin', token, cols: 140, rows: 44 })
   const replacement = presentation(peer)
@@ -1169,7 +1135,7 @@ test('stale peer cancellation cannot end a replacement lease or a takeover queue
     'server lease identity must not depend on client token uniqueness',
   )
   peer.command({ type: 'presentation-cancel', token, lease: stale.lease })
-  await waitFor(() => size(owner)?.cols === 140, 'stale cancellation changed replacement geometry')
+  await waitFor(() => size(owner).cols === 140, 'stale cancellation changed replacement geometry')
   assert.equal(presentation(peer).lease, replacement.lease)
   peer.command({ type: 'presentation-cancel', token, lease: replacement.lease })
   const nextToken = randomUUID()
@@ -1180,7 +1146,7 @@ test('stale peer cancellation cannot end a replacement lease or a takeover queue
     () => presentation(owner)?.owned === true && presentation(owner)?.token === nextToken,
     'queued restore dismissed the new owner',
   )
-  assert.equal(size(owner).cols, 150)
+  await waitFor(() => size(owner).cols === 150, 'the new owner was not shown its own size')
   peer.command({ type: 'presentation-cancel', token, lease: replacement.lease })
   assert.equal(presentation(peer).token, nextToken)
   assert.equal(presentation(peer).maximized, true)
@@ -1194,7 +1160,7 @@ test('stale peer cancellation cannot end a replacement lease or a takeover queue
   assert.equal(size(peer).rows, 30)
 })
 
-test('shared native terminals serialize to late viewers, retain last resize and close without stopping herdr', async (t) => {
+test('shared native terminals give late viewers the current screen, retain last resize and close without stopping herdr', async (t) => {
   const f = await fixture(t)
   if (!f) return
   const { manager, source, target } = f
@@ -1209,42 +1175,17 @@ test('shared native terminals serialize to late viewers, retain last resize and 
   )
   await manager.connect(source, target, second.socket)
   assert.equal(manager.entries.size, 1)
-  assert.ok(output(second).includes('SHARED_SCREEN'), 'late viewer received no snapshot')
-  const replay = new headless.Terminal({ allowProposedApi: true })
-  const write = (data: string | Buffer) =>
-    new Promise<void>((resolve) => replay.write(data, resolve))
-  try {
-    for (const data of second.received.slice()) {
-      if (Buffer.isBuffer(data)) await write(data)
-      else {
-        const message = JSON.parse(data)
-        if (message.type === 'reset') await write('\x1bc')
-        if (message.type === 'resize') replay.resize(message.cols, message.rows)
-      }
-    }
-    let replies = ''
-    const listener = replay.onData((data) => {
-      replies += data
-    })
-    await write('\x1b[?1002$p\x1b[?1006$p\x1b[?1016$p')
-    listener.dispose()
-    assert.equal(
-      replies,
-      '\x1b[?1002;1$y\x1b[?1006;1$y\x1b[?1016;2$y',
-      'late views must retain drag tracking and cell-based SGR encoding',
-    )
-    assert.equal(replay.buffer.active.type, 'alternate')
-    assert.ok(
-      Array.from({ length: replay.buffer.active.length }, (_, row) =>
-        replay.buffer.active.getLine(row)?.translateToString(true),
-      )
-        .join('\n')
-        .includes('SHARED_SCREEN'),
-      'restoring mouse modes cleared the replayed screen',
-    )
-  } finally {
-    replay.dispose()
-  }
+  assert.deepEqual(
+    cells(second.received).map((value) => value.frame),
+    [true],
+    'a late viewer starts from one frame',
+  )
+  assert.ok(
+    mirrorText(second.mirror).join('\n').includes('SHARED_SCREEN'),
+    'late viewer received no screen',
+  )
+  assert.deepEqual(mirrorText(second.mirror), mirrorText(first.mirror))
+  assert.deepEqual(second.mirror.cursor, first.mirror.cursor)
   assert.ok(messages(second).some((item) => item.readOnly === true))
   second.command({ type: 'focus' })
   assert.ok(messages(first).some((item) => item.readOnly === true))
@@ -1277,7 +1218,7 @@ test('binary mouse coordinates and UTF-8 input pass through the native herdr cli
   await manager.connect(source, target, client.socket)
   await f.ready()
   f.setNormalSize(220, 60)
-  await waitFor(() => size(client)?.cols === 220, 'wide viewport was not applied')
+  await waitFor(() => size(client).cols === 220, 'wide viewport was not applied')
   client.command({
     type: 'input',
     encoding: 'binary',
@@ -1522,13 +1463,7 @@ test('hidden viewers stop binary traffic and resume an exact current screen with
   )
   f.setNormalSize(123, 37)
   await f.assertSize(first, 123, 37)
-  await terminal.queue
-  assert.equal(second.received.slice(mark).filter(Buffer.isBuffer).length, 0)
-  assert(
-    !second.received
-      .slice(mark)
-      .some((frame) => typeof frame === 'string' && JSON.parse(frame).type === 'resize'),
-  )
+  assert.deepEqual(cells(second.received.slice(mark)), [])
   assert.equal(recipient?.isCurrent(), true, 'hiding another view changed the CLI recipient')
   const beforeResume = second.received.length
   for (let i = 0; i < 4; i++) {
@@ -1536,54 +1471,24 @@ test('hidden viewers stop binary traffic and resume an exact current screen with
     second.command({ type: 'view-visible', visible: false })
   }
   second.command({ type: 'view-visible', visible: true })
-  await terminal.queue
+  await waitFor(() => second.mirror.revision === first.mirror.revision, 'resumed view')
   assert.equal(terminal.proc, native)
   assert.equal(f.manager.entries.size, 1)
-  const frames = second.received.slice(beforeResume)
-  const visible = (value: InstanceType<typeof headless.Terminal>) =>
-    Array.from(
-      { length: value.rows },
-      (_, row) =>
-        value.buffer.active.getLine(value.buffer.active.baseY + row)?.translateToString(true) || '',
-    )
-  const expected = {
-    lines: visible(terminal.emulator),
-    cols: terminal.cols,
-    rows: terminal.rows,
-    x: terminal.emulator.buffer.active.cursorX,
-    y: terminal.emulator.buffer.active.cursorY,
-  }
-  const replay = new headless.Terminal({
-    cols: 80,
-    rows: 24,
-    scrollback: 2000,
-    allowProposedApi: true,
-  })
-  replay.loadAddon(terminalUnicodeAddon())
-  try {
-    for (const frame of frames) {
-      if (Buffer.isBuffer(frame)) await new Promise<void>((resolve) => replay.write(frame, resolve))
-      else {
-        const message = JSON.parse(frame)
-        if (message.type === 'reset')
-          await new Promise<void>((resolve) => replay.write('\x1bc', resolve))
-        if (message.type === 'resize') replay.resize(message.cols, message.rows)
-      }
-    }
-    assert.equal(replay.cols, expected.cols)
-    assert.equal(replay.rows, expected.rows)
-    assert.deepEqual(visible(replay), expected.lines)
-    assert.equal(replay.buffer.active.cursorX, expected.x)
-    assert.equal(replay.buffer.active.cursorY, expected.y)
-  } finally {
-    replay.dispose()
-  }
+  const frames = cells(second.received.slice(beforeResume))
+  assert(frames.length > 0 && frames.length <= 5, 'each resume owes at most one frame')
+  assert(
+    frames.every((value) => value.frame),
+    'a view that was hidden resumes from a frame, never a patch',
+  )
+  assert.deepEqual(size(second), { cols: 123, rows: 37 })
+  assert.deepEqual(mirrorText(second.mirror), gridText(terminal.grid!))
+  assert.deepEqual(mirrorText(second.mirror), mirrorText(first.mirror))
+  assert.deepEqual(second.mirror.cursor, first.mirror.cursor)
   const token = randomUUID()
   first.command({ type: 'focus-resize-begin', token, cols: 130, rows: 40 })
   second.command({ type: 'view-visible', visible: false })
   first.command({ type: 'focus-resize-end', token })
   await terminal.geometry.drain()
-  await terminal.queue
   assert.equal(presentation(second).maximized, false, 'hidden peers missed lease state')
 })
 
@@ -1773,4 +1678,231 @@ test('initial completed panes remain unread without replaying notifications, the
     'new completion has its own notification evidence',
   )
   assert.equal(events.filter((event) => event.kind === 'done').length, 1)
+})
+
+/** A herdr client stand-in that shows whatever grid a test gives it. */
+function fakeWindow(cols = 8, rows = 2) {
+  type Listener<T> = (value: T) => void
+  const screens = new Set<Listener<FrameData>>(),
+    frames = new Set<Listener<WindowMetadata>>(),
+    bells = new Set<() => void>(),
+    clipboards = new Set<Listener<string>>()
+  const on =
+    <T>(listeners: Set<T>) =>
+    (listener: T) => {
+      listeners.add(listener)
+      return { dispose: () => void listeners.delete(listener) }
+    }
+  const none = () => ({ dispose() {} })
+  const sizes: { cols: number; rows: number }[] = []
+  const proc: HerdrClientTransport = {
+    onScreen: on(screens),
+    onFrame: on(frames),
+    onBell: on(bells),
+    onClipboard: on(clipboards),
+    onPaneFocus: none,
+    onSnapshot: none,
+    onMetadata: none,
+    onNotification: none,
+    onExit: none,
+    completionSnapshot: () => undefined,
+    completionFence: async () => undefined,
+    content: async () => undefined,
+    paneContext: () => undefined,
+    paneAction: async () => undefined,
+    write() {},
+    resize: (cols, rows) => void sizes.push({ cols, rows }),
+    kill() {},
+  }
+  const source: Source = { id: 'fake', name: 'Fake', transport: 'local' }
+  const terminal = new LiveTerminal(
+    'fake/window',
+    source.id,
+    sourceConnectionKey(source),
+    'space',
+    'window',
+    { cleanup: async () => {} } as never,
+    cols,
+    rows,
+    () => {},
+    proc,
+    source,
+  )
+  const grid = (text: string, width = cols, height = rows): FrameData => ({
+    width,
+    height,
+    cells: Array.from({ length: width * height }, (_, index) => ({
+      symbol: text[index] ?? ' ',
+      fg: 0,
+      bg: 0,
+      modifier: 0,
+      skip: false,
+      hyperlink: null,
+    })),
+    hyperlinks: [],
+    cursor: null,
+    graphics: Buffer.alloc(0),
+  })
+  const metadata = (layout: string): WindowMetadata => ({
+    id: 'window',
+    name: 'Window',
+    status: 'idle',
+    layout,
+    panes: [],
+  })
+  return {
+    terminal,
+    sizes,
+    show(text: string, width?: number, height?: number) {
+      const value = grid(text, width, height)
+      for (const listener of screens) listener(value)
+    },
+    paint: (layout: string) => {
+      for (const listener of frames) listener(metadata(layout))
+    },
+    bell: () => {
+      for (const listener of bells) listener()
+    },
+    copy: (data: string) => {
+      for (const listener of clipboards) listener(data)
+    },
+  }
+}
+const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
+const kinds = (client: Client, from = 0) =>
+  client.received
+    .slice(from)
+    .map((data) =>
+      typeof data === 'string' ? JSON.parse(data).type : data.frame ? 'FRAME' : 'PATCH',
+    )
+
+test('a browser starts from a frame, then takes patches at the revisions the window reaches', async () => {
+  const f = fakeWindow(),
+    client = new Client()
+  f.show('one')
+  f.terminal.join(client.socket)
+  assert.deepEqual(kinds(client), [
+    'capture',
+    'pane-focus',
+    'FRAME',
+    'presentation',
+    'status',
+    'focus-resize',
+  ])
+  assert.deepEqual([client.mirror.revision, mirrorText(client.mirror)[0]], [1, 'one'])
+  await tick()
+  f.show('one')
+  await tick()
+  assert.equal(client.mirror.revision, 1, 'an unchanged grid sends nothing')
+  f.show('two')
+  await tick()
+  assert.deepEqual(kinds(client, 6), ['PATCH'])
+  assert.deepEqual([client.mirror.revision, mirrorText(client.mirror)[0]], [3, 'two'])
+  await f.terminal.close()
+})
+
+test('a socket that cannot drain is owed only the latest grid', async () => {
+  const f = fakeWindow(),
+    fast = new Client(),
+    slow = new Client()
+  f.show('zero')
+  f.terminal.join(fast.socket)
+  f.terminal.join(slow.socket)
+  await tick()
+  slow.stalled = []
+  const mark = slow.received.length
+  f.show('one')
+  for (const text of ['two', 'three', 'four']) {
+    await tick()
+    f.show(text)
+    f.paint(text)
+  }
+  await tick()
+  assert.deepEqual(kinds(slow, mark), ['PATCH'], 'nothing queues behind the message in flight')
+  assert.equal(mirrorText(slow.mirror)[0], 'one')
+  assert.equal(cells(fast.received).length, 5)
+  slow.drain()
+  await tick()
+  assert.deepEqual(
+    kinds(slow, mark),
+    ['PATCH', 'PATCH', 'completion-frame'],
+    'one patch brings it to the latest grid, then that grid may be acknowledged',
+  )
+  assert.equal(JSON.parse(slow.received.at(-1) as string).layout, 'four')
+  assert.deepEqual(
+    [slow.mirror.revision, mirrorText(slow.mirror)[0]],
+    [fast.mirror.revision, 'four'],
+  )
+  await f.terminal.close()
+})
+
+test('hidden and covered browsers get no cells and resume from a frame', async () => {
+  const f = fakeWindow(),
+    owner = new Client(),
+    peer = new Client()
+  f.show('first')
+  f.terminal.join(owner.socket)
+  f.terminal.join(peer.socket)
+  peer.command({ type: 'view-visible', visible: false })
+  await tick()
+  let mark = peer.received.length
+  f.show('second')
+  f.bell()
+  f.copy('Y29weQ==')
+  await tick()
+  assert.deepEqual(kinds(peer, mark), [], 'a hidden browser gets no cells, bell or clipboard')
+  assert.deepEqual(kinds(owner).slice(-3), ['PATCH', 'bell', 'clipboard'])
+  assert.deepEqual(JSON.parse(owner.received.at(-1) as string), {
+    type: 'clipboard',
+    data: 'Y29weQ==',
+  })
+  f.paint('layout')
+  peer.command({ type: 'view-visible', visible: true })
+  assert.deepEqual(kinds(peer, mark), ['pane-focus', 'FRAME', 'completion-frame', 'presentation'])
+  assert.equal(mirrorText(peer.mirror)[0], 'second')
+
+  mark = peer.received.length
+  owner.command({ type: 'focus-resize-begin', token: 'lease', cols: 8, rows: 2 })
+  f.show('third')
+  await tick()
+  assert.deepEqual(cells(peer.received.slice(mark)), [], 'a covered browser gets no cells')
+  assert.equal(mirrorText(owner.mirror)[0], 'third')
+  owner.command({ type: 'focus-resize-end', token: 'lease' })
+  await f.terminal.geometry.drain()
+  await tick()
+  assert.deepEqual(
+    kinds(peer, mark).filter((kind) => ['FRAME', 'PATCH', 'presentation'].includes(kind)),
+    ['presentation', 'presentation', 'FRAME', 'presentation'],
+    'a released view shows the current grid before it is presented again',
+  )
+  assert.equal(mirrorText(peer.mirror)[0], 'third')
+  await f.terminal.close()
+})
+
+test('a new size drops the old grid and every browser waits for a frame of the new one', async () => {
+  const f = fakeWindow(),
+    client = new Client(),
+    late = new Client()
+  f.show('old')
+  f.terminal.join(client.socket)
+  await tick()
+  f.terminal.setNormalSize({ cols: 10, rows: 3 })
+  await f.terminal.geometry.drain()
+  assert.deepEqual(f.sizes, [{ cols: 10, rows: 3 }])
+  f.terminal.join(late.socket)
+  assert.deepEqual(cells(late.received), [])
+  assert.deepEqual(kinds(late), ['capture', 'pane-focus', 'status', 'focus-resize'])
+  f.show('new', 10, 3)
+  await tick()
+  for (const viewer of [client, late]) {
+    assert.deepEqual(cells(viewer.received).at(-1), {
+      frame: true,
+      cols: 10,
+      rows: 3,
+      text: 'new\n\n',
+    })
+    assert(!kinds(viewer).some((kind) => kind === 'resize' || kind === 'reset'))
+  }
+  assert.deepEqual(kinds(late).slice(-2), ['FRAME', 'presentation'])
+  await f.terminal.close()
 })

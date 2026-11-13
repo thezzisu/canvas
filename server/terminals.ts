@@ -1,14 +1,60 @@
+// The window socket: what one browser exchanges with one herdr window.
+//
+// The server's herdr client is the only terminal client; the browser mirrors its screen and
+// sends input. Binary messages are cell messages (shared/cell-wire.ts); text messages are JSON.
+//
+// Cells, server to browser:
+// - The window counts the grids its client has shown; that count is the revision. A FRAME or
+//   PATCH carries the revision it brings the browser to, and a PATCH names as `base` the
+//   revision of the previous cell message on this socket. Revisions may skip: a browser is
+//   brought to the latest grid, never through the ones in between.
+// - A FRAME is sent when the browser has nothing to patch: on joining, on becoming visible
+//   again, when a maximized view it did not own is released, when the grid changes size, and
+//   when the stream's style or link table has outgrown its limit. Otherwise changed rows and
+//   the cursor travel as a PATCH; an unchanged grid sends nothing.
+// - The grid size is the FRAME's. After a size change no cells are sent until the client
+//   shows a grid of the new size. There is no separate reset or resize message.
+// - One cell message is in flight per socket. While it is, newer grids are not sent; when it
+//   has gone out the browser gets one message to the latest grid.
+// - A browser that is hidden, or covered by another browser's maximized view, gets no cells,
+//   bell or clipboard. `presentation` tells it which.
+// - A browser that cannot apply a cell message has lost the stream and reconnects.
+//
+// JSON, server to browser:
+//   status            { status: 'connected', readOnly } | { status: 'removed' | 'closed' }
+//   presentation      { maximized, owned, token?, lease? }; after the FRAME when a view resumes
+//   focus-resize      { active, owned, token?, reason? }, the maximized viewport lease
+//   pane-focus        { paneId }
+//   metadata          { window }
+//   completion-frame  { generation, focusedPaneId, layout, panes }; follows the cell message
+//                     that painted it
+//   capture           { capture }
+//   bell              {}
+//   clipboard         { data }, base64 text copied by a pane or a selection
+//   pong              { id }
+//
+// JSON, browser to server:
+//   input             { data, encoding?: 'binary' }, bytes for a terminal whose modes are fixed:
+//                     application cursor keys, bracketed paste, any-event mouse tracking with
+//                     SGR cell coordinates, focus reports
+//   focus             take input control
+//   view-visible      { visible, focused? }
+//   focus-resize-begin | -update { token, cols, rows }, focus-resize-end { token }
+//   presentation-cancel { token, lease }
+//   completion-fence  { generation }, completion-read { generation, paneId, bootId, sequence }
+//   ping              { id }
+//
+// Uploads and downloads put their own JSON messages on this socket (uploads.ts, open-download.ts).
 import { CompletionReads } from './completion-reads.ts'
 import type { PaneAction, PaneContext, PanePoint } from '../shared/pane-context.ts'
 import { sameCompletion, type CompletionToken } from '../shared/completion.ts'
-import headless from '@xterm/headless'
-import { terminalUnicodeAddon } from '../shared/terminal-unicode.ts'
-import serialize from '@xterm/addon-serialize'
 import type { WebSocket } from 'ws'
 import { sourceConnectionKey, type Source } from './state.ts'
 import { openTerminal } from './runtimes.ts'
 import { GeometryController, type Size } from './geometry.ts'
-import { HERDR_MOUSE_ENCODING, type HerdrClientTransport } from './herdr/client.ts'
+import type { HerdrClientTransport } from './herdr/client.ts'
+import type { FrameData } from './herdr/wire.ts'
+import { GridEncoder } from './cell-grid.ts'
 import type { WindowMetadata } from '../shared/window-metadata.ts'
 import { randomUUID } from 'node:crypto'
 import type { CanvasNotification } from '../shared/notification.ts'
@@ -17,8 +63,6 @@ import type { CaptureDescriptor, CaptureState } from '../shared/capture.ts'
 import { defaultTerminalCell } from '../shared/settings.ts'
 import { defaultWindowSize, normalTerminalGrid } from '../shared/window-size.ts'
 import { isTerminalHoverInput } from '../shared/terminal-mouse.ts'
-const { Terminal } = headless
-const { SerializeAddon } = serialize
 export type TerminalTarget = {
   sourceId: string
   spaceId: string
@@ -37,11 +81,24 @@ const clamp = (n: unknown, min: number, max: number, fallback: number) =>
 function json(ws: WebSocket, data: unknown) {
   if (ws.readyState === 1) ws.send(JSON.stringify(data))
 }
-class LiveTerminal {
-  emulator: InstanceType<typeof Terminal>
-  serializer: InstanceType<typeof SerializeAddon>
+/** What one browser socket has been sent of the window's grid. */
+interface View {
+  encoder: GridEncoder
+  /** The browser paints this window; otherwise it is owed a FRAME when it next does. */
+  shown: boolean
+  /** A cell message is still on its way out; the next one waits for it. */
+  sending: boolean
+  /** The completion frame, then the presentation, follow the next cell message. */
+  frameDue: boolean
+  presentationDue: boolean
+}
+export class LiveTerminal {
   clients = new Set<WebSocket>()
-  private rendered = new Set<WebSocket>()
+  private views = new Map<WebSocket, View>()
+  /** The grid the herdr client shows; absent until it shows one of the current size. */
+  grid?: FrameData
+  /** A count of the grids the client has shown. */
+  private revision = 0
   private hidden = new Set<WebSocket>()
   private focused = new Set<WebSocket>()
   private maximized?: { owner: WebSocket; token: string; lease: number; releasing?: boolean }
@@ -54,17 +111,12 @@ class LiveTerminal {
   private readGenerations = new WeakMap<WebSocket, number>()
   private pendingFences = new WeakMap<WebSocket, number>()
   private readSubscription?: { dispose(): unknown }
-  private cursorVisible = true
-  private cursorShape = 0
   private outputWaiters = new Set<() => void>()
   // Keyboard input typed during a paced paste follows the complete paste.
   private pasting?: Promise<void>
   controller?: WebSocket
   private downloadController?: WebSocket
   idle?: ReturnType<typeof setTimeout>
-  queue: Promise<void> = Promise.resolve()
-  pendingBytes = 0
-  paused = false
   geometry: GeometryController<WebSocket>
   closing?: Promise<void>
   closed = false
@@ -91,27 +143,6 @@ class LiveTerminal {
     this.cols = cols
     this.rows = rows
     this.normalSize = { cols, rows }
-    this.emulator = new Terminal({
-      cols,
-      rows,
-      scrollback: 2000,
-      allowProposedApi: true,
-    })
-    this.emulator.loadAddon(terminalUnicodeAddon())
-    this.serializer = new SerializeAddon()
-    this.emulator.loadAddon(this.serializer)
-    // SerializeAddon omits cursor appearance. Observe it on the same parser lane
-    // as screen writes so resumed snapshots retain the completed frame's state.
-    for (const final of ['h', 'l'])
-      this.emulator.parser.registerCsiHandler({ prefix: '?', final }, (params) => {
-        if (params.includes(25)) this.cursorVisible = final === 'h'
-        return false
-      })
-    this.emulator.parser.registerCsiHandler({ intermediates: ' ', final: 'q' }, (params) => {
-      if (typeof params[0] === 'number' && params[0] >= 0 && params[0] <= 6)
-        this.cursorShape = params[0]
-      return false
-    })
     this.geometry = new GeometryController(
       { cols, rows },
       (size) => this.adoptGeometry(size),
@@ -139,65 +170,27 @@ class LiveTerminal {
       this.rawMetadata = metadata
       this.publishMetadata()
     })
-    this.proc.onFrame((metadata) => {
-      const recipients = [...this.clients].map((ws) => ({
-        ws,
-        generation: this.readGenerations.get(ws) || 0,
-        blocked: this.pendingFences.has(ws),
-      }))
-      this.queue = this.queue
-        .then(() => {
-          if (this.closed) return
-          this.frame = metadata
-          for (const { ws, generation, blocked } of recipients)
-            if (
-              !blocked &&
-              generation === (this.readGenerations.get(ws) || 0) &&
-              this.canRender(ws)
-            )
-              this.publishFrame(ws)
-        })
-        .catch(() => {
-          void this.close()
-        })
-    })
-    this.proc.onData((data) => {
+    this.proc.onScreen((grid) => {
       if (this.closed) return
       for (const waiter of this.outputWaiters) waiter()
-      const bytes = Buffer.byteLength(data)
-      this.pendingBytes += bytes
-      if (this.pendingBytes > 256 * 1024 && !this.paused) {
-        this.paused = true
-        this.proc.pause()
-      }
-      this.queue = this.queue
-        .then(async () => {
-          try {
-            if (this.closed) return
-            await new Promise<void>((resolve) =>
-              this.emulator.write(data, () => {
-                for (const ws of this.clients) {
-                  if (!this.canRender(ws)) continue
-                  if (ws.bufferedAmount > 2 * 1024 * 1024) {
-                    ws.close(1013, 'Terminal output is too fast; reconnect')
-                    continue
-                  }
-                  if (ws.readyState === 1) ws.send(Buffer.from(data, 'utf8'))
-                }
-                resolve()
-              }),
-            )
-          } finally {
-            this.pendingBytes -= bytes
-            if (this.paused && this.pendingBytes < 128 * 1024 && !this.closed) {
-              this.paused = false
-              this.proc.resume()
-            }
-          }
-        })
-        .catch(() => {
-          void this.close()
-        })
+      this.grid = grid
+      this.revision++
+      for (const ws of this.clients) this.pump(ws)
+    })
+    this.proc.onFrame((frame) => {
+      if (this.closed) return
+      this.frame = frame
+      for (const ws of this.clients)
+        if (!this.pendingFences.has(ws) && this.canRender(ws)) {
+          this.views.get(ws)!.frameDue = true
+          this.pump(ws)
+        }
+    })
+    this.proc.onBell(() => {
+      for (const ws of this.clients) if (this.canRender(ws)) json(ws, { type: 'bell' })
+    })
+    this.proc.onClipboard((data) => {
+      for (const ws of this.clients) if (this.canRender(ws)) json(ws, { type: 'clipboard', data })
     })
     this.proc.onExit((event) => void this.close(event.reason))
   }
@@ -221,10 +214,34 @@ class LiveTerminal {
       })),
     })
   }
+  /**
+   * Brings a browser up to the current grid unless a cell message is still going out to it;
+   * that message's completion runs this again, so a slow socket skips the grids in between.
+   */
+  private pump(ws: WebSocket) {
+    const view = this.views.get(ws)
+    if (!view || view.sending || !this.grid || ws.readyState !== 1 || !this.canRender(ws)) return
+    const message = view.encoder.encode(this.grid, this.revision)
+    if (message) {
+      view.sending = true
+      ws.send(message, () => {
+        view.sending = false
+        if (!this.closed) this.pump(ws)
+      })
+    }
+    if (view.frameDue) {
+      view.frameDue = false
+      this.publishFrame(ws)
+    }
+    if (view.presentationDue) {
+      view.presentationDue = false
+      this.presentation(ws)
+    }
+  }
   private canRender(ws: WebSocket) {
     return (
       !this.hidden.has(ws) &&
-      this.rendered.has(ws) &&
+      !!this.views.get(ws)?.shown &&
       (!this.maximized || (!this.maximized.releasing && this.maximized.owner === ws))
     )
   }
@@ -274,16 +291,14 @@ class LiveTerminal {
   private async writePaste(segments: readonly PasteSegment[]) {
     const deadline = Date.now() + PASTE_TOTAL_LIMIT_MS
     for (const [index, segment] of segments.entries()) {
-      await this.queue
       if (this.closed) throw new Error('windowClosed')
       const pace =
         segment.file && index < segments.length - 1
           ? Math.min(PASTE_SETTLE_LIMIT_MS, deadline - Date.now())
           : 0
       const settled = pace > 0 ? this.outputSettled(pace) : undefined
-      this.proc.write(
-        this.emulator.modes.bracketedPasteMode ? `\x1b[200~${segment.text}\x1b[201~` : segment.text,
-      )
+      // The surface the input router reads always has bracketed paste on.
+      this.proc.write(`\x1b[200~${segment.text}\x1b[201~`)
       await settled
     }
   }
@@ -321,41 +336,28 @@ class LiveTerminal {
       this.hidden.has(ws) ||
       (this.maximized && (this.maximized.releasing || this.maximized.owner !== ws))
     ) {
-      this.rendered.delete(ws)
+      this.pause(ws)
       this.presentation(ws)
       return
     }
-    // The caller runs in the same queue as headless writes. Reset, geometry,
-    // serialized state and live output therefore form one ordered stream.
-    json(ws, { type: 'reset' })
-    json(ws, { type: 'resize', cols: this.emulator.cols, rows: this.emulator.rows })
-    // SerializeAddon restores tracking but omits its wire encoding.
-    const cursor = this.emulator.buffer.active
-    // Absolute positioning also avoids SerializeAddon's last-column relative
-    // cursor offset when the native projection has disabled wrapping.
-    ws.send(
-      Buffer.from(
-        this.serializer.serialize() +
-          HERDR_MOUSE_ENCODING +
-          `\x1b[${cursor.cursorY + 1};${cursor.cursorX + 1}H\x1b[${this.cursorShape} q\x1b[?25${this.cursorVisible ? 'h' : 'l'}`,
-        'utf8',
-      ),
-    )
-    this.rendered.add(ws)
+    const view = this.views.get(ws)!
+    view.shown = true
     this.sentFrames.delete(ws)
-    this.publishFrame(ws)
-    this.presentation(ws)
+    view.frameDue = true
+    view.presentationDue = true
+    this.pump(ws)
+  }
+  /** Stops cell traffic to a browser and forgets what it was sent. */
+  private pause(ws: WebSocket) {
+    const view = this.views.get(ws)
+    if (!view) return
+    view.shown = false
+    view.frameDue = false
+    view.presentationDue = false
+    view.encoder.reset()
   }
   private resume() {
-    const revision = this.presentationRevision
-    this.queue = this.queue
-      .then(() => {
-        if (revision !== this.presentationRevision) return
-        for (const ws of this.clients) if (!this.rendered.has(ws)) this.snapshot(ws)
-      })
-      .catch(() => {
-        void this.close()
-      })
+    for (const ws of this.clients) if (!this.views.get(ws)!.shown) this.snapshot(ws)
   }
   private maximize(ws: WebSocket, token: string) {
     this.presentationRevision++
@@ -364,9 +366,9 @@ class LiveTerminal {
     this.downloadController = ws
     for (const client of this.clients) {
       if (client !== ws) {
-        this.rendered.delete(client)
+        this.pause(client)
         this.presentation(client)
-      } else if (this.rendered.has(client)) this.presentation(client)
+      } else if (this.views.get(client)!.shown) this.presentation(client)
     }
     this.status()
     this.resume()
@@ -385,26 +387,31 @@ class LiveTerminal {
     // Keep every view paused until viewport restoration completes.
     // A new owner can take over while it is queued; snapshots
     // re-check the current owner and never release a newer request.
-    this.rendered.clear()
+    for (const client of this.clients) this.pause(client)
     await this.geometry.end(ws, current.token)
     if (this.maximized !== current) return
     this.maximized = undefined
     this.resume()
     this.status()
   }
-  async join(ws: WebSocket) {
+  join(ws: WebSocket) {
     clearTimeout(this.idle)
-    this.queue = this.queue.then(() => {
-      if (this.closed || ws.readyState !== 1) return
+    if (!this.closed && ws.readyState === 1) {
       this.clients.add(ws)
+      this.views.set(ws, {
+        encoder: new GridEncoder(),
+        shown: false,
+        sending: false,
+        frameDue: false,
+        presentationDue: false,
+      })
       if (!this.controller) this.controller = ws
       if (this.metadata) json(ws, { type: 'metadata', window: this.metadata })
       json(ws, { type: 'capture', capture: this.capture() } satisfies CaptureState)
       this.snapshot(ws)
       this.status()
       json(ws, this.geometry.state(ws))
-    })
-    await this.queue
+    }
     ws.on('message', (data, isBinary) => {
       if (this.closed || ws.readyState !== 1 || !this.clients.has(ws)) return
       if (isBinary || Buffer.byteLength(data.toString()) > 128 * 1024) return
@@ -427,7 +434,7 @@ class LiveTerminal {
             this.resume()
           } else {
             this.hidden.add(ws)
-            this.rendered.delete(ws)
+            this.pause(ws)
           }
           return
         }
@@ -450,12 +457,12 @@ class LiveTerminal {
                 this.pendingFences.get(ws) !== msg.generation
               )
                 return
-              this.queue = this.queue.then(() => {
-                if (this.closed || this.pendingFences.get(ws) !== msg.generation) return
-                this.pendingFences.delete(ws)
-                this.frame = frame
-                if (this.canRender(ws)) this.publishFrame(ws)
-              })
+              this.pendingFences.delete(ws)
+              this.frame = frame
+              if (this.canRender(ws)) {
+                this.views.get(ws)!.frameDue = true
+                this.pump(ws)
+              }
             })
             .catch(() => {})
           return
@@ -547,10 +554,10 @@ class LiveTerminal {
     })
     ws.once('close', () => {
       this.clients.delete(ws)
+      this.views.delete(ws)
       this.hidden.delete(ws)
       this.focused.delete(ws)
       if (this.downloadController === ws) this.downloadController = undefined
-      this.rendered.delete(ws)
       if (this.closed) return
       if (this.maximized?.owner === ws) void this.releaseMaximized(ws)
       else void this.geometry.end(ws)
@@ -567,13 +574,8 @@ class LiveTerminal {
     this.proc.resize(size.cols, size.rows)
     this.cols = size.cols
     this.rows = size.rows
-    // Geometry must not overtake bytes already queued at the previous size.
-    this.queue = this.queue.then(() => {
-      if (this.closed) return
-      this.emulator.resize(size.cols, size.rows)
-      for (const ws of this.clients)
-        if (this.canRender(ws)) json(ws, { type: 'resize', cols: size.cols, rows: size.rows })
-    })
+    // Browsers wait for the grid of the new size; the old one is never sent again.
+    this.grid = undefined
   }
   setNormalSize(size: Size) {
     if (this.closed || (this.normalSize.cols === size.cols && this.normalSize.rows === size.rows))
@@ -620,15 +622,14 @@ class LiveTerminal {
         ws.close(1000, 'Terminal detached')
       }
       this.clients.clear()
+      this.views.clear()
       this.hidden.clear()
       this.focused.clear()
-      this.rendered.clear()
       this.maximized = undefined
       try {
         this.proc.kill()
       } catch {}
       await this.handle.cleanup().catch(() => {})
-      void this.queue.finally(() => this.emulator.dispose()).catch(() => {})
       this.onClose()
     })()
     return this.closing
@@ -808,9 +809,7 @@ export class TerminalManager {
     if (terminal.closed) throw new Error('Terminal is detaching; reconnect in a moment')
     if (terminal.connectionKey !== sourceConnectionKey(source))
       throw new Error('Terminal connection changed')
-    await terminal.join(ws)
-    if (terminal.closed || this.stopped || this.closingSources.has(source.id))
-      throw new Error('Terminal detached while connecting; reconnect in a moment')
+    terminal.join(ws)
     if (!terminal.clients.size && !terminal.closed) {
       terminal.idle = setTimeout(() => void terminal.close(), 20_000)
       terminal.idle.unref()

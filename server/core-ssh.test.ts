@@ -6,7 +6,6 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import { dirname, join } from 'node:path'
 import { tmpdir, userInfo } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import headless from '@xterm/headless'
 import { CoreRpc } from './core/rpc.ts'
 import {
   closeRuntimeConnections,
@@ -28,6 +27,8 @@ import {
 import { readSourceFile, regularSourceFiles } from './source-file.ts'
 import { removeInboxFiles, writeInboxFile } from './inbox.ts'
 import type { HerdrClientTransport } from './herdr/client.ts'
+import type { FrameData } from './herdr/wire.ts'
+import { gridText } from './test-grid.ts'
 
 const delay = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
 async function stop(child?: ChildProcess) {
@@ -134,12 +135,8 @@ test(
       sshIdentityFile: join(sshRoot, 'client'),
       sshKnownHostsFile: join(sshRoot, 'known_hosts'),
     }
-    const screen = new headless.Terminal({ cols: 80, rows: 24, allowProposedApi: true })
-    const text = () =>
-      Array.from(
-        { length: screen.buffer.active.length },
-        (_, n) => screen.buffer.active.getLine(n)?.translateToString(true) || '',
-      ).join('\n')
+    let screen: FrameData | undefined
+    const text = () => (screen ? gridText(screen).join('\n') : '')
     const until = async (check: () => boolean | Promise<boolean>, label: string) => {
       const deadline = Date.now() + 12000
       while (Date.now() < deadline) {
@@ -175,7 +172,6 @@ test(
       rpc?.close()
       await stop(core)
       await stop(sshd)
-      screen.dispose()
       if (previousPath === undefined) delete process.env.PATH
       else process.env.PATH = previousPath
       await rm(root, { recursive: true, force: true })
@@ -238,7 +234,7 @@ test(
     const first = await openTerminal(source, created.spaceId, created.windowId)
     handles.push(first)
     client = await first.connect(80, 24)
-    client.onData((data) => screen.write(data))
+    client.onScreen((value) => (screen = value))
     await until(() => text().includes('CORE_SSH_FIXTURE'), 'native output did not cross SSH')
     const forwards = async (): Promise<string[][]> =>
       (await readFile(forwarding, 'utf8'))
@@ -268,7 +264,6 @@ test(
         return false
       }
     }, 'native Unicode input did not cross SSH')
-    screen.resize(100, 30)
     client.resize(100, 30)
     await until(() => text().includes('100x30'), 'native resize did not cross SSH')
     const selected = join(remoteHome, 'source 中文.txt'),

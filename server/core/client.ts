@@ -6,7 +6,7 @@ import type { PaneAction, PaneContext, PanePoint } from '../../shared/pane-conte
 import type { NativeNotification } from '../../shared/notification.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import { HerdrInputRouter } from '../herdr/input.ts'
-import { HerdrScreen, type ScreenSelection } from '../herdr/screen.ts'
+import { SELECTED, type ScreenSelection } from '../herdr/screen.ts'
 import { windowContent, type NativeContentPane } from '../herdr/content.ts'
 import type { HerdrClientExit, HerdrClientTransport } from '../herdr/client.ts'
 import type {
@@ -30,12 +30,10 @@ import {
   type CoreTerminal,
 } from './layout.ts'
 import { CoreRpc, CoreRpcError, type CoreNotification, type CoreStream } from './rpc.ts'
-import { terminalSurfaceModes } from '../../shared/terminal-mouse.ts'
 
 const { Terminal } = headless
 type Emulator = InstanceType<typeof Terminal>
 type Subscription = { dispose(): void }
-const MAX_OUTPUT = 8 * 1024 * 1024
 const blank = (symbol = ' '): CellData => ({
   symbol,
   fg: 0,
@@ -170,7 +168,9 @@ class CoreWindowClient implements HerdrClientTransport {
     layers: string[]
   }
   private layoutToken = { signature: '', token: '' }
-  private readonly screen = new HerdrScreen()
+  private screen?: FrameData
+  /** Metadata of the current screen. */
+  private painted?: WindowMetadata
   private readonly attached = new Map<string, CorePane>()
   private focused?: string
   private zoomed?: string
@@ -183,7 +183,9 @@ class CoreWindowClient implements HerdrClientTransport {
   private parseQueue: Promise<void> = Promise.resolve()
   private refreshQueue: Promise<void> = Promise.resolve()
   private readonly input: HerdrInputRouter
-  private readonly dataListeners = new Set<(data: string) => void>()
+  private readonly screenListeners = new Set<(screen: FrameData) => void>()
+  private readonly bellListeners = new Set<() => void>()
+  private readonly clipboardListeners = new Set<(data: string) => void>()
   private readonly paneFocusListeners = new Set<(id: string | undefined) => void>()
   private readonly metadataListeners = new Set<(metadata: WindowMetadata) => void>()
   private readonly frameListeners = new Set<(metadata: WindowMetadata) => void>()
@@ -192,10 +194,6 @@ class CoreWindowClient implements HerdrClientTransport {
   private readonly exitListeners = new Set<(exit: HerdrClientExit) => void>()
   private readonly subscriptions: Subscription[] = []
   private subscription?: { close(): void }
-  private output: Array<{ data: string; frame?: WindowMetadata }> = []
-  private outputBytes = 0
-  private paused = false
-  private flushing = false
   private renderScheduled = false
   private closed = false
   private initialized = false
@@ -216,7 +214,7 @@ class CoreWindowClient implements HerdrClientTransport {
         this.render()
       },
       onCopy: (text) => this.clipboard(Buffer.from(text).toString('base64')),
-      onError: () => this.emit('\x07'),
+      onError: () => this.bell(),
     })
   }
 
@@ -244,7 +242,6 @@ class CoreWindowClient implements HerdrClientTransport {
       ])
       if (this.closed) throw new Error('Core window closed while attaching')
       this.initialized = true
-      this.emit(terminalSurfaceModes)
       this.render()
       return this
     } catch (error) {
@@ -587,7 +584,7 @@ class CoreWindowClient implements HerdrClientTransport {
       }),
     )
     // The core already answers program queries; a viewer must never echo headless replies.
-    pane.subscriptions.push(emulator.onBell(() => this.emit('\x07')))
+    pane.subscriptions.push(emulator.onBell(() => this.bell()))
     return pane
   }
 
@@ -746,7 +743,6 @@ class CoreWindowClient implements HerdrClientTransport {
       this.renderScheduled = false
       if (
         this.closed ||
-        this.paused ||
         !this.state ||
         !this.tab ||
         [...this.attached.values()].some((pane) => !pane.ready)
@@ -978,11 +974,14 @@ class CoreWindowClient implements HerdrClientTransport {
           const index =
             (rect.y + Math.floor(offset / rect.width)) * this.cols + rect.x + (offset % rect.width)
           if (owners[index] === owner)
-            cells[index] = { ...cells[index]!, modifier: cells[index]!.modifier ^ 64 }
+            cells[index] = { ...cells[index]!, modifier: cells[index]!.modifier | SELECTED }
         }
         display = { ...surface, frame: { ...frame, cells } }
       }
-      this.emit(this.screen.render(display), this.renderedMetadata)
+      const screen = (this.screen = display.frame),
+        painted = (this.painted = this.renderedMetadata)
+      for (const listener of this.screenListeners) listener(screen)
+      if (painted) for (const listener of this.frameListeners) listener(painted)
     })
   }
 
@@ -1288,7 +1287,7 @@ class CoreWindowClient implements HerdrClientTransport {
     // Core events and terminal bytes are independent channels. This fences the
     // bytes already received and parsed, not unseen future remote output.
     return new Promise((resolve) => {
-      const frame = this.onFrame((metadata) => {
+      const frame = this.laterFrames((metadata) => {
         frame.dispose()
         exit.dispose()
         resolve(metadata)
@@ -1331,16 +1330,6 @@ class CoreWindowClient implements HerdrClientTransport {
     // Reconcile their streams using current local state, without another RPC.
     if (this.state) void this.refresh(() => this.state!)
   }
-  pause() {
-    this.paused = true
-  }
-  resume() {
-    if (!this.closed) {
-      this.paused = false
-      this.render()
-      this.scheduleFlush()
-    }
-  }
   kill() {
     this.finish({ exitCode: 0 })
   }
@@ -1361,44 +1350,40 @@ class CoreWindowClient implements HerdrClientTransport {
     for (const subscription of this.subscriptions) subscription.dispose()
     for (const pane of this.attached.values()) this.disposePane(pane)
     this.attached.clear()
-    this.output = []
-    this.outputBytes = 0
     for (const listener of this.exitListeners) listener(exit)
   }
   private clipboard(data: string) {
     if (!this.initialized || data.length > 2 * 1024 * 1024 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(data))
       return
-    this.emit(`\x1b]52;c;${data}\x07`)
+    for (const listener of this.clipboardListeners) listener(data)
   }
-  private emit(data: string, frame?: WindowMetadata) {
-    if (this.closed || (!data && !frame)) return
-    this.output.push({ data, frame })
-    this.outputBytes += Buffer.byteLength(data)
-    if (this.outputBytes > MAX_OUTPUT) {
-      this.finish({ exitCode: 1 })
-      return
-    }
-    this.scheduleFlush()
+  private bell() {
+    for (const listener of this.bellListeners) listener()
   }
-  private scheduleFlush() {
-    if (this.flushing || this.paused || this.closed || !this.dataListeners.size) return
-    this.flushing = true
+  onScreen(listener: (screen: FrameData) => void) {
+    this.screenListeners.add(listener)
     queueMicrotask(() => {
-      this.flushing = false
-      while (!this.closed && !this.paused && this.dataListeners.size && this.output.length) {
-        const value = this.output.shift()!
-        this.outputBytes -= Buffer.byteLength(value.data)
-        if (value.data) for (const listener of this.dataListeners) listener(value.data)
-        if (value.frame) for (const listener of this.frameListeners) listener(value.frame)
-      }
+      if (!this.closed && this.screen && this.screenListeners.has(listener)) listener(this.screen)
     })
-  }
-  onData(listener: (data: string) => void) {
-    this.dataListeners.add(listener)
-    this.scheduleFlush()
     return {
       dispose: () => {
-        this.dataListeners.delete(listener)
+        this.screenListeners.delete(listener)
+      },
+    }
+  }
+  onBell(listener: () => void) {
+    this.bellListeners.add(listener)
+    return {
+      dispose: () => {
+        this.bellListeners.delete(listener)
+      },
+    }
+  }
+  onClipboard(listener: (data: string) => void) {
+    this.clipboardListeners.add(listener)
+    return {
+      dispose: () => {
+        this.clipboardListeners.delete(listener)
       },
     }
   }
@@ -1426,6 +1411,12 @@ class CoreWindowClient implements HerdrClientTransport {
     }
   }
   onFrame(listener: (metadata: WindowMetadata) => void) {
+    queueMicrotask(() => {
+      if (!this.closed && this.painted && this.frameListeners.has(listener)) listener(this.painted)
+    })
+    return this.laterFrames(listener)
+  }
+  private laterFrames(listener: (metadata: WindowMetadata) => void) {
     this.frameListeners.add(listener)
     return {
       dispose: () => {

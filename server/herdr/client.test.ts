@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHerdrClient, type HerdrClientExit } from './client.ts'
+import { gridText, watch } from '../test-grid.ts'
 import { Writer } from './wire.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import type { NativeNotification } from '../../shared/notification.ts'
@@ -236,13 +237,10 @@ test('native notifications remain source-wide ephemeral events, separate from te
   t.after(() => client.kill())
   const events: NativeNotification[] = [],
     late: NativeNotification[] = []
-  let output = ''
-  client.onData((data) => {
-    output += data
-  })
-  await until(() => output.includes('R') && output.includes('\x1b[?2004h'))
+  const seen = watch(client)
+  await until(() => seen.text.includes('R'))
   const subscription = client.onNotification((value) => events.push(value))
-  const before = output
+  const before = seen.paints
   f.send(
     new Writer()
       .uint(14)
@@ -273,7 +271,7 @@ test('native notifications remain source-wide ephemeral events, separate from te
     windowId: 'other',
     paneId: 'other-pane',
   })
-  assert.equal(output, before)
+  assert.equal(seen.paints, before)
   client.onNotification((value) => late.push(value))
   await delay(10)
   assert.deepEqual(late, [], 'new listeners never replay past notifications')
@@ -295,7 +293,7 @@ test('native notifications remain source-wide ephemeral events, separate from te
   assert.equal(events.length, 1)
 })
 
-test('native client waits for focus and buffers its initial frame until asynchronous listener installation', async (t) => {
+test('native client waits for focus and gives its current screen to a listener installed later', async (t) => {
   const f = await fixture(t, { holdFocus: true })
   let resolved = false
   const pending = f.connect().then((client) => {
@@ -309,36 +307,35 @@ test('native client waits for focus and buffers its initial frame until asynchro
   f.response()
   const client = await pending
   t.after(() => client.kill())
-  let output = '',
+  let text = '',
     registering = true
-  client.onData((data) => {
+  client.onScreen((screen) => {
     assert.equal(registering, false)
-    output += data
+    text = gridText(screen).join('\n')
   })
   registering = false
-  await until(() => output.includes('R') && output.includes('\x1b[?2004h'))
+  await until(() => text.includes('R'))
 })
 
 test('snapshot and full-surface revisions must pair before presenting, while old frames cannot replace current output', async (t) => {
   const f = await fixture(t),
     client = await f.connect()
   t.after(() => client.kill())
-  let output = ''
-  client.onData((data) => (output += data))
+  const seen = watch(client)
   await delay(10)
-  output = ''
+  const initial = seen.paints
   f.surface(2, 2, 'FUTURE')
   await delay(10)
-  assert.equal(output, '')
+  assert.equal(seen.paints, initial)
   f.snapshot(2)
-  await until(() => output.includes('F'))
-  output = ''
+  await until(() => seen.text.includes('F'))
+  const paired = seen.paints
   f.surface(1, 1, 'OLD')
   await delay(10)
-  assert.equal(output, '')
+  assert.equal(seen.paints, paired)
   f.snapshot(1)
   await delay(10)
-  assert.equal(output, '')
+  assert.equal(seen.paints, paired)
   let exit: number | undefined
   client.onExit((value) => (exit = value.exitCode))
   f.snapshot(1, 'target', 'another-boot')
@@ -402,28 +399,27 @@ test('failed native content reads return a partial scan without stale screen tex
   assert.deepEqual(panes?.[0]?.lines, [])
 })
 
-test('native client pause/resume preserves queued display and cleanup reports one exit', async (t) => {
+test('a late screen listener is given only the latest screen and cleanup reports one exit', async (t) => {
   const f = await fixture(t),
     client = await f.connect()
-  let output = '',
-    exits = 0
-  client.onData((data) => (output += data))
+  let exits = 0
   client.onExit(() => exits++)
-  await delay(10)
-  output = ''
-  client.pause()
   f.snapshot(2)
-  f.surface(2, 2, 'PAUSED')
+  f.surface(2, 2, 'SKIPPED')
+  f.surface(2, 3, 'LATEST')
   await delay(20)
-  assert.equal(output, '')
-  client.resume()
-  await until(() => output.includes('P'))
+  const seen = watch(client)
+  await until(() => seen.paints > 0)
+  await delay(10)
+  assert.deepEqual([seen.paints, seen.text], [1, 'LATEST'])
   client.kill()
   client.kill()
   await delay(10)
   assert.equal(exits, 1)
   client.write('ignored')
-  client.resume()
+  f.surface(2, 4, 'IGNORED')
+  await delay(10)
+  assert.equal(seen.paints, 1)
 })
 
 test('pane focus follows coherent endpoint surfaces, replays to late listeners and ignores the outer herdr title', async (t) => {
@@ -431,8 +427,7 @@ test('pane focus follows coherent endpoint surfaces, replays to late listeners a
     client = await f.connect()
   t.after(() => client.kill())
   const focused: (string | undefined)[] = []
-  let output = ''
-  client.onData((data) => (output += data))
+  const seen = watch(client)
   const subscription = client.onPaneFocus((pane) => focused.push(pane))
   await until(() => focused.length === 1)
   assert.deepEqual(focused, ['pane'])
@@ -450,9 +445,11 @@ test('pane focus follows coherent endpoint surfaces, replays to late listeners a
   await until(() => late.length === 1)
   assert.deepEqual(late, ['second'])
   subscription.dispose()
+  const paints = seen.paints
   f.send(new Writer().uint(6).byte(1).string('hostname: outer workspace'))
   await delay(10)
-  assert(!output.includes('\x1b]0;'), 'outer title must not masquerade as a pane title')
+  assert.equal(seen.paints, paints, 'outer title must not masquerade as a pane title')
+  assert(!seen.text.includes('outer workspace'))
 })
 
 test('input waits behind a serialized tab-focus barrier and cannot escape before its acknowledgement', async (t) => {
@@ -462,7 +459,6 @@ test('input waits behind a serialized tab-focus barrier and cannot escape before
   f.response()
   const client = await pending
   t.after(() => client.kill())
-  client.onData(() => {})
   client.write('one')
   client.write('two')
   await until(() => f.requests.length === 2)
@@ -479,19 +475,16 @@ test('hover reaches the current pane without a tab-focus barrier or synthetic re
   f.response()
   const client = await pending
   t.after(() => client.kill())
-  let output = ''
-  client.onData((data) => {
-    output += data
-  })
-  await until(() => output.includes('\x1b[?1003h'))
-  const painted = output,
+  const seen = watch(client)
+  await until(() => seen.paints > 0)
+  const painted = seen.paints,
     inputs = () => f.tags.filter((tag) => tag === 13).length
   client.write('\x1b[<35;2;1M')
   await until(() => inputs() === 1)
   client.write(Buffer.from('\x1b[<63;3;1M'))
   await until(() => inputs() === 2)
   assert.equal(f.requests.length, 1, 'passive movement never asks tab.focus')
-  assert.equal(output, painted, 'passive movement without native output causes no paint')
+  assert.equal(seen.paints, painted, 'passive movement without native output causes no paint')
   client.write('q')
   await until(() => f.requests.length === 2)
   client.write('\x1b[<35;4;1M')
@@ -509,7 +502,6 @@ test('passive focus loss never focuses a tab and remains ordered behind already 
   f.response()
   const client = await pending
   t.after(() => client.kill())
-  client.onData(() => {})
   client.write('\x1b[O')
   await until(() => f.focuses.length === 1)
   client.write(Buffer.from('\x1b[O'))
@@ -539,10 +531,7 @@ test('a frame held behind browser focus is published when input settles without 
   const client = await pending
   t.after(() => client.kill())
   const frames: WindowMetadata[] = []
-  let output = ''
-  client.onData((data) => {
-    output += data
-  })
+  const seen = watch(client)
   client.onFrame((frame) => frames.push(frame))
   await until(() => frames.length > 0)
   const initial = frames.length
@@ -550,7 +539,7 @@ test('a frame held behind browser focus is published when input settles without 
   await until(() => f.requests.length === 2)
   f.snapshot(2)
   f.surface(2, 2, 'SIZED')
-  await until(() => output.includes('S'))
+  await until(() => seen.text.includes('S'))
   assert.equal(frames.length, initial, 'completion cannot overtake the pending input focus barrier')
   f.response()
   await until(() => f.focuses.includes(true))
@@ -570,7 +559,6 @@ test('native client rejects incomplete handshakes and closes malformed establish
   }
   const f = await fixture(t),
     client = await f.connect()
-  client.onData(() => {})
   let code: number | undefined
   client.onExit((exit) => (code = exit.exitCode))
   f.peer().end(Buffer.from([20, 0, 0, 0, 20]))
@@ -657,24 +645,22 @@ test('clipboard messages reach the hosting terminal only and late focus response
   await until(() => f.requests.length === 1)
   f.response()
   const client = await pending
-  let output = ''
-  client.onData((data) => (output += data))
+  const seen = watch(client)
   const text = 'copy 中文 😀 literal \\u4e3a'
   f.send(new Writer().uint(5).string(Buffer.from(text).toString('base64')))
-  await until(() => output.includes('\x1b]52;c;'))
-  const encoded = /\x1b\]52;c;([^\x07]+)\x07/u.exec(output)![1]!
+  await until(() => seen.clipboard.length === 1)
   assert.equal(
-    Buffer.from(encoded, 'base64').toString('utf8'),
+    Buffer.from(seen.clipboard[0]!, 'base64').toString('utf8'),
     text,
     'clipboard transport preserves Unicode and literal backslash escapes exactly',
   )
   client.write('pending')
   await until(() => f.requests.length === 2)
   client.kill()
-  const before = output
+  const before = seen.paints
   f.response()
   await delay(20)
-  assert.equal(output, before)
+  assert.deepEqual([seen.paints, seen.clipboard.length], [before, 1])
 })
 
 test('pane menu targets the rendered pane and maps only current native actions', async (t) => {
@@ -683,7 +669,6 @@ test('pane menu targets the rendered pane and maps only current native actions',
   t.after(() => client.kill())
   const frames: WindowMetadata[] = []
   client.onFrame((frame) => frames.push(frame))
-  client.onData(() => {})
   f.surface(1, 2)
   await until(() => !!frames.at(-1)?.layout)
   const point = { column: 2, row: 0, cols: 8, rows: 1, layout: frames.at(-1)!.layout! }
@@ -745,8 +730,7 @@ test('a delayed independent selection read never holds the endpoint keyboard lan
   })
   const client = await f.connect()
   t.after(() => client.kill())
-  let output = ''
-  client.onData((data) => (output += data))
+  const seen = watch(client)
   client.write('\x1b[<0;1;1M\x1b[<32;4;1M\x1b[<0;4;1m')
   await until(() => started)
   assert(!f.requests.some((request) => request.method === 'pane.selection.read'))
@@ -755,7 +739,7 @@ test('a delayed independent selection read never holds the endpoint keyboard lan
   complete({ pane_id: 'pane', text: 'READ' })
   await delay(10)
   // Typing retires the old selection; a delayed read cannot clobber clipboard.
-  assert(!output.includes('\x1b]52;c;'))
+  assert.deepEqual(seen.clipboard, [])
 })
 
 test('native metadata changes arrive independently of frames, deduplicate and replay to late listeners', async (t) => {
@@ -813,7 +797,7 @@ test('completion companions identify idle work and frame fences follow the coher
   const frames: WindowMetadata[] = [],
     metadata: WindowMetadata[] = [],
     order: string[] = []
-  client.onData(() => order.push('data'))
+  client.onScreen(() => order.push('screen'))
   client.onFrame((frame) => {
     frames.push(frame)
     order.push('frame')
@@ -851,7 +835,7 @@ test('completion companions identify idle work and frame fences follow the coher
   order.length = 0
   f.surface(2, 2, 'FINISHED')
   await until(() => frames.at(-1)?.panes[0]?.completion?.sequence === 7)
-  assert.deepEqual(order, ['data', 'frame'])
+  assert.deepEqual(order, ['screen', 'frame'])
   f.control('endpoint.agent-completions.v1', {
     boot_id: 'boot',
     revision: 2,
@@ -905,30 +889,26 @@ test('completion companions identify idle work and frame fences follow the coher
   )
 })
 
-test('a read fence ignores queued previous-pane frames and can repaint an unchanged current pane', async (t) => {
+test('a read fence reports the current pane, never a replayed frame, and can repaint it unchanged', async (t) => {
   const f = await fixture(t),
     client = await f.connect()
   t.after(() => client.kill())
   const metadata: WindowMetadata[] = [],
     observed: WindowMetadata[] = []
   client.onMetadata((value) => metadata.push(value))
-  // No data consumer yet: initial and replacement output stay in the native queue.
   f.snapshot(2, 'target', 'boot', 'replacement')
   f.surface(2, 2, 'NEW', 'boot', 'replacement')
   await until(() => metadata.at(-1)?.panes[0]?.id === 'replacement')
   const fenced = client.completionFence()
   await delay(0)
   client.onFrame((frame) => observed.push(frame))
-  client.onData(() => {})
   const current = await fenced
-  assert.equal(
-    current?.panes[0]?.id,
-    'replacement',
-    'queued old-pane frame cannot satisfy the new read fence',
-  )
-  assert(
-    observed.some((frame) => frame.panes[0]?.id === 'pane'),
-    'fixture exercised the older queued frame',
+  assert.equal(current?.panes[0]?.id, 'replacement')
+  await delay(0)
+  assert.deepEqual(
+    [...new Set(observed.map((frame) => frame.panes[0]?.id))],
+    ['replacement'],
+    'a late listener is given the current frame only',
   )
   const repeated = await client.completionFence()
   assert.equal(
@@ -942,7 +922,6 @@ test('native popup paint fences hide underlying panes without losing their compl
   const f = await fixture(t),
     client = await f.connect()
   t.after(() => client.kill())
-  client.onData(() => {})
   const frames: WindowMetadata[] = [],
     metadata: WindowMetadata[] = []
   client.onFrame((value) => frames.push(value))

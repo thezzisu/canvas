@@ -8,8 +8,8 @@ import type { HerdrClientTransport } from './herdr/client.ts'
 import { herdrApiRequest } from './herdr/api.ts'
 import { contentCandidates } from './content-candidates.ts'
 import type { WindowMetadata } from '../shared/window-metadata.ts'
-import { terminalCellWidth } from '../shared/terminal-unicode.ts'
-import headless from '@xterm/headless'
+import { gridColumns, gridText } from './test-grid.ts'
+import type { FrameData } from './herdr/wire.ts'
 import {
   createSpace,
   createWindow,
@@ -79,26 +79,10 @@ test('native herdr transport works with an unmodified server: split rendering, k
   let command: Awaited<ReturnType<typeof openTerminal>> | undefined
   let secondCommand: Awaited<ReturnType<typeof openTerminal>> | undefined
   let frame: WindowMetadata | undefined
-  const screen = new headless.Terminal({
-    cols: 90,
-    rows: 25,
-    allowProposedApi: true,
-  })
-  const screenText = () =>
-    Array.from(
-      { length: screen.buffer.active.length },
-      (_, i) => screen.buffer.active.getLine(i)?.translateToString(true) ?? '',
-    ).join('\n')
-  const secondScreen = new headless.Terminal({
-    cols: 90,
-    rows: 25,
-    allowProposedApi: true,
-  })
-  const secondText = () =>
-    Array.from(
-      { length: secondScreen.buffer.active.length },
-      (_, i) => secondScreen.buffer.active.getLine(i)?.translateToString(true) ?? '',
-    ).join('\n')
+  let screen: FrameData | undefined
+  let secondScreen: FrameData | undefined
+  const screenText = () => (screen ? gridText(screen).join('\n') : '')
+  const secondText = () => (secondScreen ? gridText(secondScreen).join('\n') : '')
   const waitFor = async (check: () => boolean | Promise<boolean>, message: string) => {
     for (let i = 0; i < 150; i++) {
       if (await check()) return
@@ -109,15 +93,11 @@ test('native herdr transport works with an unmodified server: split rendering, k
   const snapshot = () => JSON.parse(cli('api', 'snapshot')).result.snapshot
   const assertSplitGeometry = async (cols: number, rows: number) => {
     await waitFor(() => {
-      const top = screen.buffer.active.getLine(0)?.translateToString(false, 0, cols) ?? ''
-      const bottom = screen.buffer.active.getLine(rows - 1)?.translateToString(false, 0, cols) ?? ''
+      if (screen?.width !== cols || screen.height !== rows) return false
+      const top = gridColumns(screen)[0]!,
+        bottom = gridColumns(screen)[rows - 1]!
       return (
-        top.startsWith('┌') &&
-        top.endsWith('┐') &&
-        terminalCellWidth(top) === cols &&
-        bottom.startsWith('└') &&
-        bottom.endsWith('┘') &&
-        terminalCellWidth(bottom) === cols
+        top.startsWith('┌') && top.endsWith('┐') && bottom.startsWith('└') && bottom.endsWith('┘')
       )
     }, 'native tab frame did not reach every edge of the native viewport')
   }
@@ -222,8 +202,8 @@ test('native herdr transport works with an unmodified server: split rendering, k
     terminal.onFrame((value) => {
       frame = value
     })
-    terminal.onData((chunk) => {
-      screen.write(chunk)
+    terminal.onScreen((value) => {
+      screen = value
     })
     await waitFor(
       () => screenText().includes(prompt),
@@ -235,7 +215,6 @@ test('native herdr transport works with an unmodified server: split rendering, k
       () => screenText().includes('HERDR_NATIVE_OK'),
       'native herdr client did not accept native input',
     )
-    screen.resize(112, 32)
     terminal.resize(112, 32)
     data = snapshot()
     assert.equal(data.panes.filter((p: { tab_id: string }) => p.tab_id === window.id).length, 2)
@@ -253,16 +232,8 @@ test('native herdr transport works with an unmodified server: split rendering, k
     terminal.write('\x1b[<0;80;3M\x1b[<0;80;3m')
     terminal.write("printf 'RIGHT_%s\\n' MOUSE\r")
     await waitFor(() => screenText().includes('RIGHT_MOUSE'), 'mouse did not select the right pane')
-    const leftText = () =>
-      Array.from(
-        { length: screen.rows },
-        (_, i) => screen.buffer.active.getLine(i)?.translateToString(true, 0, 56) ?? '',
-      ).join('\n')
-    const rightText = () =>
-      Array.from(
-        { length: screen.rows },
-        (_, i) => screen.buffer.active.getLine(i)?.translateToString(true, 56, 112) ?? '',
-      ).join('\n')
+    const leftText = () => gridColumns(screen!, 0, 56).join('\n')
+    const rightText = () => gridColumns(screen!, 56, 112).join('\n')
     assert.ok(leftText().includes('LEFT_MOUSE'))
     assert.ok(!leftText().includes('RIGHT_MOUSE'))
     assert.ok(rightText().includes('RIGHT_MOUSE'))
@@ -406,15 +377,13 @@ test('native herdr transport works with an unmodified server: split rendering, k
       terminal.paneAction({ ...target, bootId: 'another-boot' }, { action: 'close' }),
       /Pane changed/u,
     )
-    screen.resize(70, 18)
     terminal.resize(70, 18)
     await assertSplitGeometry(70, 18)
-    screen.resize(112, 32)
     terminal.resize(112, 32)
     await assertSplitGeometry(112, 32)
     secondCommand = await openTerminal(source, space.id, other.id)
     secondTerminal = await secondCommand.connect(90, 25)
-    secondTerminal.onData((chunk) => secondScreen.write(chunk))
+    secondTerminal.onScreen((value) => (secondScreen = value))
     await waitFor(() => secondText().includes(prompt), 'second native tab produced no shell frame')
     secondTerminal.write("printf 'SECOND_TAB_%s\\n' ONLY\r")
     await waitFor(
@@ -465,8 +434,6 @@ test('native herdr transport works with an unmodified server: split rendering, k
     else process.env.XDG_CONFIG_HOME = before.config
     if (before.state === undefined) delete process.env.XDG_STATE_HOME
     else process.env.XDG_STATE_HOME = before.state
-    screen.dispose()
-    secondScreen.dispose()
     rmSync(root, { recursive: true, force: true })
   }
 })

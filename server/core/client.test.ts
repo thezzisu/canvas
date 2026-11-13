@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import headless from '@xterm/headless'
 import { createCoreClient, coreHyperlink } from './client.ts'
 import { CoreLayout, type CoreDocument } from './layout.ts'
 import { CoreRpc, CoreRpcError, CoreStream, type CoreNotification } from './rpc.ts'
+import { SELECTED } from '../herdr/screen.ts'
+import { watch } from '../test-grid.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
@@ -419,7 +420,6 @@ test('a split pane finishing leaves its live sibling connected and the last exit
   const exits: unknown[] = []
   client.onExit((exit) => exits.push(exit))
   try {
-    client.onData(() => {})
     // The terminal channel can finish before the subscription channel catches up.
     f.streams[0]!.receive({ kind: 'close', reason: { reason: 'exited', exit_code: 0 } })
     await tick()
@@ -570,7 +570,6 @@ test('missed snapshots recover ended streams and initial waiting panes without a
       f.stream.receive({ kind: 'data', data: Buffer.from('BEFORE\x1b[?9001l') })
     const client = await opening,
       notices: unknown[] = []
-    client.onData(() => {})
     client.onNotification((notice) => notices.push(notice))
     try {
       if (!initiallyWaiting) {
@@ -744,7 +743,6 @@ test('a delayed seen-label write cannot replace newer event state with its respo
   f.terminal.status.state = 'idle'
   const client = await open(f, report('idle') + '\x1b[?9001l')
   try {
-    client.onData(() => {})
     await tick()
     await client.completionFence()
     let release!: () => void
@@ -782,10 +780,7 @@ test('widening a narrow core view attaches newly exposed panes before publishing
   const client = await open(f, 'LEFT\x1b[?9001l', 2)
   try {
     const frames: WindowMetadata[] = []
-    let output = ''
-    client.onData((data) => {
-      output += data
-    })
+    const seen = watch(client)
     client.onFrame((frame) => frames.push(frame))
     await tick()
     assert.deepEqual(f.attached, ['t1'])
@@ -802,7 +797,7 @@ test('widening a narrow core view attaches newly exposed panes before publishing
     f.streams[1]!.receive({ kind: 'data', data: Buffer.from('RIGHT\x1b[?9001l') })
     await tick()
     await tick()
-    assert(!output.includes('Terminal unavailable'))
+    assert(!seen.text.includes('Terminal unavailable'))
     assert.deepEqual(
       (await client.content())?.map((pane) => pane.lines[0]?.trim()),
       ['LEFT', 'RIGHT'],
@@ -818,7 +813,6 @@ test('clearing a native core title emits an explicit empty title instead of miss
   const client = await open(f)
   try {
     const metadata: WindowMetadata[] = []
-    client.onData(() => {})
     client.onMetadata((value) => metadata.push(value))
     await f.event('title', { title: 'Task title' })
     assert.equal(metadata.at(-1)?.panes[0]?.terminalTitle, 'Task title')
@@ -833,7 +827,6 @@ test('rapid core resize retires a late pane attachment and can reveal it again',
   const f = fixture(true)
   const client = await open(f, 'LEFT\x1b[?9001l', 2)
   try {
-    client.onData(() => {})
     let release!: () => void
     f.controls.attachGate = new Promise<void>((resolve) => {
       release = resolve
@@ -878,7 +871,6 @@ test('unrecognized OSC status words cannot shift native turn accounting', async 
   const f = fixture()
   const client = await open(f, 'Working\x1b[?9001l' + report('working'))
   try {
-    client.onData(() => {})
     f.terminal.status.state = 'idle'
     f.terminal.turn = 1
     await f.event('status', { status: { state: 'idle' }, records: {}, reported: true })
@@ -926,30 +918,16 @@ test('floating panes share paint order with mouse, context targets and source-lo
         '\x1b]8;;file:///tmp/floating/report.pdf\x1b\\FLOAT.pdf\x1b]8;;\x1b\\\r\nFLOAT1\r\nFLOAT2\x1b[?9001l',
     ),
   })
-  const client = await opening,
-    screen = new headless.Terminal({ cols: 20, rows: 6, allowProposedApi: true })
+  const client = await opening
   try {
-    let output = ''
-    client.onData((data) => {
-      output += data
-      screen.write(data)
-    })
+    const seen = watch(client),
+      cell = (column: number, row: number) => seen.grid!.cells[row * seen.grid!.width + column]!
     const frame = await client.completionFence()
-    await new Promise<void>((resolve) => screen.write('', resolve))
     assert(frame?.layout)
-    assert.equal(
-      screen.buffer.active.getLine(1)?.getCell(10)?.getChars(),
-      '│',
-      'exposed divider stays visible',
-    )
-    assert.equal(
-      screen.buffer.active.getLine(4)?.getCell(10)?.getChars().trim(),
-      '',
-      'floating paint occludes the divider',
-    )
-    assert.equal(
-      output.match(/\x1b\[\?25[hl]/gu)?.at(-1),
-      '\x1b[?25l',
+    assert.equal(cell(10, 1).symbol, '│', 'exposed divider stays visible')
+    assert.equal(cell(10, 4).symbol.trim(), '', 'floating paint occludes the divider')
+    assert(
+      !seen.grid!.cursor?.visible,
       'an underlying cursor cannot appear through a floating terminal',
     )
     const target = client.paneContext({
@@ -991,17 +969,16 @@ test('floating panes share paint order with mouse, context targets and source-lo
     client.write('\x1b[<32;6;5M')
     await tick()
     await client.completionFence()
-    await new Promise<void>((resolve) => screen.write('', resolve))
     assert.equal(
-      screen.buffer.active.getLine(3)?.getCell(2)?.isInverse(),
+      cell(2, 3).modifier & SELECTED,
       0,
       'selection in a lower pane cannot highlight the floating pane',
     )
-    const copyBefore = output.length
+    assert.equal(cell(2, 2).modifier & SELECTED, SELECTED, 'its own exposed cells are selected')
     client.write('\x1b[<0;6;5m')
     await tick()
     await client.completionFence()
-    const copied = output.slice(copyBefore).match(/\x1b\]52;c;([A-Za-z0-9+/=]+)\x07/u)?.[1]
+    const copied = seen.clipboard.at(-1)
     assert(copied, 'visible selection still produces a clipboard response')
     const selectedText = Buffer.from(copied, 'base64').toString()
     assert(selectedText.includes('BASE2'))
@@ -1014,7 +991,6 @@ test('floating panes share paint order with mouse, context targets and source-lo
     assert.equal(f.failures.length, 0)
   } finally {
     client.kill()
-    screen.dispose()
   }
 })
 
@@ -1044,7 +1020,6 @@ test('a fully covered pane cannot be read and unsupported floating blocks absorb
   f.streams[1]!.receive({ kind: 'data', data: Buffer.from('FLOAT\x1b[?9001l') })
   const client = await opening
   try {
-    client.onData(() => {})
     const frame = await client.completionFence()
     assert.equal(frame?.panes.find((pane) => pane.id === 'pane')?.completion, undefined)
     await client.acknowledgeCompletion?.('pane', { bootId: 'core', sequence: 1 })
@@ -1093,18 +1068,12 @@ test('wide characters crossing an overlay edge never cover or copy through the t
     await tick()
     f.streams[0]!.receive({ kind: 'data', data: Buffer.from(`123456789${wide}\x1b[?9001l`) })
     f.streams[1]!.receive({ kind: 'data', data: Buffer.from('FLOAT\x1b[?9001l') })
-    const client = await opening,
-      screen = new headless.Terminal({ cols: 20, rows: 6, allowProposedApi: true })
+    const client = await opening
     try {
-      let output = ''
-      client.onData((data) => {
-        output += data
-        screen.write(data)
-      })
+      const seen = watch(client)
       await client.completionFence()
-      await new Promise<void>((resolve) => screen.write('', resolve))
       assert.equal(
-        screen.buffer.active.getLine(0)?.getCell(10)?.getChars(),
+        seen.grid!.cells[10]!.symbol,
         'F',
         "the lower wide character must not consume the top pane's first cell",
       )
@@ -1119,11 +1088,10 @@ test('wide characters crossing an overlay edge never cover or copy through the t
       client.write('\x1b[<32;10;1M')
       await tick()
       await client.completionFence()
-      const before = output.length
       client.write('\x1b[<0;10;1m')
       await tick()
       await client.completionFence()
-      const copied = output.slice(before).match(/\x1b\]52;c;([A-Za-z0-9+/=]+)\x07/u)?.[1]
+      const copied = seen.clipboard.at(-1)
       assert(copied)
       assert.equal(
         Buffer.from(copied, 'base64').toString(),
@@ -1132,7 +1100,6 @@ test('wide characters crossing an overlay edge never cover or copy through the t
       )
     } finally {
       client.kill()
-      screen.dispose()
     }
   }
 })
@@ -1142,7 +1109,6 @@ test('a delayed older document cannot remove a window already restored by a newe
     spaces = structuredClone(f.document.spaces)
   const client = await open(f, 'READY\x1b[?9001l')
   try {
-    client.onData(() => {})
     const exits: unknown[] = []
     client.onExit((value) => exits.push(value))
     const snapshot = f.layout.snapshot.bind(f.layout)
@@ -1212,10 +1178,7 @@ test('core first paint waits for its trailing native marker and preserves the na
   f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?9001l' + report('working')) })
   const client = await opening
   try {
-    let output = ''
-    client.onData((data) => {
-      output += data
-    })
+    const seen = watch(client)
     await tick()
     const content = await client.content()
     assert.equal(content?.[0]?.lines[0], 'ABCDEFGHIJKLMNOPQRST')
@@ -1224,10 +1187,7 @@ test('core first paint waits for its trailing native marker and preserves the na
       'second row',
       'native 80-column paint is not parsed as the 20-column card',
     )
-    const screen = new headless.Terminal({ cols: 20, rows: 6, allowProposedApi: true })
-    await new Promise<void>((resolve) => screen.write(output, resolve))
-    assert.equal(screen.buffer.active.getLine(1)?.translateToString(true).trimEnd(), 'second row')
-    screen.dispose()
+    assert.equal(seen.text.split('\n')[1], 'second row')
     assert.equal(f.failures.length, 0)
   } finally {
     client.kill()
@@ -1249,7 +1209,6 @@ test('completion events cannot acknowledge result bytes which have not reached t
   const client = await opening
   try {
     const frames: WindowMetadata[] = []
-    client.onData(() => {})
     client.onFrame((frame) => frames.push(frame))
     await tick()
     f.terminal.status.state = 'idle'
@@ -1281,7 +1240,6 @@ test('core live OSC 8 retains Unicode file paths and concealed cells remain mask
   const f = fixture()
   const client = await open(f, '\x1b[?9001l', 40)
   try {
-    client.onData(() => {})
     f.stream.receive({
       kind: 'data',
       data: Buffer.from(
@@ -1308,7 +1266,6 @@ test('coalesced native repaint never marks an unverified turn read and a fresh a
   const f = fixture()
   const client = await open(f, 'Working\x1b[?9001l' + report('working'))
   try {
-    client.onData(() => {})
     // A slow native viewer can receive every semantic event while its byte
     // backlog is replaced by one latest paint, omitting intermediate reports.
     f.terminal.status.state = 'idle'
@@ -1351,7 +1308,6 @@ test('coalesced native repaint never marks an unverified turn read and a fresh a
   })
   const fresh = await attaching
   try {
-    fresh.onData(() => {})
     await tick()
     await fresh.acknowledgeCompletion?.('pane', { bootId: 'core', sequence: 2 })
     assert.equal(
@@ -1420,10 +1376,7 @@ test('Core drag selection preserves spaces across soft wraps and trims logical l
     f.stream.receive({ kind: 'data', data: Buffer.from(sample.data + '\x1b[?9001l') })
     const client = await opening
     try {
-      let output = ''
-      client.onData((data) => {
-        output += data
-      })
+      const seen = watch(client)
       await client.completionFence()
       const [start, end] = sample.reverse ? [sample.end, [1, 1]] : [[1, 1], sample.end]
       client.write(`\x1b[<0;${start!.join(';')}M`)
@@ -1435,7 +1388,7 @@ test('Core drag selection preserves spaces across soft wraps and trims logical l
       client.write(`\x1b[<0;${end!.join(';')}m`)
       await tick()
       await client.completionFence()
-      const copied = output.match(/\x1b\]52;c;([A-Za-z0-9+/=]+)\x07/u)?.[1]
+      const copied = seen.clipboard[0]
       assert(copied, 'the ordinary mouse selection produces clipboard text')
       assert.equal(Buffer.from(copied, 'base64').toString(), sample.expected)
       assert.deepEqual(f.failures, [])
@@ -1464,14 +1417,8 @@ test('Core hover follows native tracking without clearing history, focusing or r
   })
   const client = await opening
   try {
-    let frames = 0,
-      output = ''
-    client.onData((data) => {
-      frames++
-      output += data
-    })
+    const seen = watch(client)
     await client.completionFence()
-    assert(output.includes('\x1b[?1003h'), 'the outer surface requests passive moves')
     const bottom = (await client.content())?.[0]?.lines
     client.write('\x1b[<64;1;1M')
     await tick()
@@ -1483,7 +1430,7 @@ test('Core hover follows native tracking without clearing history, focusing or r
       await tick()
       await client.content()
       const before = f.sent.length,
-        painted = frames
+        painted = seen.paints
       client.write('\x1b[<35;2;2M')
       await tick()
       await tick()
@@ -1492,7 +1439,7 @@ test('Core hover follows native tracking without clearing history, focusing or r
         history,
         `${mode}: hover never jumps to live output`,
       )
-      assert.equal(frames, painted, 'passive input does not force a render')
+      assert.equal(seen.paints, painted, 'passive input does not force a render')
       assert.deepEqual(
         f.sent.slice(before).map((frame) => ({ kind: frame.kind, data: frame.data.toString() })),
         mode === 1003 ? [{ kind: 0, data: '\x1b[<35;2;2M' }] : [],
@@ -1525,21 +1472,21 @@ test('Core typing and paste repaint the bottom immediately without waiting for p
     })
     const client = await opening
     try {
-      let frames = 0
-      client.onData(() => {
-        frames++
-      })
+      const seen = watch(client)
       await client.completionFence()
       const bottom = (await client.content())?.[0]?.lines
       client.write('\x1b[<64;1;1M')
       await tick()
       await tick()
       assert.notDeepEqual((await client.content())?.[0]?.lines, bottom)
-      const before = frames
+      const before = seen.paints
       client.write(input)
       await tick()
       await tick()
-      assert(frames > before, 'input redraws a changed scroll position without any native output')
+      assert(
+        seen.paints > before,
+        'input redraws a changed scroll position without any native output',
+      )
       assert.deepEqual((await client.content())?.[0]?.lines, bottom)
       assert.equal(
         f.sent
@@ -1548,11 +1495,11 @@ test('Core typing and paste repaint the bottom immediately without waiting for p
           ?.data.toString(),
         input === 'x' ? 'x' : 'hello',
       )
-      const settled = frames
+      const settled = seen.paints
       client.write('y')
       await tick()
       await tick()
-      assert.equal(frames, settled, 'ordinary input at the bottom adds no forced repaint')
+      assert.equal(seen.paints, settled, 'ordinary input at the bottom adds no forced repaint')
       assert.deepEqual(f.failures, [])
     } finally {
       client.kill()
