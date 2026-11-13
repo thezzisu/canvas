@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import headless, { type IBufferCell } from '@xterm/headless'
-import { terminalCellWidth, terminalUnicodeAddon } from '../../shared/terminal-unicode.ts'
 import { sameCompletion, type CompletionToken } from '../../shared/completion.ts'
 import type { PaneAction, PaneContext, PanePoint } from '../../shared/pane-context.ts'
 import type { NativeNotification } from '../../shared/notification.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
+import { cellWidth } from '../ghostty/module.ts'
+import { GhosttyTerminal } from '../ghostty/terminal.ts'
 import { HerdrInputRouter } from '../herdr/input.ts'
 import { SELECTED, type ScreenSelection } from '../herdr/screen.ts'
 import { windowContent, type NativeContentPane } from '../herdr/content.ts'
@@ -18,7 +18,7 @@ import type {
   PaneSurfacePane,
   PaneSurfaceSplit,
 } from '../herdr/wire.ts'
-import { coreInput, type CoreInputModes } from './input.ts'
+import { CORE_CELL, coreInput, Win32InputMode } from './input.ts'
 import {
   CoreLayout,
   coreWindowMetadata,
@@ -31,10 +31,10 @@ import {
 } from './layout.ts'
 import { CoreRpc, CoreRpcError, type CoreNotification, type CoreStream } from './rpc.ts'
 
-const { Terminal } = headless
-type Emulator = InstanceType<typeof Terminal>
 type Subscription = { dispose(): void }
-const blank = (symbol = ' '): CellData => ({
+/** Lines of history a pane keeps, and asks the core for when it attaches. */
+const HISTORY = 2000
+const cell = (symbol: string): CellData => ({
   symbol,
   fg: 0,
   bg: 0,
@@ -42,6 +42,7 @@ const blank = (symbol = ' '): CellData => ({
   skip: false,
   hyperlink: null,
 })
+const BLANK = Object.freeze(cell(' '))
 /** OSC 8 permits Unicode and spaces; emit a valid URI without losing the target. */
 export function coreHyperlink(value: unknown): string | undefined {
   if (typeof value !== 'string' || value.length > 8192 || /[\x00-\x1f\x7f-\x9f]/u.test(value))
@@ -64,33 +65,6 @@ function dimensions(cols: number, rows: number) {
     cols * rows > 1_000_000
   )
     throw new Error('Invalid core viewport size')
-}
-function color(cell: IBufferCell, background = false) {
-  const value = background ? cell.getBgColor() : cell.getFgColor()
-  return (background ? cell.isBgRGB() : cell.isFgRGB())
-    ? 0x2000000 | value
-    : (background ? cell.isBgPalette() : cell.isFgPalette())
-      ? 0x1000000 | value
-      : 0
-}
-function cellData(cell?: IBufferCell): CellData {
-  if (!cell) return blank()
-  return {
-    symbol: cell.getChars() || ' ',
-    fg: color(cell),
-    bg: color(cell, true),
-    modifier:
-      (cell.isBold() ? 1 : 0) |
-      (cell.isDim() ? 2 : 0) |
-      (cell.isItalic() ? 4 : 0) |
-      (cell.isUnderline() ? 8 : 0) |
-      (cell.isBlink() ? 16 : 0) |
-      (cell.isInverse() ? 64 : 0) |
-      (cell.isInvisible() ? 128 : 0) |
-      (cell.isStrikethrough() ? 256 : 0),
-    skip: cell.getWidth() === 0,
-    hyperlink: null,
-  }
 }
 /** Dividers keep their original resize axis, but only exposed cells accept hits. */
 function visibleSplits(
@@ -123,20 +97,17 @@ function visibleSplits(
 interface CorePane {
   id: string
   address: string
-  emulator: Emulator
-  modes: CoreInputModes
+  /** The pane's screen: it parses the program's output and encodes its input. */
+  engine: GhosttyTerminal
+  win32: Win32InputMode
   stream?: CoreStream
   revision: number
   ready: boolean
   paintComplete: boolean
   firstPaint: Promise<void>
   painted(): void
-  scroll: number
-  cursorVisible: boolean
-  cursorShape: number
   disposed: boolean
   subscriptions: Subscription[]
-  kittyStack: number[]
   wanted: { cols: number; rows: number }
   parsedTurn: number
   parsedState?: string
@@ -352,13 +323,8 @@ class CoreWindowClient implements HerdrClientTransport {
         )
         this.attached.set(pane.id, pane)
         if (!available) {
-          await new Promise<void>((resolve) =>
-            pane.emulator.write(
-              terminal?.state === 'live'
-                ? '[Waiting for terminal recovery]'
-                : '[Terminal finished]',
-              resolve,
-            ),
+          pane.engine.write(
+            terminal?.state === 'live' ? '[Waiting for terminal recovery]' : '[Terminal finished]',
           )
           pane.ready = true
           pane.painted()
@@ -369,9 +335,9 @@ class CoreWindowClient implements HerdrClientTransport {
             terminal: pane.address,
             cols: projected.rect.width,
             rows: projected.rect.height,
-            history: 2000,
+            history: HISTORY,
             resumed: true,
-            display: { cell: [8, 16] },
+            display: { cell: [CORE_CELL.width, CORE_CELL.height] },
           })
           if (pane.disposed || this.closed) {
             attached.stream.close()
@@ -381,7 +347,7 @@ class CoreWindowClient implements HerdrClientTransport {
           const nativeCols = Number(attached.terminal.cols),
             nativeRows = Number(attached.terminal.rows)
           dimensions(nativeCols, nativeRows)
-          pane.emulator.resize(Math.max(2, nativeCols), nativeRows)
+          pane.engine.resize(nativeCols, nativeRows)
           pane.parsedTurn = Number.isSafeInteger(attached.terminal.turn)
             ? Number(attached.terminal.turn)
             : 0
@@ -393,7 +359,7 @@ class CoreWindowClient implements HerdrClientTransport {
             attached.stream.onResize((size) =>
               this.enqueue(() => {
                 if (!pane.disposed) {
-                  pane.emulator.resize(size.cols, size.rows)
+                  pane.engine.resize(size.cols, size.rows)
                   pane.revision++
                   this.render()
                 }
@@ -422,11 +388,12 @@ class CoreWindowClient implements HerdrClientTransport {
           )
           pane.subscriptions.push(
             attached.stream.onData((data) =>
-              this.enqueue(async () => {
+              this.enqueue(() => {
                 if (pane.disposed) return
-                await new Promise<void>((resolve) => pane.emulator.write(data, resolve))
+                // The core ends its first paint by saying whether the program wants win32 keys.
+                if (pane.win32.scan(data)) pane.paintComplete = true
+                pane.engine.write(data)
                 pane.revision++
-                pane.scroll = Math.min(pane.scroll, pane.emulator.buffer.active.baseY)
                 if (pane.paintComplete) {
                   pane.ready = true
                   pane.painted()
@@ -450,141 +417,40 @@ class CoreWindowClient implements HerdrClientTransport {
   }
 
   private makePane(id: string, address: string, cols: number, rows: number): CorePane {
-    const emulator = new Terminal({
-      cols: Math.max(2, cols),
-      rows: Math.max(1, rows),
-      scrollback: 2000,
-      allowProposedApi: true,
-    })
-    emulator.loadAddon(terminalUnicodeAddon())
     let painted!: () => void
     const firstPaint = new Promise<void>((resolve) => {
       painted = resolve
     })
+    // No reply reaches the program from here: the core answers its queries itself.
+    const engine = new GhosttyTerminal(Math.max(1, cols), Math.max(1, rows), HISTORY, {
+      bell: () => this.bell(),
+      clipboard: (text) => this.clipboard(Buffer.from(text).toString('base64')),
+      status: (record, state) => {
+        if (record) return
+        // The attach reply seeds its turn. Its first report is a replay of that
+        // snapshot, not another transition; subsequent reports are live bytes.
+        if (pane.rootReport && pane.parsedState === 'working' && state !== 'working')
+          pane.parsedTurn++
+        pane.rootReport = true
+        pane.parsedState = state === 'clear' ? undefined : state
+      },
+    })
     const pane: CorePane = {
       id,
       address,
-      emulator,
+      engine,
+      win32: new Win32InputMode(),
       revision: 0,
       ready: false,
       paintComplete: false,
       firstPaint,
       painted,
-      scroll: 0,
-      cursorVisible: true,
-      cursorShape: 0,
       disposed: false,
       subscriptions: [],
-      kittyStack: [],
       wanted: { cols, rows },
       parsedTurn: 0,
       rootReport: false,
-      modes: {
-        applicationCursor: false,
-        bracketedPaste: false,
-        mouse: 'none',
-        sgrMouse: false,
-        pixelMouse: false,
-        utf8Mouse: false,
-        urxvtMouse: false,
-        kitty: 0,
-        modifyOtherKeys: 0,
-        win32: false,
-      },
     }
-    const numbers = (params: (number | number[])[]) =>
-      params.map((value) => (typeof value === 'number' ? value : value[0] || 0))
-    for (const final of ['h', 'l'])
-      pane.subscriptions.push(
-        emulator.parser.registerCsiHandler({ prefix: '?', final }, (params) => {
-          const on = final === 'h'
-          for (const mode of numbers(params)) {
-            if (mode === 25) pane.cursorVisible = on
-            if (mode === 1006) pane.modes.sgrMouse = on
-            if (mode === 1016) pane.modes.pixelMouse = on
-            if (mode === 1005) pane.modes.utf8Mouse = on
-            if (mode === 1015) pane.modes.urxvtMouse = on
-            if (mode === 9001) {
-              pane.modes.win32 = on
-              pane.paintComplete = true
-            }
-          }
-          return false
-        }),
-      )
-    pane.subscriptions.push(
-      emulator.parser.registerCsiHandler({ intermediates: ' ', final: 'q' }, (params) => {
-        pane.cursorShape = numbers(params)[0] || 0
-        return false
-      }),
-    )
-    pane.subscriptions.push(
-      emulator.parser.registerCsiHandler({ prefix: '>', final: 'u' }, (params) => {
-        pane.kittyStack.push(pane.modes.kitty)
-        if (pane.kittyStack.length > 32) pane.kittyStack.shift()
-        pane.modes.kitty = numbers(params)[0] || 0
-        return true
-      }),
-    )
-    pane.subscriptions.push(
-      emulator.parser.registerCsiHandler({ prefix: '<', final: 'u' }, (params) => {
-        let count = Math.max(1, Math.min(32, numbers(params)[0] || 1))
-        while (count--) pane.modes.kitty = pane.kittyStack.pop() ?? 0
-        return true
-      }),
-    )
-    pane.subscriptions.push(
-      emulator.parser.registerCsiHandler({ prefix: '=', final: 'u' }, (params) => {
-        const [flags = 0, operation = 1] = numbers(params)
-        pane.modes.kitty =
-          operation === 2
-            ? pane.modes.kitty | flags
-            : operation === 3
-              ? pane.modes.kitty & ~flags
-              : flags
-        return true
-      }),
-    )
-    pane.subscriptions.push(
-      emulator.parser.registerCsiHandler({ prefix: '>', final: 'm' }, (params) => {
-        const [mode, value] = numbers(params)
-        if (mode === 4) pane.modes.modifyOtherKeys = value || 0
-        return false
-      }),
-    )
-    pane.subscriptions.push(
-      emulator.parser.registerOscHandler(52, (data) => {
-        const at = data.indexOf(';'),
-          value = data.slice(at + 1)
-        if (at >= 0 && value !== '?') this.clipboard(value)
-        return true
-      }),
-    )
-    pane.subscriptions.push(
-      emulator.parser.registerOscHandler(7501, (data) => {
-        const fields = new Map(
-          data.split(':').flatMap((field) => {
-            const at = field.indexOf('=')
-            return at < 0 ? [] : [[field.slice(0, at), field.slice(at + 1)] as [string, string]]
-          }),
-        )
-        const word = fields.get('state')
-        if (
-          fields.get('id') ||
-          !['idle', 'working', 'done', 'blocked', 'error', 'clear'].includes(word || '')
-        )
-          return true
-        // The attach reply seeds its turn. Its first report is a replay of that
-        // snapshot, not another transition; subsequent reports are live bytes.
-        if (pane.rootReport && pane.parsedState === 'working' && word !== 'working')
-          pane.parsedTurn++
-        pane.rootReport = true
-        pane.parsedState = word === 'clear' ? undefined : word
-        return true
-      }),
-    )
-    // The core already answers program queries; a viewer must never echo headless replies.
-    pane.subscriptions.push(emulator.onBell(() => this.bell()))
     return pane
   }
 
@@ -668,9 +534,9 @@ class CoreWindowClient implements HerdrClientTransport {
         for (const pane of this.attached.values())
           if (
             pane.address === address &&
-            (pane.emulator.cols !== terminal.cols || pane.emulator.rows !== terminal.rows)
+            (pane.engine.cols !== terminal.cols || pane.engine.rows !== terminal.rows)
           ) {
-            pane.emulator.resize(terminal.cols, terminal.rows)
+            pane.engine.resize(terminal.cols, terminal.rows)
             pane.revision++
           }
       }
@@ -751,7 +617,7 @@ class CoreWindowClient implements HerdrClientTransport {
       const projection = projectTab(this.tab, this.cols, this.rows, this.zoomed)
       if (projection.panes.some((pane) => pane.terminal && !this.attached.has(pane.id))) return
       const frame: FrameData = {
-        cells: Array.from({ length: this.cols * this.rows }, () => blank()),
+        cells: new Array<CellData>(this.cols * this.rows).fill(BLANK),
         width: this.cols,
         height: this.rows,
         cursor: null,
@@ -765,7 +631,7 @@ class CoreWindowClient implements HerdrClientTransport {
         const area = split.hit_rect
         for (let y = area.y; y < area.y + area.height; y++)
           for (let x = area.x; x < area.x + area.width; x++)
-            frame.cells[y * this.cols + x] = blank(split.direction === 'Horizontal' ? '│' : '─')
+            frame.cells[y * this.cols + x] = cell(split.direction === 'Horizontal' ? '│' : '─')
       }
       for (const [index, projected] of projection.panes.entries()) {
         const rect = projected.rect,
@@ -781,9 +647,9 @@ class CoreWindowClient implements HerdrClientTransport {
             : '[Terminal unavailable]'
           for (let y = rect.y; y < rect.y + rect.height; y++)
             for (let x = rect.x; x < rect.x + rect.width; x++)
-              frame.cells[y * this.cols + x] = blank()
+              frame.cells[y * this.cols + x] = BLANK
           for (let x = 0; x < Math.min(rect.width, message.length); x++)
-            frame.cells[rect.y * this.cols + rect.x + x] = blank(message[x])
+            frame.cells[rect.y * this.cols + rect.x + x] = cell(message[x]!)
           surfacePanes.push({
             pane_id: projected.id,
             content_revision: 0,
@@ -800,32 +666,28 @@ class CoreWindowClient implements HerdrClientTransport {
           })
           continue
         }
-        const emulator = pane.emulator,
-          buffer = emulator.buffer.active
-        const offset = Math.max(0, buffer.baseY - pane.scroll)
+        const engine = pane.engine,
+          rows = engine.read(),
+          cursor = engine.cursor(),
+          scroll = engine.scroll
         const linkIndexes = new Map<string, number>()
-        for (let y = 0; y < rect.height; y++)
+        for (let y = 0; y < rect.height; y++) {
+          const row = rows[y]
           for (let x = 0; x < rect.width; x++) {
-            const cell =
-              x < emulator.cols && y < emulator.rows
-                ? buffer.getLine(offset + y)?.getCell(x)
-                : undefined
-            const rendered = cellData(cell)
-            const uri = cell && this.hyperlink(emulator, cell)
+            let rendered = row?.cells[x] ?? BLANK
+            const uri = coreHyperlink(row?.links?.get(x))
             if (uri) {
               let index = linkIndexes.get(uri)
               if (index === undefined) {
                 index = frame.hyperlinks.push(uri) - 1
                 linkIndexes.set(uri, index)
               }
-              rendered.hyperlink = index
+              rendered = { ...rendered, hyperlink: index }
             }
             frame.cells[(rect.y + y) * this.cols + rect.x + x] = rendered
           }
-        pane.modes.applicationCursor = emulator.modes.applicationCursorKeysMode
-        pane.modes.bracketedPaste = emulator.modes.bracketedPasteMode
-        pane.modes.mouse = emulator.modes.mouseTrackingMode
-        const alternate = buffer.type === 'alternate'
+        }
+        const alternate = engine.alternateScreen
         const focused = projected.id === this.focused
         surfacePanes.push({
           pane_id: projected.id,
@@ -836,28 +698,24 @@ class CoreWindowClient implements HerdrClientTransport {
           scroll: alternate
             ? null
             : {
-                offset_from_bottom: pane.scroll,
-                max_offset_from_bottom: buffer.baseY,
-                viewport_rows: emulator.rows,
+                offset_from_bottom: scroll.max - scroll.top,
+                max_offset_from_bottom: scroll.max,
+                viewport_rows: engine.rows,
               },
           focused,
-          mouse_reporting: emulator.modes.mouseTrackingMode !== 'none',
-          sgr_pixel_mouse: pane.modes.pixelMouse,
+          mouse_reporting: engine.mouseReporting,
+          sgr_pixel_mouse: engine.mode(1016),
           alternate_screen_active: alternate,
-          pixel_width: rect.width * 8,
-          pixel_height: rect.height * 16,
+          pixel_width: rect.width * CORE_CELL.width,
+          pixel_height: rect.height * CORE_CELL.height,
         })
-        if (
-          focused &&
-          pane.scroll === 0 &&
-          buffer.cursorX < rect.width &&
-          buffer.cursorY < rect.height
-        )
+        // The engine has no cursor to show while its viewport is scrolled away from it.
+        if (focused && cursor && cursor.x < rect.width && cursor.y < rect.height)
           frame.cursor = {
-            x: rect.x + buffer.cursorX,
-            y: rect.y + buffer.cursorY,
-            visible: pane.cursorVisible && terminal?.state === 'live',
-            shape: pane.cursorShape,
+            x: rect.x + cursor.x,
+            y: rect.y + cursor.y,
+            visible: cursor.visible && terminal?.state === 'live',
+            shape: cursor.shape,
           }
       }
       // A wide glyph is indivisible. Do not let a covered lead/continuation
@@ -871,16 +729,16 @@ class CoreWindowClient implements HerdrClientTransport {
           if (cell.skip) {
             if (continuation && owners[index] === owner) continuation--
             else {
-              frame.cells[index] = blank()
+              frame.cells[index] = BLANK
               continuation = 0
             }
             continue
           }
-          const width = terminalCellWidth(cell.symbol)
+          const width = cellWidth(cell.symbol)
           owner = owners[index]!
           continuation = Math.max(0, width - 1)
           if (x + width > this.cols || (width > 1 && owners[index + width - 1] !== owner)) {
-            frame.cells[index] = blank()
+            frame.cells[index] = BLANK
             continuation = 0
           }
         }
@@ -985,17 +843,6 @@ class CoreWindowClient implements HerdrClientTransport {
     })
   }
 
-  private hyperlink(emulator: Emulator, cell: IBufferCell): string | undefined {
-    // xterm's public cell API omits OSC 8 metadata. This narrow optional accessor
-    // is isolated here; unsupported internals simply omit the link, never text.
-    const id = (cell as IBufferCell & { extended?: { urlId?: number } }).extended?.urlId
-    const terminal = emulator as Emulator & {
-      _core?: { _oscLinkService?: { getLinkData(id: number): { uri?: unknown } | undefined } }
-    }
-    const uri = id ? terminal._core?._oscLinkService?.getLinkData(id)?.uri : undefined
-    return coreHyperlink(uri)
-  }
-
   private send(message: ClientMessage) {
     if (this.closed || typeof message === 'string') return
     if ('ClientShellPaneInput' in message) {
@@ -1005,23 +852,13 @@ class CoreWindowClient implements HerdrClientTransport {
       const active = input.events.some(
         (event) => !('Mouse' in event) || event.Mouse.kind !== 'Moved',
       )
-      const scrolled = active && pane.scroll !== 0
-      if (active) pane.scroll = 0
-      pane.modes.applicationCursor = pane.emulator.modes.applicationCursorKeysMode
-      pane.modes.bracketedPaste = pane.emulator.modes.bracketedPasteMode
-      pane.modes.mouse = pane.emulator.modes.mouseTrackingMode
-      for (let event of input.events) {
-        if ('Mouse' in event && pane.modes.pixelMouse && 'Cell' in event.Mouse.position) {
-          const { column, row } = event.Mouse.position.Cell
-          event = {
-            Mouse: {
-              ...event.Mouse,
-              position: { Pixels: { column, row, x: column * 8 + 4, y: row * 16 + 8 } },
-            },
-          }
-        }
-        const bytes = coreInput(event, pane.modes)
-        if (bytes.length) pane.stream.write(bytes)
+      // Anything but hovering returns the pane to its latest output.
+      const scroll = pane.engine.scroll,
+        scrolled = active && scroll.top < scroll.max
+      if (scrolled) pane.engine.scrollTo(scroll.max)
+      for (const event of input.events) {
+        const bytes = coreInput(event, pane.engine, pane.win32.on)
+        if (bytes.length) pane.stream.write(Buffer.from(bytes))
       }
       if (scrolled) this.render()
     } else if ('ClientShellFocus' in message)
@@ -1046,10 +883,7 @@ class CoreWindowClient implements HerdrClientTransport {
     if (method === 'pane.scroll') {
       if (!pane || !Number.isSafeInteger(params.offset_from_bottom))
         throw new Error('Invalid pane scroll')
-      pane.scroll = Math.max(
-        0,
-        Math.min(pane.emulator.buffer.active.baseY, Number(params.offset_from_bottom)),
-      )
+      pane.engine.scrollTo(pane.engine.scroll.max - Number(params.offset_from_bottom))
       this.render()
       return {}
     }
@@ -1074,6 +908,9 @@ class CoreWindowClient implements HerdrClientTransport {
   }
 
   private selectionText(pane: CorePane, anchor: unknown, cursor: unknown): string {
+    const engine = pane.engine,
+      cols = engine.cols,
+      scroll = engine.scroll
     const point = (value: unknown) => {
       if (
         !value ||
@@ -1085,34 +922,34 @@ class CoreWindowClient implements HerdrClientTransport {
       )
         throw new Error('Invalid selection coordinates')
       return {
-        row: Math.max(0, Math.min(pane.emulator.buffer.active.length - 1, Number(value.row))),
-        col: Math.max(0, Math.min(pane.emulator.cols - 1, Number(value.col))),
+        row: Math.max(0, Math.min(scroll.max + engine.rows - 1, Number(value.row))),
+        col: Math.max(0, Math.min(cols - 1, Number(value.col))),
       }
     }
     let start = point(anchor),
       end = point(cursor)
     if (start.row > end.row || (start.row === end.row && start.col > end.col))
       [start, end] = [end, start]
-    if ((end.row - start.row + 1) * pane.emulator.cols > 1_000_000)
-      throw new Error('Selection is too large')
+    if ((end.row - start.row + 1) * cols > 1_000_000) throw new Error('Selection is too large')
     const rendered = this.renderedContent,
       rect = rendered?.surface.panes.find((item) => item.pane_id === pane.id)?.inner_rect
-    const top = Math.max(0, pane.emulator.buffer.active.baseY - pane.scroll),
+    const top = scroll.top,
       owner = (rendered?.layers.indexOf(pane.id) ?? -1) + 1
     const lines: string[] = []
     for (let row = start.row; row <= end.row; row++) {
-      const line = pane.emulator.buffer.active.getLine(row)
+      const line = engine.line(row)
       let part = ''
       for (
         let col = row === start.row ? start.col : 0;
-        col <= (row === end.row ? end.col : pane.emulator.cols - 1);
+        col <= (row === end.row ? end.col : cols - 1);
         col++
       ) {
-        const cell = line?.getCell(col)
-        if (cell?.getWidth() === 0) continue
+        const cell = line?.cells[col],
+          width = cell?.width ?? 1
+        if (width === 0) continue
         let covered = false
         if (rendered && rect && row >= top && row < top + rect.height)
-          for (let offset = 0; offset < (cell?.getWidth() || 1); offset++) {
+          for (let offset = 0; offset < width; offset++) {
             if (
               col + offset >= rect.width ||
               rendered.owners[
@@ -1123,12 +960,9 @@ class CoreWindowClient implements HerdrClientTransport {
               break
             }
           }
-        part +=
-          covered || cell?.isInvisible()
-            ? ' '.repeat(cell?.getWidth() || 1)
-            : cell?.getChars() || ' '
+        part += covered || cell?.invisible ? ' '.repeat(width) : (cell?.text ?? ' ')
       }
-      if (row === start.row || !line?.isWrapped) lines.push(part)
+      if (row === start.row || !line?.wrapped) lines.push(part)
       else lines[lines.length - 1] += part
     }
     return lines.map((line) => line.replace(/ +$/u, '')).join('\n')
@@ -1149,10 +983,10 @@ class CoreWindowClient implements HerdrClientTransport {
           (rect.y + Math.floor(index / rect.width)) * surface.frame.width +
           rect.x +
           (index % rect.width)
-        return owners[at] === owner ? surface.frame.cells[at]! : blank()
+        return owners[at] === owner ? surface.frame.cells[at]! : BLANK
       })
       const local = { x: 0, y: 0, width: rect.width, height: rect.height }
-      const top = Math.max(0, native.emulator.buffer.active.baseY - native.scroll)
+      const rows = native.engine.read()
       const visible = Array.from({ length: rect.height }, (_, row) => {
         for (let col = 0; col < rect.width; col++)
           if (owners[(rect.y + row) * surface.frame.width + rect.x + col] !== owner) return false
@@ -1168,10 +1002,10 @@ class CoreWindowClient implements HerdrClientTransport {
         shell,
         this.options.tabId,
         (_id, row) =>
-          native.emulator.cols === rect.width &&
+          native.engine.cols === rect.width &&
           visible[row - 1] &&
           visible[row] &&
-          !!native.emulator.buffer.active.getLine(top + row)?.isWrapped,
+          !!rows[row]?.wrapped,
       )
     })
   }
@@ -1314,7 +1148,7 @@ class CoreWindowClient implements HerdrClientTransport {
       )
         continue
       pane.wanted = { cols: projected.rect.width, rows: projected.rect.height }
-      pane.emulator.resize(Math.max(2, projected.rect.width), Math.max(1, projected.rect.height))
+      pane.engine.resize(Math.max(1, projected.rect.width), Math.max(1, projected.rect.height))
       pane.revision++
       pane.stream?.resize(projected.rect.width, projected.rect.height)
     }
@@ -1339,7 +1173,7 @@ class CoreWindowClient implements HerdrClientTransport {
     pane.painted()
     pane.stream?.close()
     for (const subscription of pane.subscriptions) subscription.dispose()
-    pane.emulator.dispose()
+    pane.engine.free()
   }
   private finish(exit: HerdrClientExit) {
     if (this.closed) return

@@ -491,7 +491,7 @@ export class LiveTerminal {
           return
         }
         const size = {
-          // xterm needs two columns for wide characters; one row is valid.
+          // A wide character needs two columns; one row is valid.
           cols: clamp(msg.cols, 2, 500, this.cols),
           rows: clamp(msg.rows, 1, 200, this.rows),
         }
