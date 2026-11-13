@@ -1,6 +1,6 @@
 import type { ClientShellSnapshot, FrameData, PaneSurfaceFrame, SurfaceRect } from './wire.ts'
 import { popupInnerRect } from './screen.ts'
-import { terminalCellWidth } from '../../shared/terminal-unicode.ts'
+import { cellWidth } from '../ghostty/module.ts'
 
 export interface NativeContentPane {
   id: string
@@ -40,7 +40,7 @@ function readPane(
       const cell = frame.cells[y * frame.width + x]
       if (!cell || cell.skip) continue
       const concealed = !!(cell.modifier & 128)
-      const width = Math.max(1, terminalCellWidth(cell.symbol))
+      const width = Math.max(1, cellWidth(cell.symbol))
       const text = concealed ? ' '.repeat(width) : clean(cell.symbol) || ' '
       const url = concealed || cell.hyperlink === null ? '' : frame.hyperlinks[cell.hyperlink] || ''
       line += text

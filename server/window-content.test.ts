@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { contentCandidates } from './content-candidates.ts'
-import { terminalCellWidth } from '../shared/terminal-unicode.ts'
+import { cellWidth } from './ghostty/module.ts'
 import { windowContent, readWindowContent, type NativeContentPane } from './herdr/content.ts'
 import type { ClientShellSnapshot, FrameData, PaneSurfaceFrame } from './herdr/wire.ts'
 import { readSourceFile, regularSourceFiles } from './source-file.ts'
@@ -476,8 +476,8 @@ test('full-width CJK path display joins a short extension tail and verifies the 
   await mkdir(join(f.root, 'dist'))
   await writeFile(join(f.root, relative), 'synthetic markdown')
   const first = `  ${relative.slice(0, -1)}`
-  assert(terminalCellWidth(first) > first.length, 'fixture includes full-width Chinese cells')
-  f.setContent([{ ...pane([first, '  d'], f.root), columns: terminalCellWidth(first) }])
+  assert(cellWidth(first) > first.length, 'fixture includes full-width Chinese cells')
+  f.setContent([{ ...pane([first, '  d'], f.root), columns: cellWidth(first) }])
   const scan = await f.scan()
   assert.deepEqual(
     scan.panes[0]!.items.filter((item) => item.kind === 'file').map((item) => item.path),
@@ -486,7 +486,7 @@ test('full-width CJK path display joins a short extension tail and verifies the 
   f.setContent([
     {
       ...pane([first.replace('AutoOps', 'Missing'), '  d'], f.root),
-      columns: terminalCellWidth(first),
+      columns: cellWidth(first),
     },
   ])
   assert.deepEqual(
@@ -705,7 +705,7 @@ test('color runs retain filename punctuation, join at pane edges and reject stal
   const { surface, snapshot } = nativeFrame()
   const first = 'docs/视频（最终）(一).mp',
     last = '4'
-  const width = terminalCellWidth(first),
+  const width = cellWidth(first),
     height = 3
   surface.frame = {
     width,
@@ -736,7 +736,7 @@ test('color runs retain filename punctuation, join at pane edges and reject stal
     )) {
       const cell = surface.frame.cells[row * width + offset]!
       Object.assign(cell, { symbol: segment, fg })
-      const size = terminalCellWidth(segment)
+      const size = cellWidth(segment)
       // Native herdr can leave continuation cells as unmarked padding.
       for (let i = 1; i < size; i++) surface.frame.cells[row * width + offset + i]!.symbol = ' '
       offset += size
@@ -918,8 +918,8 @@ test('Markdown display decoration is removed from wrapped paths without consumin
   const quoted = '> - `docs/引用说明.m'
   const bold = '> **docs/加粗说明.m'
   f.setContent([
-    { ...pane([quoted, '>   d`'], f.root, 'quote'), columns: terminalCellWidth(quoted) },
-    { ...pane([bold, '> d**'], f.root, 'bold'), columns: terminalCellWidth(bold) },
+    { ...pane([quoted, '>   d`'], f.root, 'quote'), columns: cellWidth(quoted) },
+    { ...pane([bold, '> d**'], f.root, 'bold'), columns: cellWidth(bold) },
     pane(['> 1. `docs/list.md`'], f.root, 'list'),
   ])
   const scan = await f.scan()
@@ -943,7 +943,7 @@ test('path reconstruction preserves real spaces and OSC 8 targets instead of com
   const first = '> `docs/real name.m'
   const content = {
     ...pane([first, '> d`'], f.root),
-    columns: terminalCellWidth(first),
+    columns: cellWidth(first),
     links: [{ label: 'Linked file', url: `file://${f.root}/docs/linked%20name.md` }],
   }
   f.setContent([content])
@@ -972,20 +972,20 @@ test('width-based continuation remains bounded by pane, distinct filenames and s
   )
   assert(
     !paths([
-      { ...pane([first], '/work', 'left'), columns: terminalCellWidth(first) },
+      { ...pane([first], '/work', 'left'), columns: cellWidth(first) },
       pane(['d'], '/work', 'right'),
     ]).includes('/work/docs/report.md'),
     'panes never join',
   )
   assert(
-    !paths([{ ...pane([first, 'other.md'], '/work'), columns: terminalCellWidth(first) }]).includes(
+    !paths([{ ...pane([first, 'other.md'], '/work'), columns: cellWidth(first) }]).includes(
       '/work/docs/report.mother.md',
     ),
     'another complete filename is not a continuation',
   )
   const overlong = 'd'.repeat(33)
   assert(
-    !paths([{ ...pane([first, overlong], '/work'), columns: terminalCellWidth(first) }]).includes(
+    !paths([{ ...pane([first, overlong], '/work'), columns: cellWidth(first) }]).includes(
       `/work/${first}${overlong}`,
     ),
     'continuation length is bounded',
@@ -993,7 +993,7 @@ test('width-based continuation remains bounded by pane, distinct filenames and s
   const capped = contentCandidates([
     {
       ...pane([...Array.from({ length: 200 }, (_, i) => `/tmp/${i}.md`), first, 'd'], '/work'),
-      columns: terminalCellWidth(first),
+      columns: cellWidth(first),
     },
   ])
   assert.equal(capped.panes.flatMap((group) => group.items).length, 200)
@@ -1434,7 +1434,7 @@ test('inline tool paths reconstruct arbitrary measured hard wraps and keep speci
     f.setContent([
       {
         ...pane([first, relative.slice(relative.indexOf(end) + end.length)], f.root),
-        columns: terminalCellWidth(first),
+        columns: cellWidth(first),
       },
     ])
     assert.deepEqual(
@@ -1523,7 +1523,7 @@ test('application-indented code paths join unfinished fragments without reaching
       f.setContent([
         {
           ...pane([first, indent + path.slice(split)], f.root),
-          columns: terminalCellWidth(first) + margin,
+          columns: cellWidth(first) + margin,
         },
       ])
       assert.deepEqual(
@@ -1729,7 +1729,7 @@ test('plain file URLs resolve to local paths and join application hard wraps und
   ]
   for (const name of names) await writeFile(join(directory, name), 'synthetic image')
   const [short, tail, slash] = names.map((name) => `    file://${join(directory, name)}`)
-  const columns = terminalCellWidth(tail!) - 1,
+  const columns = cellWidth(tail!) - 1,
     middle = slash!.indexOf('legacy-dialogs') + 'legacy-di'.length
   f.setContent([
     {

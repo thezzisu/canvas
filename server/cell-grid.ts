@@ -9,7 +9,7 @@ import {
   encodePatch,
   type CellCursor,
 } from '../shared/cell-wire.ts'
-import { terminalCellWidth } from '../shared/terminal-unicode.ts'
+import { cellWidth } from './ghostty/module.ts'
 import { SELECTED } from './herdr/screen.ts'
 import type { CellData, FrameData } from './herdr/wire.ts'
 
@@ -160,7 +160,7 @@ export class GridEncoder {
       const symbol = cell.skip ? ' ' : cell.symbol.replace(controls, ' ')
       const wide =
         (symbol.length > 1 || symbol.charCodeAt(0) > 0x2ff) &&
-        terminalCellWidth(symbol) > 1 &&
+        cellWidth(symbol) > 1 &&
         x + 1 < grid.width
       this.row.cell(style, symbol, wide)
       if (wide) x++

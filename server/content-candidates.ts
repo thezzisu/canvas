@@ -1,7 +1,7 @@
 import { posix } from 'node:path'
 import type { WindowContentItem, WindowContentPane } from '../shared/window-content.ts'
 import type { NativeContentPane } from './herdr/content.ts'
-import { terminalCellWidth } from '../shared/terminal-unicode.ts'
+import { cellWidth } from './ghostty/module.ts'
 
 const MAX_ITEMS = 200
 const controls = /[\x00-\x1f\x7f-\x9f]/u
@@ -231,7 +231,7 @@ function* pathSpans(
           finished = true
           break
         }
-        const width = terminalCellWidth(lines[next]!.trimEnd())
+        const width = cellWidth(lines[next]!.trimEnd())
         const indent = lines[next + 1]?.match(/^\s*/u)?.[0] || ''
         // Applications wrap code inside a padded region narrower than the pane.
         // Matching indentation plus an unfinished path/suffix is stronger evidence
@@ -239,7 +239,7 @@ function* pathSpans(
         const aligned =
           indent.length > 0 &&
           (indent === line.match(/^\s*/u)?.[0] ||
-            terminalCellWidth(indent) === terminalCellWidth(line.slice(0, offset)))
+            cellWidth(indent) === cellWidth(line.slice(0, offset)))
         const continuation =
           aligned &&
           !/\.[\p{L}][\p{L}\p{N}_-]{0,15}$/u.test(withoutFileLocation(trimPunctuation(value))) &&
@@ -288,7 +288,7 @@ function* tablePathSpans(
     budget.characters -= line.length
     const cells = line.split(border),
       allSeparators = [...line.matchAll(new RegExp(border, 'gu'))].map((match) =>
-        terminalCellWidth(line.slice(0, match.index)),
+        cellWidth(line.slice(0, match.index)),
       )
     const separators = allSeparators
     if (cells.length < 2) return
@@ -323,9 +323,7 @@ function* tablePathSpans(
         lane.push(following.cells[column]!)
       }
       const columns =
-        column < first.cells.length - 1
-          ? terminalCellWidth(cell) - (cell.endsWith(' ') ? 1 : 0)
-          : undefined
+        column < first.cells.length - 1 ? cellWidth(cell) - (cell.endsWith(' ') ? 1 : 0) : undefined
       if (lane.length > 1)
         yield* pathSpans(
           lane.map((value) => value.trimEnd()),

@@ -5,7 +5,7 @@ import type {
   PaneSurfacePatch,
   SurfaceRect,
 } from './wire.ts'
-import { terminalCellWidth as cellWidth } from '../../shared/terminal-unicode.ts'
+import { cellWidth } from '../ghostty/module.ts'
 export { cellWidth }
 
 export interface ScreenSelection {
