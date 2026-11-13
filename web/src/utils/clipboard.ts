@@ -3,8 +3,9 @@ import { beginCopyFeedback } from './copy-feedback'
 
 const MAX_COPY_BYTES = 1024 * 1024
 const COPY_GESTURE_MS = 3000
-let restoringFocus = false
-export const clipboardRestoringFocus = () => restoringFocus
+let borrowingFocus = false
+/** A copy is passing focus through its own field and back: nothing lost or gained it. */
+export const clipboardBorrowingFocus = () => borrowingFocus
 
 /** A user copy works on HTTP as well as secure origins. Never read the clipboard. */
 export async function copyText(
@@ -57,6 +58,7 @@ export async function copyText(
     const root = document.fullscreenElement || document.body
     root.append(area)
     document.addEventListener('copy', onCopy, true)
+    borrowingFocus = true
     area.focus({ preventScroll: true })
     area.select()
     copied = document.execCommand('copy')
@@ -65,7 +67,6 @@ export async function copyText(
   } finally {
     document.removeEventListener('copy', onCopy, true)
     area.remove()
-    restoringFocus = true
     try {
       if (previous?.isConnected) previous.focus({ preventScroll: true })
       if (
@@ -86,7 +87,7 @@ export async function copyText(
     } catch {
       /* Selection may have been removed while the copy event ran. */
     } finally {
-      restoringFocus = false
+      borrowingFocus = false
     }
   }
   if (!copied && navigator.clipboard) {

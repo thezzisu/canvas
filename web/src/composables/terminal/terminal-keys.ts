@@ -1,4 +1,4 @@
-import { clipboardRestoringFocus } from '../../utils/clipboard'
+import { clipboardBorrowingFocus } from '../../utils/clipboard'
 import { encodeFocus, encodePaste } from '../../utils/terminal/terminal-encoder'
 import {
   hasModifiers,
@@ -93,10 +93,11 @@ export function blurTerminal(session: Session) {
 }
 /** The terminal's input gained or lost the keyboard. */
 export function inputFocused(session: Session, focused: boolean) {
+  if (clipboardBorrowingFocus()) return
   if (!focused) {
     session.nativeKey = undefined
     setModifiers(session)
-  } else if (!clipboardRestoringFocus()) claimFocus(session)
+  } else claimFocus(session)
   session.painter.setFocus(focused)
   sendInput(session, encodeFocus(focused), false)
 }
