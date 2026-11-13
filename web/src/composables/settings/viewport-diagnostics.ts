@@ -41,7 +41,6 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
     element ? { rect: rect(element.getBoundingClientRect()), padding: padding(element) } : null
   const app = query('.app-shell'),
     input = query('.focus-overlay .terminal-mobile-input')
-  const xtermInput = query('.focus-overlay .xterm-helper-textarea')
   const visual = window.visualViewport,
     active = document.activeElement,
     fullscreen = document.fullscreenElement
@@ -207,14 +206,7 @@ export function collectViewportDiagnostics(settings?: GlobalSettings | null) {
       dock: geometry(query('.focus-overlay .mobile-key-dock')),
     },
     focus: {
-      active:
-        active === input
-          ? 'mobile-input'
-          : active === xtermInput
-            ? 'xterm-input'
-            : active === document.body
-              ? 'body'
-              : 'other',
+      active: active === input ? 'mobile-input' : active === document.body ? 'body' : 'other',
       editable: input?.isContentEditable === true,
       inputMode:
         input?.inputMode === 'text' ? 'text' : input?.inputMode === 'none' ? 'none' : 'other',

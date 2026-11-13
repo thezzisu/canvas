@@ -2,12 +2,12 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { terminalKey, terminalShortcut, modifiedText } from './terminal-input.ts'
 
-test('soft terminal keys respect normal and application cursor modes', () => {
-  assert.equal(terminalKey('ArrowUp'), '\x1b[A')
-  assert.equal(terminalKey('ArrowLeft', {}, true), '\x1bOD')
-  assert.equal(terminalKey('Home', {}, true), '\x1bOH')
-  assert.equal(terminalKey('End'), '\x1b[F')
-  assert.equal(terminalKey('ArrowDown', { ctrl: true }, true), '\x1b[1;5B')
+test('soft terminal keys send application-mode cursor keys', () => {
+  assert.equal(terminalKey('ArrowUp'), '\x1bOA')
+  assert.equal(terminalKey('ArrowLeft', {}), '\x1bOD')
+  assert.equal(terminalKey('Home', {}), '\x1bOH')
+  assert.equal(terminalKey('End'), '\x1bOF')
+  assert.equal(terminalKey('ArrowDown', { ctrl: true }), '\x1b[1;5B')
   assert.equal(terminalKey('ArrowRight', { ctrl: true, alt: true }), '\x1b[1;7C')
   assert.equal(terminalKey('PageDown', { alt: true }), '\x1b[6;3~')
   assert.equal(terminalKey('Delete'), '\x1b[3~')
@@ -45,7 +45,7 @@ test('all modifier combinations retain their independent bits on special keys', 
       ctrl: !!(mask & 4),
       meta: !!(mask & 8),
     }
-    assert.equal(terminalKey('ArrowLeft', modifiers, true), mask ? `\x1b[1;${mask + 1}D` : '\x1bOD')
+    assert.equal(terminalKey('ArrowLeft', modifiers), mask ? `\x1b[1;${mask + 1}D` : '\x1bOD')
     assert.equal(terminalKey('Delete', modifiers), `\x1b[3${mask ? `;${mask + 1}` : ''}~`)
     assert.equal(terminalKey('F4', modifiers), mask ? `\x1b[1;${mask + 1}S` : '\x1bOS')
   }
@@ -153,7 +153,7 @@ test('plain typing remains in xterm while physical function keys reach the termi
   }
   assert.equal(terminalShortcut({ key: 'F1' }), '\x1bOP')
   assert.equal(terminalShortcut({ key: 'F12' }), '\x1b[24~')
-  assert.equal(terminalShortcut({ key: 'ArrowLeft', altKey: true }, {}, true), '\x1b[1;3D')
+  assert.equal(terminalShortcut({ key: 'ArrowLeft', altKey: true }), '\x1b[1;3D')
   assert.equal(terminalShortcut({ key: 'Unidentified', ctrlKey: true }), '')
   assert.equal(terminalShortcut({ key: 'Shift', shiftKey: true }), '')
 })
@@ -173,41 +173,38 @@ test('physical shortcut capture yields to composition, AltGraph and native third
     },
   ])
     assert.equal(terminalShortcut(event, { meta: true }), '', event.key)
-  assert.equal(terminalShortcut({ key: '@', ctrlKey: true, altKey: true }, {}, false, 'Win32'), '')
-  assert.equal(terminalShortcut({ key: 'é', altKey: true }, {}, false, 'MacIntel'), '')
+  assert.equal(terminalShortcut({ key: '@', ctrlKey: true, altKey: true }, {}, 'Win32'), '')
+  assert.equal(terminalShortcut({ key: 'é', altKey: true }, {}, 'MacIntel'), '')
   assert.equal(
-    terminalShortcut({ key: 'ArrowLeft', ctrlKey: true, altKey: true }, {}, false, 'Win32'),
+    terminalShortcut({ key: 'ArrowLeft', ctrlKey: true, altKey: true }, {}, 'Win32'),
     '\x1b[1;7D',
   )
+  assert.equal(terminalShortcut({ key: 'ArrowLeft', altKey: true }, {}, 'MacIntel'), '\x1b[1;3D')
   assert.equal(
-    terminalShortcut({ key: 'ArrowLeft', altKey: true }, {}, false, 'MacIntel'),
-    '\x1b[1;3D',
-  )
-  assert.equal(
-    terminalShortcut({ key: 'x', ctrlKey: true, altKey: true }, {}, false, 'MacIntel'),
+    terminalShortcut({ key: 'x', ctrlKey: true, altKey: true }, {}, 'MacIntel'),
     '\x1b[120;7u',
   )
   assert.equal(
-    terminalShortcut({ key: '@', ctrlKey: true, altKey: true, metaKey: true }, {}, false, 'Win32'),
+    terminalShortcut({ key: '@', ctrlKey: true, altKey: true, metaKey: true }, {}, 'Win32'),
     '\x1b[64;15u',
   )
 })
 
 test('Mac select-all stays local while other Command chords retain terminal semantics', () => {
-  assert.equal(terminalShortcut({ key: 'a', metaKey: true }, {}, false, 'MacIntel'), '')
-  assert.equal(terminalShortcut({ key: 'A', metaKey: true }, {}, false, 'MacIntel'), '')
+  assert.equal(terminalShortcut({ key: 'a', metaKey: true }, {}, 'MacIntel'), '')
+  assert.equal(terminalShortcut({ key: 'A', metaKey: true }, {}, 'MacIntel'), '')
   assert.equal(
-    terminalShortcut({ key: 'a', metaKey: true, ctrlKey: true }, {}, false, 'MacIntel'),
+    terminalShortcut({ key: 'a', metaKey: true, ctrlKey: true }, {}, 'MacIntel'),
     '\x1b[97;13u',
   )
   assert.equal(
-    terminalShortcut({ key: 'A', metaKey: true, shiftKey: true }, {}, false, 'MacIntel'),
+    terminalShortcut({ key: 'A', metaKey: true, shiftKey: true }, {}, 'MacIntel'),
     '\x1b[65;10u',
   )
   assert.equal(
-    terminalShortcut({ key: 'a', metaKey: true, altKey: true }, {}, false, 'MacIntel'),
+    terminalShortcut({ key: 'a', metaKey: true, altKey: true }, {}, 'MacIntel'),
     '\x1b[97;11u',
   )
-  assert.equal(terminalShortcut({ key: 'w', metaKey: true }, {}, false, 'MacIntel'), '\x1b[119;9u')
-  assert.equal(terminalShortcut({ key: 'a', metaKey: true }, {}, false, 'Linux'), '\x1b[97;9u')
+  assert.equal(terminalShortcut({ key: 'w', metaKey: true }, {}, 'MacIntel'), '\x1b[119;9u')
+  assert.equal(terminalShortcut({ key: 'a', metaKey: true }, {}, 'Linux'), '\x1b[97;9u')
 })

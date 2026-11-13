@@ -4,7 +4,8 @@ import { apiContext, isCurrentApi } from '../../../api/api'
 import { activeInstance } from '../../instances/instances'
 import { notificationSurface } from '../../notifications/notification-surface'
 import { notificationTarget } from '../../../utils/notifications/notification-model'
-import { focusWindow, terminalReadFocus } from '../../terminal/terminals'
+import { terminalReadFocus } from '../../terminal/terminal-read-focus'
+import { focusWindow } from '../../terminal/terminals'
 import { terminalIdentityKey } from '../../../utils/terminal/terminal-identity'
 import { lastWindowCanvas, useWindowCanvasHistory } from '../../workspace/window-canvas'
 import type { WindowFocus } from '../../../utils/workspace/completion-focus'
@@ -249,7 +250,7 @@ export function useWindowReveal(scene: CanvasScene) {
         scene.layout.editing.value ||
         !workspace.pageVisible ||
         !scene.focus.windowFocused.value ||
-        !element?.matches('.xterm-helper-textarea, .terminal-mobile-input')
+        !element?.matches('.terminal-desktop-input, .terminal-mobile-input')
       )
         return
       const card = element.closest<HTMLElement>('.terminal-card'),

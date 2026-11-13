@@ -1,3 +1,4 @@
+import type { TerminalConnection } from '../terminal/terminal-connection'
 import { computed, shallowRef } from 'vue'
 import { apiFetch, apiUrl } from '../../api/api'
 import { notify } from '../notify'
@@ -40,8 +41,8 @@ export async function presentDownload(file: Omit<DownloadPreview, 'preview'>, do
   await downloadMedia(file.url, file.filename)
 }
 
-const requests = new Map<AbortController, WebSocket>()
-let received = new WeakMap<WebSocket, Set<string>>()
+const requests = new Map<AbortController, TerminalConnection>()
+let received = new WeakMap<TerminalConnection, Set<string>>()
 let getDownloadContext: (resource: DownloadResource) => DownloadContext | undefined = () =>
   undefined
 
@@ -51,19 +52,19 @@ export function setDownloadContext(
   getDownloadContext = getter || (() => undefined)
 }
 
-function firstMessage(socket: WebSocket, type: string, id: string) {
-  const messages = received.get(socket) || new Set<string>()
+function firstMessage(connection: TerminalConnection, type: string, id: string) {
+  const messages = received.get(connection) || new Set<string>()
   const key = `${type}:${id}`
   if (messages.has(key)) return false
   messages.add(key)
   if (messages.size > 256) messages.delete(messages.values().next().value!)
-  received.set(socket, messages)
+  received.set(connection, messages)
   return true
 }
 
-async function prepare(socket: WebSocket, path: string, context: DownloadContext) {
+async function prepare(connection: TerminalConnection, path: string, context: DownloadContext) {
   const controller = new AbortController()
-  requests.set(controller, socket)
+  requests.set(controller, connection)
   const timeout = setTimeout(() => controller.abort(), 10_000)
   try {
     await apiFetch(path, {
@@ -83,7 +84,7 @@ async function prepare(socket: WebSocket, path: string, context: DownloadContext
 
 /** Bind staging to the receiving tab's canvas without a browser decision. */
 export function receiveDownload(
-  socket: WebSocket,
+  connection: TerminalConnection,
   message: Record<string, unknown>,
   resource: DownloadResource,
 ): boolean {
@@ -96,9 +97,9 @@ export function receiveDownload(
     return true
   }
   if (message.type === 'file-context') {
-    if (!firstMessage(socket, message.type, message.id)) return true
+    if (!firstMessage(connection, message.type, message.id)) return true
     const context = { ...getDownloadContext(resource) }
-    void prepare(socket, path, context)
+    void prepare(connection, path, context)
     return true
   }
   if (typeof message.url !== 'string' || typeof message.filename !== 'string') return true
@@ -109,7 +110,7 @@ export function receiveDownload(
     return true
   }
   if (url.href !== apiUrl(path).href || url.search) return true
-  if (!firstMessage(socket, message.type, message.id)) return true
+  if (!firstMessage(connection, message.type, message.id)) return true
   if (Number.isSafeInteger(message.size) && (message.size as number) >= 0) {
     void presentDownload({
       id: message.id,
@@ -125,14 +126,14 @@ export function receiveDownload(
   return true
 }
 
-export function disconnectDownloads(socket: WebSocket) {
+export function disconnectDownloads(connection: TerminalConnection) {
   for (const [controller, owner] of requests) {
-    if (owner === socket) {
+    if (owner === connection) {
       controller.abort()
       requests.delete(controller)
     }
   }
-  received.delete(socket)
+  received.delete(connection)
 }
 
 export function clearDownloads() {

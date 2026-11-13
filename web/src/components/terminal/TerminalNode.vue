@@ -45,12 +45,10 @@ import { useRetainedFrame } from '../../composables/files/retained-frame'
 import { useCardContentFocus } from '../../composables/canvas/card-content-focus'
 import { captureToolbarHeight } from '../../../../shared/capture'
 import { api } from '../../api/api'
-import {
-  cachedTerminalView,
-  hasTerminalFrame,
-  mountTerminal,
-  type TerminalStatus,
-} from '../../composables/terminal/terminals'
+import { mountTerminal } from '../../composables/terminal/terminal-mount'
+import type { TerminalStatus } from '../../composables/terminal/terminal-session'
+import { cachedTerminalView, hasTerminalFrame } from '../../composables/terminal/terminals'
+import '../../assets/css/terminal-grid.css'
 import { emptyModifiers, type TerminalModifiers } from '../../utils/terminal/terminal-input'
 import type { TerminalTouchMode } from '../../utils/terminal/terminal-touch'
 import type { TouchpadControl } from '../../utils/touchpad-gesture'
@@ -235,7 +233,7 @@ const inputFocused = computed(
     keepTerminal.value &&
     status.value.status === 'connected' &&
     !status.value.readOnly &&
-    !!activeElement.value?.matches('.xterm-helper-textarea, .terminal-mobile-input') &&
+    !!activeElement.value?.matches('.terminal-desktop-input, .terminal-mobile-input') &&
     !!host.value?.contains(activeElement.value),
 )
 const frameStatus = computed(() =>
@@ -1249,13 +1247,10 @@ async function resized(event: { params: { width: number; height: number; x: numb
     transition: none;
   }
 }
-.terminal-transition :deep(.xterm-rows),
-.terminal-transition :deep(.xterm-selection),
-.terminal-transition :deep(.xterm-viewport),
-.terminal-transition :deep(.xterm-decoration-container) {
+.terminal-transition :deep(.terminal-grid) {
   opacity: 0;
 }
-.terminal-host[data-content-active='false'] :deep(.xterm) {
+.terminal-host[data-content-active='false'] :deep(.terminal-grid) {
   cursor: inherit;
 }
 .terminal-card.input-focused {

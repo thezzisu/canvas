@@ -28,7 +28,6 @@ interface PhysicalKey {
 export function terminalShortcut(
   event: PhysicalKey,
   virtual: Partial<TerminalModifiers> = {},
-  applicationCursor = false,
   platform = '',
 ): string {
   if (
@@ -38,7 +37,7 @@ export function terminalShortcut(
     event.getModifierState?.('AltGraph')
   )
     return ''
-  // xterm implements the platform's familiar local select-all shortcut.
+  // The platform's select-all is not a key for the window.
   if (
     /Mac/.test(platform) &&
     event.metaKey &&
@@ -87,7 +86,7 @@ export function terminalShortcut(
     return '\x1b[Z'
   const basic: Record<string, number> = { Tab: 9, Enter: 13, Backspace: 127, Escape: 27 }
   if (basic[key] && modifier > 1) return `\x1b[${basic[key]};${modifier}u`
-  return terminalKey(key, modifiers, applicationCursor)
+  return terminalKey(key, modifiers)
 }
 
 const shifted: Record<string, string> = {
@@ -138,11 +137,8 @@ export function modifiedText(text: string, modifiers: Partial<TerminalModifiers>
   return (modifiers.alt || modifiers.meta ? '\x1b' : '') + value
 }
 
-export function terminalKey(
-  key: string,
-  modifiers: Partial<TerminalModifiers> = {},
-  applicationCursor = false,
-): string {
+/** A key as the window's fixed modes take it; cursor keys are in application mode. */
+export function terminalKey(key: string, modifiers: Partial<TerminalModifiers> = {}): string {
   const modifier =
     1 +
     (modifiers.shift ? 1 : 0) +
@@ -157,10 +153,7 @@ export function terminalKey(
     Home: 'H',
     End: 'F',
   }
-  if (cursor[key])
-    return modifier > 1
-      ? `\x1b[1;${modifier}${cursor[key]}`
-      : `\x1b${applicationCursor ? 'O' : '['}${cursor[key]}`
+  if (cursor[key]) return modifier > 1 ? `\x1b[1;${modifier}${cursor[key]}` : `\x1bO${cursor[key]}`
   const tilde: Record<string, number> = {
     Insert: 2,
     Delete: 3,

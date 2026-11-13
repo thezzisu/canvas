@@ -1,4 +1,3 @@
-import type { Terminal } from '@xterm/xterm'
 import { effectScope } from 'vue'
 import { useEventListener, useResizeObserver } from '@vueuse/core'
 import type { TerminalModifiers } from '../../utils/terminal/terminal-input'
@@ -15,17 +14,25 @@ interface TouchpadOptions {
   focus(): void
   modifiers(): TerminalModifiers
   copyGesture(): void
+  grid(): { cols: number; rows: number }
+  send(data: string): void
+  /** Passive motion is kept from the program while this browser has a selection. */
+  selecting(): boolean
+  /** Where the pointer is, for the link under it; nothing when it is gone. */
+  point(cell?: { column: number; row: number }): void
+  /** A left click landed on a cell. */
+  click(cell: { column: number; row: number }): void
 }
 
 /** One browser-local pointer; native pane ownership still goes through terminal input. */
 export function bindTerminalTouchpad(
   surface: HTMLElement,
-  term: Terminal,
+  screen: HTMLElement,
   options: TouchpadOptions,
 ) {
-  const screen = term.element!.querySelector<HTMLElement>('.xterm-screen')!
   const cursor = document.createElement('div')
   cursor.className = 'terminal-touchpad-cursor'
+  cursor.hidden = true
   cursor.setAttribute('aria-hidden', 'true')
   cursor.innerHTML =
     '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M3 2l17 12-8 1-4 7z" fill="#fff" stroke="#111317" stroke-width="2" stroke-linejoin="round"/></svg>'
@@ -60,44 +67,24 @@ export function bindTerminalTouchpad(
     cursor.style.top = `${position.y * screen.offsetHeight}px`
     cursor.style.transform = `translate(-2px,-2px) scale(${1 / scale})`
   }
+  const cell = () => {
+    const { cols, rows } = options.grid()
+    return {
+      column: Math.min(cols - 1, Math.floor(position.x * cols)),
+      row: Math.min(rows - 1, Math.floor(position.y * rows)),
+    }
+  }
+  // Raw reports: the window's client also takes the horizontal wheel, which a mouse never sends.
   function send(code: number, up = false) {
     if (!active()) return
     const modifiers = options.modifiers()
     code += (modifiers.shift ? 4 : 0) + (modifiers.alt ? 8 : 0) + (modifiers.ctrl ? 16 : 0)
-    // The existing client protocol accepts movement and horizontal wheel even
-    // when the outer xterm reports only button drags / vertical WheelEvents.
-    term.input(
-      `\x1b[<${code};${Math.min(term.cols - 1, Math.floor(position.x * term.cols)) + 1};${Math.min(term.rows - 1, Math.floor(position.y * term.rows)) + 1}${up ? 'm' : 'M'}`,
-      (code & ~28) !== 35,
-    )
+    const { column, row } = cell()
+    options.send(`\x1b[<${code};${column + 1};${row + 1}${up ? 'm' : 'M'}`)
   }
-  /**
-   * xterm's own link detection hit-tests the virtual pointer's cell. The
-   * events target `.xterm-screen` without bubbling, so its Linkifier sees them
-   * but `.xterm` mouse reporting and selection do not; the terminal receives
-   * only the reports `send` writes. Coordinates are on-screen like real mouse
-   * events; Canvas's document capture normalizer unscales them for xterm.
-   */
-  function pointLink(type: 'mousemove' | 'mousedown' | 'mouseup' | 'mouseleave') {
-    const rect = screen.getBoundingClientRect()
-    if (!rect.width || !rect.height) return
-    pointing = type !== 'mouseleave'
-    screen.dispatchEvent(
-      new MouseEvent(type, {
-        bubbles: false,
-        cancelable: true,
-        button: 0,
-        buttons: type === 'mousedown' ? 1 : 0,
-        clientX:
-          rect.left +
-          ((Math.min(term.cols - 1, Math.floor(position.x * term.cols)) + 0.5) / term.cols) *
-            rect.width,
-        clientY:
-          rect.top +
-          ((Math.min(term.rows - 1, Math.floor(position.y * term.rows)) + 0.5) / term.rows) *
-            rect.height,
-      }),
-    )
+  function showPointer(shown: boolean) {
+    pointing = shown
+    options.point(shown ? cell() : undefined)
   }
   function release() {
     if (left) send(0, true)
@@ -122,7 +109,7 @@ export function bindTerminalTouchpad(
       const { clientX, clientY } = point()
       const modifiers = options.modifiers()
       // Let the existing right-button preference and pane menu own this gesture.
-      term.element!.dispatchEvent(
+      screen.dispatchEvent(
         new PointerEvent('pointerdown', {
           bubbles: true,
           cancelable: true,
@@ -134,7 +121,7 @@ export function bindTerminalTouchpad(
         }),
       )
       for (const type of ['mousedown', 'mouseup', 'contextmenu'])
-        term.element!.dispatchEvent(
+        screen.dispatchEvent(
           new MouseEvent(type, {
             bubbles: true,
             cancelable: true,
@@ -150,13 +137,12 @@ export function bindTerminalTouchpad(
         )
     } else {
       const code = button === 'left' ? 0 : 1
-      if (button === 'left') {
-        pointLink('mousemove')
-        pointLink('mousedown')
-      }
       send(code)
       send(code, true)
-      if (button === 'left') pointLink('mouseup')
+      if (button === 'left') {
+        showPointer(true)
+        options.click(cell())
+      }
     }
   }
   function move(x: number, y: number) {
@@ -167,13 +153,13 @@ export function bindTerminalTouchpad(
     position.y = Math.max(0, Math.min(1 - 1 / rect.height, position.y + y / rect.height))
     render()
     dragged ||= left
-    if (!left) pointLink('mousemove')
-    if (left || (options.hover() && !term.hasSelection())) send(left ? 32 : 35)
+    if (!left) showPointer(true)
+    if (left || (options.hover() && !options.selecting())) send(left ? 32 : 35)
   }
   function scroll(x: number, y: number) {
     if (!active() || left) return
     const { rect } = point(),
-      step = Math.max(8, rect.height / term.rows)
+      step = Math.max(8, rect.height / options.grid().rows)
     remainderX += x
     remainderY += y
     for (const [delta, positive, negative] of [
@@ -224,7 +210,7 @@ export function bindTerminalTouchpad(
     gesture.cancel()
     release()
     remainderX = remainderY = 0
-    if (pointing) pointLink('mouseleave')
+    if (pointing) showPointer(false)
   }
   // Terminal sessions outlive their card component when maximization moves hosts.
   const scope = effectScope(true)
@@ -267,6 +253,5 @@ export function bindTerminalTouchpad(
       cursor.remove()
     },
   }
-  render()
   return controller
 }

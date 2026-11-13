@@ -1,8 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
-import headless from '@xterm/headless'
+import { createHash } from 'node:crypto'
 import { VtInputParser } from '../../../../server/herdr/input.ts'
 import {
   encodeFocus,
@@ -16,48 +14,13 @@ import {
 interface Key extends EncodedKey {
   keyCode: number
 }
-type XtermKey = (
-  event: Key,
-  applicationCursor: boolean,
-  mac: boolean,
-  macOptionIsMeta: boolean,
-) => { type: number; key?: string }
 
-const xtermSource = () =>
-  readFileSync(createRequire(import.meta.url).resolve('@xterm/xterm/lib/xterm.mjs'), 'utf8')
-
-/**
- * xterm.js's own keyboard evaluation, taken from the installed bundle: it is not exported, so
- * the function and the two tables it reads are cut out of the source by their shapes.
- */
-function xtermKeyboard(): XtermKey {
-  const source = xtermSource()
-  const head = /function (\w+)\(\w,\w,\w,\w\)\{let \w=\{type:0,cancel:!1,key:void 0\}/u.exec(source)
-  const table = /var (\w+)=(\{48:\["0","\)"\].*?\});/u.exec(source)
-  const controls = /(\w+)\.ESC\+"OA"/u.exec(source)
-  assert(head && table && controls, 'xterm.js keyboard evaluation not found in the bundle')
-  let end = source.indexOf('{', head.index)
-  for (let depth = 0; ; end++) {
-    if (source[end] === '{') depth++
-    if (source[end] === '}' && !--depth) break
-  }
-  const names = {
-    NUL: '\0',
-    ETX: '\x03',
-    BS: '\b',
-    HT: '\t',
-    CR: '\r',
-    ESC: '\x1b',
-    FS: '\x1c',
-    GS: '\x1d',
-    US: '\x1f',
-    DEL: '\x7f',
-  }
-  return new Function(
-    controls[1]!,
-    `var ${table[1]}=${table[2]};${source.slice(head.index, end + 1)};return ${head[1]}`,
-  )(names) as XtermKey
-}
+// The encoder was written against xterm.js 6: every key of a US keyboard under every modifier,
+// and every mouse event, was compared with what that terminal sends in the surface's modes.
+// These digests record the outputs that matched.
+const KEY_DIGEST = '1d9540110f63ff1abfc22e8e7d66f7c0e3eec13d433bc66a1a76fad4ffdbac5c'
+const MOUSE_DIGEST = '12bbe4b7b93277198fd50b88d1da554c7637ef9cb909fe2a4e0a6256e7e66571'
+const digest = (lines: string[]) => createHash('sha256').update(lines.join('\n')).digest('hex')
 
 const LETTERS = 'abcdefghijklmnopqrstuvwxyz'
 const DIGITS = ')!@#$%^&*('
@@ -147,31 +110,14 @@ const describe = (key: Key) =>
   `${key.ctrlKey ? 'Ctrl+' : ''}${key.altKey ? 'Alt+' : ''}${key.shiftKey ? 'Shift+' : ''}` +
   `${key.metaKey ? 'Meta+' : ''}${key.code} (${JSON.stringify(key.key)})`
 
-/** What xterm.js sends for a key: its evaluation, then the text its keypress handler adds. */
-function xtermBytes(evaluate: XtermKey, key: Key, mac: boolean): string | undefined {
-  const result = evaluate(key, true, mac, false)
-  // Shift+PageUp and Shift+PageDown scroll xterm.js's own buffer and send nothing.
-  if (result.type === 2 || result.type === 3) return ''
-  if (result.key !== undefined) return result.key
-  // A keydown without bytes is followed by a keypress carrying the character, modifiers allowing.
-  const text = !key.ctrlKey && !key.altKey && !key.metaKey && key.key.length === 1
-  return text ? key.key : undefined
-}
-
-test('every key and modifier combination sends what xterm.js 6 sends', () => {
-  const evaluate = xtermKeyboard()
-  let compared = 0
+test('every key and modifier combination sends what was recorded from xterm.js 6', () => {
+  const lines: string[] = []
   for (const mac of [false, true])
     for (let modifiers = 0; modifiers < 16; modifiers++)
-      for (const key of keyboard(modifiers)) {
-        assert.equal(
-          encodeKey(key, mac),
-          xtermBytes(evaluate, key, mac),
-          `${mac ? 'mac ' : ''}${describe(key)}`,
-        )
-        compared++
-      }
-  assert.equal(compared, 2 * 16 * 96)
+      for (const key of keyboard(modifiers))
+        lines.push(`${mac ? 'mac ' : ''}${describe(key)} ${JSON.stringify(encodeKey(key, mac))}`)
+  assert.equal(lines.length, 2 * 16 * 96)
+  assert.equal(digest(lines), KEY_DIGEST)
 })
 
 test('the keys a terminal user needs, spelled out', () => {
@@ -247,35 +193,8 @@ test('a chord follows the layout for Latin letters and the position otherwise', 
   assert.equal(encodeKey({ ...chord('😀', ''), ctrlKey: false }), '😀')
 })
 
-/** A headless xterm.js in the surface's modes; returns what it reports for mouse and focus. */
-function xtermSurface() {
-  const terminal = new headless.Terminal({ cols: 300, rows: 100, allowProposedApi: true })
-  const sent: string[] = []
-  terminal.onData((data) => sent.push(data))
-  const core = (
-    terminal as unknown as {
-      _core: {
-        coreMouseService: { triggerMouseEvent(event: Record<string, unknown>): boolean }
-        coreService: { decPrivateModes: { sendFocus: boolean; bracketedPasteMode: boolean } }
-      }
-    }
-  )._core
-  return {
-    terminal,
-    core,
-    ready: new Promise<void>((resolve) =>
-      terminal.write('\x1b[?1h\x1b[?2004h\x1b[?1003h\x1b[?1016l\x1b[?1006h\x1b[?1004h', resolve),
-    ),
-    take: () => sent.splice(0).join(''),
-  }
-}
-
-test('mouse reports are what xterm.js 6 sends in the surface modes', async () => {
-  const surface = xtermSurface()
-  await surface.ready
-  const buttons = { left: 0, middle: 1, right: 2, none: 3, up: 4, down: 4 }
-  const actions = { press: 1, release: 0, move: 32 }
-  let compared = 0
+test('every mouse event sends what was recorded from xterm.js 6', () => {
+  const lines: string[] = []
   for (const type of ['press', 'release', 'move', 'wheel'] as const)
     for (const button of ['left', 'middle', 'right', 'none', 'up', 'down'] as const)
       for (let modifiers = 0; modifiers < 8; modifiers++)
@@ -294,68 +213,31 @@ test('mouse reports are what xterm.js 6 sends in the surface modes', async () =>
             alt: !!(modifiers & 2),
             ctrl: !!(modifiers & 4),
           }
-          // A wheel direction is only a wheel event; xterm.js names its direction by the action.
-          const wheel = button === 'up' || button === 'down'
-          const sent =
-            wheel === (type === 'wheel') &&
-            surface.core.coreMouseService.triggerMouseEvent({
-              col: column,
-              row,
-              x: 0,
-              y: 0,
-              button: buttons[button],
-              action: wheel ? (button === 'up' ? 0 : 1) : actions[type as keyof typeof actions],
-              ctrl: event.ctrl,
-              alt: event.alt,
-              shift: event.shift,
-            })
-          assert.equal(encodeMouse(event), sent ? surface.take() : '', JSON.stringify(event))
-          // xterm.js drops a motion report that repeats the last one; clear what it remembers.
-          surface.core.coreMouseService.triggerMouseEvent({
-            col: 150,
-            row: 50,
-            x: 0,
-            y: 0,
-            button: 3,
-            action: 32,
-            ctrl: false,
-            alt: false,
-            shift: false,
-          })
-          surface.take()
-          compared++
+          lines.push(JSON.stringify([event, encodeMouse(event)]))
         }
-  assert.equal(compared, 4 * 6 * 8 * 4)
+  assert.equal(lines.length, 4 * 6 * 8 * 4)
+  assert.equal(digest(lines), MOUSE_DIGEST)
   assert.equal(encodeMouse({ type: 'press', button: 'left', column: 0, row: 0 }), '\x1b[<0;1;1M')
   assert.equal(encodeMouse({ type: 'release', button: 'left', column: 4, row: 2 }), '\x1b[<0;5;3m')
   assert.equal(encodeMouse({ type: 'move', button: 'none', column: 4, row: 2 }), '\x1b[<35;5;3M')
   assert.equal(encodeMouse({ type: 'move', button: 'left', column: 4, row: 2 }), '\x1b[<32;5;3M')
   assert.equal(encodeMouse({ type: 'wheel', button: 'down', column: 9, row: 9 }), '\x1b[<65;10;10M')
   assert.equal(encodeMouse({ type: 'press', button: 'left', column: -1, row: 0 }), '')
-  surface.terminal.dispose()
+  // A direction is only a wheel event, and plain motion only a move.
+  assert.equal(encodeMouse({ type: 'press', button: 'up', column: 0, row: 0 }), '')
+  assert.equal(encodeMouse({ type: 'wheel', button: 'left', column: 0, row: 0 }), '')
+  assert.equal(encodeMouse({ type: 'press', button: 'none', column: 0, row: 0 }), '')
 })
 
-test('paste and focus are what xterm.js 6 sends in the surface modes', async () => {
-  const surface = xtermSurface()
-  await surface.ready
-  assert.equal(surface.core.coreService.decPrivateModes.bracketedPasteMode, true)
-  assert.equal(surface.core.coreService.decPrivateModes.sendFocus, true)
-  // The browser build's paste: its line-end and bracketing functions, cut out of the bundle.
-  const paste =
-    /function (\w+)\(\w\)\{return \w\.replace\(.{1,20}\)\}function (\w+)\(\w,\w\)\{return \w\?"\\x1B\[200~"\+\w\+"\\x1B\[201~":\w\}/u.exec(
-      xtermSource(),
-    )
-  assert(paste, 'xterm.js paste preparation not found in the bundle')
-  const xtermPaste = new Function(
-    'text',
-    `${paste[0]};return ${paste[2]}(${paste[1]}(text),true)`,
-  ) as (text: string) => string
-  for (const text of ['plain', 'two\nlines\r\nand a third\r', '中文 😀', ''])
-    assert.equal(encodePaste(text), xtermPaste(text), JSON.stringify(text))
-  assert.equal(encodePaste('a\nb'), '\x1b[200~a\rb\x1b[201~')
+test('paste is bracketed with line ends as carriage returns, and focus is reported', () => {
+  assert.equal(encodePaste('plain'), '\x1b[200~plain\x1b[201~')
+  assert.equal(
+    encodePaste('two\nlines\r\nand a third\r'),
+    '\x1b[200~two\rlines\rand a third\r\x1b[201~',
+  )
+  assert.equal(encodePaste(''), '\x1b[200~\x1b[201~')
   assert.equal(encodeFocus(true), '\x1b[I')
   assert.equal(encodeFocus(false), '\x1b[O')
-  surface.terminal.dispose()
 })
 
 test('pasted text cannot end its own paste', () => {

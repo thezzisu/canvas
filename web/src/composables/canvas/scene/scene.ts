@@ -274,7 +274,7 @@ export function createCanvasScene(): CanvasScene {
       return
     }
     if (
-      target?.closest('.xterm') ||
+      target?.closest('.terminal-surface') ||
       (target?.closest('.note-card input, .note-card [contenteditable="true"]') &&
         !(scene.focus.cardId.value && event.key === 'Escape'))
     )

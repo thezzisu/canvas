@@ -14,7 +14,6 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/minimap/dist/style.css'
 import '@vue-flow/node-resizer/dist/style.css'
-import '@xterm/xterm/css/xterm.css'
 import './assets/css/style.css'
 import './assets/css/card-presentation.css'
 

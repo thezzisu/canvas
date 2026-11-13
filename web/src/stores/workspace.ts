@@ -18,13 +18,13 @@ import { retainBackgrounds } from '../composables/workspace/backgrounds'
 import { applyComposers } from '../composables/terminal/composers'
 import { clearCaptureTrust } from '../composables/terminal/capture-trust'
 import { hideMobileKeyboard } from '../composables/terminal/mobile-keyboard'
+import { liveTerminalMetadata } from '../composables/terminal/terminal-metadata'
+import { terminalReadFocus } from '../composables/terminal/terminal-read-focus'
 import {
   acknowledgeTerminalMetadata,
   clearTerminals,
   hasLiveTerminal,
-  liveTerminalMetadata,
   retainTerminalMetadata,
-  terminalReadFocus,
 } from '../composables/terminal/terminals'
 import { closeTrustedPreview } from '../composables/files/trusted-preview'
 import { applyContentFont, resetContentFont } from '../composables/settings/content-font'

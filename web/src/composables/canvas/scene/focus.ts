@@ -4,11 +4,8 @@ import { apiContext, apiRevision, isCurrentApi } from '../../../api/api'
 import { cardMenuOpen } from '../card-menu'
 import { useDocumentFocus } from '../../document-focus'
 import { hideMobileKeyboard } from '../../terminal/mobile-keyboard'
-import {
-  liveTerminalMetadata,
-  prepareTerminalReadFocus,
-  setTerminalReadFocus,
-} from '../../terminal/terminals'
+import { liveTerminalMetadata } from '../../terminal/terminal-metadata'
+import { prepareTerminalReadFocus, setTerminalReadFocus } from '../../terminal/terminal-read-focus'
 import type { WindowFocus } from '../../../utils/workspace/completion-focus'
 import type { FileCanvasNode, NoteCanvasNode, TerminalCanvasNode } from '../../../api/types'
 import { windowKey } from '../../../stores/workspace'

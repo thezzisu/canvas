@@ -1,75 +1,42 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
-import type { Terminal } from '@xterm/xterm'
-import { bindTerminalTouch } from './terminal-touch.ts'
+import { bindTerminalTouch, type TerminalTouchMode } from './terminal-touch.ts'
 
-class WheelFixture extends Event {
-  static readonly DOM_DELTA_LINE = 1
-  readonly clientX: number
-  readonly clientY: number
-  readonly deltaY: number
-  readonly deltaMode: number
-  constructor(type: string, init: WheelEventInit) {
-    super(type, init)
-    this.clientX = init.clientX ?? 0
-    this.clientY = init.clientY ?? 0
-    this.deltaY = init.deltaY ?? 0
-    this.deltaMode = init.deltaMode ?? 0
-  }
-}
-function fixture(t: TestContext, lineHeight = 17, mouse = true, alternate = false) {
+/** A grid of 17 px rows and 10 px columns from the page's origin. */
+function fixture(t: TestContext, rowHeight = 17, mode: TerminalTouchMode = 'scroll') {
   const view = new EventTarget(),
     surface = new EventTarget(),
-    wheels: WheelFixture[] = [],
-    history: number[] = []
-  const element = Object.assign(new EventTarget(), {
-    querySelector: () => ({ getBoundingClientRect: () => ({ height: lineHeight * 24 }) }),
-  })
-  element.addEventListener('wheel', (event) => wheels.push(event as WheelFixture))
-  const globals = new Map(
-    ['window', 'WheelEvent'].map((name) => [
-      name,
-      Object.getOwnPropertyDescriptor(globalThis, name),
-    ]),
-  )
+    sent: string[] = []
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
   Object.defineProperty(globalThis, 'window', { configurable: true, value: view })
-  Object.defineProperty(globalThis, 'WheelEvent', { configurable: true, value: WheelFixture })
-  let focused = 0
-  const terminal = {
-    element,
-    rows: 24,
-    modes: { mouseTrackingMode: mouse ? 'drag' : 'none' },
-    buffer: { active: { type: alternate ? 'alternate' : 'normal' } },
-    scrollLines: (lines: number) => history.push(lines),
-    parser: {
-      registerCsiHandler: () => ({ dispose() {} }),
-      registerEscHandler: () => ({ dispose() {} }),
-    },
-  } as unknown as Terminal
-  const dispose = bindTerminalTouch(surface as HTMLElement, terminal, {
+  let focused = 0,
+    copies = 0
+  const dispose = bindTerminalTouch(surface as HTMLElement, {
     active: () => true,
-    mode: () => 'scroll',
+    mode: () => mode,
     focus: () => {
       focused++
     },
-    copyGesture: () => assert.fail('scroll cannot copy'),
-    suppressInput: (action) => action(),
+    copyGesture: () => {
+      copies++
+    },
+    cell: (x, y) => ({ column: Math.floor(x / 10), row: Math.floor(y / rowHeight) }),
+    send: (data) => sent.push(data),
+    rowHeight: () => rowHeight,
   })
   t.after(() => {
     dispose()
-    for (const [name, descriptor] of globals) {
-      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
-      else Reflect.deleteProperty(globalThis, name)
-    }
+    if (previous) Object.defineProperty(globalThis, 'window', previous)
+    else Reflect.deleteProperty(globalThis, 'window')
   })
   let y = 600
-  function touch(type: string) {
+  function touch(type: string, x = 120) {
     const event = new Event(type, { cancelable: true })
     Object.assign(event, {
       touches:
         type === 'touchend' || type === 'touchcancel'
           ? []
-          : [{ identifier: 1, clientX: 120, clientY: y }],
+          : [{ identifier: 1, clientX: x, clientY: y }],
     })
     surface.dispatchEvent(event)
     return event.defaultPrevented
@@ -82,71 +49,72 @@ function fixture(t: TestContext, lineHeight = 17, mouse = true, alternate = fals
     }
     assert(touch('touchend'))
   }
+  /** Wheel steps sent, as 1 for down and -1 for up. */
+  const wheels = () =>
+    sent.map((data) => /^\x1b\[<(64|65);13;\d+M$/u.exec(data)?.[1]).map((code) => +code! * 2 - 129)
   return {
+    sent,
     wheels,
-    history,
     drag,
-    focused: () => focused,
-    clear: () => {
-      wheels.length = 0
-      history.length = 0
-    },
     touch,
-    move: (delta: number) => {
+    focused: () => focused,
+    copies: () => copies,
+    clear: () => {
+      sent.length = 0
+    },
+    move: (delta: number, x?: number) => {
       y -= delta
-      touch('touchmove')
+      touch('touchmove', x)
     },
   }
 }
 
-test('mobile scrolling reports one line-unit wheel step per crossed cell independent of event chunking', (t) => {
+test('scrolling reports one wheel step per crossed row, however the travel is chunked', (t) => {
   const f = fixture(t)
   for (const deltas of [[120], Array(6).fill(20), Array(12).fill(10)]) {
     f.clear()
     f.drag(deltas)
-    assert.equal(f.wheels.length, 7, '120 CSS pixels cross seven visible 17px cells')
-    assert(f.wheels.every((event) => event.deltaMode === 1 && event.deltaY === 1))
-    assert(
-      f.wheels.every((event) => event.clientX === 120 && event.clientY <= 600),
-      'the direct mode keeps the finger hit coordinates',
-    )
+    assert.deepEqual(f.wheels(), Array(7).fill(1), '120 CSS pixels cross seven 17px rows')
   }
   assert.equal(f.focused(), 3, 'one focus per gesture, not per wheel report')
-  assert.deepEqual(f.history, [])
 })
 
-test('fractional scaled cell heights retain remainder and reverse without inventing wheel steps', (t) => {
+test('fractional row heights keep their remainder and reverse without inventing steps', (t) => {
   const f = fixture(t, 17.25)
   f.drag([6, -6, 12, 5.25, -17.25])
-  assert.deepEqual(
-    f.wheels.map((event) => event.deltaY),
-    [1, -1],
-  )
+  assert.deepEqual(f.wheels(), [1, -1])
   f.clear()
   f.drag([23, 23, 23])
-  assert.equal(f.wheels.length, 4)
+  assert.equal(f.sent.length, 4)
   f.clear()
   f.drag([69])
-  assert.equal(f.wheels.length, 4)
+  assert.equal(f.sent.length, 4)
 })
 
-test('normal buffers without mouse reporting retain local history scrolling', (t) => {
-  const f = fixture(t, 17, false)
-  f.drag([68, -34])
-  assert.deepEqual(f.history, [4, -2])
-  assert.deepEqual(f.wheels, [])
-})
-
-test('alternate buffers keep xterm wheel handling and bound individual bursts like the touchpad', (t) => {
-  const f = fixture(t, 17, false, true)
+test('one move sends at most fifteen steps, and a cancelled gesture carries nothing over', (t) => {
+  const f = fixture(t)
   f.drag([17 * 30])
-  assert.equal(f.wheels.length, 15)
-  assert(f.wheels.every((event) => event.deltaMode === 1 && event.deltaY === 1))
-  assert.deepEqual(f.history, [])
+  assert.deepEqual(f.wheels(), Array(15).fill(1))
   f.clear()
   f.touch('touchstart')
   f.move(8)
   f.touch('touchcancel')
   f.drag([9])
-  assert.deepEqual(f.wheels, [], 'cancellation does not carry partial distance into a new gesture')
+  assert.deepEqual(f.sent, [])
+})
+
+test('mouse mode presses, drags once per cell and releases where the finger left', (t) => {
+  const f = fixture(t, 17, 'mouse')
+  f.touch('touchstart')
+  f.move(2)
+  f.move(0, 131)
+  f.move(17, 131)
+  f.touch('touchend')
+  assert.deepEqual(f.sent, [
+    '\x1b[<0;13;36M',
+    '\x1b[<32;14;36M',
+    '\x1b[<32;14;35M',
+    '\x1b[<0;14;35m',
+  ])
+  assert.equal(f.copies(), 0, 'an untrusted gesture never authorizes a copy')
 })

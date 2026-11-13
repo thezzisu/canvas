@@ -1,10 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {
-  bindTerminalMouseDefaults,
-  rightMouseInput,
-  type RightMouseAction,
-} from './terminal-mouse-defaults.ts'
+import { bindTerminalMouseDefaults, type RightMouseAction } from './terminal-mouse-defaults.ts'
 import type { RightClickMode } from '../../composables/terminal/terminal-settings.ts'
 
 function fixture(mode: RightClickMode = 'menu') {
@@ -133,19 +129,6 @@ test('middle mouse consumes only its own browser paste and keeps ordinary clipbo
   }
   f.controller.dispose()
   assert(!f.event(f.surface, 'contextmenu'))
-})
-
-test('right reports preserve modifiers, scaled coordinates and outside releases without private xterm APIs', () => {
-  const rect = { left: 100, top: 50, width: 400, height: 200 }
-  const point = { clientX: 120, clientY: 70, shiftKey: true, altKey: true, ctrlKey: true }
-  assert.equal(rightMouseInput(point, 'down', rect, 80, 20), '\x1b[<30;5;3M')
-  assert.equal(rightMouseInput(point, 'drag', rect, 80, 20), '\x1b[<62;5;3M')
-  assert.equal(
-    rightMouseInput({ ...point, clientX: 1000, clientY: -30 }, 'up', rect, 80, 20),
-    '\x1b[<30;80;1m',
-  )
-  assert.equal(rightMouseInput({ ...point, clientX: 99 }, 'down', rect, 80, 20), '')
-  assert.equal(rightMouseInput(point, 'down', { ...rect, width: 0 }, 80, 20), '')
 })
 
 test('a rejected native press never attaches drag/release or emits an unmatched button-up', () => {

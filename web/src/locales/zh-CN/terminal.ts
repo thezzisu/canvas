@@ -171,5 +171,4 @@ export default {
   pane: '窗格 {name}',
   copyDiagnostics: '复制调试数据',
   previewTitle: '标签页标题',
-  tooMuchOutput: '输出内容过多，请查看终端行以继续阅读。',
 }

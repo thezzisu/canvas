@@ -233,15 +233,13 @@ test('all softkey modifiers, navigation and function keys map to native semantic
     const mods = { shift: !!(mask & 1), alt: !!(mask & 2), ctrl: !!(mask & 4), meta: !!(mask & 8) }
     const native = (mask & 1) | (mask & 2 ? 4 : 0) | (mask & 4 ? 2 : 0) | (mask & 8)
     for (const [name, expected] of Object.entries(names)) {
-      for (const application of [false, true]) {
-        const input = events(parse(terminalKey(name, mods, application)))
-        assert.equal(input.length, 1)
-        assert.deepEqual(
-          keyShape(input[0]!),
-          { code: expected, modifiers: native },
-          `${name}/${mask}/${application}`,
-        )
-      }
+      const input = events(parse(terminalKey(name, mods)))
+      assert.equal(input.length, 1)
+      assert.deepEqual(
+        keyShape(input[0]!),
+        { code: expected, modifiers: native },
+        `${name}/${mask}`,
+      )
     }
     for (let number = 1; number <= 12; number++)
       assert.deepEqual(keyShape(events(parse(terminalKey(`F${number}`, mods)))[0]!), {
@@ -314,14 +312,12 @@ test('physical function and navigation chords retain every modifier through the 
     }
     const native = (mask & 1) | (mask & 2 ? 4 : 0) | (mask & 4 ? 2 : 0) | (mask & 8)
     for (const [key, code] of Object.entries(navigation)) {
-      for (const application of [false, true]) {
-        const input = events(parse(terminalShortcut({ key, ...modifiers }, {}, application)))
-        assert.deepEqual(
-          input.map(keyShape),
-          mask ? [{ code, modifiers: native }] : [],
-          `${key}/${mask}/${application}`,
-        )
-      }
+      const input = events(parse(terminalShortcut({ key, ...modifiers })))
+      assert.deepEqual(
+        input.map(keyShape),
+        mask ? [{ code, modifiers: native }] : [],
+        `${key}/${mask}`,
+      )
     }
     for (let number = 1; number <= 12; number++) {
       const key = `F${number}`
@@ -365,7 +361,7 @@ test('physical layout characters keep their codepoints and independent modifier 
     }
     const native = (mask & 1) | (mask & 2 ? 4 : 0) | (mask & 4 ? 2 : 0) | (mask & 8)
     for (const char of ['a', 'A', '$', 'é', '中', '😀']) {
-      const data = terminalShortcut({ key: char, ...modifiers }, {}, false, 'Linux')
+      const data = terminalShortcut({ key: char, ...modifiers }, {}, 'Linux')
       const bytes = Buffer.from(data),
         split = Math.floor(bytes.length / 2)
       assert.deepEqual(

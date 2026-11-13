@@ -171,5 +171,4 @@ export default {
   pane: 'Pane {name}',
   copyDiagnostics: 'Copy debug data',
   previewTitle: 'Tab title',
-  tooMuchOutput: 'Too much output to announce. Navigate to the terminal rows to continue reading.',
 }

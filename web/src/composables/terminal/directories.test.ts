@@ -12,11 +12,13 @@ test('structured directory delivery builds its browser link and acknowledges rec
   t.after(clearDirectories)
   const replies: unknown[] = [],
     socket = {
-      readyState: WebSocket.OPEN,
-      send(value: string) {
-        replies.push(JSON.parse(value))
+      open: true,
+      send(value: object) {
+        replies.push(value)
+        return true
       },
-    } as WebSocket
+      close() {},
+    }
   const message = {
     type: 'open-directory',
     id: 'request-one',
@@ -44,11 +46,12 @@ test('malformed directory targets neither appear nor acknowledge successful deli
   clearDirectories()
   t.after(clearDirectories)
   const socket = {
-    readyState: WebSocket.OPEN,
-    send() {
+    open: true,
+    send(): boolean {
       assert.fail('Invalid directory was acknowledged')
     },
-  } as unknown as WebSocket
+    close() {},
+  }
   for (const message of [
     { type: 'open-directory', id: 'bad', path: '../relative', authority: { hostName: 'host' } },
     { type: 'open-directory', id: 'bad', path: '/project', authority: { hostName: 'host/other' } },

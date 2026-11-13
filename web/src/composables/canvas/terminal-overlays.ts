@@ -19,12 +19,11 @@ export function useTerminalOverlays(options: {
   const body = computed(() => {
     if (!options.enabled()) return
     const active = activeElement.value
-    if (!windowFocused.value || !active?.matches('.xterm-helper-textarea, .terminal-mobile-input'))
+    if (!windowFocused.value || !active?.matches('.terminal-desktop-input, .terminal-mobile-input'))
       return
     const host = active.closest<HTMLElement>('.terminal-host')
     return host && unrefElement(options.surface)?.contains(host) ? host : undefined
   })
-  // Pointer coordinates remain in viewport CSS pixels; xterm normalizes mouse events.
   const mouse = usePointer()
   // VueFlow patches node transforms after its store update; measure the next frame.
   const bounds = useElementBounding(body, { updateTiming: 'next-frame' })

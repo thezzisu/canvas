@@ -1,12 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": [
-    "web/notification-worker.js",
-    "cli/main.ts",
-    "scripts/*.mjs",
-    "**/*.test.ts",
-    "web/src/assets/css/terminal-grid.css"
-  ],
+  "entry": ["web/notification-worker.js", "cli/main.ts", "scripts/*.mjs", "**/*.test.ts"],
   "project": ["{web/src,server,shared,cli,scripts}/**/*.{ts,vue,mjs,js,css}", "*.config.ts"],
   "ignoreExportsUsedInFile": true,
   "ignoreDependencies": ["@iconify-json/lucide"],

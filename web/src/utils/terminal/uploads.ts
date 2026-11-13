@@ -41,7 +41,7 @@ interface UploadOptions {
   readiness(): 'ready' | 'waiting' | 'unavailable'
   unavailableReason(): string
   focus(): void
-  send(message: unknown): boolean
+  send(message: object): boolean
   changed(state: TerminalUploadState | undefined): void
 }
 
@@ -433,7 +433,7 @@ export function preventFileNavigation(event: DragEvent) {
   event.preventDefault()
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'none'
 }
-/** Capture files before xterm pastes fallback text; plain text stays with xterm. */
+/** Capture files before the terminal's input pastes fallback text; plain text stays with it. */
 export function bindFileInput(
   host: HTMLElement,
   uploads: TerminalUploads,

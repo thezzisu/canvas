@@ -1,4 +1,3 @@
-import type { Terminal } from '@xterm/xterm'
 import { isPasteShortcut } from './clipboard-shortcuts'
 import { beginCopyFeedback } from './copy-feedback'
 
@@ -118,6 +117,12 @@ export type ClipboardNotice = 'macPaste'
 interface ClipboardOptions {
   visible(): boolean
   controlsInput(): boolean
+  /** The terminal's own input has the keyboard. */
+  focused(): boolean
+  /** What this browser has selected on the screen; '' for nothing. */
+  selection(): string
+  /** A press that selects in this browser instead of reaching the program. */
+  selects(event: MouseEvent): boolean
   copyError?(value: ClipboardNotice | undefined): void
 }
 
@@ -126,12 +131,10 @@ export class TerminalClipboard {
   private gesture?: { x: number; y: number; moved: boolean; multiple: boolean; local: boolean }
   private lastCopiedSelection = ''
   private copyUntil = 0
-  private readonly osc
   private noticeTimer?: ReturnType<typeof setTimeout>
   private disposed = false
 
   constructor(
-    private readonly term: Terminal,
     private readonly surface: HTMLElement,
     private readonly options: ClipboardOptions,
   ) {
@@ -141,24 +144,20 @@ export class TerminalClipboard {
     surface.addEventListener('keyup', this.keyUp, true)
     surface.addEventListener('focusout', this.focusOut)
     window.addEventListener('blur', this.reset)
-    this.osc = term.parser.registerOscHandler(52, (data) => this.osc52(data))
   }
 
   private ready() {
     return this.options.visible() && document.hasFocus() && document.visibilityState === 'visible'
   }
-  private focused() {
-    return !!this.term.element?.contains(document.activeElement)
-  }
   private allowProgramCopy() {
     this.copyUntil =
-      this.ready() && this.focused() && this.options.controlsInput()
+      this.ready() && this.options.focused() && this.options.controlsInput()
         ? performance.now() + COPY_GESTURE_MS
         : 0
   }
   private copySelection() {
     if (!this.ready()) return false
-    const text = this.term.getSelection()
+    const text = this.options.selection()
     if (!text) return false
     this.copyUntil = 0
     this.lastCopiedSelection = text
@@ -185,17 +184,17 @@ export class TerminalClipboard {
     }, 5000)
   }
 
-  key(event: KeyboardEvent): boolean {
+  /** A clipboard chord: `native` leaves a paste to the browser, `sent` means a copy was made. */
+  key(event: KeyboardEvent): 'sent' | 'native' | undefined {
     if (
       event.isComposing ||
       event.keyCode === 229 ||
       ['Process', 'Dead', 'AltGraph'].includes(event.key) ||
       event.getModifierState('AltGraph')
     )
-      return true
-    // Returning false skips xterm's Ctrl+V -> SYN mapping without cancelling
-    // the browser's native paste event. Windows clipboard history can supply
-    // the logical key without a physical code; images still arrive via paste.
+      return
+    // The key is not sent, so that the browser's own paste event follows. Windows clipboard
+    // history can supply the logical key without a physical code; images still arrive via paste.
     if (isPasteShortcut(event)) {
       if (
         event.type === 'keydown' &&
@@ -206,7 +205,7 @@ export class TerminalClipboard {
         !event.metaKey
       )
         this.notice('macPaste')
-      return false
+      return 'native'
     }
     const copy =
       !event.altKey &&
@@ -214,27 +213,22 @@ export class TerminalClipboard {
         (event.key === 'Insert' && event.ctrlKey && !event.shiftKey && !event.metaKey))
     if (copy && event.type === 'keydown' && event.isTrusted) {
       this.allowProgramCopy()
-      if (this.ready() && this.term.hasSelection()) {
-        this.copySelection()
+      if (this.copySelection()) {
         event.preventDefault()
-        return false
+        return 'sent'
       }
     }
-    return true
   }
 
   private mouseDown = (event: MouseEvent) => {
     if (!event.isTrusted || event.button !== 0 || !this.ready()) return
     this.copyUntil = 0
-    const forced = /Mac/.test(navigator.platform)
-      ? event.altKey && this.term.options.macOptionClickForcesSelection === true
-      : event.shiftKey
     this.gesture = {
       x: event.screenX,
       y: event.screenY,
       moved: false,
       multiple: event.detail >= 2,
-      local: this.term.modes.mouseTrackingMode === 'none' || forced,
+      local: this.options.selects(event),
     }
   }
   private mouseMove = (event: MouseEvent) => {
@@ -254,10 +248,10 @@ export class TerminalClipboard {
     if (
       event.isTrusted &&
       event.key === 'Shift' &&
-      this.focused() &&
+      this.options.focused() &&
       this.gesture?.local &&
       this.gesture.moved &&
-      this.term.getSelection() !== this.lastCopiedSelection
+      this.options.selection() !== this.lastCopiedSelection
     )
       this.copySelection()
   }
@@ -270,45 +264,38 @@ export class TerminalClipboard {
       this.reset()
   }
 
-  private osc52(data: string): boolean {
-    const split = data.indexOf(';')
-    if (split < 0) return true
-    const selection = data.slice(0, split),
-      payload = data.slice(split + 1)
-    // Clipboard queries never read local data or produce a terminal response.
-    if (payload === '?' || (selection !== '' && selection !== 'c')) return true
+  /** Text a program in the window copied, as base64. Only a recent copy gesture here allows it. */
+  programCopy(payload: string) {
     if (
       !this.ready() ||
-      !this.focused() ||
+      !this.options.focused() ||
       !this.options.controlsInput() ||
       performance.now() > this.copyUntil
     )
-      return true
+      return
     this.copyUntil = 0
     if (
       !payload ||
       payload.length > Math.ceil(MAX_COPY_BYTES / 3) * 4 ||
       !/^[A-Za-z0-9+/]*={0,2}$/u.test(payload)
     )
-      return true
+      return
     try {
       const raw = atob(payload)
-      if (raw.length > MAX_COPY_BYTES) return true
+      if (raw.length > MAX_COPY_BYTES) return
       const text = new TextDecoder('utf-8', { fatal: true }).decode(
         Uint8Array.from(raw, (character) => character.charCodeAt(0)),
       )
-      this.copy(text)
+      void this.copy(text)
     } catch {
       /* Invalid or oversized clipboard writes are ignored. */
     }
-    return true
   }
 
   dispose() {
     this.disposed = true
     this.reset()
     clearTimeout(this.noticeTimer)
-    this.osc.dispose()
     this.surface.removeEventListener('mousedown', this.mouseDown, true)
     document.removeEventListener('mousemove', this.mouseMove, true)
     document.removeEventListener('mouseup', this.mouseUp)

@@ -5,7 +5,7 @@ import {
   useWindowFocus,
 } from '@vueuse/core'
 
-// xterm updates many DOM rows. Observe document focus/removal once for the app,
+// Terminals update many DOM rows. Observe document focus/removal once for the app,
 // rather than giving every terminal its own document-wide mutation observer.
 export const useDocumentFocus = createSharedComposable(() => {
   const activeElement = useActiveElement({ triggerOnRemoval: true })

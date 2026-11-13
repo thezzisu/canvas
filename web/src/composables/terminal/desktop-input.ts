@@ -1,13 +1,18 @@
 import { watchEffect } from 'vue'
 import { t } from '../../plugins/i18n'
-import { encodeFocus, encodeKey, encodePaste } from '../../utils/terminal/terminal-encoder'
+import { encodeKey } from '../../utils/terminal/terminal-encoder'
 
 interface DesktopInputOptions {
   active(): boolean
   /** Bytes for the terminal. */
   send(data: string): void
-  /** A key the host handles itself (a shortcut, a held modifier): true keeps it from the terminal. */
-  key?(event: KeyboardEvent): boolean
+  /**
+   * A key the host decides itself: `sent` when it sent the key its own way, `native` to leave
+   * the key to the browser (a paste, a copy).
+   */
+  key?(event: KeyboardEvent): 'sent' | 'native' | undefined
+  /** Plain text pasted into the field. */
+  paste(text: string): void
   /** The text an input method is composing, to show at the cursor; '' when it ends. */
   preedit?(text: string): void
   focus?(): void
@@ -64,10 +69,9 @@ export function bindDesktopInput(parent: HTMLElement, options: DesktopInputOptio
     if (composing || event.isComposing || event.keyCode === 229) return
     // Text still waiting to be read was typed before this key.
     if (commitTimer !== undefined) commit()
-    if (options.key?.(event)) {
-      event.preventDefault()
-      return
-    }
+    const decided = options.key?.(event)
+    if (decided === 'sent') event.preventDefault()
+    if (decided) return
     const data = encodeKey(event, options.mac)
     if (data === undefined) return
     event.preventDefault()
@@ -98,17 +102,13 @@ export function bindDesktopInput(parent: HTMLElement, options: DesktopInputOptio
     event.preventDefault()
     event.stopPropagation()
     const text = event.clipboardData?.getData('text/plain') || ''
-    if (text && options.active()) options.send(encodePaste(text))
+    if (text && options.active()) options.paste(text)
   }
   const focus = () => {
     if (!composing && commitTimer === undefined) element.value = ''
-    if (options.active()) options.send(encodeFocus(true))
     options.focus?.()
   }
-  const blur = () => {
-    if (options.active()) options.send(encodeFocus(false))
-    options.blur?.()
-  }
+  const blur = () => options.blur?.()
   element.addEventListener('keydown', key)
   element.addEventListener('beforeinput', beforeInput)
   element.addEventListener('input', input)

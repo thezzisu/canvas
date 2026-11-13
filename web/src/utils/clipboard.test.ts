@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { copyText, TerminalClipboard } from './clipboard'
-import type { Terminal } from '@xterm/xterm'
 import { installNotices } from '../composables/notify'
 
 // Copy feedback is a notice; the last one shown is what the user sees.
@@ -103,22 +102,13 @@ function terminalClipboard(t: TestContext, controlsInput = true) {
     else Reflect.deleteProperty(globalThis, 'window')
   })
   Object.assign(document, { hasFocus: () => true, visibilityState: 'visible' })
-  let selected = '',
-    osc!: (data: string) => boolean
-  const term = {
-    element: { contains: () => true },
-    getSelection: () => selected,
-    hasSelection: () => !!selected,
-    parser: {
-      registerOscHandler(_code: number, handler: typeof osc) {
-        osc = handler
-        return { dispose() {} }
-      },
-    },
-  } as unknown as Terminal
-  clipboard = new TerminalClipboard(term, surface as unknown as HTMLElement, {
+  let selected = ''
+  clipboard = new TerminalClipboard(surface as unknown as HTMLElement, {
     visible: () => true,
     controlsInput: () => controlsInput,
+    focused: () => true,
+    selection: () => selected,
+    selects: (event) => event.shiftKey,
   })
   return {
     clipboard,
@@ -126,7 +116,7 @@ function terminalClipboard(t: TestContext, controlsInput = true) {
     select: (text: string) => {
       selected = text
     },
-    osc: (text: string) => osc('c;' + btoa(text)),
+    osc: (text: string) => clipboard.programCopy(btoa(text)),
   }
 }
 
@@ -159,11 +149,11 @@ test('copy chords consume only a local selection; empty-selection Cmd+C reaches 
   ]) {
     f.select('local selection')
     const local = copyKey(chord)
-    assert.equal(f.clipboard.key(local.event), false)
+    assert.equal(f.clipboard.key(local.event), 'sent')
     assert.equal(local.prevented(), true)
     f.select('')
     const native = copyKey(chord)
-    assert.equal(f.clipboard.key(native.event), true)
+    assert.equal(f.clipboard.key(native.event), undefined)
     assert.equal(native.prevented(), false)
   }
   await Promise.resolve()
@@ -174,7 +164,7 @@ test('Ctrl+C retains terminal input semantics even with browser selection', (t) 
   const f = terminalClipboard(t)
   f.select('local selection')
   const key = copyKey({ ctrlKey: true })
-  assert.equal(f.clipboard.key(key.event), true)
+  assert.equal(f.clipboard.key(key.event), undefined)
   assert.equal(key.prevented(), false)
   assert.deepEqual(f.writes, [])
 })
@@ -190,7 +180,7 @@ test('composition and AltGraph never copy local selection or authorize program c
   ]) {
     f.select('local selection')
     const key = copyKey({ ctrlKey: true, shiftKey: true, ...composing })
-    assert.equal(f.clipboard.key(key.event), true)
+    assert.equal(f.clipboard.key(key.event), undefined)
     assert.equal(key.prevented(), false)
     f.osc('unsolicited')
   }
@@ -208,6 +198,15 @@ test('program clipboard output needs an initiating trusted copy gesture and is c
   f.osc('replayed')
   await Promise.resolve()
   assert.deepEqual(f.writes, ['initiated'])
+})
+
+test('a paste chord is left to the browser and unreadable program output is ignored', async (t) => {
+  const f = terminalClipboard(t)
+  assert.equal(f.clipboard.key(copyKey({ code: 'KeyV', key: 'v', ctrlKey: true }).event), 'native')
+  f.clipboard.key(copyKey({ metaKey: true }).event)
+  f.clipboard.programCopy('not base64!')
+  await Promise.resolve()
+  assert.deepEqual(f.writes, [])
 })
 
 test('passive viewers cannot write a shared client clipboard response', async (t) => {

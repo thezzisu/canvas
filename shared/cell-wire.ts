@@ -422,6 +422,11 @@ export class CellMirror {
   /** One list of runs per row. */
   lines: CellRun[][] = []
 
+  /** Leaves its stream: only a FRAME applies next. What was mirrored stays readable. */
+  detach() {
+    this.revision = -1
+  }
+
   /**
    * Applies one message and names the rows it replaced. A message that is malformed, or a PATCH
    * for another revision, throws CellWireError and changes nothing.

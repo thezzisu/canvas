@@ -1,3 +1,4 @@
+import type { TerminalConnection } from './terminal-connection'
 import { computed, shallowRef } from 'vue'
 import { api, apiUrl, requireCurrentApi, uuid, type ApiContext } from '../../api/api'
 
@@ -7,7 +8,7 @@ interface UrlRequest {
   forwarded: boolean
 }
 const requests = shallowRef<UrlRequest[]>([])
-let received = new WeakMap<WebSocket, Set<string>>()
+let received = new WeakMap<TerminalConnection, Set<string>>()
 export const urlRequest = computed(() => requests.value[0])
 export function dismissUrl() {
   requests.value = requests.value.slice(1)
@@ -27,7 +28,10 @@ export function presentUrl(value: UrlRequest) {
   if (value.forwarded && !/^\/api\/forward\/[A-Za-z0-9_-]{43}\//u.test(value.url)) return
   requests.value = [...requests.value, { ...value, url: url.href }]
 }
-export function receiveUrl(socket: WebSocket, message: Record<string, unknown>): boolean {
+export function receiveUrl(
+  connection: TerminalConnection,
+  message: Record<string, unknown>,
+): boolean {
   if (message.type !== 'open-url') return false
   if (
     typeof message.id !== 'string' ||
@@ -37,15 +41,14 @@ export function receiveUrl(socket: WebSocket, message: Record<string, unknown>):
     typeof message.forwarded !== 'boolean'
   )
     return true
-  const ids = received.get(socket) || new Set<string>()
+  const ids = received.get(connection) || new Set<string>()
   if (!ids.has(message.id)) {
     presentUrl({ id: message.id, url: message.url, forwarded: message.forwarded })
     ids.add(message.id)
     if (ids.size > 256) ids.delete(ids.values().next().value!)
-    received.set(socket, ids)
+    received.set(connection, ids)
   }
-  if (socket.readyState === WebSocket.OPEN)
-    socket.send(JSON.stringify({ type: 'url-received', id: message.id }))
+  connection.send({ type: 'url-received', id: message.id })
   return true
 }
 export function clearUrls() {

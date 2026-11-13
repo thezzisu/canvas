@@ -24,7 +24,7 @@ const bounds = ref<HTMLElement>()
 const boundsVisible = ref(false)
 const boundsSupported = typeof HTMLElement.prototype.showPopover === 'function'
 function preserveTerminalFocus(event: Event) {
-  if (document.activeElement?.matches('.terminal-mobile-input, .xterm-helper-textarea'))
+  if (document.activeElement?.matches('.terminal-mobile-input, .terminal-desktop-input'))
     event.preventDefault()
 }
 const popoverContent = computed(() => ({

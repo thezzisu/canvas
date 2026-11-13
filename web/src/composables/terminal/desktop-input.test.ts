@@ -2,7 +2,10 @@ import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { bindDesktopInput } from './desktop-input.ts'
 
-function fixture(t: TestContext, hostKey?: (event: KeyboardEvent) => boolean) {
+function fixture(
+  t: TestContext,
+  hostKey?: (event: KeyboardEvent) => 'sent' | 'native' | undefined,
+) {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const element = Object.assign(new EventTarget(), {
     style: {} as Record<string, string>,
@@ -28,7 +31,10 @@ function fixture(t: TestContext, hostKey?: (event: KeyboardEvent) => boolean) {
     active: () => active,
     send: (data) => sent.push(data),
     key: hostKey,
+    paste: (text) => sent.push(`paste:${text}`),
     preedit: (text) => preedits.push(text),
+    focus: () => sent.push('focus'),
+    blur: () => sent.push('blur'),
   })
   t.after(() => {
     control.dispose()
@@ -91,8 +97,12 @@ test("a key that is not the terminal's is left to the browser", (t) => {
 })
 
 test('the host takes its own keys first', (t) => {
-  const { keydown, sent } = fixture(t, (event) => event.key === 'k' && event.ctrlKey)
+  const { keydown, sent } = fixture(t, (event) =>
+    !event.ctrlKey ? undefined : event.key === 'k' ? 'sent' : 'native',
+  )
   assert.equal(keydown('k', 'KeyK', { ctrlKey: true }).defaultPrevented, true)
+  // A key left to the browser, such as a paste chord, is neither sent nor cancelled.
+  assert.equal(keydown('v', 'KeyV', { ctrlKey: true }).defaultPrevented, false)
   keydown('k', 'KeyK')
   assert.deepEqual(sent, ['k'])
 })
@@ -161,7 +171,7 @@ test('text that is not a key is sent as it lands', (t) => {
   assert.equal(element.value, '')
 })
 
-test('paste is bracketed and focus is reported', (t) => {
+test('pasted text and focus go to the host', (t) => {
   const { dispatch, sent } = fixture(t)
   dispatch('focus')
   const event = dispatch('paste', {
@@ -169,7 +179,7 @@ test('paste is bracketed and focus is reported', (t) => {
   })
   dispatch('blur')
   assert.equal(event.defaultPrevented, true)
-  assert.deepEqual(sent, ['\x1b[I', '\x1b[200~a\rb\x1b[201~', '\x1b[O'])
+  assert.deepEqual(sent, ['focus', 'paste:a\nb', 'blur'])
 })
 
 test('an inactive terminal takes no input', (t) => {
@@ -182,7 +192,6 @@ test('an inactive terminal takes no input', (t) => {
   )
   edit('x')
   dispatch('paste', { clipboardData: { getData: () => 'p' } })
-  dispatch('focus')
   dispatch('compositionstart')
   dispatch('compositionend', { data: 'y' })
   tick()

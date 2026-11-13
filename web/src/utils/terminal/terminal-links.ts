@@ -1,4 +1,3 @@
-import type { ILinkHandler } from '@xterm/xterm'
 import type { WindowContentItem, WindowContentScan } from '../../../../shared/window-content'
 
 export type TerminalLinkTarget =
@@ -90,18 +89,4 @@ export function activateTerminalLink(uri: string, actions: TerminalLinkActions):
   else if (target.loopback) actions.forwardWeb(target.url)
   else actions.openWeb(target.url)
   return true
-}
-
-/** xterm draws the hover underline and pointer; Canvas only decides what a primary click opens. */
-export function terminalLinkHandler(
-  actions: TerminalLinkActions,
-  allowed: (event: MouseEvent) => boolean = () => true,
-): ILinkHandler {
-  return {
-    allowNonHttpProtocols: true,
-    activate(event, uri) {
-      if (event.button !== 0 || !allowed(event)) return
-      activateTerminalLink(uri, actions)
-    },
-  }
 }

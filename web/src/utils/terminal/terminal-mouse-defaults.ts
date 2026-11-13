@@ -1,25 +1,6 @@
 import type { RightClickMode } from '../../composables/terminal/terminal-settings'
 
 export type RightMouseAction = 'down' | 'drag' | 'up'
-export function rightMouseInput(
-  event: Pick<MouseEvent, 'clientX' | 'clientY' | 'shiftKey' | 'altKey' | 'ctrlKey'>,
-  action: RightMouseAction,
-  rect: { left: number; top: number; width: number; height: number },
-  cols: number,
-  rows: number,
-): string {
-  if (!(rect.width > 0 && rect.height > 0)) return ''
-  const column = Math.floor(((event.clientX - rect.left) * cols) / rect.width)
-  const row = Math.floor(((event.clientY - rect.top) * rows) / rect.height)
-  if (action === 'down' && (column < 0 || row < 0 || column >= cols || row >= rows)) return ''
-  const code =
-    2 +
-    (action === 'drag' ? 32 : 0) +
-    (event.shiftKey ? 4 : 0) +
-    (event.altKey ? 8 : 0) +
-    (event.ctrlKey ? 16 : 0)
-  return `\x1b[<${code};${Math.max(0, Math.min(cols - 1, column)) + 1};${Math.max(0, Math.min(rows - 1, row)) + 1}${action === 'up' ? 'm' : 'M'}`
-}
 
 /** One right-click gesture has one owner, even if a peer changes its preference. */
 export function bindTerminalMouseDefaults(

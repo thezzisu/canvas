@@ -5,7 +5,6 @@ import {
   activateTerminalLink,
   publicWebUrl,
   scannedFile,
-  terminalLinkHandler,
   terminalLinkTarget,
 } from './terminal-links.ts'
 
@@ -102,16 +101,6 @@ test('activation dispatches each target to one action', () => {
     'forward http://localhost:3000/',
     'file /tmp/a b.txt',
   ])
-
-  let allowed = true
-  const handler = terminalLinkHandler(actions, (event) => allowed && event.button === 0)
-  assert.equal(handler.allowNonHttpProtocols, true)
-  const range = { start: { x: 1, y: 1 }, end: { x: 2, y: 1 } }
-  handler.activate({ button: 0 } as MouseEvent, 'file:///x', range)
-  handler.activate({ button: 1 } as MouseEvent, 'file:///middle', range)
-  allowed = false
-  handler.activate({ button: 0 } as MouseEvent, 'file:///blocked', range)
-  assert.deepEqual(calls.slice(3), ['file /x'])
 })
 
 test('a file link matches only its exact verified scan item', () => {

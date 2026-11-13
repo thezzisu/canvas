@@ -1,4 +1,5 @@
-import type { Terminal } from '@xterm/xterm'
+import type { CellPoint } from './cell-selection'
+import { encodeMouse } from './terminal-encoder'
 
 export type TerminalTouchMode = 'scroll' | 'mouse' | 'select' | 'touchpad'
 interface TouchOptions {
@@ -6,16 +7,19 @@ interface TouchOptions {
   mode(): TerminalTouchMode
   focus(): void
   copyGesture(): void
-  suppressInput(action: () => void): void
+  /** The cell under a viewport point, clamped to the grid. */
+  cell(x: number, y: number): CellPoint
+  send(data: string): void
+  /** A row's height on screen, in CSS pixels. */
+  rowHeight(): number
 }
 
 /** Touch scroll and native mouse gestures are deliberately separate modes. */
-export function bindTerminalTouch(surface: HTMLElement, term: Terminal, options: TouchOptions) {
+export function bindTerminalTouch(surface: HTMLElement, options: TouchOptions) {
   let gesture:
     | {
         id: number
-        x: number
-        y: number
+        cell: CellPoint
         startX: number
         startY: number
         lastY: number
@@ -24,53 +28,10 @@ export function bindTerminalTouch(surface: HTMLElement, term: Terminal, options:
         moved: boolean
       }
     | undefined
-  const mouse = (type: string, x: number, y: number, buttons: number) =>
-    term.element?.dispatchEvent(
-      new MouseEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        clientX: x,
-        clientY: y,
-        button: 0,
-        buttons,
-      }),
-    )
-  let bindingsChanged = false
-  // Native clients may briefly disable and restore mouse reporting during a
-  // redraw. xterm removes its document drag/up listeners on disable, but only
-  // binds them again on a new press. Keep the existing touch gesture continuous
-  // without sending another press or disturbing the software keyboard.
-  const observers = (['h', 'l'] as const).map((final) =>
-    term.parser.registerCsiHandler({ prefix: '?', final }, (params) => {
-      if (gesture?.mouse && params.some((param) => [9, 1000, 1002, 1003].includes(param as number)))
-        bindingsChanged = true
-      return false
-    }),
-  )
-  observers.push(
-    term.parser.registerEscHandler({ final: 'c' }, () => {
-      if (gesture?.mouse) bindingsChanged = true
-      return false
-    }),
-  )
-  const resumeMouse = () => {
-    if (
-      !gesture?.mouse ||
-      !bindingsChanged ||
-      !options.active() ||
-      term.modes.mouseTrackingMode === 'none'
-    )
-      return
-    bindingsChanged = false
-    options.suppressInput(() => mouse('mousedown', gesture!.x, gesture!.y, 1))
-  }
   const finish = () => {
-    if (gesture?.mouse) {
-      resumeMouse()
-      mouse('mouseup', gesture.x, gesture.y, 0)
-    }
+    if (gesture?.mouse && options.active())
+      options.send(encodeMouse({ type: 'release', button: 'left', ...gesture.cell }))
     gesture = undefined
-    bindingsChanged = false
   }
   const start = (event: TouchEvent) => {
     if (!options.active() || options.mode() === 'select' || options.mode() === 'touchpad') return
@@ -85,8 +46,7 @@ export function bindTerminalTouch(surface: HTMLElement, term: Terminal, options:
     options.focus()
     gesture = {
       id: touch.identifier,
-      x: touch.clientX,
-      y: touch.clientY,
+      cell: options.cell(touch.clientX, touch.clientY),
       startX: touch.clientX,
       startY: touch.clientY,
       lastY: touch.clientY,
@@ -94,8 +54,7 @@ export function bindTerminalTouch(surface: HTMLElement, term: Terminal, options:
       mouse: options.mode() === 'mouse',
       moved: false,
     }
-    bindingsChanged = false
-    if (gesture.mouse) mouse('mousedown', touch.clientX, touch.clientY, 1)
+    if (gesture.mouse) options.send(encodeMouse({ type: 'press', button: 'left', ...gesture.cell }))
   }
   const move = (event: TouchEvent) => {
     if (!gesture) return
@@ -113,39 +72,22 @@ export function bindTerminalTouch(surface: HTMLElement, term: Terminal, options:
     if (Math.hypot(touch.clientX - gesture.startX, touch.clientY - gesture.startY) > 3)
       gesture.moved = true
     const delta = gesture.lastY - touch.clientY
-    gesture.x = touch.clientX
-    gesture.y = touch.clientY
+    const cell = options.cell(touch.clientX, touch.clientY)
+    const sameCell = cell.column === gesture.cell.column && cell.row === gesture.cell.row
+    gesture.cell = cell
     gesture.lastY = touch.clientY
     if (gesture.mouse) {
-      resumeMouse()
-      mouse('mousemove', touch.clientX, touch.clientY, 1)
+      if (!sameCell) options.send(encodeMouse({ type: 'move', button: 'left', ...cell }))
       return
     }
-    const screen = term.element?.querySelector<HTMLElement>('.xterm-screen')
-    const lineHeight = Math.max(
-      8,
-      (screen?.getBoundingClientRect().height || term.rows * 14) / term.rows,
-    )
+    // The window's own client scrolls: a finger's travel becomes one wheel step per row.
+    const rowHeight = Math.max(8, options.rowHeight())
     gesture.remainder += delta
-    const lines = Math.trunc(gesture.remainder / lineHeight)
-    if (!lines) return
-    gesture.remainder -= lines * lineHeight
-    if (term.modes.mouseTrackingMode !== 'none' || term.buffer.active.type === 'alternate') {
-      // Already quantized: avoid xterm's pixel-wheel attenuation. It reports
-      // one native wheel step per event, matching the touchpad's bounded steps.
-      for (let i = 0; i < Math.min(15, Math.abs(lines)); i++) {
-        term.element?.dispatchEvent(
-          new WheelEvent('wheel', {
-            bubbles: true,
-            cancelable: true,
-            clientX: touch.clientX,
-            clientY: touch.clientY,
-            deltaY: Math.sign(lines),
-            deltaMode: WheelEvent.DOM_DELTA_LINE,
-          }),
-        )
-      }
-    } else term.scrollLines(lines)
+    const rows = Math.trunc(gesture.remainder / rowHeight)
+    if (!rows) return
+    gesture.remainder -= rows * rowHeight
+    const step = encodeMouse({ type: 'wheel', button: rows > 0 ? 'down' : 'up', ...cell })
+    for (let count = Math.min(15, Math.abs(rows)); count; count--) options.send(step)
   }
   const end = (event: TouchEvent) => {
     if (!gesture) return
@@ -162,7 +104,6 @@ export function bindTerminalTouch(surface: HTMLElement, term: Terminal, options:
   window.addEventListener('blur', cancel)
   return () => {
     finish()
-    observers.forEach((observer) => observer.dispose())
     surface.removeEventListener('touchstart', start)
     surface.removeEventListener('touchmove', move)
     surface.removeEventListener('touchend', end)
