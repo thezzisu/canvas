@@ -438,7 +438,6 @@ class CoreWindowClient implements HerdrClientTransport {
     const firstPaint = new Promise<void>((resolve) => {
       painted = resolve
     })
-    console.log(`Core pane ${id}: attaching at ${cols}x${rows}`)
     // No reply reaches the program from here: the core answers its queries itself.
     const engine = new GhosttyTerminal(Math.max(1, cols), Math.max(1, rows), HISTORY, {
       bell: () => this.bell(),
@@ -888,32 +887,20 @@ class CoreWindowClient implements HerdrClientTransport {
       const input = message.ClientShellPaneInput,
         pane = this.attached.get(input.pane_id)
       if (!pane?.stream) return
-      const active = input.events.some(
-        (event) => !('Mouse' in event) || event.Mouse.kind !== 'Moved',
-      )
-      // Anything but hovering returns the pane to its latest output.
-      const scroll = pane.engine.scroll,
-        scrolled = active && scroll.top < scroll.max
-      if (scrolled) {
-        pane.engine.scrollTo(scroll.max)
-        console.log(
-          `Core pane ${input.pane_id}: input returned it to its latest output:`,
-          // Only mouse events are spelled out: a key would be what the user typed.
-          input.events
-            .map((event) =>
-              'Mouse' in event ? JSON.stringify(event.Mouse) : Object.keys(event)[0],
-            )
-            .join()
-            .slice(0, 300),
-          `mouse=${pane.engine.mouseReporting} alternate=${pane.engine.alternateScreen}`,
-          `shown=${JSON.stringify(this.surface?.panes.find((shown) => shown.pane_id === input.pane_id))}`,
-        )
-      }
+      // What reaches the program, other than hovering, returns the pane to its latest output.
+      // A wheel step a program without mouse reporting never hears of does not.
+      let used = false
       for (const event of input.events) {
         const bytes = coreInput(event, pane.engine, pane.win32.on)
-        if (bytes.length) pane.stream.write(Buffer.from(bytes))
+        if (!bytes.length) continue
+        pane.stream.write(Buffer.from(bytes))
+        used ||= !('Mouse' in event) || event.Mouse.kind !== 'Moved'
       }
-      if (scrolled) this.render()
+      const scroll = pane.engine.scroll
+      if (used && scroll.top < scroll.max) {
+        pane.engine.scrollTo(scroll.max)
+        this.render()
+      }
     } else if ('ClientShellFocus' in message)
       this.attached.get(this.focused || '')?.stream?.focus(message.ClientShellFocus.focused)
   }

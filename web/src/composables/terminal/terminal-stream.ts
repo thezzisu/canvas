@@ -181,9 +181,7 @@ function cells(session: Session, bytes: Uint8Array) {
   let change: { frame: boolean; rows: number[] }
   try {
     change = session.mirror.apply(bytes)
-  } catch (error) {
-    // The server's log is where a lost stream can be looked up afterwards.
-    session.connection?.send({ type: 'cell-error', message: String(error).slice(0, 200) })
+  } catch {
     connectionFailed(session)
     return
   }
