@@ -26,6 +26,16 @@ function markdownPath(path: string): string {
   )
 }
 
+const PASTE_END = '\x1b[201~'
+/**
+ * Text as one bracketed paste. The end marker is removed until none is left: removing it
+ * once can join the pieces around it into another, which would end the paste early and let the
+ * rest of the text be read as keys.
+ */
+export function bracketedPaste(text: string): string {
+  while (text.includes(PASTE_END)) text = text.replaceAll(PASTE_END, '')
+  return `\x1b[200~${text}${PASTE_END}`
+}
 export interface PasteSegment {
   text: string
   file: boolean

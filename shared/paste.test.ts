@@ -1,6 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { filePasteParts, renderPasteParts, renderPasteSegments, type PastePart } from './paste.ts'
+import {
+  bracketedPaste,
+  filePasteParts,
+  renderPasteParts,
+  renderPasteSegments,
+  type PastePart,
+} from './paste.ts'
 
 test('mixed paste keeps text, images, files and repeated references in their original positions', () => {
   const parts: PastePart[] = [
@@ -112,4 +118,12 @@ test('note content becomes paste parts with each attachment delivered once', asy
     parts: [{ file: 0, format: 'path' }, ' ', { file: 1, format: 'path' }],
   })
   assert.deepEqual(noteContentPaste('plain'), { files: [], parts: ['plain'] })
+})
+
+test('a bracketed paste cannot end itself, however the end marker is nested', () => {
+  assert.equal(bracketedPaste('a\nb'), '\x1b[200~a\nb\x1b[201~')
+  for (const text of ['x\x1b[201~rm -rf', '\x1b[20\x1b[201~1~y', '\x1b[2\x1b[20\x1b[201~1~01~z']) {
+    const body = bracketedPaste(text).slice(6, -6)
+    assert.equal(body.includes('\x1b[201~'), false, JSON.stringify(text))
+  }
 })

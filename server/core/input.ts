@@ -1,3 +1,4 @@
+import { bracketedPaste } from '../../shared/paste.ts'
 import type { ClientKeyCode, ClientPaneInputEvent } from '../herdr/wire.ts'
 
 /** The modes which affect input are observed on the same parser lane as paint. */
@@ -60,11 +61,7 @@ function win32Key(code: ClientKeyCode, bits: number): string | undefined {
 export function coreInput(event: ClientPaneInputEvent, modes: CoreInputModes): Buffer {
   if ('TextCommit' in event) return Buffer.from(event.TextCommit)
   if ('Paste' in event)
-    return Buffer.from(
-      modes.bracketedPaste
-        ? `${ESC}[200~${event.Paste.replace(/\x1b\[201~/gu, '')}${ESC}[201~`
-        : event.Paste,
-    )
+    return Buffer.from(modes.bracketedPaste ? bracketedPaste(event.Paste) : event.Paste)
   if ('Mouse' in event) {
     const mouse = event.Mouse,
       kind = mouse.kind

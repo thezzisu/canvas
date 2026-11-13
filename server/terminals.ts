@@ -58,7 +58,7 @@ import { GridEncoder } from './cell-grid.ts'
 import type { WindowMetadata } from '../shared/window-metadata.ts'
 import { randomUUID } from 'node:crypto'
 import type { CanvasNotification } from '../shared/notification.ts'
-import type { PasteSegment } from '../shared/paste.ts'
+import { bracketedPaste, type PasteSegment } from '../shared/paste.ts'
 import type { CaptureDescriptor, CaptureState } from '../shared/capture.ts'
 import { defaultTerminalCell } from '../shared/settings.ts'
 import { defaultWindowSize, normalTerminalGrid } from '../shared/window-size.ts'
@@ -298,7 +298,7 @@ export class LiveTerminal {
           : 0
       const settled = pace > 0 ? this.outputSettled(pace) : undefined
       // The surface the input router reads always has bracketed paste on.
-      this.proc.write(`\x1b[200~${segment.text}\x1b[201~`)
+      this.proc.write(bracketedPaste(segment.text))
       await settled
     }
   }
