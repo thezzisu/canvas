@@ -898,7 +898,15 @@ class CoreWindowClient implements HerdrClientTransport {
         pane.engine.scrollTo(scroll.max)
         console.log(
           `Core pane ${input.pane_id}: input returned it to its latest output:`,
-          input.events.map((event) => Object.keys(event)[0]).join(),
+          // Only mouse events are spelled out: a key would be what the user typed.
+          input.events
+            .map((event) =>
+              'Mouse' in event ? JSON.stringify(event.Mouse) : Object.keys(event)[0],
+            )
+            .join()
+            .slice(0, 300),
+          `mouse=${pane.engine.mouseReporting} alternate=${pane.engine.alternateScreen}`,
+          `shown=${JSON.stringify(this.surface?.panes.find((shown) => shown.pane_id === input.pane_id))}`,
         )
       }
       for (const event of input.events) {
