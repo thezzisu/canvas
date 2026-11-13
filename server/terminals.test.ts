@@ -1210,7 +1210,7 @@ test('shared native terminals give late viewers the current screen, retain last 
   )
 })
 
-test('binary mouse coordinates and UTF-8 input pass through the native herdr client', async (t) => {
+test('UTF-8 input passes through the native herdr client', async (t) => {
   const f = await fixture(t, true)
   if (!f) return
   const { manager, source, target } = f,
@@ -1219,27 +1219,12 @@ test('binary mouse coordinates and UTF-8 input pass through the native herdr cli
   await f.ready()
   f.setNormalSize(220, 60)
   await waitFor(() => size(client).cols === 220, 'wide viewport was not applied')
-  client.command({
-    type: 'input',
-    encoding: 'binary',
-    data: '\x1b[M' + String.fromCharCode(67, 200, 70),
-  })
-  await waitFor(
-    () => existsSync(f.bytes) && readFileSync(f.bytes).length >= 6,
-    'legacy mouse bytes did not arrive',
-  )
-  const mouseBytes = readFileSync(f.bytes)
-  assert.equal(
-    mouseBytes.toString('hex'),
-    '1b5b4d43c846',
-    'borderless native pane mouse coordinates must arrive without UTF-8 expansion',
-  )
   client.command({ type: 'input', data: '中文' })
   await waitFor(
-    () => readFileSync(f.bytes).length >= mouseBytes.length + Buffer.byteLength('中文'),
+    () => existsSync(f.bytes) && readFileSync(f.bytes).length >= Buffer.byteLength('中文'),
     'UTF-8 text did not arrive',
   )
-  assert.deepEqual(readFileSync(f.bytes).subarray(mouseBytes.length), Buffer.from('中文'))
+  assert.deepEqual(readFileSync(f.bytes), Buffer.from('中文'))
 })
 
 test('explicit native right and middle input preserve Unicode paste bytes without duplicate insertion', async (t) => {
@@ -1697,7 +1682,6 @@ function fakeWindow(cols = 8, rows = 2) {
   const proc: HerdrClientTransport = {
     onScreen: on(screens),
     onFrame: on(frames),
-    onBell: none,
     onClipboard: on(clipboards),
     onPaneFocus: none,
     onSnapshot: none,

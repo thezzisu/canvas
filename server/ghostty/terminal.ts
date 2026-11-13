@@ -5,7 +5,6 @@ import { ghostty, type GhosttyModule, type Pointer } from './module.ts'
 export const MODS = { shift: 1, ctrl: 2, alt: 4, super: 8 } as const
 
 export interface GhosttyEvents {
-  bell?(): void
   /** A program set the clipboard (OSC 52 or OSC 5522) to this text. */
   clipboard?(text: Uint8Array): void
   /** A program status report (OSC 7501) for the record `id`; the root record has no id. */
@@ -95,7 +94,7 @@ interface Kit {
   mouseEncoder: Pointer
   mouseEvent: Pointer
   codepoints: Pointer
-  callbacks: { bell: number; status: number; clipboard: number }
+  callbacks: { status: number; clipboard: number }
   terminals: Map<Pointer, GhosttyTerminal>
 }
 let shared: Kit | undefined
@@ -155,7 +154,6 @@ function kit(): Kit {
     mouseEvent: g.handle((slot) => x.ghostty_mouse_event_new!(0, slot)),
     codepoints: g.alloc(MAX_CLUSTER * 4),
     callbacks: {
-      bell: g.callback(2, (terminal) => terminals.get(terminal)?.events.bell?.()),
       status: g.callback(3, (terminal, _userdata, report) => {
         const state = STATUS_STATES[g.view.getUint32(report, true)]
         if (state)
@@ -237,7 +235,6 @@ export class GhosttyTerminal {
     g.view.setUint8(g.out, 1)
     this.set('DEFAULT_CURSOR_BLINK', g.out)
     // No reply callback is installed: the core answers the program's queries itself.
-    this.set('BELL', callbacks.bell)
     this.set('PROGRAM_STATUS', callbacks.status)
     this.set('CLIPBOARD_WRITE', callbacks.clipboard)
   }

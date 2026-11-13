@@ -26,7 +26,6 @@ import { isTerminalHoverInput } from '../../shared/terminal-mouse.ts'
 export interface HerdrClientTransport {
   /** The composed grid of the window. A new listener is first given the current one. */
   onScreen(listener: (screen: FrameData) => void): { dispose(): void }
-  onBell(listener: () => void): { dispose(): void }
   /** Base64 text a pane or a Canvas selection copied. */
   onClipboard(listener: (data: string) => void): { dispose(): void }
   onPaneFocus(listener: (paneId: string | undefined) => void): { dispose(): void }
@@ -112,7 +111,6 @@ class HerdrClient implements HerdrClientTransport {
   private readonly socket: Socket
   private readonly reader = new FrameReader()
   private readonly screenListeners = new Set<(screen: FrameData) => void>()
-  private readonly bellListeners = new Set<() => void>()
   private readonly clipboardListeners = new Set<(data: string) => void>()
   private screen?: FrameData
   /** Metadata of the current screen, when it is safe to acknowledge. */
@@ -181,7 +179,6 @@ class HerdrClient implements HerdrClientTransport {
         this.selection = selection
         this.render()
       },
-      onError: () => this.bell(),
     })
     this.socket = createConnection(options.socketPath)
     this.deadline = setTimeout(
@@ -490,8 +487,7 @@ class HerdrClient implements HerdrClientTransport {
     else if (message.type === 'notification') {
       if (this.initialized)
         for (const listener of this.notificationListeners) listener(message.notification)
-    } else if (message.type === 'bell') this.bell()
-    else if (message.type === 'shutdown') this.finish({ exitCode: 0 })
+    } else if (message.type === 'shutdown') this.finish({ exitCode: 0 })
     else if (message.type === 'error') throw new Error(message.message)
   }
 
@@ -627,9 +623,6 @@ class HerdrClient implements HerdrClientTransport {
       return
     for (const listener of this.clipboardListeners) listener(data)
   }
-  private bell() {
-    for (const listener of this.bellListeners) listener()
-  }
   onScreen(listener: (screen: FrameData) => void) {
     this.screenListeners.add(listener)
     queueMicrotask(() => {
@@ -638,14 +631,6 @@ class HerdrClient implements HerdrClientTransport {
     return {
       dispose: () => {
         this.screenListeners.delete(listener)
-      },
-    }
-  }
-  onBell(listener: () => void) {
-    this.bellListeners.add(listener)
-    return {
-      dispose: () => {
-        this.bellListeners.delete(listener)
       },
     }
   }

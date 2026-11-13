@@ -34,7 +34,6 @@ export function watch(client: HerdrClientTransport) {
     paints: 0,
     grid: undefined as FrameData | undefined,
     text: '',
-    bells: 0,
     clipboard: [] as string[],
   }
   client.onScreen((grid) => {
@@ -42,7 +41,6 @@ export function watch(client: HerdrClientTransport) {
     seen.grid = grid
     seen.text = gridText(grid).join('\n')
   })
-  client.onBell(() => seen.bells++)
   client.onClipboard((data) => seen.clipboard.push(data))
   return seen
 }

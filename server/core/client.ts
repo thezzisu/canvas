@@ -167,7 +167,6 @@ class CoreWindowClient implements HerdrClientTransport {
   private refreshQueue: Promise<void> = Promise.resolve()
   private readonly input: HerdrInputRouter
   private readonly screenListeners = new Set<(screen: FrameData) => void>()
-  private readonly bellListeners = new Set<() => void>()
   private readonly clipboardListeners = new Set<(data: string) => void>()
   private readonly paneFocusListeners = new Set<(id: string | undefined) => void>()
   private readonly metadataListeners = new Set<(metadata: WindowMetadata) => void>()
@@ -197,7 +196,6 @@ class CoreWindowClient implements HerdrClientTransport {
         this.render()
       },
       onCopy: (text) => this.clipboard(Buffer.from(text).toString('base64')),
-      onError: () => this.bell(),
     })
   }
 
@@ -440,7 +438,6 @@ class CoreWindowClient implements HerdrClientTransport {
     })
     // No reply reaches the program from here: the core answers its queries itself.
     const engine = new GhosttyTerminal(Math.max(1, cols), Math.max(1, rows), HISTORY, {
-      bell: () => this.bell(),
       clipboard: (text) => this.clipboard(Buffer.from(text).toString('base64')),
       status: (record, state) => {
         if (record) return
@@ -1238,9 +1235,6 @@ class CoreWindowClient implements HerdrClientTransport {
       return
     for (const listener of this.clipboardListeners) listener(data)
   }
-  private bell() {
-    for (const listener of this.bellListeners) listener()
-  }
   onScreen(listener: (screen: FrameData) => void) {
     this.screenListeners.add(listener)
     queueMicrotask(() => {
@@ -1249,14 +1243,6 @@ class CoreWindowClient implements HerdrClientTransport {
     return {
       dispose: () => {
         this.screenListeners.delete(listener)
-      },
-    }
-  }
-  onBell(listener: () => void) {
-    this.bellListeners.add(listener)
-    return {
-      dispose: () => {
-        this.bellListeners.delete(listener)
       },
     }
   }

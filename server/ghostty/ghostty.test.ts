@@ -147,10 +147,9 @@ test('the viewport scrolls through history and the cursor leaves with its row', 
   assert.deepEqual([t.alternateScreen, t.scroll], [true, { top: 0, max: 0 }])
 })
 
-test('modes, bells, clipboard writes and status reports are observed, queries are not answered', () => {
+test('modes, clipboard writes and status reports are observed, queries are not answered', () => {
   const seen: unknown[] = []
   using t = terminal(20, 2, {
-    bell: () => seen.push('bell'),
     clipboard: (data) => seen.push(Buffer.from(data).toString()),
     status: (id, state) => seen.push([id, state]),
   })
@@ -169,7 +168,7 @@ test('modes, bells, clipboard writes and status reports are observed, queries ar
   )
   // Device attributes, cursor position and a colour query: the core answers these, not a viewer.
   t.write('\x1b[c\x1b[6n\x1b]11;?\x07')
-  assert.deepEqual(seen, ['bell', 'hello 🦊', ['', 'working'], ['job', 'done']])
+  assert.deepEqual(seen, ['hello 🦊', ['', 'working'], ['job', 'done']])
 })
 
 test('freed terminals return their memory to the module', () => {

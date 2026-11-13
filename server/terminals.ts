@@ -39,7 +39,7 @@
 //   pong              { id }
 //
 // JSON, browser to server:
-//   input             { data, encoding?: 'binary' }, bytes for a terminal whose modes are fixed:
+//   input             { data }, bytes for a terminal whose modes are fixed:
 //                     application cursor keys, bracketed paste, any-event mouse tracking with
 //                     SGR cell coordinates, focus reports
 //   focus             take input control
@@ -532,23 +532,17 @@ export class LiveTerminal {
         }
         if (this.controller !== ws) return
         if (this.maximized && this.maximized.owner !== ws) return
-        if (
-          msg.type === 'input' &&
-          typeof msg.data === 'string' &&
-          msg.data.length <= 64 * 1024 &&
-          (msg.encoding === undefined || msg.encoding === 'binary')
-        ) {
+        if (msg.type === 'input' && typeof msg.data === 'string' && msg.data.length <= 64 * 1024) {
           // Outer window focus reports cannot change the native pane or pixels.
           if (msg.data !== '\x1b[I' && msg.data !== '\x1b[O' && !isTerminalHoverInput(msg.data))
             this.sentFrames.delete(ws)
-          const data = msg.encoding === 'binary' ? Buffer.from(msg.data, 'latin1') : msg.data
           if (this.pasting)
             this.holdInput(
               this.pasting.then(() => {
-                if (!this.closed) this.proc.write(data)
+                if (!this.closed) this.proc.write(msg.data as string)
               }),
             )
-          else this.proc.write(data)
+          else this.proc.write(msg.data)
         }
       } catch {
         /* Malformed messages cannot become terminal commands. */
