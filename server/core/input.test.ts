@@ -72,6 +72,29 @@ test('core human input encodes actual terminal modes without agent send semantic
   assert.equal(sent({ Paste: 'a\x1b[20\x1b[201~1~b' }, '\x1b[?2004h'), '\x1b[200~ab\x1b[201~')
 })
 
+test('every byte a legacy keyboard can send reaches the program as that byte', () => {
+  // The outer parser turns a control byte into a key with Control; it must come out unchanged.
+  const control = (code: number): ClientPaneInputEvent =>
+    code === 0
+      ? key({ Char: ' ' }, CONTROL)
+      : code < 27
+        ? key({ Char: String.fromCharCode(code + 96) }, CONTROL)
+        : key({ Char: ['[', '\\', ']', '^', '_'][code - 27]! }, CONTROL)
+  for (let code = 0; code < 32; code++) {
+    if ([9, 13, 27].includes(code)) continue // Tab, Enter and Esc arrive as their own keys.
+    assert.equal(sent(control(code)), String.fromCharCode(code), `control byte ${code}`)
+    const alt = control(code)
+    if ('Key' in alt) alt.Key.modifiers |= ALT
+    assert.equal(sent(alt), `\x1b${String.fromCharCode(code)}`, `Alt + control byte ${code}`)
+  }
+  for (let code = 32; code < 127; code++) {
+    const text = String.fromCharCode(code),
+      shift = /^[A-Z]$/u.test(text) ? SHIFT : 0
+    assert.equal(sent(key({ Char: text }, shift)), text, JSON.stringify(text))
+    assert.equal(sent(key({ Char: text }, shift | ALT)), `\x1b${text}`, `Alt + ${text}`)
+  }
+})
+
 test('core enhanced keyboard negotiation keeps modifiers and key event types', () => {
   assert.equal(sent(key('Enter', SHIFT), '\x1b[>1u'), '\x1b[13;2u')
   assert.equal(sent(key({ Char: 'c' }, CONTROL), '\x1b[>1u'), '\x1b[99;5u')
