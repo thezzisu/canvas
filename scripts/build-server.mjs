@@ -15,6 +15,12 @@ await writeFile(
   new URL('../dist/server/build-info.js', import.meta.url),
   serverBuildModule(buildInfo),
 )
+// The terminal engine is loaded from beside its binding.
+for (const file of ['ghostty-vt.wasm', 'LICENSE'])
+  await copyFile(
+    new URL(`../server/ghostty/${file}`, import.meta.url),
+    new URL(`../dist/server/ghostty/${file}`, import.meta.url),
+  )
 await mkdir(new URL('../dist/cli', import.meta.url), { recursive: true })
 await copyFile(
   new URL('../cli/canvas', import.meta.url),
