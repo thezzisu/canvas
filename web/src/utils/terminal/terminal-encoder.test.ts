@@ -4,7 +4,6 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import headless from '@xterm/headless'
 import { VtInputParser } from '../../../../server/herdr/input.ts'
-import { terminalSurfaceModes } from '../../../../shared/terminal-mouse.ts'
 import {
   encodeFocus,
   encodeKey,
@@ -264,7 +263,9 @@ function xtermSurface() {
   return {
     terminal,
     core,
-    ready: new Promise<void>((resolve) => terminal.write(terminalSurfaceModes, resolve)),
+    ready: new Promise<void>((resolve) =>
+      terminal.write('\x1b[?1h\x1b[?2004h\x1b[?1003h\x1b[?1016l\x1b[?1006h\x1b[?1004h', resolve),
+    ),
     take: () => sent.splice(0).join(''),
   }
 }
@@ -359,6 +360,7 @@ test('paste and focus are what xterm.js 6 sends in the surface modes', async () 
 
 test('pasted text cannot end its own paste', () => {
   assert.equal(encodePaste('safe\x1b[201~rm -rf /\n'), '\x1b[200~saferm -rf /\r\x1b[201~')
+  assert.equal(encodePaste('\x1b[20\x1b[201~1~x'), '\x1b[200~x\x1b[201~')
 })
 
 /** What the server's parser of the outer surface makes of some bytes. */

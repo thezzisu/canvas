@@ -1,8 +1,10 @@
 /**
  * Input for the outer terminal surface, as the bytes xterm.js 6 sends in the surface's fixed
- * modes (`terminalSurfaceModes`): application cursor keys, bracketed paste, any-motion mouse in
+ * modes: application cursor keys, bracketed paste, any-motion mouse in
  * SGR encoding and focus reporting. Pure: no DOM, no state.
  */
+
+import { bracketedPaste } from '../../../../shared/paste'
 
 export type EncodedKey = Pick<
   KeyboardEvent,
@@ -136,9 +138,7 @@ export function encodeKey(event: EncodedKey, mac = false): string | undefined {
 
 /** Pasted text between the bracketed-paste markers, with line ends as carriage returns. */
 export function encodePaste(text: string): string {
-  // An end marker inside the text would close the paste early and let the rest run as keys.
-  const body = text.replaceAll(`${ESC}[201~`, '').replace(/\r?\n/gu, '\r')
-  return `${ESC}[200~${body}${ESC}[201~`
+  return bracketedPaste(text.replace(/\r?\n/gu, '\r'))
 }
 
 export function encodeFocus(focused: boolean): string {
