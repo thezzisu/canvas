@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createApp } from './app.ts'
 import { Store, noteNodeSchema, type Canvas, type Source, type TerminalNode } from './state.ts'
-import type { WebSocket } from 'ws'
+import type { TerminalChannel } from './terminal-channels.ts'
 import { TerminalManager } from './terminals.ts'
 import {
   closeRuntimeConnections,
@@ -607,7 +607,7 @@ test('official herdr window and final-pane closes remove references while nonfin
   await manager.connect(
     source,
     { sourceId: source.id, spaceId: space.spaceId, windowId: other.windowId },
-    client as unknown as WebSocket,
+    client as unknown as TerminalChannel,
   )
   const terminal = (await manager.entries.get(`${source.id}/${other.windowId}`))!
   const metadata = terminal.proc.completionSnapshot()!

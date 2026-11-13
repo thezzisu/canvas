@@ -11,9 +11,10 @@ import { Store, sourceConnectionKey, type Source } from './state.ts'
 import { createApp } from './app.ts'
 import { AccountStore } from './account.ts'
 import { CompletionReads } from './completion-reads.ts'
-import { TerminalManager } from './terminals.ts'
+import { TerminalManager, type TerminalTarget } from './terminals.ts'
 import { allowedOrigin, parseAllowedOrigins, bearerToken } from './auth.ts'
 import { authenticateWebSocket } from './websocket-auth.ts'
+import { serveTerminalChannels, type TerminalChannel } from './terminal-channels.ts'
 import {
   closeRuntimeConnections,
   prepareOpenBridge,
@@ -63,10 +64,11 @@ const uploads = new UploadService(terminals)
 const helperBytes = readFileSync(new URL('../cli/canvas', import.meta.url))
 const sourcePreviews = new SourcePreviewService(store, captures, helperBytes.toString('utf8'))
 const socketSessions = new WeakMap<import('ws').WebSocket, string>()
-const socketCaptureBases = new WeakMap<import('ws').WebSocket, string>()
+const channelSessions = new WeakMap<TerminalChannel, string>()
+const channelCaptureBases = new WeakMap<TerminalChannel, string>()
 const downloads = new OpenDownloadService({
   capture: async (source, windowId, paneId, header, socket, recipient) => {
-    const publicBase = socketCaptureBases.get(recipient.socket)
+    const publicBase = channelCaptureBases.get(recipient.socket)
     const reject = (reason: string) => socket.end(JSON.stringify({ ok: false, reason }) + '\n')
     if (!publicBase) {
       reject('capture-address-unavailable')
@@ -158,7 +160,7 @@ const downloads = new OpenDownloadService({
   recipient: async (sourceId, windowId) => {
     const recipient = await terminals.downloadRecipient(sourceId, windowId)
     const socket = recipient?.socket
-    const sessionId = socket && socketSessions.get(socket)
+    const sessionId = socket && channelSessions.get(socket)
     return socket && sessionId && store.hasSession(sessionId)
       ? {
           socket,
@@ -279,14 +281,6 @@ const upgrade = (
     socket.destroy()
     return
   }
-  const sourceId = url.searchParams.get('sourceId') ?? '',
-    spaceId = url.searchParams.get('spaceId') ?? '',
-    windowId = url.searchParams.get('windowId') ?? ''
-  const source = store.get<Source>('source', sourceId)
-  if (!source || !spaceId || !windowId) {
-    socket.destroy()
-    return
-  }
   wss.handleUpgrade(request, socket, head, (ws) =>
     authenticateWebSocket(
       ws,
@@ -299,69 +293,67 @@ const upgrade = (
           ws.close(1008, 'Invalid Canvas API base')
           return
         }
-        const current = store.get<Source>('source', sourceId)
-        if (!current || sourceConnectionKey(current) !== sourceConnectionKey(source)) {
-          ws.close(1008, 'Connection changed')
-          return
-        }
         socketSessions.set(ws, token)
-        if (captureBase) socketCaptureBases.set(ws, captureBase)
-        ws.once('close', () => uploads.disconnected(ws))
-        ws.on('message', (bytes, binary) => {
-          if (binary || Buffer.byteLength(bytes.toString()) > 128 * 1024) return
-          const session = socketSessions.get(ws) || ''
-          if (!store.hasSession(session)) return
-          try {
-            const message = JSON.parse(bytes.toString())
-            if (message.type === 'upload-begin') {
-              const current = store.get<Source>('source', sourceId)
-              if (current && sourceConnectionKey(current) === sourceConnectionKey(source))
-                void uploads.begin(source, windowId, ws, session, {
-                  id: message.id,
-                  files: message.files,
-                  parts: message.parts,
-                })
-            } else if (message.type === 'composer-send') {
-              const current = store.get<Source>('source', sourceId)
-              if (current && sourceConnectionKey(current) === sourceConnectionKey(source))
-                void sendComposer(store, assets, uploads, source, windowId, ws, session, {
-                  id: message.id,
-                  composer: message.composer,
-                  version: message.version,
-                })
-            } else if (message.type === 'upload-cancel' && typeof message.id === 'string')
-              uploads.cancel(ws, message.id)
-            else if (message.type === 'upload-failed' && typeof message.id === 'string')
-              uploads.failed(ws, message.id)
-            else if (message.type === 'directory-received' && typeof message.id === 'string')
-              downloads.directoryReceived(message.id, ws, session)
-            else if (message.type === 'url-received' && typeof message.id === 'string')
-              downloads.urlReceived(message.id, ws, session)
-          } catch {
-            /* Only named file-transfer messages are handled here. */
-          }
-        })
-        ws.once('close', downloads.retainSource(sourceId))
-        ws.on('error', () => ws.close())
-        ws.send(JSON.stringify({ type: 'status', status: 'connecting' }))
-        void terminals
-          .connect(source, { sourceId, spaceId, windowId }, ws)
-          .then(() => downloads.ensureSource(source).catch(() => {}))
-          .catch((error) => {
-            if (ws.readyState === 1) {
-              ws.send(
-                JSON.stringify({
-                  type: 'status',
-                  status: 'error',
-                  error: error.message,
-                }),
-              )
-              ws.close(1011, 'Connection failed')
-            }
-          })
+        serveTerminalChannels(ws, (channel, target) =>
+          openWindowChannel(channel, target, token, captureBase),
+        )
       },
     ),
   )
+}
+/** Attaches a window to a channel of an authenticated socket. */
+function openWindowChannel(
+  channel: TerminalChannel,
+  { sourceId, spaceId, windowId }: TerminalTarget,
+  session: string,
+  captureBase?: string,
+) {
+  const source = store.get<Source>('source', sourceId)
+  if (!source) {
+    channel.send({ type: 'status', status: 'error', error: 'Connection not found' })
+    channel.close()
+    return
+  }
+  const current = () => {
+    const now = store.get<Source>('source', sourceId)
+    return !!now && sourceConnectionKey(now) === sourceConnectionKey(source)
+  }
+  channelSessions.set(channel, session)
+  if (captureBase) channelCaptureBases.set(channel, captureBase)
+  channel.once('close', () => uploads.disconnected(channel))
+  channel.on('message', (message) => {
+    if (!store.hasSession(session)) return
+    const id = message.id
+    if (message.type === 'upload-begin') {
+      if (current())
+        void uploads.begin(source, windowId, channel, session, {
+          id: message.id,
+          files: message.files,
+          parts: message.parts,
+        })
+    } else if (message.type === 'composer-send') {
+      if (current())
+        void sendComposer(store, assets, uploads, source, windowId, channel, session, {
+          id: message.id,
+          composer: message.composer,
+          version: message.version,
+        })
+    } else if (typeof id !== 'string') return
+    else if (message.type === 'upload-cancel') uploads.cancel(channel, id)
+    else if (message.type === 'upload-failed') uploads.failed(channel, id)
+    else if (message.type === 'directory-received')
+      downloads.directoryReceived(id, channel, session)
+    else if (message.type === 'url-received') downloads.urlReceived(id, channel, session)
+  })
+  channel.once('close', downloads.retainSource(sourceId))
+  channel.send({ type: 'status', status: 'connecting' })
+  void terminals
+    .connect(source, { sourceId, spaceId, windowId }, channel)
+    .then(() => downloads.ensureSource(source).catch(() => {}))
+    .catch((error) => {
+      channel.send({ type: 'status', status: 'error', error: error.message })
+      channel.close()
+    })
 }
 const hosts = [
   ...new Set(

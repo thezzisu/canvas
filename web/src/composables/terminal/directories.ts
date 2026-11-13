@@ -1,4 +1,4 @@
-import type { TerminalConnection } from './terminal-connection'
+import type { TerminalConnection } from '../../utils/terminal/terminal-channels'
 import { computed, shallowRef } from 'vue'
 import { vscodeDirectoryUri } from '../../utils/terminal/editor-links'
 

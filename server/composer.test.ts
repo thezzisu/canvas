@@ -16,8 +16,8 @@ import type { PasteSegment } from '../shared/paste.ts'
 class FakeSocket {
   readyState = 1
   messages: Record<string, unknown>[] = []
-  send(value: string) {
-    this.messages.push(JSON.parse(value))
+  send(value: object) {
+    this.messages.push(JSON.parse(JSON.stringify(value)))
   }
 }
 

@@ -4,7 +4,7 @@ import { chmod, lstat, mkdir, mkdtemp, open, readFile, rm, unlink } from 'node:f
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Writable, type Readable } from 'node:stream'
-import type { WebSocket } from 'ws'
+import type { TerminalChannel } from './terminal-channels.ts'
 import {
   sourceConnectionKey,
   type FileAsset,
@@ -43,7 +43,7 @@ export interface PreparedOpenBridge {
 }
 
 export interface DownloadRecipient {
-  socket: WebSocket
+  socket: TerminalChannel
   sessionId: string
   isCurrent(): boolean
 }
@@ -105,7 +105,7 @@ interface DownloadTicket {
   size: number
   state: DownloadState
   transferred: number
-  recipient: WebSocket
+  recipient: TerminalChannel
   lastProgressAt: number
   body?: Writable
   upload?: Upload
@@ -121,7 +121,7 @@ interface DirectoryTicket {
   sourceId: string
   sessionId: string
   socket: Socket
-  recipient: WebSocket
+  recipient: TerminalChannel
   timer: ReturnType<typeof setTimeout>
   cleanup(): void
 }
@@ -500,9 +500,7 @@ export class OpenDownloadService {
     socket.setTimeout(0)
     this.deadline(ticket, this.options.contextTimeoutMs ?? CONTEXT_TIMEOUT, 'not-attached')
     try {
-      recipient.socket.send(
-        JSON.stringify({ type: 'file-context', id, filename, size: ticket.size }),
-      )
+      recipient.socket.send({ type: 'file-context', id, filename, size: ticket.size })
       socket.write(jsonLine({ state: 'offered', transferred: 0, size: ticket.size }))
     } catch {
       this.finish(ticket, 'failed', 'disconnected')
@@ -570,21 +568,21 @@ export class OpenDownloadService {
         this.finishDirectory(id, 'not-attached')
         return
       }
-      recipient.socket.send(JSON.stringify({ ...data, id }))
+      recipient.socket.send({ ...data, id })
     } catch {
       this.finishDirectory(id, kind === 'url' ? 'url-unavailable' : 'editor-unavailable')
     }
   }
 
-  directoryReceived(id: string, socket: WebSocket, sessionId: string): boolean {
+  directoryReceived(id: string, socket: TerminalChannel, sessionId: string): boolean {
     return this.referenceReceived(id, socket, sessionId, 'directory')
   }
-  urlReceived(id: string, socket: WebSocket, sessionId: string): boolean {
+  urlReceived(id: string, socket: TerminalChannel, sessionId: string): boolean {
     return this.referenceReceived(id, socket, sessionId, 'url')
   }
   private referenceReceived(
     id: string,
-    socket: WebSocket,
+    socket: TerminalChannel,
     sessionId: string,
     kind: 'directory' | 'url',
   ): boolean {
@@ -732,17 +730,15 @@ export class OpenDownloadService {
           this.finish(ticket, 'completed')
           if (asset.temporary && ticket.recipient.readyState === 1) {
             try {
-              ticket.recipient.send(
-                JSON.stringify({
-                  type: 'download',
-                  id: ticket.id,
-                  url: `/api/downloads/${ticket.id}`,
-                  filename: ticket.filename,
-                  size: ticket.size,
-                  mime: asset.mime,
-                  sourcePreview: asset.sourcePreview,
-                }),
-              )
+              ticket.recipient.send({
+                type: 'download',
+                id: ticket.id,
+                url: `/api/downloads/${ticket.id}`,
+                filename: ticket.filename,
+                size: ticket.size,
+                mime: asset.mime,
+                sourcePreview: asset.sourcePreview,
+              })
             } catch {}
           }
           callback()

@@ -1,4 +1,4 @@
-import type { WebSocket } from 'ws'
+import type { TerminalChannel } from './terminal-channels.ts'
 import { z } from 'zod'
 import { noteContentPaste } from '../shared/paste.ts'
 import type { AssetStore } from './assets.ts'
@@ -20,7 +20,7 @@ export async function sendComposer(
   uploads: UploadService,
   source: Source,
   windowId: string,
-  socket: WebSocket,
+  socket: TerminalChannel,
   session: string,
   input: unknown,
 ) {
@@ -32,16 +32,14 @@ export async function sendComposer(
   const id = parsed.success ? parsed.data.id : raw
   const fail = (error: string) => {
     if (socket.readyState === 1)
-      socket.send(
-        JSON.stringify({
-          type: 'upload-progress',
-          id,
-          state: 'failed',
-          transferred: 0,
-          total: 0,
-          error,
-        }),
-      )
+      socket.send({
+        type: 'upload-progress',
+        id,
+        state: 'failed',
+        transferred: 0,
+        total: 0,
+        error,
+      })
   }
   if (!parsed.success) {
     fail('invalidRequest')

@@ -1,13 +1,14 @@
 import { isCompletionToken } from '../../../../shared/completion'
 import { isWindowMetadata } from '../../../../shared/window-metadata'
-import { apiContext, apiFetch, apiUrl, isCurrentApi, uuid } from '../../api/api'
+import { apiContext, isCurrentApi, uuid } from '../../api/api'
 import { t } from '../../plugins/i18n'
 import { sameTerminalGrid } from '../../utils/terminal/terminal-geometry'
 import { terminalInputHasFocus } from '../../utils/terminal/terminal-reconnect'
 import { disconnectDownloads, receiveDownload } from '../files/downloads'
 import { receiveCapture, removeCaptures } from './capture'
 import { receiveDirectory } from './directories'
-import { openTerminalConnection, type TerminalConnection } from './terminal-connection'
+import type { TerminalConnection } from '../../utils/terminal/terminal-channels'
+import { openTerminalConnection, terminalAccess } from './terminal-connection'
 import { liveTerminalMetadata, metadataKey, updateMetadata } from './terminal-metadata'
 import {
   endFocusSize,
@@ -87,8 +88,6 @@ export function disconnect(session: Session) {
   session.mirror.detach()
   session.shown = -1
   session.awaitingPaint = []
-  session.connectionProbe?.abort()
-  session.connectionProbe = undefined
   endFocusSize(session)
   if (connection) {
     disconnectDownloads(connection)
@@ -177,7 +176,7 @@ export function setContentHidden(
   else schedulePresentation(session)
 }
 
-/** A cell message. One that does not apply means the stream is lost: connect again. */
+/** A cell message. One that does not apply means the stream is lost: open the channel again. */
 function cells(session: Session, bytes: Uint8Array) {
   let change: { frame: boolean; rows: number[] }
   try {
@@ -350,20 +349,14 @@ export async function connect(session: Session, probe: boolean) {
   const revision = ++session.connectionRevision,
     context = apiContext()
   if (probe) {
-    const controller = (session.connectionProbe = new AbortController())
     try {
-      // A socket error hides an HTTP 401. Check the existing account/source
-      // before retrying instead of repeatedly opening a rejected connection.
-      const response = await apiFetch('/api/state', { signal: controller.signal }, context)
+      const sources = await terminalAccess(context)
       if (session.connectionRevision !== revision) return
-      if (response.status === 401) {
+      if (sources === 'expired') {
         connectionFailed(session, t('terminal.connection.expired'), false)
         return
       }
-      if (!response.ok) throw new Error(t('terminal.connection.failed'))
-      const state = (await response.json()) as { sources: Array<{ id: string }> }
-      if (session.connectionRevision !== revision) return
-      if (!state.sources.some((source) => source.id === session.resource.sourceId)) {
+      if (!sources.has(session.resource.sourceId)) {
         connectionFailed(session, t('terminal.connection.removed'), false)
         return
       }
@@ -371,25 +364,19 @@ export async function connect(session: Session, probe: boolean) {
       if (session.connectionRevision === revision)
         connectionFailed(session, t('terminal.connection.failed'))
       return
-    } finally {
-      if (session.connectionProbe === controller) session.connectionProbe = undefined
     }
   }
   if (session.connectionRevision !== revision || !session.host?.isConnected || document.hidden)
     return
-  const url = apiUrl('/api/terminal', context)
-  url.searchParams.set('apiBase', context.base)
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-  for (const [name, value] of Object.entries(session.resource)) url.searchParams.set(name, value)
-  const connection: TerminalConnection = openTerminalConnection(url, context.token, {
+  const connection: TerminalConnection = openTerminalConnection(context, session.resource, {
     message: (message) => {
       if (isCurrentApi(context)) receive(session, connection, message, probe)
     },
     cells: (bytes) => {
       if (isCurrentApi(context)) cells(session, bytes)
     },
-    // A policy close can also mean an authentication timeout or a changed connection.
-    // The reconnect probe verifies the session before signing out.
+    // The server ends a channel when the connection changed, and the socket when the session
+    // expired. The reconnect probe verifies the session before signing out.
     closed: (failed) =>
       connectionFailed(session, failed ? t('terminal.connection.failed') : undefined),
   })

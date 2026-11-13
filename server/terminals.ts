@@ -1,4 +1,5 @@
-// The window socket: what one browser exchanges with one herdr window.
+// The window channel: what one browser exchanges with one herdr window. A browser tab has one
+// socket, and a channel on it for each window it shows (terminal-channels.ts).
 //
 // The server's herdr client is the only terminal client; the browser mirrors its screen and
 // sends input. Binary messages are cell messages (shared/cell-wire.ts); text messages are JSON.
@@ -6,7 +7,7 @@
 // Cells, server to browser:
 // - The window counts the grids its client has shown; that count is the revision. A FRAME or
 //   PATCH carries the revision it brings the browser to, and a PATCH names as `base` the
-//   revision of the previous cell message on this socket. Revisions may skip: a browser is
+//   revision of the previous cell message on this channel. Revisions may skip: a browser is
 //   brought to the latest grid, never through the ones in between.
 // - A FRAME is sent when the browser has nothing to patch: on joining, on becoming visible
 //   again, when a maximized view it did not own is released, when the grid changes size, and
@@ -14,14 +15,19 @@
 //   the cursor travel as a PATCH; an unchanged grid sends nothing.
 // - The grid size is the FRAME's. After a size change no cells are sent until the client
 //   shows a grid of the new size. There is no separate reset or resize message.
-// - One cell message is in flight per socket. While it is, newer grids are not sent; when it
-//   has gone out the browser gets one message to the latest grid.
+// - One cell message is in flight per channel. While it is, newer grids are not sent; when it
+//   has gone out to the network the browser gets one message to the latest grid. So the socket
+//   never queues more than one cell message per window, however fast a window redraws, and
+//   that window's next message goes behind what the other windows queued meanwhile.
 // - A browser that is hidden, or covered by another browser's maximized view, gets no cells
 //   or clipboard. `presentation` tells it which.
-// - A browser that cannot apply a cell message has lost the stream and reconnects.
+// - A browser that cannot apply a cell message has lost the stream: it closes the channel and
+//   opens another.
 //
 // JSON, server to browser:
-//   status            { status: 'connected', readOnly } | { status: 'removed' | 'closed' }
+//   status            { status: 'connecting' } | { status: 'connected', readOnly } |
+//                     { status: 'error', error } | { status: 'removed' | 'closed' }; the server
+//                     closes the channel after the last three
 //   presentation      { maximized, owned, token?, lease? }; after the FRAME when a view resumes
 //   focus-resize      { active, owned, token?, reason? }, the maximized viewport lease
 //   pane-focus        { paneId }
@@ -43,11 +49,11 @@
 //   completion-fence  { generation }, completion-read { generation, paneId, bootId, sequence }
 //   ping              { id }
 //
-// Uploads and downloads put their own JSON messages on this socket (uploads.ts, open-download.ts).
+// Uploads and downloads put their own JSON messages on this channel (uploads.ts, open-download.ts).
 import { CompletionReads } from './completion-reads.ts'
 import type { PaneAction, PaneContext, PanePoint } from '../shared/pane-context.ts'
 import { sameCompletion, type CompletionToken } from '../shared/completion.ts'
-import type { WebSocket } from 'ws'
+import type { TerminalChannel } from './terminal-channels.ts'
 import { sourceConnectionKey, type Source } from './state.ts'
 import { openTerminal } from './runtimes.ts'
 import { GeometryController, type Size } from './geometry.ts'
@@ -77,10 +83,10 @@ const clamp = (n: unknown, min: number, max: number, fallback: number) =>
   typeof n === 'number' && Number.isFinite(n)
     ? Math.min(max, Math.max(min, Math.round(n)))
     : fallback
-function json(ws: WebSocket, data: unknown) {
-  if (ws.readyState === 1) ws.send(JSON.stringify(data))
+function json(ws: TerminalChannel, data: object) {
+  ws.send(data)
 }
-/** What one browser socket has been sent of the window's grid. */
+/** What one browser has been sent of the window's grid. */
 interface View {
   encoder: GridEncoder
   /** The browser paints this window; otherwise it is owed a FRAME when it next does. */
@@ -92,31 +98,31 @@ interface View {
   presentationDue: boolean
 }
 export class LiveTerminal {
-  clients = new Set<WebSocket>()
-  private views = new Map<WebSocket, View>()
+  clients = new Set<TerminalChannel>()
+  private views = new Map<TerminalChannel, View>()
   /** The grid the herdr client shows; absent until it shows one of the current size. */
   grid?: FrameData
   /** A count of the grids the client has shown. */
   private revision = 0
-  private hidden = new Set<WebSocket>()
-  private focused = new Set<WebSocket>()
-  private maximized?: { owner: WebSocket; token: string; lease: number; releasing?: boolean }
+  private hidden = new Set<TerminalChannel>()
+  private focused = new Set<TerminalChannel>()
+  private maximized?: { owner: TerminalChannel; token: string; lease: number; releasing?: boolean }
   private presentationRevision = 0
   private focusedPaneId?: string
   private metadata?: WindowMetadata
   private rawMetadata?: WindowMetadata
   private frame?: WindowMetadata
-  private sentFrames = new WeakMap<WebSocket, WindowMetadata>()
-  private readGenerations = new WeakMap<WebSocket, number>()
-  private pendingFences = new WeakMap<WebSocket, number>()
+  private sentFrames = new WeakMap<TerminalChannel, WindowMetadata>()
+  private readGenerations = new WeakMap<TerminalChannel, number>()
+  private pendingFences = new WeakMap<TerminalChannel, number>()
   private readSubscription?: { dispose(): unknown }
   private outputWaiters = new Set<() => void>()
   // Keyboard input typed during a paced paste follows the complete paste.
   private pasting?: Promise<void>
-  controller?: WebSocket
-  private downloadController?: WebSocket
+  controller?: TerminalChannel
+  private downloadController?: TerminalChannel
   idle?: ReturnType<typeof setTimeout>
-  geometry: GeometryController<WebSocket>
+  geometry: GeometryController<TerminalChannel>
   closing?: Promise<void>
   closed = false
   cols: number
@@ -195,7 +201,7 @@ export class LiveTerminal {
     this.metadata = this.reads?.project(this.source, this.rawMetadata) || this.rawMetadata
     for (const ws of this.clients) json(ws, { type: 'metadata', window: this.metadata })
   }
-  private publishFrame(ws: WebSocket) {
+  private publishFrame(ws: TerminalChannel) {
     if (!this.frame || this.pendingFences.has(ws)) return
     const frame = this.reads?.project(this.source, this.frame) || this.frame
     this.sentFrames.set(ws, frame)
@@ -214,7 +220,7 @@ export class LiveTerminal {
    * Brings a browser up to the current grid unless a cell message is still going out to it;
    * that message's completion runs this again, so a slow socket skips the grids in between.
    */
-  private pump(ws: WebSocket) {
+  private pump(ws: TerminalChannel) {
     const view = this.views.get(ws)
     if (!view || view.sending || !this.grid || ws.readyState !== 1 || !this.canRender(ws)) return
     const message = view.encoder.encode(this.grid, this.revision)
@@ -234,7 +240,7 @@ export class LiveTerminal {
       this.presentation(ws)
     }
   }
-  private canRender(ws: WebSocket) {
+  private canRender(ws: TerminalChannel) {
     return (
       !this.hidden.has(ws) &&
       !!this.views.get(ws)?.shown &&
@@ -246,7 +252,7 @@ export class LiveTerminal {
     const message: CaptureState = { type: 'capture', capture: this.capture() }
     for (const ws of this.clients) json(ws, message)
   }
-  downloadRecipient(): WebSocket | undefined {
+  downloadRecipient(): TerminalChannel | undefined {
     const ws = this.downloadController
     return ws &&
       ws === this.controller &&
@@ -257,7 +263,7 @@ export class LiveTerminal {
       : undefined
   }
   captureFilePaste(
-    ws: WebSocket,
+    ws: TerminalChannel,
   ): ((segments: readonly PasteSegment[]) => Promise<void>) | undefined {
     if (
       this.closed ||
@@ -317,7 +323,7 @@ export class LiveTerminal {
       this.outputWaiters.add(output)
     })
   }
-  private presentation(ws: WebSocket) {
+  private presentation(ws: TerminalChannel) {
     json(ws, {
       type: 'presentation',
       maximized: !!this.maximized,
@@ -325,7 +331,7 @@ export class LiveTerminal {
       ...(this.maximized ? { token: this.maximized.token, lease: this.maximized.lease } : {}),
     })
   }
-  private snapshot(ws: WebSocket) {
+  private snapshot(ws: TerminalChannel) {
     if (this.closed || !this.clients.has(ws) || ws.readyState !== 1) return
     json(ws, { type: 'pane-focus', paneId: this.focusedPaneId })
     if (
@@ -344,7 +350,7 @@ export class LiveTerminal {
     this.pump(ws)
   }
   /** Stops cell traffic to a browser and forgets what it was sent. */
-  private pause(ws: WebSocket) {
+  private pause(ws: TerminalChannel) {
     const view = this.views.get(ws)
     if (!view) return
     view.shown = false
@@ -355,7 +361,7 @@ export class LiveTerminal {
   private resume() {
     for (const ws of this.clients) if (!this.views.get(ws)!.shown) this.snapshot(ws)
   }
-  private maximize(ws: WebSocket, token: string) {
+  private maximize(ws: TerminalChannel, token: string) {
     this.presentationRevision++
     this.maximized = { owner: ws, token, lease: this.presentationRevision }
     this.controller = ws
@@ -369,7 +375,7 @@ export class LiveTerminal {
     this.status()
     this.resume()
   }
-  private async releaseMaximized(ws: WebSocket, token?: string) {
+  private async releaseMaximized(ws: TerminalChannel, token?: string) {
     const current = this.maximized
     if (
       !current ||
@@ -390,7 +396,7 @@ export class LiveTerminal {
     this.resume()
     this.status()
   }
-  join(ws: WebSocket) {
+  join(ws: TerminalChannel) {
     clearTimeout(this.idle)
     if (!this.closed && ws.readyState === 1) {
       this.clients.add(ws)
@@ -408,11 +414,9 @@ export class LiveTerminal {
       this.status()
       json(ws, this.geometry.state(ws))
     }
-    ws.on('message', (data, isBinary) => {
+    ws.on('message', (msg) => {
       if (this.closed || ws.readyState !== 1 || !this.clients.has(ws)) return
-      if (isBinary || Buffer.byteLength(data.toString()) > 128 * 1024) return
       try {
-        const msg = JSON.parse(data.toString())
         if (msg.type === 'ping') {
           if (typeof msg.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(msg.id))
             json(ws, { type: 'pong', id: msg.id })
@@ -435,13 +439,15 @@ export class LiveTerminal {
           return
         }
         if (msg.type === 'completion-fence') {
+          const generation = msg.generation
           if (
-            !Number.isSafeInteger(msg.generation) ||
-            msg.generation <= (this.readGenerations.get(ws) || 0)
+            typeof generation !== 'number' ||
+            !Number.isSafeInteger(generation) ||
+            generation <= (this.readGenerations.get(ws) || 0)
           )
             return
-          this.readGenerations.set(ws, msg.generation)
-          this.pendingFences.set(ws, msg.generation)
+          this.readGenerations.set(ws, generation)
+          this.pendingFences.set(ws, generation)
           this.sentFrames.delete(ws)
           void this.proc
             .completionFence()
@@ -450,7 +456,7 @@ export class LiveTerminal {
                 !frame ||
                 this.closed ||
                 !this.clients.has(ws) ||
-                this.pendingFences.get(ws) !== msg.generation
+                this.pendingFences.get(ws) !== generation
               )
                 return
               this.pendingFences.delete(ws)
@@ -466,7 +472,7 @@ export class LiveTerminal {
         if (msg.type === 'completion-read') {
           const frame = this.sentFrames.get(ws)
           const pane = frame?.panes.find((pane) => pane.id === msg.paneId && pane.active)
-          const completion: CompletionToken = { bootId: msg.bootId, sequence: msg.sequence }
+          const completion = { bootId: msg.bootId, sequence: msg.sequence } as CompletionToken
           if (
             Number.isSafeInteger(msg.generation) &&
             msg.generation === (this.readGenerations.get(ws) || 0) &&
@@ -608,14 +614,14 @@ export class LiveTerminal {
     if (reason === 'removed')
       for (const ws of this.clients) {
         json(ws, { type: 'status', status: 'removed' })
-        ws.close(1000, 'Window removed')
+        ws.close()
       }
     this.closing = (async () => {
       // Restore the viewport before detaching this client.
       await this.geometry.close()
       for (const ws of this.clients) {
         if (reason !== 'removed') json(ws, { type: 'status', status: 'closed' })
-        ws.close(1000, 'Terminal detached')
+        ws.close()
       }
       this.clients.clear()
       this.views.clear()
@@ -713,7 +719,7 @@ export class TerminalManager {
       })
     }
   }
-  async connect(source: Source, target: TerminalTarget, ws: WebSocket) {
+  async connect(source: Source, target: TerminalTarget, ws: TerminalChannel) {
     if (this.stopped || this.closingSources.has(source.id))
       throw new Error('Terminal service is closing')
     const key = `${source.id}/${target.windowId}`
@@ -814,7 +820,7 @@ export class TerminalManager {
   async downloadRecipient(
     sourceId: string,
     windowId: string,
-  ): Promise<{ socket: WebSocket; isCurrent(): boolean } | undefined> {
+  ): Promise<{ socket: TerminalChannel; isCurrent(): boolean } | undefined> {
     const pending = this.entries.get(`${sourceId}/${windowId}`)
     if (!pending) return
     const terminal = await pending.catch(() => undefined)
@@ -869,7 +875,7 @@ export class TerminalManager {
       authorized,
     )
   }
-  async captureFilePaste(sourceId: string, windowId: string, ws: WebSocket) {
+  async captureFilePaste(sourceId: string, windowId: string, ws: TerminalChannel) {
     const pending = this.entries.get(`${sourceId}/${windowId}`)
     const terminal = await pending?.catch(() => undefined)
     return terminal?.captureFilePaste(ws)

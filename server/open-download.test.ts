@@ -56,8 +56,8 @@ class FakeWebSocket extends EventEmitter {
   readyState = 1
   messages: Record<string, unknown>[] = []
   onMessage?: (message: Record<string, unknown>) => void
-  send(value: string) {
-    const message = JSON.parse(value)
+  send(value: object) {
+    const message = JSON.parse(JSON.stringify(value))
     this.messages.push(message)
     this.onMessage?.(message)
   }

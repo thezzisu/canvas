@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import type { WebSocket } from 'ws'
+import type { TerminalChannel } from './terminal-channels.ts'
 import { createApp } from './app.ts'
 import { Store, sourceConnectionKey, type Source } from './state.ts'
 import { TerminalManager } from './terminals.ts'
@@ -13,7 +13,7 @@ const source: Source = {
 }
 const target = { sourceId: source.id, spaceId: 'space', windowId: 'window' }
 const key = `${source.id}/${target.windowId}`
-const socket = () => ({ readyState: 1 }) as WebSocket
+const socket = () => ({ readyState: 1 }) as unknown as TerminalChannel
 function gate() {
   let resolve!: () => void
   const promise = new Promise<void>((done) => {
@@ -27,8 +27,8 @@ function entry(manager: TerminalManager, connection = source) {
     spaceId: target.spaceId,
     connectionKey: sourceConnectionKey(connection),
     closed: false,
-    clients: new Set<WebSocket>(),
-    async join(ws: WebSocket) {
+    clients: new Set<TerminalChannel>(),
+    async join(ws: TerminalChannel) {
       this.clients.add(ws)
     },
     async close() {

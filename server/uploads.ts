@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
-import type { WebSocket } from 'ws'
+import type { TerminalChannel } from './terminal-channels.ts'
 import { z } from 'zod'
 import type { Source } from './state.ts'
 import type { TerminalManager } from './terminals.ts'
@@ -50,7 +50,7 @@ interface Batch {
   source: Source
   windowId: string
   session: string
-  socket: WebSocket
+  socket: TerminalChannel
   files: InboxFile[]
   parts: PastePart[]
   tokens: string[]
@@ -83,8 +83,8 @@ export class UploadService {
     },
   ) {}
 
-  private send(socket: WebSocket, value: unknown) {
-    if (socket.readyState === 1) socket.send(JSON.stringify(value))
+  private send(socket: TerminalChannel, value: object) {
+    socket.send(value)
   }
   private progress(
     batch: Batch,
@@ -114,7 +114,7 @@ export class UploadService {
   async begin(
     source: Source,
     windowId: string,
-    socket: WebSocket,
+    socket: TerminalChannel,
     session: string,
     input: unknown,
   ) {
@@ -202,7 +202,7 @@ export class UploadService {
   async sendStored(
     source: Source,
     windowId: string,
-    socket: WebSocket,
+    socket: TerminalChannel,
     session: string,
     request: { id: string; files: StoredFile[]; parts: PastePart[]; delivered(): void },
   ) {
@@ -352,16 +352,16 @@ export class UploadService {
     // Canvas still holds stored files, so their partial inbox copies are only waste.
     if (cancelled || batch.stored) this.cleanup(batch.source, [...batch.paths])
   }
-  failed(socket: WebSocket, id: string) {
+  failed(socket: TerminalChannel, id: string) {
     for (const batch of this.batches.values())
       if (batch.socket === socket && batch.id === id) this.fail(batch, 'requestFailed')
   }
-  cancel(socket: WebSocket, id?: string) {
+  cancel(socket: TerminalChannel, id?: string) {
     for (const batch of this.batches.values())
       if (batch.socket === socket && (id === undefined || batch.id === id))
         this.fail(batch, 'cancelled', true)
   }
-  disconnected(socket: WebSocket) {
+  disconnected(socket: TerminalChannel) {
     for (const batch of this.batches.values())
       if (batch.socket === socket)
         this.fail(batch, 'interrupted', false, batch.files[batch.next]?.name)

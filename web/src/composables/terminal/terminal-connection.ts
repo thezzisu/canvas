@@ -1,66 +1,55 @@
-/**
- * A window's link to the server, as a session sees it: JSON either way, cell messages in.
- * Sessions hold nothing else of the transport, so several windows can later share one socket.
- */
-export interface TerminalConnection {
-  readonly open: boolean
-  /** False when the link is not open; the message is dropped. */
-  send(message: object): boolean
-  /** Ends the link. Nothing is reported after it. */
-  close(): void
-}
+import { apiFetch, apiUrl, type ApiContext } from '../../api/api'
+import {
+  TerminalChannels,
+  type ConnectionEvents,
+  type TerminalConnection,
+  type TerminalWindow,
+} from '../../utils/terminal/terminal-channels'
 
-interface ConnectionEvents {
-  message(message: Record<string, unknown>): void
-  cells(bytes: Uint8Array): void
-  /** The link ended without `close`; `failed` when it never opened or broke with an error. */
-  closed(failed: boolean): void
-}
+/** One socket per signed-in instance. It lives from its first channel to its last. */
+const sockets = new Map<string, TerminalChannels>()
+const socketKey = (context: ApiContext) => `${context.base}\n${context.token}`
 
-/** One socket for one window. The server expects the token as the first message. */
+/** Opens a window's channel on the instance's socket, opening the socket for the first one. */
 export function openTerminalConnection(
-  url: URL,
-  token: string,
+  context: ApiContext,
+  window: TerminalWindow,
   events: ConnectionEvents,
 ): TerminalConnection {
-  const socket = new WebSocket(url)
-  socket.binaryType = 'arraybuffer'
-  let live = true
-  const ended = (failed: boolean) => {
-    if (!live) return
-    live = false
-    socket.close()
-    events.closed(failed)
+  const key = socketKey(context)
+  let channels = sockets.get(key)
+  if (!channels) {
+    const url = apiUrl('/api/terminal', context)
+    url.searchParams.set('apiBase', context.base)
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+    const created = (channels = new TerminalChannels(new WebSocket(url), context.token, () => {
+      if (sockets.get(key) === created) sockets.delete(key)
+    }))
+    sockets.set(key, created)
   }
-  socket.onopen = () => socket.send(JSON.stringify({ type: 'auth', token }))
-  socket.onmessage = (event) => {
-    if (!live) return
-    if (event.data instanceof ArrayBuffer) {
-      events.cells(new Uint8Array(event.data))
-      return
-    }
-    let message: unknown
-    try {
-      message = JSON.parse(event.data)
-    } catch {
-      return
-    }
-    if (message && typeof message === 'object') events.message(message as Record<string, unknown>)
+  return channels.open(window, events)
+}
+
+const probes = new Map<string, Promise<ReadonlySet<string> | 'expired'>>()
+/**
+ * Whether the account still stands, and the sources it has. A socket's failure hides an HTTP
+ * 401, so a window asks before it connects again; windows that lost the socket together share
+ * one request.
+ */
+export function terminalAccess(context: ApiContext): Promise<ReadonlySet<string> | 'expired'> {
+  const key = socketKey(context)
+  let probe = probes.get(key)
+  if (!probe) {
+    probe = (async () => {
+      const response = await apiFetch('/api/state', undefined, context)
+      if (response.status === 401) return 'expired' as const
+      if (!response.ok) throw new Error('State unavailable')
+      const state = (await response.json()) as { sources: Array<{ id: string }> }
+      return new Set(state.sources.map((source) => source.id))
+    })()
+    probes.set(key, probe)
+    const settled = () => probes.delete(key)
+    void probe.then(settled, settled)
   }
-  socket.onerror = () => ended(true)
-  socket.onclose = () => ended(false)
-  return {
-    get open() {
-      return live && socket.readyState === WebSocket.OPEN
-    },
-    send(message) {
-      if (!live || socket.readyState !== WebSocket.OPEN) return false
-      socket.send(JSON.stringify(message))
-      return true
-    },
-    close() {
-      live = false
-      socket.close()
-    },
-  }
+  return probe
 }

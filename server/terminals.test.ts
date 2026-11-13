@@ -6,7 +6,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { WebSocket } from 'ws'
+import { serveTerminalChannels, type TerminalChannel } from './terminal-channels.ts'
 import { CellMirror } from '../shared/cell-wire.ts'
 import { gridText, mirrorText } from './test-grid.ts'
 import { terminalInputChunks } from '../web/src/utils/terminal/terminal-input-chunks.ts'
@@ -35,8 +35,8 @@ class Client extends EventEmitter {
   mirror = new CellMirror()
   /** While set, cell messages stay in flight, as on a socket that cannot drain. */
   stalled?: (() => void)[]
-  send(data: string | Uint8Array, sent?: () => void) {
-    if (typeof data === 'string') this.received.push(data)
+  send(data: object | Uint8Array, sent?: () => void) {
+    if (!(data instanceof Uint8Array)) this.received.push(JSON.stringify(data))
     else {
       const { frame } = this.mirror.apply(data)
       const { cols, rows } = this.mirror
@@ -57,10 +57,10 @@ class Client extends EventEmitter {
     this.emit('close')
   }
   command(data: unknown) {
-    this.emit('message', Buffer.from(JSON.stringify(data)), false)
+    this.emit('message', JSON.parse(JSON.stringify(data)))
   }
   get socket() {
-    return this as unknown as WebSocket
+    return this as unknown as TerminalChannel
   }
 }
 
@@ -1830,6 +1830,51 @@ test('a socket that cannot drain is owed only the latest grid', async () => {
     [fast.mirror.revision, 'four'],
   )
   await f.terminal.close()
+})
+
+test('a window that redraws without pause keeps one message on the shared socket and waits behind the others', async () => {
+  // The browser's one socket, which here lets nothing out until told to.
+  const socket = new (class extends EventEmitter {
+    readyState = 1
+    queue: { channel: number; sent?: () => void }[] = []
+    send(data: string | Uint8Array, sent?: () => void) {
+      if (typeof data !== 'string') this.queue.push({ channel: data[0]!, sent })
+    }
+    /** The oldest queued cell message leaves for the network. */
+    flush() {
+      this.queue.shift()!.sent?.()
+    }
+  })()
+  const busy = fakeWindow(),
+    quiet = fakeWindow(),
+    windows = [busy, quiet]
+  busy.show('zero')
+  quiet.show('zero')
+  serveTerminalChannels(socket as never, (channel) => windows[channel.id]!.terminal.join(channel))
+  for (const channel of [0, 1])
+    socket.emit(
+      'message',
+      Buffer.from(
+        JSON.stringify({ type: 'open', channel, sourceId: 's', spaceId: 's', windowId: 'w' }),
+      ),
+      false,
+    )
+  const queued = () => socket.queue.map(({ channel }) => channel)
+  assert.deepEqual(queued(), [0, 1], 'each window sent its frame')
+  socket.flush()
+  socket.flush()
+  for (let i = 0; i < 500; i++) busy.show(`busy ${i}`)
+  quiet.show('typed')
+  for (let i = 500; i < 1000; i++) busy.show(`busy ${i}`)
+  assert.deepEqual(queued(), [0, 1], 'a thousand grids queue one message')
+  socket.flush()
+  assert.deepEqual(queued(), [1, 0], 'its next message goes behind the other window')
+  socket.flush()
+  socket.flush()
+  busy.show('last')
+  socket.flush()
+  assert.deepEqual(queued(), [])
+  await Promise.all(windows.map(({ terminal }) => terminal.close()))
 })
 
 test('hidden and covered browsers get no cells and resume from a frame', async () => {

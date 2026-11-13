@@ -13,7 +13,7 @@ import type { CellPainter } from './cell-painter'
 import type { bindDesktopInput } from './desktop-input'
 import type { bindMobileInput } from './mobile-input'
 import type { bindMobileKeyboard } from './mobile-keyboard'
-import type { TerminalConnection } from './terminal-connection'
+import type { TerminalConnection } from '../../utils/terminal/terminal-channels'
 import type { bindTerminalKeyboardLock } from './terminal-keyboard-lock'
 import type { bindTerminalMouse } from './terminal-mouse'
 import type { TerminalSelection } from './terminal-selection'
@@ -103,7 +103,6 @@ export interface Session {
   connection?: TerminalConnection
   reconnect: TerminalReconnect
   connectionRevision: number
-  connectionProbe?: AbortController
   connectionError?: string
   metadata?: WindowMetadata
   lastName?: string

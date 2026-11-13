@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { WebSocket } from 'ws'
+import type { TerminalChannel } from './terminal-channels.ts'
 import { UploadService } from './uploads.ts'
 import { Store, sourceConnectionKey, type Source } from './state.ts'
 import { createApp } from './app.ts'
@@ -27,8 +27,8 @@ import {
 class FakeSocket {
   readyState = 1
   messages: Record<string, unknown>[] = []
-  send(value: string) {
-    this.messages.push(JSON.parse(value))
+  send(value: object) {
+    this.messages.push(JSON.parse(JSON.stringify(value)))
   }
 }
 function gate() {
@@ -64,7 +64,7 @@ function fixture(
     removed: Array<{ sourceId: string; paths: string[] }> = []
   const pasted: Array<{ sourceId: string; windowId: string; text: string }> = []
   const pasteCalls: string[][] = []
-  const captures: Array<{ sourceId: string; windowId: string; socket: WebSocket }> = []
+  const captures: Array<{ sourceId: string; windowId: string; socket: TerminalChannel }> = []
   const windows = new Set(['window-a', 'window-b'])
   let serial = 0,
     pasteFails = false,
@@ -89,7 +89,7 @@ function fixture(
     return path
   }
   const terminals = {
-    captureFilePaste: async (sourceId: string, windowId: string, socket: WebSocket) => {
+    captureFilePaste: async (sourceId: string, windowId: string, socket: TerminalChannel) => {
       await options.capture?.()
       captures.push({ sourceId, windowId, socket })
       if (!canCapture) return undefined
@@ -794,8 +794,8 @@ test('real native terminal receives no upload paths until the whole batch succee
         readyState = 1
         bufferedAmount = 0
         messages: Record<string, unknown>[] = []
-        send(value: string | Uint8Array, sent?: () => void) {
-          if (typeof value === 'string') this.messages.push(JSON.parse(value))
+        send(value: object | Uint8Array, sent?: () => void) {
+          if (!(value instanceof Uint8Array)) this.messages.push(JSON.parse(JSON.stringify(value)))
           sent?.()
         }
         close() {
@@ -804,7 +804,7 @@ test('real native terminal receives no upload paths until the whole batch succee
         }
       }
       const client = new Client(),
-        socket = client as unknown as WebSocket
+        socket = client as unknown as TerminalChannel
       client.once('close', () => service.disconnected(socket))
       await manager.connect(source, { sourceId: source.id, spaceId: space.id, windowId }, socket)
       const terminal = (await manager.entries.get(`${source.id}/${windowId}`))!
@@ -812,7 +812,7 @@ test('real native terminal receives no upload paths until the whole batch succee
         () => !!terminal.grid && gridText(terminal.grid).join('\n').includes('UPLOAD_READY'),
         'Native receiver is ready',
       )
-      client.emit('message', Buffer.from(JSON.stringify({ type: 'focus' })), false)
+      client.emit('message', { type: 'focus' })
       const actualInput = () => (existsSync(input) ? readFileSync(input) : Buffer.alloc(0))
       const baseline = actualInput()
       const start = async (id: string, names: string[], parts?: PastePart[]) => {

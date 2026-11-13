@@ -1,4 +1,4 @@
-import type { TerminalConnection } from '../terminal/terminal-connection'
+import type { TerminalConnection } from '../../utils/terminal/terminal-channels'
 import { computed, shallowRef } from 'vue'
 import { apiFetch, apiUrl } from '../../api/api'
 import { notify } from '../notify'
