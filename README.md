@@ -23,8 +23,8 @@ layouts and processes.
   filters, a minimap and one-window-at-a-time paging.
 - **Custom canvases** with draggable terminal references, notes and files,
   synchronized between browsers.
-- **Native terminals** rendered with xterm.js, including mouse, clipboard,
-  bracketed paste and pane actions.
+- **Native terminals** mirrored from the server as cells, including mouse,
+  clipboard, bracketed paste and pane actions.
 - **Files and links** from the terminal: `canvas open` previews files, opens
   directories in VS Code Remote SSH and forwards loopback URLs.
 - **Uploads** by pasting or dropping files into a terminal.
