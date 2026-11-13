@@ -170,22 +170,29 @@ export class GhosttyModule {
     this.io = { ptr, capacity }
   }
   /**
-   * Runs an encoder writing into the I/O buffer behind its first `skip` bytes, with more room
-   * when it asks for it, and returns what it wrote.
+   * Runs an encoder writing into the I/O buffer behind its first `skip` bytes and returns what it
+   * wrote, or nothing when that is longer than `limit`. An encoder that asks for more room gets
+   * it once: the second call has exactly what the first one asked for.
    */
-  encode(skip: number, call: (buffer: Pointer, capacity: number, written: Pointer) => number) {
+  encode(
+    skip: number,
+    limit: number,
+    call: (buffer: Pointer, capacity: number, written: Pointer) => number,
+  ): Uint8Array | undefined {
     const outOfSpace = this.value('GhosttyResult', 'OUT_OF_SPACE'),
       written = this.out2 + 120
     this.reserve(skip + 64, skip)
-    for (;;) {
+    for (let attempt = 0; attempt < 2; attempt++) {
       const result = this.check(
         call(this.io.ptr + skip, this.io.capacity - skip, written),
         outOfSpace,
       )
       const length = this.view.getUint32(written, true)
+      if (length > limit) return
       if (result === 0) return this.bytes.slice(this.io.ptr + skip, this.io.ptr + skip + length)
       this.reserve(skip + length, skip)
     }
+    throw new Error('libghostty-vt: an encoder asked for more room twice')
   }
 }
 
@@ -195,21 +202,35 @@ export function ghostty(): GhosttyModule {
   return (loaded ??= new GhosttyModule(readFileSync(new URL('./ghostty-vt.wasm', import.meta.url))))
 }
 
+/** No cluster a terminal shows is longer; text past this many code points is not measured. */
+const MAX_WIDTH_CODEPOINTS = 64
 const widths = new Map<string, number>()
 /** The cells a grapheme cluster takes, by the rules the terminal itself prints with. */
 export function cellWidth(text: string): number {
   if (text.length === 1 && text.charCodeAt(0) < 0x300) return 1
-  let cells = widths.get(text)
+  // Symbols come from remote screens: neither the work nor the cache grows with their length.
+  const cached = text.length <= MAX_WIDTH_CODEPOINTS * 2
+  let cells = cached ? widths.get(text) : undefined
   if (cells !== undefined) return cells
   const g = ghostty(),
-    codepoints = Uint32Array.from(text, (character) => character.codePointAt(0)!)
-  g.put(new Uint8Array(codepoints.buffer))
+    codepoints = new Uint32Array(MAX_WIDTH_CODEPOINTS)
+  let length = 0
+  for (const character of text) {
+    if (length === MAX_WIDTH_CODEPOINTS) break
+    codepoints[length++] = character.codePointAt(0)!
+  }
+  g.put(new Uint8Array(codepoints.buffer, 0, length * 4))
   cells = 0
-  for (let at = 0; at < codepoints.length;) {
-    at += g.x.ghostty_unicode_grapheme_width!(g.ioPointer + at * 4, codepoints.length - at, g.out)
+  for (let at = 0; at < length;) {
+    const used = g.x.ghostty_unicode_grapheme_width!(g.ioPointer + at * 4, length - at, g.out)
+    // The library consumes at least one code point; anything else would never end here.
+    if (used < 1) break
+    at += used
     cells += g.bytes[g.out]!
   }
-  if (widths.size >= 4096) widths.clear()
-  widths.set(text, cells)
+  if (cached) {
+    if (widths.size >= 4096) widths.clear()
+    widths.set(text, cells)
+  }
   return cells
 }

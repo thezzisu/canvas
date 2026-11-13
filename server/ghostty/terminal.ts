@@ -71,6 +71,10 @@ const MAX_CLUSTER = 32
 const MAX_LINK = 8192
 /** A program may set at most this much clipboard text at once. */
 const MAX_CLIPBOARD = 1024 * 1024
+/** The representations of one clipboard write that are looked at for its text. */
+const MAX_CLIPBOARD_KINDS = 16
+/** No key or mouse report is longer. */
+const MAX_REPORT = 4096
 
 interface Layout {
   cell: Record<'tag' | 'content' | 'style' | 'wide' | 'link', { lsb: number; width: number }>
@@ -169,7 +173,7 @@ function kit(): Kit {
           count = view.getUint32(field('contents_len'), true),
           size = g.size('GhosttyClipboardContent')
         let text: Uint8Array | undefined
-        for (let index = 0; index < count && !text; index++) {
+        for (let index = 0; index < Math.min(count, MAX_CLIPBOARD_KINDS) && !text; index++) {
           const content = contents + index * size
           if (g.string(content + g.offset('GhosttyClipboardContent', 'mime')) === 'text/plain')
             text = g.stringBytes(content + g.offset('GhosttyClipboardContent', 'data'))
@@ -487,14 +491,15 @@ export class GhosttyTerminal {
     g.view.setUint32(coordinate + g.offset('GhosttyPointCoordinate', 'y'), y, true)
     return g.x.ghostty_terminal_grid_ref!(this.handle, point, ref) === 0 ? ref : 0
   }
+  /** The OSC 8 target of a viewport cell; none when it is longer than a link may be. */
   private link(column: number, row: number): string {
     const { g } = this.k,
       ref = this.ref('VIEWPORT', column, row)
     if (!ref) return ''
-    const uri = g.encode(0, (buffer, capacity, written) =>
-      g.x.ghostty_grid_ref_hyperlink_uri!(ref, buffer, Math.min(capacity, MAX_LINK), written),
+    const uri = g.encode(0, MAX_LINK, (buffer, capacity, written) =>
+      g.x.ghostty_grid_ref_hyperlink_uri!(ref, buffer, capacity, written),
     )
-    return Buffer.from(uri).toString('utf8')
+    return uri ? Buffer.from(uri).toString('utf8') : ''
   }
 
   /** The cursor in the viewport read last, or nothing while it is scrolled out of view. */
@@ -583,12 +588,13 @@ export class GhosttyTerminal {
     x.ghostty_key_event_set_unshifted_codepoint!(keyEvent, input.unshifted)
     // The event borrows its text, which stays at the front of the buffer the result follows.
     const length = g.put(input.text)
-    return g.encode(length, (buffer, capacity, written) => {
+    const report = g.encode(length, MAX_REPORT, (buffer, capacity, written) => {
       g.view.setUint32(g.out, g.ioPointer, true)
       g.view.setUint32(g.out + 4, length, true)
       x.ghostty_key_event_set_utf8!(keyEvent, g.out)
       return x.ghostty_key_encoder_encode!(keyEncoder, keyEvent, buffer, capacity, written)
     })
+    return report ?? new Uint8Array()
   }
   /** The bytes a mouse event sends; none unless the program asked for such events. */
   encodeMouse(input: MouseInput): Uint8Array {
@@ -616,8 +622,9 @@ export class GhosttyTerminal {
     g.view.setFloat32(g.out, input.x, true)
     g.view.setFloat32(g.out + 4, input.y, true)
     g.check(x.ghostty_mouse_event_set_position!(mouseEvent, g.out))
-    return g.encode(0, (buffer, capacity, written) =>
+    const report = g.encode(0, MAX_REPORT, (buffer, capacity, written) =>
       x.ghostty_mouse_encoder_encode!(mouseEncoder, mouseEvent, buffer, capacity, written),
     )
+    return report ?? new Uint8Array()
   }
 }

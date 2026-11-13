@@ -189,3 +189,41 @@ test('freed terminals return their memory to the module', () => {
     `${settled} bytes grew to ${ghostty().memoryBytes}`,
   )
 })
+
+test('nothing a program writes can keep a read or a measurement from ending', () => {
+  using t = terminal(40, 3)
+  // A link target longer than a link may be: the cell is shown without one.
+  const long = `https://example.test/${'a'.repeat(9000)}`,
+    huge = `https://example.test/${'b'.repeat(200_000)}`
+  t.write(
+    `\x1b]8;;${long}\x1b\\long\x1b]8;;\x1b\\ \x1b]8;;https://example.test/ok\x1b\\ok\x1b]8;;\x1b\\\r\n`,
+  )
+  t.write(`\x1b]8;;${huge}\x1b\\huge\x1b]8;;\x1b\\`)
+  const rows = t.read()
+  assert.equal(text(rows[0])!.trimEnd(), 'long ok')
+  assert.deepEqual(
+    [...rows[0]!.links!],
+    [
+      [5, 'https://example.test/ok'],
+      [6, 'https://example.test/ok'],
+    ],
+  )
+  assert.equal(text(rows[1])!.trimEnd(), 'huge')
+  assert.equal(rows[1]!.links, undefined)
+  // Symbols of any length are measured in bounded work and never cached.
+  assert.equal(cellWidth('中'.repeat(100_000)), 128)
+  assert.equal(cellWidth('\u0301'.repeat(100_000)), 0)
+  assert.equal(cellWidth(''), 0)
+  // An encoder gets more room once, and what is longer than its limit is dropped.
+  const g = ghostty()
+  let calls = 0
+  const never = (_buffer: number, _capacity: number, written: number) => {
+    calls++
+    g.view.setUint32(written, 1 << 20, true)
+    return g.value('GhosttyResult', 'OUT_OF_SPACE')
+  }
+  assert.throws(() => g.encode(0, 1 << 21, never), /asked for more room twice/u)
+  assert.equal(calls, 2)
+  assert.equal(g.encode(0, 4096, never), undefined)
+  assert.equal(calls, 3)
+})
