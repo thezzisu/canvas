@@ -86,8 +86,9 @@ export function bindTerminalMouse(surface: HTMLElement, options: MouseOptions) {
     document.addEventListener('mouseup', release, capture)
   }
   const hover = (event: MouseEvent) => {
+    // A pointer on its way to select, or beside a selection, is not the program's.
     if (held || event.buttons || !options.hover() || options.selection.active) return
-    if (options.active()) moved('none', at(event), event)
+    if (options.active() && !options.selects(event)) moved('none', at(event), event)
   }
   const left = () => {
     if (!held) last = undefined

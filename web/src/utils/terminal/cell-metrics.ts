@@ -39,7 +39,7 @@ export function cellGeometry(font: {
 }): CellGeometry {
   const { advance, ratio } = font
   const units = ratio * 64
-  const width = font.ligatures ? advance : Math.floor(advance * units + 0.01) / units
+  const width = font.ligatures ? advance : Math.floor(advance * units) / units
   return {
     width,
     height: Math.max(1, Math.floor(Math.ceil(font.fontHeight * ratio) * font.lineHeight)) / ratio,

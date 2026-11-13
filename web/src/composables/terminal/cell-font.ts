@@ -67,7 +67,9 @@ export function measureCellFont(options: CellFontOptions, ratio: number): CellFo
   const laidOut = (text.getBoundingClientRect().width / ruler.getBoundingClientRect().width) * 5
   probe.remove()
 
-  const advance = laidOut > 0 ? laidOut : box.width
+  // Layout counts in 64ths of a pixel, so 200 glyphs give the advance to the thousandth, and
+  // every screen then names the same number for the same font.
+  const advance = Math.round((laidOut > 0 ? laidOut : box.width) * 1000) / 1000
   const scale = box.width > 0 ? advance / box.width : 1
   const geometry = cellGeometry({
     advance,
