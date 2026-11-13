@@ -15,7 +15,10 @@ export function bindKeyboard(session: Session) {
   session.desktopInput = undefined
   if (!session.mobile) {
     session.desktopInput = bindDesktopInput(session.surface, {
-      active: () => interactive(session) && session.state.status !== 'closed',
+      active: () =>
+        interactive(session) &&
+        session.state.status !== 'closed' &&
+        !(session.state.presentation?.maximized && !session.state.presentation.owned),
       send: (data) => sendInput(session, data),
       key: (event) => handleKey(session, event),
       paste: (text) => pasteText(session, text),

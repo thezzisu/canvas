@@ -192,6 +192,7 @@ export function setState(session: Session, state: TerminalStatus) {
     touchMode: session.touchMode,
     keyboardRequested: session.keyboardRequested,
   })
+  session.desktopInput?.refresh()
   session.keyboardLock?.refresh()
   session.touchpad.refresh()
   session.listeners.forEach((listener) => listener(next))

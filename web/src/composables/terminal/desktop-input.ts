@@ -35,7 +35,6 @@ export function bindDesktopInput(parent: HTMLElement, options: DesktopInputOptio
   element.setAttribute('autocorrect', 'off')
   element.setAttribute('autocomplete', 'off')
   element.spellcheck = false
-  element.tabIndex = 0
   Object.assign(element.style, {
     position: 'absolute',
     left: '0',
@@ -119,8 +118,14 @@ export function bindDesktopInput(parent: HTMLElement, options: DesktopInputOptio
   element.addEventListener('focus', focus)
   element.addEventListener('blur', blur)
   parent.append(element)
+  const refresh = () => {
+    element.tabIndex = options.active() ? 0 : -1
+  }
+  refresh()
   return {
     element,
+    /** Tab reaches the field only while the terminal takes keys. */
+    refresh,
     /** Puts the field at the cursor, in the parent's own pixels: the input method opens beside it. */
     moveTo(box: { left: number; top: number; height: number }) {
       element.style.transform = `translate(${box.left}px,${box.top}px)`

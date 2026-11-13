@@ -229,10 +229,10 @@ test('a frame is painted in the next animation frame and reported once', (t) => 
     ['one', 'two'],
   )
   const root = fake(painter.element)
-  // 8.4 px is rounded up to 538/64 px, and 20 cells are exactly 20 times that.
-  assert.deepEqual(metrics, [{ width: 538 / 64, height: 18 }])
-  assert.deepEqual(painter.metrics, { width: 538 / 64, height: 18 })
-  assert.equal(root.style.width, `${(20 * 538 + 0.2) / 64}px`)
+  // 8.4 px is rounded down to 537/64 px, and 20 cells are exactly 20 times that.
+  assert.deepEqual(metrics, [{ width: 537 / 64, height: 18 }])
+  assert.deepEqual(painter.metrics, { width: 537 / 64, height: 18 })
+  assert.equal(root.style.width, `${(20 * 537 + 0.2) / 64}px`)
   assert.equal(root.style.height, '36px')
   // A window that names no colours of its own takes the theme's.
   assert.equal(root.properties.get('--tg-fg'), '#d5d7dd')
@@ -290,7 +290,7 @@ test('a new size keeps the rows it can and a new table replaces the old', (t) =>
   assert.equal(rows.length, 1)
   const segment = fake(rows[0]!.children[0])
   assert.equal(fake(segment.children[0]).style.cssText, 'color:#ff0000;')
-  assert.equal(fake(painter.element).style.width, `${(10 * 538 + 0.2) / 64}px`)
+  assert.equal(fake(painter.element).style.width, `${(10 * 537 + 0.2) / 64}px`)
   assert.equal(painter.background, '#202020')
   // Styles appended by a patch continue the table.
   patch(
@@ -306,7 +306,7 @@ test('a new size keeps the rows it can and a new table replaces the old', (t) =>
   dom.frame()
   assert.equal(
     rowsOf(painter)[0]!.style.background,
-    'linear-gradient(to right,#00ff00 16.8125px,var(--tg-bg) 0)',
+    'linear-gradient(to right,#00ff00 16.7813px,var(--tg-bg) 0)',
   )
   painter.dispose()
 })
@@ -360,9 +360,9 @@ test('the cursor follows focus and covers a wide cell whole', (t) => {
   assert.ok(element.dataset.blink)
   assert.equal(element.textContent, '中')
   assert.deepEqual(painter.cursorBox(), {
-    left: (2 * 538) / 64,
+    left: (2 * 537) / 64,
     top: 0,
-    width: (2 * 538) / 64,
+    width: (2 * 537) / 64,
     height: 18,
   })
   // A move starts the blink over.
@@ -436,8 +436,8 @@ test('hit testing, links and the selection work in the scaled box the page shows
     fake(root.children.at(-3)).children.map((box) => fake(box).style.cssText as string)
   painter.setSelection({ start: { column: 28, row: 0 }, end: { column: 0, row: 1 } })
   assert.deepEqual(selected(), [
-    `left:${(28 * 538) / 64}px;top:0px;width:${(2 * 538) / 64}px;`,
-    `left:0px;top:18px;width:${538 / 64}px;`,
+    `left:${(28 * 537) / 64}px;top:0px;width:${(2 * 537) / 64}px;`,
+    `left:0px;top:18px;width:${537 / 64}px;`,
   ])
   painter.setSelection()
   assert.deepEqual(selected(), [])

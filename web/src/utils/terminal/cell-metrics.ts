@@ -24,8 +24,9 @@ export interface CellGeometry extends CellMetrics {
  * pixels, where `ratio` layout pixels make one CSS pixel.
  *
  * The height is a whole number of layout pixels, as xterm.js sizes its rows. Without ligatures the
- * width is rounded up to a layout unit and the difference becomes letter-spacing, so any number of
- * cells is an exact length. Ligatures only form at zero letter-spacing: there the width stays the
+ * width is rounded down to a layout unit and the difference becomes letter-spacing, so any number
+ * of cells is an exact length, and never longer than the font's own: a grid sized from the advance
+ * fits on every screen. Ligatures only form at zero letter-spacing: there the width stays the
  * font's own advance and boxes are placed on rounded edges instead.
  */
 export function cellGeometry(font: {
@@ -38,7 +39,7 @@ export function cellGeometry(font: {
 }): CellGeometry {
   const { advance, ratio } = font
   const units = ratio * 64
-  const width = font.ligatures ? advance : Math.ceil(advance * units - 0.01) / units
+  const width = font.ligatures ? advance : Math.floor(advance * units + 0.01) / units
   return {
     width,
     height: Math.max(1, Math.floor(Math.ceil(font.fontHeight * ratio) * font.lineHeight)) / ratio,

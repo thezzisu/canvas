@@ -15,7 +15,7 @@ test('without ligatures a cell is a whole number of layout units', () => {
         `${advance}@${ratio}`,
       )
       // Measurement noise below a hundredth of a unit is not worth a whole unit of spacing.
-      assert.ok(cell.spacing > -0.011 / cell.units && cell.spacing < 1 / cell.units)
+      assert.ok(cell.spacing > -1 / cell.units && cell.spacing < 0.011 / cell.units)
       assert.ok(Math.abs(cell.width - cell.spacing - advance) < 1e-9)
       // Any number of cells is then an exact length: no drift over a long row.
       assert.equal(columnEdge(500, cell), 500 * Math.round(cell.width * cell.units))

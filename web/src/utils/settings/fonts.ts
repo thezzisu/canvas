@@ -68,5 +68,6 @@ export async function measureTerminalCell(settings: ContentFontSettings): Promis
     window.devicePixelRatio || 1,
   )
   if (!(font.width > 0 && font.height > 0)) throw new Error(t('common.fontLoadFailed'))
-  return { width: font.width, height: font.height }
+  // The font's own advance: how a screen rounds its cells is not shared.
+  return { width: font.width - font.spacing, height: font.height }
 }

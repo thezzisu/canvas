@@ -113,10 +113,14 @@ export function bindMobileKeyboard(input: HTMLElement, options: KeyboardOptions)
     const focused = hold && !paused && !composer && options.active()
     const typing = focused && open && mode === 'system'
     if (!typing) {
-      if (input.isContentEditable || !focused) input.blur()
+      const editing = input.isContentEditable
+      if (editing || !focused) input.blur()
       // A composition can end after the blur; its text is sent before the input goes read-only.
-      await options.finishEditing()
-      if (current !== revision) return
+      // An input that was not editable has none, and takes focus at once.
+      if (editing) {
+        await options.finishEditing()
+        if (current !== revision) return
+      }
     }
     options.setEditable(typing)
     if (!focused) return

@@ -8,7 +8,7 @@
   font-kerning: none;
   line-height: var(--tg-h);
   direction: ltr;
-  cursor: text;
+  cursor: default;
   user-select: none;
   -webkit-user-select: none;
   color: var(--tg-fg);
