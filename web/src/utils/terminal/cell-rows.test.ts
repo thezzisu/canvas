@@ -1,32 +1,37 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  CELL_ATTR,
-  CELL_DEFAULT,
+  ATTR,
+  DEFAULT_COLOUR,
   UNDERLINE_SHIFT,
-  runCells,
   type CellRun,
   type CellStyle,
-} from './cell-grid.ts'
+} from '../../../../shared/cell-wire.ts'
 import { createGlyphs } from './cell-glyphs.ts'
 import { clusterAt, planRow, rowText, type RowFont } from './cell-rows.ts'
 import { cellPaint, xtermPalette, type CellTheme } from './cell-style.ts'
 
-const theme: CellTheme = { cursor: 0, cursorAccent: 0, selectionBackground: 0x415168 }
+const theme: CellTheme = {
+  foreground: 0,
+  background: 0,
+  cursor: 0,
+  cursorAccent: 0,
+  selectionBackground: 0x415168,
+}
 const plain: CellStyle = {
   attrs: 0,
-  fg: CELL_DEFAULT,
-  bg: CELL_DEFAULT,
-  underline: CELL_DEFAULT,
+  fg: DEFAULT_COLOUR,
+  bg: DEFAULT_COLOUR,
+  underline: DEFAULT_COLOUR,
   link: 0,
 }
 const styles: CellStyle[] = [
   plain,
   { ...plain, fg: 0xff0000 },
   { ...plain, bg: 0x0000ff },
-  { ...plain, attrs: CELL_ATTR.bold },
+  { ...plain, attrs: ATTR.bold },
   { ...plain, attrs: 1 << UNDERLINE_SHIFT },
-  { ...plain, attrs: CELL_ATTR.blink },
+  { ...plain, attrs: ATTR.blink },
   { ...plain, fg: 0xff8800, bg: 0x005f00 },
 ]
 const paintOf = (index: number) => cellPaint(styles[index]!, xtermPalette, theme)
@@ -46,13 +51,19 @@ const font: RowFont = {
           ? 9
           : 8,
 }
-const plan = (runs: CellRun[]) => planRow(runs, paintOf, font, glyphs)
-const text = (run: string, style = 0): CellRun => ({ style, text: run })
-const clusters = (run: string[], style = 0, wide = false): CellRun => ({
-  style,
-  clusters: run,
-  wide,
-})
+type Piece = Omit<CellRun, 'column' | 'columns'>
+/** Runs side by side from the first column. */
+function row(pieces: Piece[]): CellRun[] {
+  let column = 0
+  return pieces.map((piece) => {
+    const run = { ...piece, column, columns: piece.text.length * (piece.wide ? 2 : 1) }
+    column += run.columns
+    return run
+  })
+}
+const plan = (pieces: Piece[]) => planRow(row(pieces), paintOf, font, glyphs)
+const text = (run: string, style = 0): Piece => ({ style, wide: false, text: run })
+const clusters = (run: string[], style = 0, wide = false): Piece => ({ style, wide, text: run })
 
 test('plain ASCII is one segment of bare text', () => {
   const { segments, fills, tiles } = plan([text('hello world')])
@@ -255,11 +266,7 @@ test('a long row is cut into segments, so rounding inside one cannot travel', ()
 })
 
 test('the cluster under a column, wide cells included', () => {
-  const runs = [text('ab'), clusters(['中', '文'], 1, true), clusters(['→'])]
-  assert.equal(
-    runs.reduce((sum, run) => sum + runCells(run), 0),
-    7,
-  )
+  const runs = row([text('ab'), clusters(['中', '文'], 1, true), clusters(['→'])])
   assert.deepEqual(clusterAt(runs, 1), { cluster: 'b', style: 0, column: 1, cells: 1 })
   assert.deepEqual(clusterAt(runs, 2), { cluster: '中', style: 1, column: 2, cells: 2 })
   assert.deepEqual(clusterAt(runs, 3), { cluster: '中', style: 1, column: 2, cells: 2 })
@@ -269,11 +276,9 @@ test('the cluster under a column, wide cells included', () => {
 })
 
 test('a row reads as text with the column of every unit', () => {
-  const { text: read, columns } = rowText([
-    text('a '),
-    clusters(['中', '😀'], 0, true),
-    clusters(['', 'é']),
-  ])
-  assert.equal(read, 'a 中😀 é')
-  assert.deepEqual(columns, [0, 1, 2, 4, 4, 6, 7, 8])
+  const { text: read, columns } = rowText(
+    row([text('a '), clusters(['中', '😀'], 0, true), clusters(['é'])]),
+  )
+  assert.equal(read, 'a 中😀é')
+  assert.deepEqual(columns, [0, 1, 2, 4, 4, 6, 7])
 })

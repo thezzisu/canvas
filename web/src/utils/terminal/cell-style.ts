@@ -1,14 +1,17 @@
 import {
-  CELL_ATTR,
-  CELL_DEFAULT,
-  CELL_PALETTE,
+  ATTR,
+  DEFAULT_COLOUR,
+  PALETTE_COLOUR,
   UNDERLINE_MASK,
   UNDERLINE_SHIFT,
   type CellStyle,
-} from './cell-grid'
+} from '../../../../shared/cell-wire'
 
 /** Colours the grid itself does not carry. All are 0xRRGGBB. */
 export interface CellTheme {
+  /** The default colours, for a window that names none of its own. */
+  foreground: number
+  background: number
   cursor: number
   /** The character under a block cursor. */
   cursorAccent: number
@@ -38,9 +41,8 @@ export const xtermPalette: readonly number[] = (() => {
   return colours
 })()
 
-/** A frame's own palette wins; otherwise the theme's ANSI colours sit on xterm's. */
-export function cellPalette(theme: CellTheme, frame?: readonly number[] | null): readonly number[] {
-  if (frame?.length === 256) return frame
+/** The theme's ANSI colours on xterm's palette. */
+export function cellPalette(theme: CellTheme): readonly number[] {
   return theme.ansi?.length
     ? [...theme.ansi, ...xtermPalette.slice(theme.ansi.length)]
     : xtermPalette
@@ -78,37 +80,37 @@ export function cellPaint(
   theme: CellTheme,
 ): CellPaint {
   const { attrs } = style
-  const bold = (attrs & CELL_ATTR.bold) !== 0
+  const bold = (attrs & ATTR.bold) !== 0
   const colour = (value: number, bright = false) => {
-    if (value === CELL_DEFAULT) return ''
-    if (value < CELL_PALETTE) return cssColour(value)
+    if (value === DEFAULT_COLOUR) return ''
+    if (value < PALETTE_COLOUR) return cssColour(value)
     const index = value & 255
     return cssColour(palette[bright && index < 8 ? index + 8 : index]!)
   }
   let fg = colour(style.fg, bold && theme.brightBold !== false)
   let bg = colour(style.bg)
-  if (attrs & CELL_ATTR.inverse) [fg, bg] = [bg || BACKGROUND, fg || FOREGROUND]
-  if (attrs & CELL_ATTR.selected) {
+  if (attrs & ATTR.inverse) [fg, bg] = [bg || BACKGROUND, fg || FOREGROUND]
+  if (attrs & ATTR.selected) {
     bg = 'var(--tg-select)'
     if (theme.selectionForeground !== undefined) fg = 'var(--tg-select-fg)'
   }
   let solid = fg || FOREGROUND
-  if (attrs & CELL_ATTR.dim) {
+  if (attrs & ATTR.dim) {
     solid = `color-mix(in srgb, ${solid} 50%, ${bg || BACKGROUND})`
     fg = `color-mix(in srgb, ${fg || FOREGROUND} 50%, transparent)`
   }
-  if (attrs & CELL_ATTR.invisible) {
+  if (attrs & ATTR.invisible) {
     fg = 'transparent'
     solid = bg || BACKGROUND
   }
   const underline = (attrs & UNDERLINE_MASK) >>> UNDERLINE_SHIFT
   const classes = [
     bold ? 'tg-b' : '',
-    attrs & CELL_ATTR.italic ? 'tg-i' : '',
+    attrs & ATTR.italic ? 'tg-i' : '',
     UNDERLINES[underline] ?? 'tg-u',
-    attrs & CELL_ATTR.strike ? 'tg-s' : '',
-    attrs & CELL_ATTR.overline ? 'tg-o' : '',
-    attrs & CELL_ATTR.blink ? 'tg-blink' : '',
+    attrs & ATTR.strike ? 'tg-s' : '',
+    attrs & ATTR.overline ? 'tg-o' : '',
+    attrs & (ATTR.blink | ATTR.rapidBlink) ? 'tg-blink' : '',
   ]
   const line = underline ? colour(style.underline) : ''
   return {
@@ -117,7 +119,7 @@ export function cellPaint(
     paper: bg,
     className: classes.filter(Boolean).join(' '),
     css: (fg ? `color:${fg};` : '') + (line ? `text-decoration-color:${line};` : ''),
-    face: (bold ? FACE_BOLD : 0) | (attrs & CELL_ATTR.italic ? FACE_ITALIC : 0),
+    face: (bold ? FACE_BOLD : 0) | (attrs & ATTR.italic ? FACE_ITALIC : 0),
     link: style.link,
   }
 }

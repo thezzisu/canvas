@@ -1,11 +1,4 @@
-import {
-  runCells,
-  type CellCursor,
-  type CellFrame,
-  type CellPatch,
-  type CellRun,
-  type CellStyle,
-} from '../../utils/terminal/cell-grid'
+import type { CellMirror, CellRun, CellStyle } from '../../../../shared/cell-wire'
 import { isDrawnGlyph } from '../../utils/terminal/cell-glyphs'
 import { detectLinks } from '../../utils/terminal/cell-links'
 import {
@@ -31,7 +24,22 @@ import {
   type CellPaint,
   type CellTheme,
 } from '../../utils/terminal/cell-style'
+import { selectedSpan, type CellRange } from '../../utils/terminal/cell-selection'
 import { layoutRatio, measureCellFont, type CellFont, type CellFontOptions } from './cell-font'
+
+/** The screen a painter shows: the mirror of a window, which the painter only reads. */
+export type CellScreen = Pick<
+  CellMirror,
+  | 'revision'
+  | 'cols'
+  | 'rows'
+  | 'foreground'
+  | 'background'
+  | 'cursor'
+  | 'links'
+  | 'styles'
+  | 'lines'
+>
 
 export interface CellPainterOptions {
   font: CellFontOptions
@@ -42,7 +50,7 @@ export interface CellPainterOptions {
   onPaint?(revision: number): void
   /** When the cell size changes: a new font, or a new pixel ratio. */
   onMetrics?(metrics: CellMetrics): void
-  /** A click on a hyperlink or a web address. The painter opens nothing itself. */
+  /** A primary click on a hyperlink or a web address. The painter opens nothing itself. */
   onLink?(uri: string, event: MouseEvent): void
 }
 
@@ -133,14 +141,15 @@ function watchRatio() {
 }
 
 /**
- * Paints a grid of cells as DOM rows. It runs no terminal emulation and owns no selection: it
- * shows the frames and patches it is given, and reports cells and links back.
+ * Paints a screen of cells as DOM rows. It runs no terminal emulation and keeps no copy of the
+ * screen: told which rows changed, it reads them from the mirror, and reports cells and links back.
  *
  * A paint rebuilds only the rows that changed and reads nothing from layout. Sizes come from one
  * measurement per font, shared by every painter.
  */
 export class CellPainter {
   readonly element: HTMLDivElement
+  private readonly selectionLayer: HTMLDivElement
   private readonly linkLayer: HTMLDivElement
   private readonly cursorElement: HTMLDivElement
   private preeditElement: HTMLDivElement | undefined
@@ -154,16 +163,8 @@ export class CellPainter {
   private focused = false
   private disposed = false
 
-  private revision = -1
-  private cols = 0
-  private rows = 0
-  private lines: (readonly CellRun[])[] = []
-  private styles: CellStyle[] = []
-  private links: string[] = []
   private paints: (CellPaint | undefined)[] = []
-  private framePalette: readonly number[] | null | undefined
   private palette: readonly number[]
-  private cursor: CellCursor | undefined
   private rowElements: HTMLDivElement[] = []
   private dirty: boolean[] = []
 
@@ -172,8 +173,13 @@ export class CellPainter {
   private preedit = ''
   private pointer: { column: number; row: number } | undefined
   private hoverKey = ''
+  private selection: CellRange | undefined
 
-  constructor(host: HTMLElement, options: CellPainterOptions) {
+  constructor(
+    host: HTMLElement,
+    private readonly screen: CellScreen,
+    options: CellPainterOptions,
+  ) {
     this.options = options
     this.fontOptions = options.font
     this.theme = options.theme
@@ -184,14 +190,16 @@ export class CellPainter {
     element.setAttribute('role', 'group')
     element.setAttribute('aria-live', 'off')
     if (options.label) element.setAttribute('aria-label', options.label)
+    this.selectionLayer = document.createElement('div')
+    this.selectionLayer.className = 'tg-selection'
     this.linkLayer = document.createElement('div')
     this.linkLayer.className = 'tg-links'
     this.cursorElement = document.createElement('div')
     this.cursorElement.className = 'tg-cursor'
     this.cursorElement.hidden = true
-    for (const overlay of [this.linkLayer, this.cursorElement])
+    for (const overlay of [this.selectionLayer, this.linkLayer, this.cursorElement])
       overlay.setAttribute('aria-hidden', 'true')
-    element.append(this.linkLayer, this.cursorElement)
+    element.append(this.selectionLayer, this.linkLayer, this.cursorElement)
     element.addEventListener('mousemove', this.pointerMoved)
     element.addEventListener('mouseleave', this.pointerLeft)
     element.addEventListener('click', this.clicked)
@@ -208,59 +216,28 @@ export class CellPainter {
     return { width: font.width, height: font.height }
   }
 
-  /** Replaces everything shown. */
-  frame(frame: CellFrame) {
-    this.cols = frame.cols
-    this.rows = frame.rows
-    this.lines = Array.from({ length: frame.rows }, (_, y) => frame.lines[y] ?? NO_RUNS)
-    this.styles = [...frame.styles]
-    this.links = [...frame.links]
-    this.paints = []
-    this.framePalette = frame.palette
-    this.palette = cellPalette(this.theme, frame.palette)
-    this.cursor = frame.cursor
-    this.revision = frame.revision
-    const style = this.element.style
-    style.setProperty('--tg-fg', cssColour(frame.foreground))
-    style.setProperty('--tg-bg', cssColour(frame.background))
-    while (this.rowElements.length > frame.rows) this.rowElements.pop()!.remove()
-    while (this.rowElements.length < frame.rows) {
-      const row = document.createElement('div')
-      row.className = 'tg-row'
-      this.linkLayer.before(row)
-      this.rowElements.push(row)
-    }
-    this.dirty = new Array<boolean>(frame.rows).fill(true)
-    this.sized = false
-    schedule(this)
+  /** The window's default background, which also fills the margins around the grid. */
+  get background(): string {
+    return cssColour(this.screen.background ?? this.theme.background)
   }
 
-  /** Applies changed rows. False when the patch is for another revision: ask for a frame. */
-  patch(patch: CellPatch): boolean {
-    if (this.revision < 0 || patch.base !== this.revision) return false
-    this.styles.push(...patch.styles)
-    this.links.push(...patch.links)
-    const scroll = Math.min(patch.scroll, this.rows)
-    if (scroll > 0) {
-      // The rows that left the top become the new rows at the bottom.
-      const moved = this.rowElements.splice(0, scroll)
-      this.linkLayer.before(...moved)
-      this.rowElements.push(...moved)
-      this.lines = [
-        ...this.lines.slice(scroll),
-        ...new Array<readonly CellRun[]>(scroll).fill(NO_RUNS),
-      ]
-      this.dirty = [...this.dirty.slice(scroll), ...new Array<boolean>(scroll).fill(true)]
-    }
-    for (const { y, runs } of patch.rows) {
-      if (y >= this.rows) continue
-      this.lines[y] = runs
-      this.dirty[y] = true
-    }
-    this.cursor = patch.cursor
-    this.revision = patch.revision
+  /** The mirror applied a message: a frame replaced everything, otherwise these rows changed. */
+  update(change: { frame: boolean; rows: readonly number[] }) {
+    const { screen } = this
+    if (change.frame) {
+      this.paints = []
+      this.applyDefaults()
+      while (this.rowElements.length > screen.rows) this.rowElements.pop()!.remove()
+      while (this.rowElements.length < screen.rows) {
+        const row = document.createElement('div')
+        row.className = 'tg-row'
+        this.selectionLayer.before(row)
+        this.rowElements.push(row)
+      }
+      this.dirty = new Array<boolean>(screen.rows).fill(true)
+      this.sized = false
+    } else for (const y of change.rows) this.dirty[y] = true
     schedule(this)
-    return true
   }
 
   setFont(font: CellFontOptions) {
@@ -271,17 +248,17 @@ export class CellPainter {
   /** Measures the cell again before the next paint: the pixel ratio or a CSS zoom changed. */
   refreshMetrics() {
     this.stale = true
-    if (this.revision >= 0) schedule(this)
+    if (this.screen.revision >= 0) schedule(this)
     else if (this.font) this.measure()
   }
 
   setTheme(theme: CellTheme) {
     this.theme = theme
-    this.palette = cellPalette(theme, this.framePalette)
+    this.palette = cellPalette(theme)
     this.paints = []
     this.applyTheme()
     this.dirty.fill(true)
-    if (this.revision >= 0) schedule(this)
+    if (this.screen.revision >= 0) schedule(this)
   }
 
   /** Whether this grid has the keyboard: without it the cursor is an outline and does not blink. */
@@ -297,21 +274,34 @@ export class CellPainter {
     this.paintCursor()
   }
 
+  /** The cells shown as selected, from one cell through another in reading order. */
+  setSelection(range?: CellRange) {
+    this.selection = range
+    this.paintSelection()
+  }
+
+  /** Where a pointer that sends no mouse events is: the link under it is underlined. */
+  setPointer(cell?: { column: number; row: number }) {
+    this.pointer = cell
+    this.showHover()
+  }
+
+  /** The hyperlink or web address at a cell. */
+  linkAt(column: number, row: number): string | undefined {
+    return this.link(column, row)?.uri
+  }
+
   /** The cell under a viewport point, clamped to the grid; exact whatever scales the page. */
   cellAt(clientX: number, clientY: number): { column: number; row: number } {
-    return cellFromPoint(
-      this.element.getBoundingClientRect(),
-      { cols: this.cols, rows: this.rows },
-      clientX,
-      clientY,
-    )
+    return cellFromPoint(this.element.getBoundingClientRect(), this.screen, clientX, clientY)
   }
 
   /** The cursor's cell in the grid's own unscaled CSS pixels, to place an input method. */
   cursorBox(): { left: number; top: number; width: number; height: number } | undefined {
-    const { cursor, font } = this
-    if (!cursor || !font) return
-    const cell = clusterAt(this.lines[cursor.y] ?? NO_RUNS, cursor.x)
+    const { font } = this
+    const { cursor } = this.screen
+    if (!font) return
+    const cell = clusterAt(this.screen.lines[cursor.y] ?? NO_RUNS, cursor.x)
     const column = cell?.column ?? cursor.x
     return {
       left: columnEdge(column, font) / font.units,
@@ -324,22 +314,24 @@ export class CellPainter {
   /** Paints now what would otherwise wait for the next animation frame. */
   flush() {
     waiting.delete(this)
-    if (this.disposed || this.revision < 0) return
+    const { screen } = this
+    if (this.disposed || screen.revision < 0) return
     const font = this.measure()
     if (!this.sized) {
       const style = this.element.style
-      style.width = `${unitsToCss(columnEdge(this.cols, font), font.units)}px`
-      style.height = `${this.rows * font.height}px`
+      style.width = `${unitsToCss(columnEdge(screen.cols, font), font.units)}px`
+      style.height = `${screen.rows * font.height}px`
       this.sized = true
+      this.paintSelection()
     }
-    for (let y = 0; y < this.rows; y++) {
+    for (let y = 0; y < screen.rows; y++) {
       if (!this.dirty[y]) continue
       this.dirty[y] = false
       this.paintRow(y, font)
     }
     this.paintCursor()
     this.showHover(true)
-    this.options.onPaint?.(this.revision)
+    this.options.onPaint?.(screen.revision)
   }
 
   dispose() {
@@ -353,9 +345,16 @@ export class CellPainter {
     this.element.remove()
   }
 
+  private applyDefaults() {
+    const style = this.element.style
+    style.setProperty('--tg-fg', cssColour(this.screen.foreground ?? this.theme.foreground))
+    style.setProperty('--tg-bg', this.background)
+  }
+
   private applyTheme() {
     const style = this.element.style
     const { theme } = this
+    this.applyDefaults()
     style.setProperty('--tg-cursor', cssColour(theme.cursor))
     style.setProperty('--tg-cursor-accent', cssColour(theme.cursorAccent))
     style.setProperty('--tg-select', cssColour(theme.selectionBackground))
@@ -394,10 +393,14 @@ export class CellPainter {
   }
 
   private readonly paintOf = (index: number): CellPaint =>
-    (this.paints[index] ??= cellPaint(this.styles[index] ?? NO_STYLE, this.palette, this.theme))
+    (this.paints[index] ??= cellPaint(
+      this.screen.styles[index] ?? NO_STYLE,
+      this.palette,
+      this.theme,
+    ))
 
   private paintRow(y: number, font: CellFont) {
-    const plan = planRow(this.lines[y]!, this.paintOf, font, font.glyphs)
+    const plan = planRow(this.screen.lines[y] ?? NO_RUNS, this.paintOf, font, font.glyphs)
     const row = this.rowElements[y]!
     const background = rowBackground(plan, font)
     if (row.style.background !== background) row.style.background = background
@@ -444,14 +447,15 @@ export class CellPainter {
   }
 
   private paintCursor() {
-    const { cursor, font, cursorElement: element } = this
-    const box = cursor?.visible && cursor.x < this.cols && cursor.y < this.rows && this.cursorBox()
+    const { font, cursorElement: element } = this
+    const { cursor, lines } = this.screen
+    const box = cursor.visible && this.cursorBox()
     element.hidden = !box
     if (this.preeditElement) this.preeditElement.hidden = !box || !this.preedit
-    if (!box || !cursor || !font) return
+    if (!box || !font) return
     const place = `translate(${box.left}px,${box.top}px)`
     const shape = this.focused ? cursor.shape : 'outline'
-    const cell = shape === 'block' ? clusterAt(this.lines[cursor.y]!, cursor.x) : undefined
+    const cell = shape === 'block' ? clusterAt(lines[cursor.y] ?? NO_RUNS, cursor.x) : undefined
     const code = cell?.cluster.codePointAt(0) ?? 0
     const drawn =
       !!cell && cell.cells === 1 && cell.cluster.length === 1 && isDrawnGlyph(code)
@@ -490,35 +494,47 @@ export class CellPainter {
     this.preeditElement.style.transform = place
   }
 
-  /** The hyperlink or web address at a cell. */
-  private linkAt(column: number, row: number): LinkHit | undefined {
-    const runs = this.lines[row]
+  /** Marks the selected cells, row by row, over the text. */
+  private paintSelection() {
+    const { font, selection, screen } = this
+    const boxes: HTMLElement[] = []
+    if (font && selection)
+      for (let row = selection.start.row; row <= selection.end.row && row < screen.rows; row++) {
+        const [from, to] = selectedSpan(selection, row, screen.cols)
+        const left = columnEdge(from, font)
+        const element = document.createElement('div')
+        element.style.cssText = `left:${left / font.units}px;top:${row * font.height}px;width:${(columnEdge(to, font) - left) / font.units}px;`
+        boxes.push(element)
+      }
+    this.selectionLayer.replaceChildren(...boxes)
+  }
+
+  private link(column: number, row: number): LinkHit | undefined {
+    const { lines, links, cols } = this.screen
+    const runs = lines[row]
     const cell = runs && clusterAt(runs, column)
     if (!runs || !cell) return
     const link = this.paintOf(cell.style).link
     const span = (y: number, from: number, to: number) => {
       const pieces: LinkPiece[] = []
-      let start = 0
-      for (const run of this.lines[y]!) {
-        const end = start + runCells(run)
+      for (const run of lines[y]!) {
         const paint = this.paintOf(run.style)
-        const left = Math.max(start, from)
-        const right = Math.min(end, to)
+        const left = Math.max(run.column, from)
+        const right = Math.min(run.column + run.columns, to)
         if (left < right && (!link || paint.link === link)) {
           const last = pieces.at(-1)
           if (last && last.column + last.cells === left && last.ink === paint.ink)
             last.cells += right - left
           else pieces.push({ row: y, column: left, cells: right - left, ink: paint.ink })
         }
-        start = end
       }
       return pieces
     }
     if (link) {
-      const uri = this.links[link - 1]
+      const uri = links[link - 1]
       if (!uri) return
       // A hyperlink may wrap and change style: every cell that carries it is the link.
-      const pieces = () => this.lines.flatMap((_, y) => span(y, 0, this.cols))
+      const pieces = () => lines.flatMap((_, y) => span(y, 0, cols))
       return { uri, key: `link ${link}`, pieces }
     }
     const { text, columns } = rowText(runs)
@@ -537,7 +553,7 @@ export class CellPainter {
   /** Underlines the link under the pointer, on every row it covers. */
   private showHover(repainted = false) {
     const { pointer, font } = this
-    const link = pointer && this.linkAt(pointer.column, pointer.row)
+    const link = pointer && this.link(pointer.column, pointer.row)
     const key = link?.key ?? ''
     // The same link is redrawn only when the rows under it may have changed.
     if (key === this.hoverKey && !(repainted && key)) return
@@ -567,9 +583,9 @@ export class CellPainter {
   }
 
   private readonly clicked = (event: MouseEvent) => {
-    if (!this.options.onLink) return
+    if (!this.options.onLink || event.button !== 0) return
     const cell = this.cellAt(event.clientX, event.clientY)
-    const link = this.linkAt(cell.column, cell.row)
-    if (link) this.options.onLink(link.uri, event)
+    const uri = this.linkAt(cell.column, cell.row)
+    if (uri) this.options.onLink(uri, event)
   }
 }

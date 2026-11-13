@@ -1,4 +1,4 @@
-import { runCells, type CellRun } from './cell-grid'
+import type { CellRun } from '../../../../shared/cell-wire'
 import { inkMix, isDrawnGlyph, type Glyphs } from './cell-glyphs'
 import { BACKGROUND, type CellPaint } from './cell-style'
 
@@ -182,7 +182,7 @@ export function planRow(
 
   for (const run of runs) {
     const paint = paintOf(run.style)
-    if (!('text' in run)) fit(paint, run.clusters, run.wide ? 2 : 1)
+    if (typeof run.text !== 'string') fit(paint, run.text, run.wide ? 2 : 1)
     else if (font.exact[paint.face]) add(paint, run.text, run.text.length)
     else fit(paint, run.text, 1)
   }
@@ -208,42 +208,34 @@ export function clusterAt(
   runs: readonly CellRun[],
   column: number,
 ): { cluster: string; style: number; column: number; cells: number } | undefined {
-  let start = 0
   for (const run of runs) {
-    const cells = runCells(run)
-    if (column < start + cells) {
-      const each = 'text' in run || !run.wide ? 1 : 2
-      const index = Math.floor((column - start) / each)
-      return {
-        cluster: 'text' in run ? run.text[index]! : run.clusters[index]!,
-        style: run.style,
-        column: start + index * each,
-        cells: each,
-      }
+    if (column >= run.column + run.columns) continue
+    const each = run.wide ? 2 : 1
+    const index = Math.floor((column - run.column) / each)
+    return {
+      cluster: run.text[index]!,
+      style: run.style,
+      column: run.column + index * each,
+      cells: each,
     }
-    start += cells
   }
 }
 
-/**
- * A row as a string, with the column each UTF-16 unit starts at and, last, the row's end.
- * A cell with nothing visible in it reads as a space.
- */
+/** A row as a string, with the column each UTF-16 unit starts at and, last, the row's end. */
 export function rowText(runs: readonly CellRun[]): { text: string; columns: number[] } {
   let text = ''
   let column = 0
   const columns: number[] = []
   for (const run of runs) {
-    if ('text' in run) {
+    if (typeof run.text === 'string') {
       for (let index = 0; index < run.text.length; index++) columns.push(column + index)
       text += run.text
       column += run.text.length
       continue
     }
-    for (const cluster of run.clusters) {
-      const shown = cluster || ' '
-      for (let index = 0; index < shown.length; index++) columns.push(column)
-      text += shown
+    for (const cluster of run.text) {
+      for (let index = 0; index < cluster.length; index++) columns.push(column)
+      text += cluster
       column += run.wide ? 2 : 1
     }
   }

@@ -81,6 +81,7 @@
 .tg-blink {
   animation: tg-blink 1s steps(1) infinite;
 }
+.tg-selection > div,
 .tg-links > div,
 .tg-cursor,
 .tg-preedit {
@@ -89,6 +90,11 @@
   left: 0;
   height: var(--tg-h);
   pointer-events: none;
+}
+/* Over the text, so that a selection never repaints a row. */
+.tg-selection > div {
+  background: var(--tg-select);
+  opacity: 0.5;
 }
 .tg-links > div {
   background: linear-gradient(currentColor 0 0) 0 calc(100% - 0.1em) / 100% var(--tg-line) no-repeat;

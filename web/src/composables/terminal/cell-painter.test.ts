@@ -1,14 +1,13 @@
 import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  CELL_ATTR,
-  CELL_DEFAULT,
+  ATTR,
+  DEFAULT_COLOUR,
   type CellCursor,
-  type CellFrame,
   type CellRun,
   type CellStyle,
-} from '../../utils/terminal/cell-grid.ts'
-import { CellPainter, type CellPainterOptions } from './cell-painter.ts'
+} from '../../../../shared/cell-wire.ts'
+import { CellPainter, type CellPainterOptions, type CellScreen } from './cell-painter.ts'
 
 /** Just enough of an element for the painter: a tree, inline styles and events. */
 class FakeElement extends EventTarget {
@@ -142,30 +141,69 @@ function page(t: TestContext, ratio = 1) {
 
 const plain: CellStyle = {
   attrs: 0,
-  fg: CELL_DEFAULT,
-  bg: CELL_DEFAULT,
-  underline: CELL_DEFAULT,
+  fg: DEFAULT_COLOUR,
+  bg: DEFAULT_COLOUR,
+  underline: DEFAULT_COLOUR,
   link: 0,
 }
 const cursor: CellCursor = { x: 0, y: 0, shape: 'block', visible: true, blink: true }
-const line = (text: string, style = 0): CellRun[] => [{ style, text }]
-const frameOf = (lines: CellRun[][], extra: Partial<CellFrame> = {}): CellFrame => ({
-  revision: 1,
-  cols: 20,
-  rows: lines.length,
-  foreground: 0xd5d7dd,
-  background: 0x111317,
-  cursor,
-  styles: [plain],
-  links: [],
-  lines,
-  ...extra,
-})
+type Piece = Omit<CellRun, 'column' | 'columns' | 'wide'> & { wide?: boolean }
+/** Runs side by side from the first column. */
+function runs(pieces: Piece[]): CellRun[] {
+  let column = 0
+  return pieces.map((piece) => {
+    const wide = !!piece.wide
+    const run = { ...piece, wide, column, columns: piece.text.length * (wide ? 2 : 1) }
+    column += run.columns
+    return run
+  })
+}
+const line = (text: string, style = 0): CellRun[] => runs([{ style, text }])
 const options = (extra: Partial<CellPainterOptions> = {}): CellPainterOptions => ({
   font: { family: 'monospace', size: 14, lineHeight: 1, ligatures: false },
-  theme: { cursor: 0xe8b183, cursorAccent: 0x111317, selectionBackground: 0x415168 },
+  theme: {
+    foreground: 0xd5d7dd,
+    background: 0x111317,
+    cursor: 0xe8b183,
+    cursorAccent: 0x111317,
+    selectionBackground: 0x415168,
+  },
   ...extra,
 })
+/** A painter on a screen the test changes as a mirror would. */
+function mount(body: unknown, extra: Partial<CellPainterOptions> = {}) {
+  const screen: CellScreen = {
+    revision: -1,
+    cols: 0,
+    rows: 0,
+    cursor,
+    links: [],
+    styles: [],
+    lines: [],
+  }
+  const painter = new CellPainter(body as HTMLElement, screen, options(extra))
+  return {
+    painter,
+    frame(lines: CellRun[][], extra: Partial<CellScreen> = {}) {
+      Object.assign(screen, {
+        revision: 1,
+        cols: 20,
+        rows: lines.length,
+        cursor,
+        styles: [plain],
+        links: [],
+        lines,
+        ...extra,
+      })
+      painter.update({ frame: true, rows: lines.map((_, y) => y) })
+    },
+    patch(revision: number, rows: Record<number, CellRun[]>, extra: Partial<CellScreen> = {}) {
+      for (const [y, runs] of Object.entries(rows)) screen.lines[+y] = runs
+      Object.assign(screen, { revision, ...extra })
+      painter.update({ frame: false, rows: Object.keys(rows).map(Number) })
+    },
+  }
+}
 const fake = (element: unknown) => element as FakeElement
 const rowsOf = (painter: CellPainter) =>
   fake(painter.element).children.filter(
@@ -176,15 +214,12 @@ test('a frame is painted in the next animation frame and reported once', (t) => 
   const dom = page(t)
   const painted: number[] = []
   const metrics: unknown[] = []
-  const painter = new CellPainter(
-    dom.body as unknown as HTMLElement,
-    options({
-      label: 'shell',
-      onPaint: (revision) => painted.push(revision),
-      onMetrics: (cell) => metrics.push(cell),
-    }),
-  )
-  painter.frame(frameOf([line('one'), line('two')]))
+  const { painter, frame } = mount(dom.body, {
+    label: 'shell',
+    onPaint: (revision) => painted.push(revision),
+    onMetrics: (cell) => metrics.push(cell),
+  })
+  frame([line('one'), line('two')])
   assert.deepEqual(painted, [])
   assert.equal(dom.pending(), 1)
   dom.frame()
@@ -199,8 +234,10 @@ test('a frame is painted in the next animation frame and reported once', (t) => 
   assert.deepEqual(painter.metrics, { width: 538 / 64, height: 18 })
   assert.equal(root.style.width, `${(20 * 538 + 0.2) / 64}px`)
   assert.equal(root.style.height, '36px')
+  // A window that names no colours of its own takes the theme's.
   assert.equal(root.properties.get('--tg-fg'), '#d5d7dd')
   assert.equal(root.properties.get('--tg-bg'), '#111317')
+  assert.equal(painter.background, '#111317')
   assert.equal(root.attributes.get('role'), 'group')
   assert.equal(root.attributes.get('aria-label'), 'shell')
   assert.equal(root.attributes.get('aria-live'), 'off')
@@ -208,27 +245,16 @@ test('a frame is painted in the next animation frame and reported once', (t) => 
   assert.equal(root.parent, undefined)
 })
 
-test('a patch repaints its rows only, and one for another revision is refused', (t) => {
+test('changed rows alone are repainted', (t) => {
   const dom = page(t)
   const painted: number[] = []
-  const painter = new CellPainter(
-    dom.body as unknown as HTMLElement,
-    options({ onPaint: (revision) => painted.push(revision) }),
-  )
-  painter.frame(frameOf([line('one'), line('two'), line('three')]))
+  const { painter, frame, patch } = mount(dom.body, {
+    onPaint: (revision) => painted.push(revision),
+  })
+  frame([line('one'), line('two'), line('three')])
   dom.frame()
   const before = rowsOf(painter).map((row) => row.children[0])
-  const patch = {
-    revision: 2,
-    base: 1,
-    cursor,
-    styles: [],
-    links: [],
-    scroll: 0,
-    rows: [{ y: 1, runs: line('TWO') }],
-  }
-  assert.equal(painter.patch(patch), true)
-  assert.equal(painter.patch({ ...patch, revision: 9, base: 7 }), false)
+  patch(2, { 1: line('TWO') })
   dom.frame()
   const after = rowsOf(painter)
   assert.deepEqual(
@@ -240,80 +266,43 @@ test('a patch repaints its rows only, and one for another revision is refused', 
   assert.equal(after[2]!.children[0], before[2])
   assert.deepEqual(painted, [1, 2])
   // Several changes before a frame are one paint, of the last revision.
-  painter.patch({ ...patch, revision: 3, base: 2, rows: [{ y: 0, runs: line('a') }] })
-  painter.patch({ ...patch, revision: 4, base: 3, rows: [{ y: 0, runs: line('b') }] })
+  patch(3, { 0: line('a') })
+  patch(4, { 0: line('b') })
   assert.equal(dom.pending(), 1)
   dom.frame()
   assert.deepEqual(painted, [1, 2, 4])
   assert.equal(rowsOf(painter)[0]!.textContent, 'b')
-  painter.dispose()
-})
-
-test('a scroll moves the row elements and paints only what came in', (t) => {
-  const dom = page(t)
-  const painter = new CellPainter(dom.body as unknown as HTMLElement, options())
-  painter.frame(frameOf([line('1'), line('2'), line('3'), line('4')]))
-  dom.frame()
-  const before = rowsOf(painter)
-  const kept = before.map((row) => row.children[0])
-  painter.patch({
-    revision: 2,
-    base: 1,
-    cursor,
-    styles: [],
-    links: [],
-    scroll: 2,
-    rows: [
-      { y: 2, runs: line('5') },
-      { y: 3, runs: line('6') },
-    ],
-  })
-  dom.frame()
-  const after = rowsOf(painter)
-  assert.deepEqual(
-    after.map((row) => row.textContent),
-    ['3', '4', '5', '6'],
-  )
-  assert.deepEqual(after, [before[2], before[3], before[0], before[1]])
-  assert.equal(after[0]!.children[0], kept[2])
-  assert.equal(after[1]!.children[0], kept[3])
   // The overlays stay last, above every row.
   const classes = fake(painter.element).children.map((child) => fake(child).className)
-  assert.deepEqual(classes.slice(-2), ['tg-links', 'tg-cursor'])
+  assert.deepEqual(classes.slice(-3), ['tg-selection', 'tg-links', 'tg-cursor'])
   painter.dispose()
 })
 
 test('a new size keeps the rows it can and a new table replaces the old', (t) => {
   const dom = page(t)
-  const painter = new CellPainter(dom.body as unknown as HTMLElement, options())
-  painter.frame(frameOf([line('1'), line('2'), line('3')]))
+  const { painter, frame, patch } = mount(dom.body)
+  frame([line('1'), line('2'), line('3')])
   dom.frame()
   const red: CellStyle = { ...plain, fg: 0xff0000 }
-  painter.frame(frameOf([line('x', 1)], { revision: 5, cols: 10, styles: [plain, red] }))
+  frame([line('x', 1)], { revision: 5, cols: 10, styles: [plain, red], background: 0x202020 })
   dom.frame()
   const rows = rowsOf(painter)
   assert.equal(rows.length, 1)
   const segment = fake(rows[0]!.children[0])
   assert.equal(fake(segment.children[0]).style.cssText, 'color:#ff0000;')
   assert.equal(fake(painter.element).style.width, `${(10 * 538 + 0.2) / 64}px`)
+  assert.equal(painter.background, '#202020')
   // Styles appended by a patch continue the table.
-  painter.patch({
-    revision: 6,
-    base: 5,
-    cursor,
-    styles: [{ ...plain, bg: 0x00ff00 }],
-    links: [],
-    scroll: 0,
-    rows: [
-      {
-        y: 0,
-        runs: [
-          { style: 2, text: 'ab' },
-          { style: 0, text: 'cd' },
-        ],
-      },
-    ],
-  })
+  patch(
+    6,
+    {
+      0: runs([
+        { style: 2, text: 'ab' },
+        { style: 0, text: 'cd' },
+      ]),
+    },
+    { styles: [plain, red, { ...plain, bg: 0x00ff00 }] },
+  )
   dom.frame()
   assert.equal(
     rowsOf(painter)[0]!.style.background,
@@ -325,32 +314,22 @@ test('a new size keeps the rows it can and a new table replaces the old', (t) =>
 test('fonts are measured once, however many painters and paints', (t) => {
   const dom = page(t)
   const font = { family: 'once', size: 14, lineHeight: 1, ligatures: false }
-  const painters = Array.from(
-    { length: 40 },
-    () => new CellPainter(dom.body as unknown as HTMLElement, options({ font })),
-  )
-  for (const painter of painters)
-    painter.frame(
-      frameOf([line('plain ascii'), [{ style: 0, clusters: ['中', '文'], wide: true }]]),
-    )
+  const mounted = Array.from({ length: 40 }, () => mount(dom.body, { font }))
+  const wide = runs([{ style: 0, text: ['中', '文'], wide: true }])
+  for (const { frame } of mounted) frame([line('plain ascii'), wide])
   dom.frame()
   const first = dom.measured.length
   assert.ok(first > 0 && first < 12, `${first} measurements`)
-  for (const painter of painters)
-    painter.frame(
-      frameOf([line('other text'), [{ style: 0, clusters: ['中', '文'], wide: true }]], {
-        revision: 2,
-      }),
-    )
+  for (const { frame } of mounted) frame([line('other text'), wide], { revision: 2 })
   dom.frame()
   assert.equal(dom.measured.length, first)
-  for (const painter of painters) painter.dispose()
+  for (const { painter } of mounted) painter.dispose()
 })
 
 test('rows are whole device pixels at a fractional ratio', (t) => {
   const dom = page(t, 2.625)
-  const painter = new CellPainter(dom.body as unknown as HTMLElement, options())
-  painter.frame(frameOf([line('a')]))
+  const { painter, frame } = mount(dom.body)
+  frame([line('a')])
   dom.frame()
   assert.equal(painter.metrics.height, 48 / 2.625)
   assert.equal(Number.isInteger(+(painter.metrics.width * 2.625 * 64).toFixed(6)), true)
@@ -359,12 +338,16 @@ test('rows are whole device pixels at a fractional ratio', (t) => {
 
 test('the cursor follows focus and covers a wide cell whole', (t) => {
   const dom = page(t)
-  const painter = new CellPainter(dom.body as unknown as HTMLElement, options())
-  const wide: CellRun[] = [
-    { style: 0, text: 'ab' },
-    { style: 0, clusters: ['中'], wide: true },
-  ]
-  painter.frame(frameOf([wide], { cursor: { ...cursor, x: 3 } }))
+  const { painter, frame, patch } = mount(dom.body)
+  frame(
+    [
+      runs([
+        { style: 0, text: 'ab' },
+        { style: 0, text: ['中'], wide: true },
+      ]),
+    ],
+    { cursor: { ...cursor, x: 3 } },
+  )
   dom.frame()
   const element = fake(painter.element).children.at(-1) as FakeElement
   assert.equal(element.hidden, false)
@@ -384,53 +367,32 @@ test('the cursor follows focus and covers a wide cell whole', (t) => {
   })
   // A move starts the blink over.
   const phase = element.dataset.blink
-  painter.patch({
-    revision: 2,
-    base: 1,
-    cursor: { ...cursor, x: 0, shape: 'bar' },
-    styles: [],
-    links: [],
-    scroll: 0,
-    rows: [],
-  })
+  patch(2, {}, { cursor: { ...cursor, x: 0, shape: 'bar' } })
   dom.frame()
   assert.notEqual(element.dataset.blink, phase)
   assert.equal(element.dataset.shape, 'bar')
   assert.equal(element.textContent, '')
-  painter.patch({
-    revision: 3,
-    base: 2,
-    cursor: { ...cursor, visible: false },
-    styles: [],
-    links: [],
-    scroll: 0,
-    rows: [],
-  })
+  patch(3, {}, { cursor: { ...cursor, visible: false } })
   dom.frame()
   assert.equal(element.hidden, true)
   painter.dispose()
 })
 
-test('hit testing and links work in the scaled box the page shows', (t) => {
+test('hit testing, links and the selection work in the scaled box the page shows', (t) => {
   const dom = page(t)
   const clicks: string[] = []
-  const painter = new CellPainter(
-    dom.body as unknown as HTMLElement,
-    options({ onLink: (uri) => clicks.push(uri) }),
-  )
-  const linked: CellStyle = { ...plain, attrs: CELL_ATTR.bold, link: 1 }
-  painter.frame(
-    frameOf(
-      [
-        [
-          { style: 1, text: 'docs' },
-          { style: 0, text: ' and ' },
-          { style: 0, clusters: ['中'], wide: true },
-        ],
-        line('see https://example.com/x.'),
-      ],
-      { cols: 30, styles: [plain, linked], links: ['file:///srv/readme.md'] },
-    ),
+  const { painter, frame, patch } = mount(dom.body, { onLink: (uri) => clicks.push(uri) })
+  const linked: CellStyle = { ...plain, attrs: ATTR.bold, link: 1 }
+  frame(
+    [
+      runs([
+        { style: 1, text: 'docs' },
+        { style: 0, text: ' and ' },
+        { style: 0, text: ['中'], wide: true },
+      ]),
+      line('see https://example.com/x.'),
+    ],
+    { cols: 30, styles: [plain, linked], links: ['file:///srv/readme.md'] },
   )
   dom.frame()
   // The card is drawn at half size, 100 px into the page.
@@ -443,36 +405,41 @@ test('hit testing and links work in the scaled box the page shows', (t) => {
   assert.deepEqual(painter.cellAt(100 + 9.6 * 4.2, 41), { column: 9, row: 0 })
   assert.deepEqual(painter.cellAt(100 + 29.9 * 4.2, 57.9), { column: 29, row: 1 })
   assert.deepEqual(painter.cellAt(0, 0), { column: 0, row: 0 })
-  const click = (column: number, row: number) =>
-    root.dispatchEvent(Object.assign(new Event('click'), at(column, row)))
+  const click = (column: number, row: number, button = 0) =>
+    root.dispatchEvent(Object.assign(new Event('click'), at(column, row), { button }))
   const move = (column: number, row: number) =>
     root.dispatchEvent(Object.assign(new Event('mousemove'), at(column, row)))
   const underlined = () => fake(root.children.at(-2)).children.length
   click(1, 0)
+  click(1, 0, 1)
   click(6, 0)
   click(10, 1)
   click(25, 1)
   assert.deepEqual(clicks, ['file:///srv/readme.md', 'https://example.com/x'])
+  assert.equal(painter.linkAt(10, 1), 'https://example.com/x')
+  assert.equal(painter.linkAt(6, 0), undefined)
   move(2, 0)
   assert.equal(underlined(), 1)
   assert.equal(root.className, 'terminal-grid tg-link')
   move(6, 0)
   assert.equal(underlined(), 0)
   assert.equal(root.className, 'terminal-grid')
-  move(12, 1)
+  painter.setPointer({ column: 12, row: 1 })
   assert.equal(underlined(), 1)
   // The row under the pointer changes: the underline goes with the link.
-  painter.patch({
-    revision: 2,
-    base: 1,
-    cursor,
-    styles: [],
-    links: [],
-    scroll: 0,
-    rows: [{ y: 1, runs: line('gone') }],
-  })
+  patch(2, { 1: line('gone') })
   dom.frame()
   assert.equal(underlined(), 0)
   root.dispatchEvent(new Event('mouseleave'))
+  // A selection is one box per row, from its first cell through its last.
+  const selected = () =>
+    fake(root.children.at(-3)).children.map((box) => fake(box).style.cssText as string)
+  painter.setSelection({ start: { column: 28, row: 0 }, end: { column: 0, row: 1 } })
+  assert.deepEqual(selected(), [
+    `left:${(28 * 538) / 64}px;top:0px;width:${(2 * 538) / 64}px;`,
+    `left:0px;top:18px;width:${538 / 64}px;`,
+  ])
+  painter.setSelection()
+  assert.deepEqual(selected(), [])
   painter.dispose()
 })
