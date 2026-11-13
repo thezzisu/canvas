@@ -1685,7 +1685,6 @@ function fakeWindow(cols = 8, rows = 2) {
   type Listener<T> = (value: T) => void
   const screens = new Set<Listener<FrameData>>(),
     frames = new Set<Listener<WindowMetadata>>(),
-    bells = new Set<() => void>(),
     clipboards = new Set<Listener<string>>()
   const on =
     <T>(listeners: Set<T>) =>
@@ -1698,7 +1697,7 @@ function fakeWindow(cols = 8, rows = 2) {
   const proc: HerdrClientTransport = {
     onScreen: on(screens),
     onFrame: on(frames),
-    onBell: on(bells),
+    onBell: none,
     onClipboard: on(clipboards),
     onPaneFocus: none,
     onSnapshot: none,
@@ -1759,9 +1758,6 @@ function fakeWindow(cols = 8, rows = 2) {
     },
     paint: (layout: string) => {
       for (const listener of frames) listener(metadata(layout))
-    },
-    bell: () => {
-      for (const listener of bells) listener()
     },
     copy: (data: string) => {
       for (const listener of clipboards) listener(data)
@@ -1847,11 +1843,10 @@ test('hidden and covered browsers get no cells and resume from a frame', async (
   await tick()
   let mark = peer.received.length
   f.show('second')
-  f.bell()
   f.copy('Y29weQ==')
   await tick()
-  assert.deepEqual(kinds(peer, mark), [], 'a hidden browser gets no cells, bell or clipboard')
-  assert.deepEqual(kinds(owner).slice(-3), ['PATCH', 'bell', 'clipboard'])
+  assert.deepEqual(kinds(peer, mark), [], 'a hidden browser gets no cells or clipboard')
+  assert.deepEqual(kinds(owner).slice(-2), ['PATCH', 'clipboard'])
   assert.deepEqual(JSON.parse(owner.received.at(-1) as string), {
     type: 'clipboard',
     data: 'Y29weQ==',

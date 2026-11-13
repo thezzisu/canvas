@@ -16,8 +16,8 @@
 //   shows a grid of the new size. There is no separate reset or resize message.
 // - One cell message is in flight per socket. While it is, newer grids are not sent; when it
 //   has gone out the browser gets one message to the latest grid.
-// - A browser that is hidden, or covered by another browser's maximized view, gets no cells,
-//   bell or clipboard. `presentation` tells it which.
+// - A browser that is hidden, or covered by another browser's maximized view, gets no cells
+//   or clipboard. `presentation` tells it which.
 // - A browser that cannot apply a cell message has lost the stream and reconnects.
 //
 // JSON, server to browser:
@@ -29,7 +29,6 @@
 //   completion-frame  { generation, focusedPaneId, layout, panes }; follows the cell message
 //                     that painted it
 //   capture           { capture }
-//   bell              {}
 //   clipboard         { data }, base64 text copied by a pane or a selection
 //   pong              { id }
 //
@@ -185,9 +184,6 @@ export class LiveTerminal {
           this.views.get(ws)!.frameDue = true
           this.pump(ws)
         }
-    })
-    this.proc.onBell(() => {
-      for (const ws of this.clients) if (this.canRender(ws)) json(ws, { type: 'bell' })
     })
     this.proc.onClipboard((data) => {
       for (const ws of this.clients) if (this.canRender(ws)) json(ws, { type: 'clipboard', data })
