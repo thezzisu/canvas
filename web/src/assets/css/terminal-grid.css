@@ -1,0 +1,139 @@
+/* The cell painter's grid: rows of boxes that tile the window. Sizes come from the painter as
+   custom properties; colours of individual runs are inline. */
+.terminal-grid {
+  position: relative;
+  overflow: hidden;
+  contain: size layout paint;
+  white-space: pre;
+  font-kerning: none;
+  line-height: var(--tg-h);
+  direction: ltr;
+  cursor: text;
+  user-select: none;
+  -webkit-user-select: none;
+  color: var(--tg-fg);
+  background: var(--tg-bg);
+}
+.terminal-grid.tg-link {
+  cursor: pointer;
+}
+/* A row is taller than its cells and the next row covers the excess: where a row edge falls
+   between device pixels (a scaled card), the pixel on it blends the two rows and nothing below
+   them. Its background is opaque for the same reason.
+   Not `contain: strict`: style containment makes moving a row cost a document-wide style pass. */
+.tg-row {
+  height: calc(var(--tg-h) + var(--tg-under));
+  margin-bottom: calc(-1 * var(--tg-under));
+  contain: size layout paint;
+  pointer-events: none;
+  background: var(--tg-bg);
+}
+/* Segments tile a row. Cells keep their logical order, as in any terminal. */
+.tg-seg {
+  display: inline-block;
+  vertical-align: top;
+  height: 100%;
+  unicode-bidi: bidi-override;
+}
+/* A drawn character keeps its text for readers only. */
+.tg-hidden {
+  color: transparent;
+}
+.tg-box {
+  display: inline-block;
+  overflow: visible;
+}
+.tg-b {
+  font-weight: bold;
+}
+.tg-i {
+  font-style: italic;
+}
+.tg-u {
+  text-decoration-line: underline;
+  text-decoration-skip-ink: none;
+}
+.tg-s {
+  text-decoration-line: line-through;
+}
+.tg-u.tg-s {
+  text-decoration-line: underline line-through;
+}
+.tg-u2 {
+  text-decoration-style: double;
+}
+/* A wave at the font's underline position is cut off by the row below. */
+.tg-u3 {
+  text-decoration-style: wavy;
+  text-decoration-thickness: 1px;
+  text-underline-offset: -0.12em;
+}
+.tg-u4 {
+  text-decoration-style: dotted;
+}
+.tg-u5 {
+  text-decoration-style: dashed;
+}
+/* An overline as a text decoration sits on the row's top edge and is clipped. */
+.tg-o {
+  box-shadow: inset 0 1px 0 currentColor;
+}
+.tg-blink {
+  animation: tg-blink 1s steps(1) infinite;
+}
+.tg-links > div,
+.tg-cursor,
+.tg-preedit {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: var(--tg-h);
+  pointer-events: none;
+}
+.tg-links > div {
+  background: linear-gradient(currentColor 0 0) 0 calc(100% - 0.1em) / 100% var(--tg-line) no-repeat;
+}
+.tg-cursor {
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.tg-cursor[data-shape='block'] {
+  color: var(--tg-cursor-accent);
+  background: var(--tg-cursor);
+}
+.tg-cursor[data-shape='bar'] {
+  border-left: var(--tg-line) solid var(--tg-cursor);
+}
+.tg-cursor[data-shape='underline'] {
+  border-bottom: var(--tg-line) solid var(--tg-cursor);
+}
+.tg-cursor[data-shape='outline'] {
+  border: var(--tg-line) solid var(--tg-cursor);
+}
+/* Two names for one animation: switching between them starts the blink over. */
+.tg-cursor[data-blink='a'] {
+  animation: tg-cursor-a 1.2s steps(1) infinite;
+}
+.tg-cursor[data-blink='b'] {
+  animation: tg-cursor-b 1.2s steps(1) infinite;
+}
+.tg-preedit {
+  color: var(--tg-fg);
+  background: var(--tg-bg);
+  text-decoration: underline;
+}
+@keyframes tg-blink {
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes tg-cursor-a {
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes tg-cursor-b {
+  50% {
+    opacity: 0;
+  }
+}
