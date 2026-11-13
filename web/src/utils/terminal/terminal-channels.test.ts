@@ -29,6 +29,8 @@ class FakeSocket {
   }
 }
 const window = (windowId: string) => ({ sourceId: 'source', spaceId: 'space', windowId })
+// A session's window is a canvas node, which has a `type` of its own.
+const node = (windowId: string) => ({ ...window(windowId), type: 'terminal', x: 0 })
 function listener() {
   const log: unknown[] = []
   const events: ConnectionEvents = {
@@ -47,11 +49,11 @@ function fixture() {
 
 test('the socket authenticates once, then opens the channels asked for before and after', () => {
   const f = fixture(),
-    a = f.channels.open(window('a'), listener().events)
+    a = f.channels.open(node('a'), listener().events)
   assert.equal(a.open, false)
   assert.equal(a.send({ type: 'focus' }), false, 'nothing is sent before the socket opens')
   f.socket.accept()
-  const b = f.channels.open(window('b'), listener().events)
+  const b = f.channels.open(node('b'), listener().events)
   assert.deepEqual(f.socket.sent, [
     { type: 'auth', token: 'token' },
     { type: 'open', channel: 0, ...window('a') },

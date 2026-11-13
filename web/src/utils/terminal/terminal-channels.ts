@@ -43,8 +43,7 @@ export class TerminalChannels {
     // The server expects the token first.
     socket.onopen = () => {
       this.write({ type: 'auth', token })
-      for (const [channel, { window }] of this.channels)
-        this.write({ type: 'open', channel, ...window })
+      for (const [channel, { window }] of this.channels) this.announce(channel, window)
     }
     socket.onmessage = (event) => this.receive(event.data)
     socket.onerror = () => this.ended(true)
@@ -55,7 +54,7 @@ export class TerminalChannels {
     const channel = this.next++
     this.channels.set(channel, { window, events })
     const live = () => this.channels.has(channel) && this.socket.readyState === this.socket.OPEN
-    if (live()) this.write({ type: 'open', channel, ...window })
+    if (live()) this.announce(channel, window)
     return {
       get open() {
         return live()
@@ -72,6 +71,10 @@ export class TerminalChannels {
     }
   }
 
+  /** Only the target is sent: a caller's window may be a larger object. */
+  private announce(channel: number, { sourceId, spaceId, windowId }: TerminalWindow) {
+    this.write({ type: 'open', channel, sourceId, spaceId, windowId })
+  }
   private write(message: object) {
     this.socket.send(JSON.stringify(message))
   }
