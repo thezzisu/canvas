@@ -288,6 +288,9 @@ function receive(
   else if (message.type === 'clipboard') {
     if (typeof message.data === 'string') session.clipboard.programCopy(message.data)
   } else if (message.type === 'presentation') {
+    // The server answers every request in turn. Ownership of one this view has already ended
+    // is followed by its release, which would read as another view taking the window.
+    if (message.owned === true && message.token !== session.focusResize?.token) return
     const revision = (session.presentationRevision = (session.presentationRevision || 0) + 1)
     const presentation = {
       maximized: message.maximized === true,

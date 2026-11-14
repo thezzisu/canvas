@@ -124,7 +124,12 @@ export function endFocusSize(session: Session) {
     // The view stays covered until that arrives, whatever size it has.
     if (!request.suspended) awaitFrame(session)
   }
-  setState(session, { ...session.state, focusResize: undefined })
+  // The release the server reports next is this view's own, not another view taking the window.
+  setState(session, {
+    ...session.state,
+    focusResize: undefined,
+    presentation: request.suspended ? session.state.presentation : undefined,
+  })
 }
 
 // The content font every terminal shows; the app loads it before any terminal mounts.
