@@ -25,7 +25,7 @@ defineProps<
     :class="
       data.spaceId
         ? 'overview-create-tab flex-col justify-center gap-2.5 border border-dashed border-accented'
-        : 'overview-create-space'
+        : 'overview-create-space group text-muted hover:bg-transparent hover:text-highlighted active:bg-transparent'
     "
     :size="data.spaceId ? 'md' : 'xs'"
     :icon="data.spaceId ? 'i-lucide-square-plus' : 'i-lucide-layers'"
@@ -47,7 +47,8 @@ defineProps<
     @dblclick.stop
   >
     <template v-if="!data.spaceId" #trailing
-      ><span class="ms-1 flex-1 border-t border-dashed border-default"
+      ><span
+        class="ms-1 flex-1 border-t border-dashed border-default transition-colors group-hover:border-inverted/60"
     /></template>
   </UButton>
 </template>
