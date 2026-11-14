@@ -12,13 +12,6 @@ export const interactiveWidget = useLocalStorage<InteractiveWidget>(
   'resizes-content',
 )
 
-/** For comparing: a maximized terminal whose row count alone changes is not covered meanwhile. */
-const uncoveredRowResize = useLocalStorage('canvas:developer:uncovered-row-resize', false)
-export const uncoversRowResize = computed({
-  get: () => developerMode.value && uncoveredRowResize.value,
-  set: (value) => (uncoveredRowResize.value = value),
-})
-
 export const pendingViewportPolicy = computed(
   () =>
     ({

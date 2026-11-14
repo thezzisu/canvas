@@ -1,15 +1,18 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { resizesRowsOnly, showsCover } from './resize-cover.ts'
+import { rewraps, showsCover } from './resize-cover.ts'
 
-test('only a change of the row count alone resizes rows only', () => {
+test('only another column count wraps the lines on screen anew', () => {
   const shown = { cols: 57, rows: 55 }
-  assert.equal(resizesRowsOnly(shown, { cols: 57, rows: 35 }), true)
-  assert.equal(resizesRowsOnly(shown, { cols: 57, rows: 60 }), true)
+  // A keyboard opening, closing or settling changes the rows alone.
+  const shorter = { cols: 57, rows: 35 }
+  assert.equal(rewraps(shown, shorter), false)
+  assert.equal(rewraps(shown, shown), false)
   // A rotation changes both, and a split screen may change the columns alone.
-  assert.equal(resizesRowsOnly(shown, { cols: 120, rows: 22 }), false)
-  assert.equal(resizesRowsOnly(shown, { cols: 40, rows: 55 }), false)
-  assert.equal(resizesRowsOnly(shown, shown), false)
+  const turned = { cols: 120, rows: 22 }
+  const narrower = { cols: 40, rows: 55 }
+  assert.equal(rewraps(shown, turned), true)
+  assert.equal(rewraps(shown, narrower), true)
 })
 
 test('the cover is over a painted, connected terminal whose frame is not the one to look at', () => {

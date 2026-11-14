@@ -62,7 +62,6 @@ export default {
   wakePaused: 'Wake lock paused',
   retryWake: 'Retry wake lock',
   developerMode: 'Developer mode',
-  uncoveredRowResize: 'No cover when only rows change',
   developerAdvanced: 'Advanced developer settings',
   adjustAdvanced: 'Adjust advanced settings',
   reload: 'Reload page',

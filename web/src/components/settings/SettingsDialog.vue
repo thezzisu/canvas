@@ -19,7 +19,6 @@ import { uiScale, uiZoom } from '../../composables/ui-scale'
 import { cutoutPosition, cutoutWidth, type CutoutPosition } from '../../composables/display-cutout'
 import {
   developerMode,
-  uncoversRowResize,
   viewportFit,
   interactiveWidget,
   viewportReloadRequired,
@@ -417,13 +416,6 @@ defineExpose({ close })
               class="w-36 max-w-full"
               aria-label="interactive-widget"
           /></UFormField>
-          <UFormField
-            :label="t('settings.uncoveredRowResize')"
-            orientation="horizontal"
-            :ui="field"
-          >
-            <USwitch v-model="uncoversRowResize" :aria-label="t('settings.uncoveredRowResize')" />
-          </UFormField>
         </template>
         <UFormField
           v-if="developerMode || viewportReloadRequired"

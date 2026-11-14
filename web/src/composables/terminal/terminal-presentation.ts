@@ -1,5 +1,5 @@
 import { uuid } from '../../api/api'
-import { resizesRowsOnly, showsCover } from '../../utils/terminal/resize-cover'
+import { rewraps, showsCover } from '../../utils/terminal/resize-cover'
 import {
   fitTerminalGrid,
   placeFrame,
@@ -7,7 +7,6 @@ import {
   type TerminalGrid,
 } from '../../utils/terminal/terminal-geometry'
 import { normalizeContentZoom } from '../canvas/content-zoom'
-import { uncoversRowResize } from '../developer-mode'
 import type { CellFontOptions } from './cell-font'
 import { claimFocus, online, paused, sessions, setState, type Session } from './terminal-session'
 
@@ -105,15 +104,14 @@ export function updateFocusSize(session: Session) {
       ...proposed,
     })
     // The mirror holds this connection's frame: the server sends one before it says connected.
-    if (!sameGrid(proposed, session.mirror)) awaitFrame(session)
+    if (rewraps(session.mirror, proposed)) awaitFrame(session)
     return
   }
   const request = session.focusResize
   if (sameGrid(proposed, request.requested)) return
   request.requested = proposed
   session.connection!.send({ type: 'focus-resize-update', token: request.token, ...proposed })
-  if (sameGrid(proposed, session.mirror)) return
-  if (!(uncoversRowResize.value && resizesRowsOnly(session.mirror, proposed))) awaitFrame(session)
+  if (rewraps(session.mirror, proposed)) awaitFrame(session)
 }
 export function endFocusSize(session: Session) {
   const request = session.focusResize

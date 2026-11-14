@@ -62,7 +62,6 @@ export default {
   wakePaused: '常亮已暂停',
   retryWake: '重试常亮',
   developerMode: '开发者模式',
-  uncoveredRowResize: '仅行数变化时不显示遮罩',
   developerAdvanced: '开发者高级设置',
   adjustAdvanced: '调整高级设置',
   reload: '重新加载页面',
