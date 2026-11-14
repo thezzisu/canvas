@@ -90,7 +90,7 @@ jobs:
           const licenses = [...files].filter(path => /(?:^|\/)(?:licenses?|licences?)\//i.test(path) || /(?:^|\/)(?:license|licence|copying|copyright|notice|(?:[^/]*[-_])?ofl)(?:\.(?:md|txt))?$/i.test(path))
           if (licenses.length !== 1 || licenses[0] !== 'LICENSE') throw new Error('Release must contain exactly one top-level LICENSE')
           if (!execFileSync('tar', ['-xOf', pack.filename, 'package/LICENSE']).equals(readFileSync('LICENSE'))) throw new Error('Release LICENSE must match the original project LICENSE exactly')
-          for (const path of ['dist/cli/main.js', 'dist/web/index.html']) {
+          for (const path of ['dist/cli/main.js', 'dist/web/index.html', 'dist/server/ghostty/ghostty-vt.wasm']) {
             if (!files.has(path)) throw new Error(`Release archive is missing ${path}`)
           }
           if (!existsSync(pack.filename)) throw new Error(`Release archive was not created: ${pack.filename}`)

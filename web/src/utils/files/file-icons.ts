@@ -1,4 +1,4 @@
-// Material Icon Theme manifest and SVGs (MIT); see ../public/licenses/Material-Icon-Theme.txt.
+// Material Icon Theme manifest and SVGs (MIT).
 import {
   file,
   fileExtensions,

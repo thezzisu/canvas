@@ -80,7 +80,6 @@
   },
   "files": [
     "dist",
-    "!dist/**/licenses/**",
     "!dist/**/.vite/license.md",
     "LICENSE",
     "README.md"

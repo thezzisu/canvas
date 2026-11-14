@@ -12,5 +12,4 @@ and Brotli 1.2.1 without subsetting or changes to glyphs, names or features.
 Cascadia files are unchanged official WOFF2 members. `manifest.json` preserves
 source and delivered hashes, Unicode mappings, glyph counts, features and metrics.
 
-Vite publishes content-hashed fonts. Their original OFL copyright and license
-texts remain in [public font licenses](../../../public/fonts/licenses/).
+Vite publishes content-hashed fonts.
