@@ -241,22 +241,19 @@ const frameStatus = computed(() =>
 )
 // The cover over an unsettled frame stays long enough to be seen as one, then fades.
 const covered = useHeld(() => !!(status.value.transitioning || status.value.layoutRestoring), 240)
-// A terminal that had no frame stays under the loading panel until its first settled one, so
-// loading and a cover that follows it are one.
+// A terminal without a settled frame of its connection is under the loading panel, which is the
+// cover's own material: at first, and again after the connection was lost, until the frame it
+// comes back to has settled. Loading, reconnecting and a cover that follows are one.
 const loaded = ref(adopted)
-// A terminal that lost its connection is likewise under the loading panel until the frame it
-// comes back to has settled: the wait for the connection and for that frame are one.
-const rejoining = ref(false)
 watch(
-  () => status.value.status,
-  (now, before) => {
-    if (before === 'connected' && now !== 'connected' && loaded.value) rejoining.value = true
+  () => status.value.status === 'connected',
+  (connected) => {
+    if (!connected) loaded.value = false
   },
 )
 watchEffect(() => {
-  if (status.value.status !== 'connected' || !status.value.screenReady || covered.value) return
-  loaded.value = true
-  rejoining.value = false
+  if (status.value.status === 'connected' && status.value.screenReady && !covered.value)
+    loaded.value = true
 })
 const firstFrame = computed(() => !status.value.screenReady || !loaded.value)
 const resizeState = computed(() =>
@@ -741,7 +738,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     :class="[
       {
         selected,
-        'terminal-transition': covered && !rejoining,
+        'terminal-transition': covered,
         unavailable: !closed && !keepTerminal,
         focused: data.focus,
         'input-focused': inputFocused || captureActive,
@@ -1109,8 +1106,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
             !closed &&
             keepTerminal &&
             !maximizedElsewhere &&
-            (status.status === 'connecting' ||
-              (status.status === 'connected' && (firstFrame || rejoining)))
+            (status.status === 'connecting' || (status.status === 'connected' && firstFrame))
           "
           class="terminal-loading nodrag"
           :class="{ 'terminal-loading-initial': firstFrame }"
@@ -1281,7 +1277,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
   background: #11131799;
   color: #b0b8c5;
 }
-/* Before its first frame a terminal is covered by the same material as during a resize, so the
+/* Without a settled frame a terminal is covered by the same material as during a resize, so the
    two read as one cover. A load that is quick shows no label at all. */
 .terminal-loading-initial {
   z-index: 12;
