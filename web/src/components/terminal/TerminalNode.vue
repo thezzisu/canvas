@@ -241,14 +241,15 @@ const frameStatus = computed(() =>
 )
 // The cover over an unsettled frame stays long enough to be seen as one, then fades.
 const covered = useHeld(() => !!(status.value.transitioning || status.value.layoutRestoring), 240)
-// A terminal without a settled frame of its connection is under the loading panel, which is the
-// cover's own material: at first, and again after the connection was lost, until the frame it
-// comes back to has settled. Loading, reconnecting and a cover that follows are one.
+// A terminal that has no frame to show is under the loading panel in the cover's own material,
+// until its first settled one: loading and a cover that follows are one. A maximized terminal
+// that lost its connection has none either: the server gave its size up, so the window comes
+// back in its shared shape first. A card keeps its frame, which comes back in the same shape.
 const loaded = ref(adopted)
 watch(
   () => status.value.status === 'connected',
   (connected) => {
-    if (!connected) loaded.value = false
+    if (!connected && props.data.focus) loaded.value = false
   },
 )
 watchEffect(() => {
@@ -723,7 +724,13 @@ async function resized(event: { params: { width: number; height: number; x: numb
 </script>
 <template>
   <NodeResizer
-    v-if="!data.mobile && !data.overview && !data.focus && !maximizedElsewhere"
+    v-if="
+      !data.mobile &&
+      !data.overview &&
+      !data.focus &&
+      !maximizedElsewhere &&
+      (status.status === 'connected' || closed)
+    "
     :min-width="360"
     :min-height="220"
     :max-width="4000"
