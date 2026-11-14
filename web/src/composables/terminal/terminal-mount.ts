@@ -221,12 +221,6 @@ export function mountTerminal(
     setEditing(value: boolean) {
       if (mine()) setContentHidden(session, 'editing', value)
     },
-    /** The card reports whether its cover is on screen. */
-    setCovered(value: boolean) {
-      if (session.host !== host) return
-      if (session.covered && !value) session.uncoveredAt = performance.now()
-      session.covered = value
-    },
     setAppShowing(value: boolean) {
       if (mine()) setContentHidden(session, 'appShowing', value)
     },

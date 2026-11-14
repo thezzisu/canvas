@@ -1,5 +1,5 @@
 import { uuid } from '../../api/api'
-import { coversResize, resizesRowsOnly, showsCover } from '../../utils/terminal/resize-cover'
+import { resizesRowsOnly, showsCover } from '../../utils/terminal/resize-cover'
 import {
   fitTerminalGrid,
   placeFrame,
@@ -113,15 +113,7 @@ export function updateFocusSize(session: Session) {
   request.requested = proposed
   session.connection!.send({ type: 'focus-resize-update', token: request.token, ...proposed })
   if (sameGrid(proposed, session.mirror)) return
-  const covers = coversResize({
-    covered: !!session.covered,
-    prompted: !!session.resizePrompted,
-    sinceUncovered:
-      session.uncoveredAt === undefined ? undefined : performance.now() - session.uncoveredAt,
-  })
-  session.resizePrompted = false
-  if (covers && !(uncoversRowResize.value && resizesRowsOnly(session.mirror, proposed)))
-    awaitFrame(session)
+  if (!(uncoversRowResize.value && resizesRowsOnly(session.mirror, proposed))) awaitFrame(session)
 }
 export function endFocusSize(session: Session) {
   const request = session.focusResize
@@ -160,6 +152,5 @@ export function setTerminalFont(font: typeof contentFont) {
 export function setTerminalZoom(session: Session, percent: number) {
   const size = fontSize(session, percent)
   if (size === session.fontSize) return
-  session.resizePrompted = true
   applyFont(session, size)
 }

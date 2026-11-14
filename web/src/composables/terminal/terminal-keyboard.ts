@@ -47,7 +47,6 @@ export function bindKeyboard(session: Session) {
     blur: () => inputFocused(session, false),
   }))
   const keyboardChanged = (state: MobileKeyboardState) => {
-    session.resizePrompted = true
     session.keyboardRequested = state.open
     setState(session, {
       ...session.state,

@@ -241,7 +241,6 @@ const frameStatus = computed(() =>
 )
 // The cover over an unsettled frame stays long enough to be seen as one, then fades.
 const covered = useHeld(() => !!(status.value.transitioning || status.value.layoutRestoring), 240)
-watch(covered, (value) => terminal?.setCovered(value), { flush: 'sync' })
 // A terminal that had no frame stays under the loading panel until its first settled one, so
 // loading and a cover that follows it are one.
 const loaded = ref(adopted)
@@ -592,7 +591,6 @@ function mount() {
     )
     terminal.setAppShowing(showApp.value)
     terminal.setEditing(editing.value)
-    terminal.setCovered(covered.value)
     if (mobileFocus.value && !showApp.value) {
       if (status.value.touchMode === 'select') terminal.setTouchMode('scroll')
       terminal.focus()

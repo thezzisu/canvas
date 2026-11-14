@@ -94,10 +94,6 @@ export interface Session {
   awaitingFrame: boolean
   /** Ends that wait if no answer comes; see `boundAnswer`. */
   answerLimit?: ReturnType<typeof setTimeout>
-  /** What decides whether the next resize is covered; see `coversResize`. */
-  covered?: boolean
-  uncoveredAt?: number
-  resizePrompted?: boolean
   focusResize?: { token: string; suspended: boolean; requested?: TerminalGrid }
   presentationFrame?: number
   presentationRevision?: number
