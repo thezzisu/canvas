@@ -166,6 +166,21 @@ function mouse(
         button: 'UNKNOWN',
         dragging: false,
       })
+    // Alternate scroll, as herdr does it: a program on the alternate screen that takes no mouse
+    // reads each wheel step up or down as one press of that arrow key.
+    if (!terminal.mouseReporting)
+      return terminal.alternateScreen &&
+        terminal.mode(1007) &&
+        (kind === 'ScrollUp' || kind === 'ScrollDown')
+        ? terminal.encodeKey({
+            action: 'PRESS',
+            key: kind === 'ScrollUp' ? 'ARROW_UP' : 'ARROW_DOWN',
+            mods: 0,
+            consumed: 0,
+            text: '',
+            unshifted: 0,
+          })
+        : new Uint8Array()
     // A wheel is the press of one of the buttons past the third, once per line.
     const button = {
       ScrollUp: 'FOUR',

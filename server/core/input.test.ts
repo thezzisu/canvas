@@ -157,6 +157,26 @@ test('core mouse input respects tracking, coordinates, modifiers and wheel count
   )
 })
 
+test('a wheel step is an arrow key for an alternate-screen program that takes no mouse', () => {
+  const wheel = (kind: 'ScrollUp' | 'ScrollDown' | 'ScrollLeft' | 'ScrollRight', lines = 1) => ({
+    Mouse: { kind, position: { Cell: { column: 4, row: 2 } }, geometry: null, modifiers: 0, lines },
+  })
+  const alternate = '\x1b[?1049h'
+  assert.equal(sent(wheel('ScrollUp'), alternate), '\x1b[A')
+  assert.equal(sent(wheel('ScrollDown'), alternate), '\x1b[B')
+  assert.equal(sent(wheel('ScrollUp'), alternate + '\x1b[?1h'), '\x1bOA', 'application cursor keys')
+  assert.equal(sent(wheel('ScrollDown', 5), alternate), '\x1b[B', 'one key for a wheel event')
+  assert.equal(sent(wheel('ScrollLeft'), alternate), '')
+  assert.equal(sent(wheel('ScrollRight'), alternate), '')
+  assert.equal(sent(wheel('ScrollUp'), alternate + '\x1b[?1007l'), '', 'alternate scroll off')
+  assert.equal(sent(wheel('ScrollUp')), '', 'the primary screen scrolls its history instead')
+  assert.equal(
+    sent(wheel('ScrollUp'), alternate + '\x1b[?1000h\x1b[?1006h'),
+    '\x1b[<64;5;3M',
+    'a program that takes the mouse gets the report',
+  )
+})
+
 test('hover follows the child application tracking mode without inventing a press', () => {
   const hover: ClientPaneInputEvent = {
     Mouse: {
