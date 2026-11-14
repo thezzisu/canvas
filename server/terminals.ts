@@ -226,7 +226,12 @@ export class LiveTerminal {
     const message = view.encoder.encode(this.grid, this.revision)
     if (message) {
       view.sending = true
+      const started = Date.now()
       ws.send(message, () => {
+        if (Date.now() - started > 500)
+          console.log(
+            `diag ${this.key} channel ${ws.id} cell message took ${Date.now() - started}ms to leave, ${message.length} bytes`,
+          )
         view.sending = false
         if (!this.closed) this.pump(ws)
       })
@@ -417,6 +422,13 @@ export class LiveTerminal {
     ws.on('message', (msg) => {
       if (this.closed || ws.readyState !== 1 || !this.clients.has(ws)) return
       try {
+        if (msg.type === 'cell-error') {
+          console.log(
+            `diag ${this.key} channel ${ws.id} could not read a cell message:`,
+            String(msg.message).slice(0, 200),
+          )
+          return
+        }
         if (msg.type === 'ping') {
           if (typeof msg.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(msg.id))
             json(ws, { type: 'pong', id: msg.id })
@@ -429,6 +441,7 @@ export class LiveTerminal {
             this.onReadFocus?.()
           } else if (!msg.visible || msg.focused === false) this.focused.delete(ws)
           if (msg.visible === !this.hidden.has(ws)) return
+          console.log(`diag ${this.key} channel ${ws.id} reports visible=${msg.visible}`)
           if (msg.visible) {
             this.hidden.delete(ws)
             this.resume()
@@ -536,6 +549,7 @@ export class LiveTerminal {
           // Outer window focus reports cannot change the native pane or pixels.
           if (msg.data !== '\x1b[I' && msg.data !== '\x1b[O' && !isTerminalHoverInput(msg.data))
             this.sentFrames.delete(ws)
+          if (this.pasting) console.log(`diag ${this.key} input held behind a paste`)
           if (this.pasting)
             this.holdInput(
               this.pasting.then(() => {

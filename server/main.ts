@@ -409,3 +409,12 @@ async function stop() {
 }
 process.on('SIGINT', () => void stop())
 process.on('SIGTERM', () => void stop())
+
+// diag: the server's event loop held for a quarter second or more.
+let diagTick = Date.now()
+setInterval(() => {
+  const now = Date.now(),
+    late = now - diagTick - 100
+  diagTick = now
+  if (late > 250) console.log(`diag event loop held ${late}ms`)
+}, 100).unref()

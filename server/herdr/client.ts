@@ -503,8 +503,44 @@ class HerdrClient implements HerdrClientTransport {
       ? surface
       : undefined
   }
+  // diag: a screen held back by the gate above for a second or more, and what held it.
+  private stall?: { since: number; timer: ReturnType<typeof setTimeout>; logged: boolean }
+  private stallReason() {
+    const snapshot = this.snapshot,
+      surface = this.surface
+    return JSON.stringify({
+      tab: this.options.tabId,
+      focusReady: this.focusReady,
+      focusRequested: this.focusRequested,
+      focusedTab: snapshot?.focused_tab_id,
+      boot: surface?.boot_id === snapshot?.boot_id,
+      projection: surface?.projection_revision,
+      snapshot: snapshot?.revision,
+      surface: surface && `${surface.frame.width}x${surface.frame.height}`,
+      asked: `${this.cols}x${this.rows}`,
+    })
+  }
   private render() {
     const surface = this.coherentSurface()
+    if (!surface && !this.closed && this.initialized && !this.stall) {
+      const stall: { since: number; timer: ReturnType<typeof setTimeout>; logged: boolean } =
+        (this.stall = {
+          since: Date.now(),
+          logged: false,
+          timer: setTimeout(() => {
+            stall.logged = true
+            console.log('diag herdr screen held 1s', this.stallReason())
+          }, 1000),
+        })
+    } else if ((surface || this.closed) && this.stall) {
+      clearTimeout(this.stall.timer)
+      if (this.stall.logged)
+        console.log(
+          `diag herdr screen released after ${Date.now() - this.stall.since}ms`,
+          this.options.tabId,
+        )
+      this.stall = undefined
+    }
     if (!surface || this.closed) return
     const paneId = surface.panes.find((pane) => pane.focused)?.pane_id
     if (paneId !== this.focusedPaneId) {
