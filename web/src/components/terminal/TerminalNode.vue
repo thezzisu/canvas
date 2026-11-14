@@ -244,8 +244,19 @@ const covered = useHeld(() => !!(status.value.transitioning || status.value.layo
 // A terminal that had no frame stays under the loading panel until its first settled one, so
 // loading and a cover that follows it are one.
 const loaded = ref(adopted)
+// A terminal that lost its connection is likewise under the loading panel until the frame it
+// comes back to has settled: the wait for the connection and for that frame are one.
+const rejoining = ref(false)
+watch(
+  () => status.value.status,
+  (now, before) => {
+    if (before === 'connected' && now !== 'connected' && loaded.value) rejoining.value = true
+  },
+)
 watchEffect(() => {
-  if (status.value.screenReady && !covered.value) loaded.value = true
+  if (status.value.status !== 'connected' || !status.value.screenReady || covered.value) return
+  loaded.value = true
+  rejoining.value = false
 })
 const firstFrame = computed(() => !status.value.screenReady || !loaded.value)
 const resizeState = computed(() =>
@@ -730,7 +741,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
     :class="[
       {
         selected,
-        'terminal-transition': covered,
+        'terminal-transition': covered && !rejoining,
         unavailable: !closed && !keepTerminal,
         focused: data.focus,
         'input-focused': inputFocused || captureActive,
@@ -1098,7 +1109,8 @@ async function resized(event: { params: { width: number; height: number; x: numb
             !closed &&
             keepTerminal &&
             !maximizedElsewhere &&
-            (status.status === 'connecting' || (status.status === 'connected' && firstFrame))
+            (status.status === 'connecting' ||
+              (status.status === 'connected' && (firstFrame || rejoining)))
           "
           class="terminal-loading nodrag"
           :class="{ 'terminal-loading-initial': firstFrame }"

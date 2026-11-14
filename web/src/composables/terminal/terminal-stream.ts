@@ -16,6 +16,7 @@ import {
   frameSettled,
   present,
   schedulePresentation,
+  updateFocusSize,
 } from './terminal-presentation'
 import { refreshReadFocus, syncViewVisibility } from './terminal-read-focus'
 import {
@@ -325,6 +326,8 @@ function receive(
         readOnly: message.readOnly === true,
       })
       syncViewVisibility(session)
+      // A maximized view asks for its size at once, so the loading panel and that wait are one.
+      updateFocusSize(session)
       present(session)
       schedulePresentation(session)
       if (
