@@ -1525,6 +1525,45 @@ test('Core hover follows native tracking without clearing history, focusing or r
   }
 })
 
+test('a sideways wheel step leaves a scrolled Core pane where it is', async () => {
+  const f = fixture()
+  f.terminal.cols = 20
+  f.terminal.rows = 3
+  const opening = createCoreClient({
+    rpc: f.rpc,
+    layout: f.layout,
+    spaceId: 'space',
+    tabId: 'tab',
+    cols: 20,
+    rows: 3,
+  })
+  await tick()
+  f.stream.receive({
+    kind: 'data',
+    data: Buffer.from('line1\r\nline2\r\nline3\r\nline4\r\nline5\r\nline6\x1b[?9001l'),
+  })
+  const client = await opening
+  try {
+    await client.completionFence()
+    client.write('\x1b[<64;1;1M')
+    await tick()
+    await tick()
+    const history = (await client.content())?.[0]?.lines,
+      before = f.sent.length
+    // A touchpad's two fingers drift: wheel left and right, which the shell never hears of.
+    for (const button of [66, 67]) {
+      client.write(`\x1b[<${button};1;1M`)
+      await tick()
+      await tick()
+    }
+    assert.deepEqual((await client.content())?.[0]?.lines, history)
+    assert.equal(f.sent.length, before, 'nothing reaches a program without mouse reporting')
+    assert.deepEqual(f.failures, [])
+  } finally {
+    client.kill()
+  }
+})
+
 test('Core typing and paste repaint the bottom immediately without waiting for program output', async () => {
   for (const input of ['x', '\x1b[200~hello\x1b[201~']) {
     const f = fixture()

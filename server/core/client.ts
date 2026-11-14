@@ -887,18 +887,20 @@ class CoreWindowClient implements HerdrClientTransport {
       const input = message.ClientShellPaneInput,
         pane = this.attached.get(input.pane_id)
       if (!pane?.stream) return
-      const active = input.events.some(
-        (event) => !('Mouse' in event) || event.Mouse.kind !== 'Moved',
-      )
-      // Anything but hovering returns the pane to its latest output.
-      const scroll = pane.engine.scroll,
-        scrolled = active && scroll.top < scroll.max
-      if (scrolled) pane.engine.scrollTo(scroll.max)
+      // What reaches the program, other than hovering, returns the pane to its latest output.
+      // A wheel step a program without mouse reporting never hears of does not.
+      let used = false
       for (const event of input.events) {
         const bytes = coreInput(event, pane.engine, pane.win32.on)
-        if (bytes.length) pane.stream.write(Buffer.from(bytes))
+        if (!bytes.length) continue
+        pane.stream.write(Buffer.from(bytes))
+        used ||= !('Mouse' in event) || event.Mouse.kind !== 'Moved'
       }
-      if (scrolled) this.render()
+      const scroll = pane.engine.scroll
+      if (used && scroll.top < scroll.max) {
+        pane.engine.scrollTo(scroll.max)
+        this.render()
+      }
     } else if ('ClientShellFocus' in message)
       this.attached.get(this.focused || '')?.stream?.focus(message.ClientShellFocus.focused)
   }
