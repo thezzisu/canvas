@@ -1,5 +1,5 @@
 import { uuid } from '../../api/api'
-import { coversResize } from '../../utils/terminal/resize-cover'
+import { coversResize, resizesRowsOnly } from '../../utils/terminal/resize-cover'
 import {
   containTerminalScale,
   fitTerminalGrid,
@@ -8,6 +8,7 @@ import {
   type TerminalGrid,
 } from '../../utils/terminal/terminal-geometry'
 import { normalizeContentZoom } from '../canvas/content-zoom'
+import { uncoversRowResize } from '../developer-mode'
 import type { CellFontOptions } from './cell-font'
 import { claimFocus, online, paused, sessions, setState, type Session } from './terminal-session'
 
@@ -101,7 +102,8 @@ export function updateFocusSize(session: Session) {
       session.uncoveredAt === undefined ? undefined : performance.now() - session.uncoveredAt,
   })
   session.resizePrompted = false
-  if (covers) awaitNativeResize(session)
+  if (covers && !(uncoversRowResize.value && resizesRowsOnly(session.mirror, proposed)))
+    awaitNativeResize(session)
 }
 export function endFocusSize(session: Session) {
   const request = session.focusResize
