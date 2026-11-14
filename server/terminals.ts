@@ -640,7 +640,14 @@ export class LiveTerminal {
             this.sentFrames.delete(ws)
           if (this.pasting) console.log(`diag ${this.key} input held behind a paste`)
           // diag: a view that typed and, 1.5 s later, was not sent the grid the window has.
-          if (!this.diagWatch.has(ws)) {
+          // Focus reports and hovering are not typing; a hidden view sends them too.
+          if (
+            !this.diagWatch.has(ws) &&
+            !this.hidden.has(ws) &&
+            msg.data !== '\x1b[I' &&
+            msg.data !== '\x1b[O' &&
+            !isTerminalHoverInput(msg.data)
+          ) {
             const at = this.revision
             this.diagWatch.add(ws)
             setTimeout(() => {
