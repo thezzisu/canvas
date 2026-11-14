@@ -40,9 +40,10 @@ export function present(session: Session) {
   const { style } = session.surface
   style.width = `${painted.width}px`
   style.height = `${painted.height}px`
-  // The view that owns the size shows every frame at its own font, the one it is waiting to
-  // replace too: that frame keeps its bottom rows in place and is cut where it does not fit.
-  if (session.magnified && session.state.focusResize?.owned) {
+  // A frame made for this view's own size is shown at its font whatever the view waits for,
+  // another size or its connection: it keeps its bottom rows in place and is cut where it
+  // does not fit.
+  if (session.magnified && painted.own) {
     const rows = proposedSize(session)?.rows ?? painted.rows
     const top = ownedFrameTop(painted.height, rows, session.painter.metrics.height)
     style.transform = top ? `translateY(${top}px)` : 'none'

@@ -72,8 +72,12 @@ export interface Session {
   fontSize: number
   /** The revision on screen; -1 before this connection's first paint. */
   shown: number
-  /** The grid on screen, with its size in the surface's own pixels. */
-  painted?: TerminalGrid & { width: number; height: number }
+  /**
+   * The grid on screen, with its size in the surface's own pixels. `own` says the grid is one
+   * this view asked for as owner of the size; it stays so while the same grid is on screen,
+   * through the wait for another size and through a lost connection.
+   */
+  painted?: TerminalGrid & { width: number; height: number; own: boolean }
   /** Work that waits until the screen shows the revision it arrived with. */
   awaitingPaint: { revision: number; run(): void }[]
   /** Content that was hidden stays covered until a fresh FRAME is on screen. */

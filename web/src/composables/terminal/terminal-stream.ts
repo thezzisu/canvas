@@ -209,6 +209,10 @@ export function painted(session: Session, revision: number) {
     rows: mirror.rows,
     width: mirror.cols * cell.width,
     height: mirror.rows * cell.height,
+    own:
+      (session.state.focusResize?.owned === true &&
+        sameTerminalGrid(session.focusResize?.requested, mirror)) ||
+      (previous?.own === true && sameTerminalGrid(previous, mirror)),
   })
   session.shown = revision
   const cursor = painter.cursorBox()
