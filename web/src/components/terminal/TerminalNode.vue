@@ -710,12 +710,15 @@ const menu = computed<DropdownMenuItem[]>(() => [
     onSelect: () => action('close'),
   },
 ])
+// A card whose terminal is not connected keeps its size: the terminal could not follow it.
+const resizable = computed(() => status.value.status === 'connected' || closed.value)
 function resizeStarted(event: { params: { x: number; y: number; width: number; height: number } }) {
+  if (!resizable.value) return
   if (!editing.value) terminal?.setResizing(true)
   props.data.onResizeStart(props.id, event.params)
 }
 async function resized(event: { params: { width: number; height: number; x: number; y: number } }) {
-  if (props.data.overview || props.data.focus) return
+  if (props.data.overview || props.data.focus || !resizable.value) return
   await nextTick()
   if (!editing.value) terminal?.setResizing(false)
   const { width, height, x, y } = event.params
@@ -724,13 +727,10 @@ async function resized(event: { params: { width: number; height: number; x: numb
 </script>
 <template>
   <NodeResizer
-    v-if="
-      !data.mobile &&
-      !data.overview &&
-      !data.focus &&
-      !maximizedElsewhere &&
-      (status.status === 'connected' || closed)
-    "
+    v-if="!data.mobile && !data.overview && !data.focus && !maximizedElsewhere"
+    :should-resize="() => resizable"
+    :handle-class-name="resizable ? undefined : 'resize-refused'"
+    :line-class-name="resizable ? undefined : 'resize-refused'"
     :min-width="360"
     :min-height="220"
     :max-width="4000"
@@ -1423,6 +1423,10 @@ async function resized(event: { params: { width: number; height: number; x: numb
 </style>
 
 <style scoped>
+/* The library sets a resize cursor on each handle and line by its side. */
+:global(.vue-flow__resize-control.resize-refused) {
+  cursor: not-allowed !important;
+}
 .terminal-mobile-preview .capture-body,
 .terminal-mobile-preview .capture-toolbar {
   pointer-events: none;
