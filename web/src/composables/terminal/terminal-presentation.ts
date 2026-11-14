@@ -1,5 +1,6 @@
 import { uuid } from '../../api/api'
 import { rewraps, showsCover } from '../../utils/terminal/resize-cover'
+import { log, logging } from '../../utils/diagnostics/log'
 import {
   fitTerminalGrid,
   placeFrame,
@@ -31,8 +32,15 @@ export function present(session: Session) {
     dragging: !!session.resizing,
     awaitingFrame: session.awaitingFrame,
   })
-  if (session.state.transitioning !== transitioning)
+  if (session.state.transitioning !== transitioning) {
+    log('cover', {
+      w: session.logId,
+      on: transitioning,
+      dragging: !!session.resizing,
+      awaiting: session.awaitingFrame,
+    })
     setState(session, { ...session.state, transitioning })
+  }
   const { painted, available } = session
   // The host is measured once its ResizeObserver first reports.
   if (paused(session) || !painted || !available) return
@@ -53,7 +61,19 @@ export function present(session: Session) {
   const { style } = session.surface
   style.width = `${painted.width}px`
   style.height = `${painted.height}px`
-  style.transform = top ? `translateY(${top}px)` : scale === 1 ? 'none' : `scale(${scale})`
+  const transform = top ? `translateY(${top}px)` : scale === 1 ? 'none' : `scale(${scale})`
+  if (logging() && style.transform !== transform)
+    log('place', {
+      w: session.logId,
+      scale,
+      top,
+      asking,
+      cols: painted.cols,
+      rows: painted.rows,
+      width: available.width,
+      height: available.height,
+    })
+  style.transform = transform
 }
 export function schedulePresentation(session: Session) {
   if (session.presentationFrame !== undefined) return
@@ -103,6 +123,7 @@ export function updateFocusSize(session: Session) {
       token: session.focusResize.token,
       ...proposed,
     })
+    log('ask', { w: session.logId, ...proposed })
     // The mirror holds this connection's frame: the server sends one before it says connected.
     if (rewraps(session.mirror, proposed)) awaitFrame(session)
     return
@@ -111,6 +132,7 @@ export function updateFocusSize(session: Session) {
   if (sameGrid(proposed, request.requested)) return
   request.requested = proposed
   session.connection!.send({ type: 'focus-resize-update', token: request.token, ...proposed })
+  log('ask', { w: session.logId, ...proposed })
   if (rewraps(session.mirror, proposed)) awaitFrame(session)
 }
 export function endFocusSize(session: Session) {

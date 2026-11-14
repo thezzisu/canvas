@@ -1,3 +1,4 @@
+import { log } from '../../utils/diagnostics/log'
 import type { PaneAction, PaneContext } from '../../../../shared/pane-context'
 import { api, apiContext, isCurrentApi } from '../../api/api'
 import { t } from '../../plugins/i18n'
@@ -172,6 +173,15 @@ export function mountTerminal(
   syncViewVisibility(session)
   schedulePresentation(session)
 
+  /** Holds keystrokes until the returned release, and says so in the diagnostic log. */
+  const holdInput = () => {
+    log('hold', { w: session.logId, on: true })
+    const release = session.input.hold()
+    return () => {
+      log('hold', { w: session.logId, on: false })
+      release()
+    }
+  }
   return {
     setSettings(settings: TerminalSettings) {
       if (mine()) session.settings = settings
@@ -348,7 +358,7 @@ export function mountTerminal(
     },
     /** Hold keystrokes until the returned release; they then follow in order. */
     holdInput() {
-      return session.input.hold()
+      return holdInput()
     },
     /** Deliver the stored draft version the user saw; Canvas streams its files to the native inbox. */
     sendComposer(
@@ -377,7 +387,7 @@ export function mountTerminal(
           name,
           fileCount: files.length,
           started: () => {
-            release = session.input.hold()
+            release = holdInput()
             limit = setTimeout(settle, COMPOSER_INPUT_HOLD_MS)
           },
           done: (error) => {

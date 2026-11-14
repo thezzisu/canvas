@@ -5,6 +5,7 @@ import {
   type TerminalConnection,
   type TerminalWindow,
 } from '../../utils/terminal/terminal-channels'
+import { log } from '../../utils/diagnostics/log'
 
 /** One socket per signed-in instance. It lives from its first channel to its last. */
 const sockets = new Map<string, TerminalChannels>()
@@ -22,7 +23,14 @@ export function openTerminalConnection(
     const url = apiUrl('/api/terminal', context)
     url.searchParams.set('apiBase', context.base)
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-    const created = (channels = new TerminalChannels(new WebSocket(url), context.token, () => {
+    const socket = new WebSocket(url)
+    log('socket', { state: 'opening' })
+    socket.addEventListener('open', () => log('socket', { state: 'open' }))
+    socket.addEventListener('error', () => log('socket', { state: 'error' }))
+    socket.addEventListener('close', ({ code, wasClean }) =>
+      log('socket', { state: 'close', code, clean: wasClean }),
+    )
+    const created = (channels = new TerminalChannels(socket, context.token, () => {
       if (sockets.get(key) === created) sockets.delete(key)
     }))
     sockets.set(key, created)
@@ -48,6 +56,10 @@ export function terminalAccess(context: ApiContext): Promise<ReadonlySet<string>
       return new Set(state.sources.map((source) => source.id))
     })()
     probes.set(key, probe)
+    void probe.then(
+      (sources) => log('probe', { state: sources === 'expired' ? 'expired' : 'ok' }),
+      () => log('probe', { state: 'failed' }),
+    )
     const settled = () => probes.delete(key)
     void probe.then(settled, settled)
   }

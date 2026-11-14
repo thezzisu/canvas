@@ -1,3 +1,4 @@
+import { inputKind, log, logging } from '../../utils/diagnostics/log'
 import { clipboardBorrowingFocus } from '../../utils/clipboard'
 import { encodeFocus, encodePaste } from '../../utils/terminal/terminal-encoder'
 import {
@@ -50,6 +51,13 @@ export function sendInput(session: Session, data: string, typed = true) {
     data = modifiedText(data, session.modifiers)
     setModifiers(session)
   }
+  if (logging())
+    log('input', {
+      w: session.logId,
+      kind: inputKind(data),
+      bytes: data.length,
+      held: session.input.held,
+    })
   session.input.write(() => {
     for (const chunk of terminalInputChunks(data)) {
       if (!writable()) return

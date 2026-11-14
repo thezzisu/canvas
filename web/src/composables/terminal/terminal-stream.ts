@@ -8,6 +8,7 @@ import { disconnectDownloads, receiveDownload } from '../files/downloads'
 import { receiveCapture, removeCaptures } from './capture'
 import { receiveDirectory } from './directories'
 import type { TerminalConnection } from '../../utils/terminal/terminal-channels'
+import { log, logging } from '../../utils/diagnostics/log'
 import { openTerminalConnection, terminalAccess } from './terminal-connection'
 import { liveTerminalMetadata, metadataKey, updateMetadata } from './terminal-metadata'
 import {
@@ -75,6 +76,7 @@ function doubtUploads(session: Session) {
 export function disconnect(session: Session) {
   const connection = session.connection
   session.connection = undefined
+  if (connection) log('channel', { w: session.logId, state: 'close' })
   doubtUploads(session)
   session.touchpad.cancel()
   session.pastePreview?.()
@@ -178,14 +180,31 @@ export function setContentHidden(
   else schedulePresentation(session)
 }
 
+/** When the first cell message not yet on screen arrived, for the diagnostic log. */
+const received = new WeakMap<Session, number>()
 /** A cell message. One that does not apply means the stream is lost: open the channel again. */
 function cells(session: Session, bytes: Uint8Array) {
   let change: { frame: boolean; rows: number[] }
   try {
     change = session.mirror.apply(bytes)
   } catch {
+    log('cells-error', { w: session.logId, bytes: bytes.length })
     connectionFailed(session)
     return
+  }
+  if (logging()) {
+    const { revision, cols, rows } = session.mirror
+    // A paint may show several messages at once: its delay counts from the first of them.
+    if (!received.has(session)) received.set(session, performance.now())
+    log('cells', {
+      w: session.logId,
+      kind: change.frame ? 'frame' : 'patch',
+      rev: revision,
+      bytes: bytes.length,
+      cols,
+      rows,
+      changed: change.rows.length,
+    })
   }
   session.selection.changed(change)
   session.painter.update(change)
@@ -213,6 +232,15 @@ export function painted(session: Session, revision: number) {
     height: mirror.rows * cell.height,
   })
   session.shown = revision
+  if (logging()) {
+    const since = received.get(session)
+    received.delete(session)
+    log('painted', {
+      w: session.logId,
+      rev: revision,
+      ms: since === undefined ? undefined : performance.now() - since,
+    })
+  }
   const cursor = painter.cursorBox()
   if (cursor) session.desktopInput?.moveTo(cursor)
   const due = session.awaitingPaint.filter((entry) => entry.revision <= revision)
@@ -384,10 +412,13 @@ export async function connect(session: Session, probe: boolean) {
     },
     // The server ends a channel when the connection changed, and the socket when the session
     // expired. The reconnect probe verifies the session before signing out.
-    closed: (failed) =>
-      connectionFailed(session, failed ? t('terminal.connection.failed') : undefined),
+    closed: (failed) => {
+      log('channel', { w: session.logId, state: failed ? 'error' : 'closed' })
+      connectionFailed(session, failed ? t('terminal.connection.failed') : undefined)
+    },
   })
   session.connection = connection
+  log('channel', { w: session.logId, state: 'open' })
 }
 
 /** The page went to the background or came back. */

@@ -1,3 +1,4 @@
+import { logWindow } from '../../utils/diagnostics/log'
 import { CellMirror } from '../../../../shared/cell-wire'
 import { isCurrentApi, uuid, type ApiContext } from '../../api/api'
 import { t } from '../../plugins/i18n'
@@ -91,6 +92,7 @@ export function createSession(
   const transfer = `terminal-upload:${uuid()}`
   const session: Session = {
     resource: { ...resource },
+    logId: logWindow(resource),
     state: { status: 'connecting' },
     listeners: new Set(),
     changed: () => {

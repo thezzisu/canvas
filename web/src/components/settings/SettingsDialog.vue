@@ -46,10 +46,17 @@ import {
 import LanguageSelect from '../LanguageSelect.vue'
 import PwaControls from '../PwaControls.vue'
 import { frontendBuild } from '../../utils/build-info'
+import {
+  clearDiagnosticLog,
+  diagnosticLog,
+  diagnosticLogStatus,
+  downloadDiagnosticLog,
+  refreshDiagnosticLogStatus,
+} from '../../composables/diagnostic-log'
 import { buildLabel } from '../../../../shared/build-info'
 import { copyText } from '../../utils/clipboard'
 
-const { t, n } = useI18n()
+const { t, n, d } = useI18n()
 
 const props = defineProps<{ open: boolean; settings: GlobalSettings; hasDisplayCutout?: boolean }>()
 const emit = defineEmits<{
@@ -108,6 +115,24 @@ async function testNotification(kind: 'sound' | 'system') {
   }
 }
 const viewportFits = ['cover', 'contain']
+// The stored log's size and the span of time it covers.
+const logSummary = computed(() => {
+  const status = diagnosticLogStatus.value
+  if (!status) return ''
+  const size =
+    status.bytes < 1024 * 1024
+      ? `${n(Math.ceil(status.bytes / 1024))} KB`
+      : `${n(status.bytes / 1024 / 1024, { maximumFractionDigits: 1 })} MB`
+  const time = (epoch: number) => d(epoch, { timeStyle: 'short' })
+  return status.from && status.to ? `${size} · ${time(status.from)}–${time(status.to)}` : size
+})
+watch(
+  () => props.open && diagnosticLog.value,
+  (shown) => {
+    if (shown) void refreshDiagnosticLogStatus()
+  },
+  { immediate: true },
+)
 const interactiveWidgets = ['resizes-content', 'resizes-visual', 'overlays-content']
 const inputModes = computed(() => [
   { value: 'auto', label: t('settings.inputAuto') },
@@ -416,6 +441,34 @@ defineExpose({ close })
               class="w-36 max-w-full"
               aria-label="interactive-widget"
           /></UFormField>
+          <UFormField :label="t('settings.diagnosticLog')" orientation="horizontal" :ui="field">
+            <template v-if="diagnosticLog && logSummary" #description
+              ><span class="tabular-nums">{{ logSummary }}</span></template
+            >
+            <div class="flex items-center gap-2">
+              <template v-if="diagnosticLog">
+                <UButton
+                  type="button"
+                  color="neutral"
+                  variant="outline"
+                  size="sm"
+                  icon="i-lucide-download"
+                  :label="t('settings.downloadLog')"
+                  @click="downloadDiagnosticLog()"
+                />
+                <UButton
+                  type="button"
+                  color="neutral"
+                  variant="outline"
+                  size="sm"
+                  icon="i-lucide-trash-2"
+                  :label="t('settings.clearLog')"
+                  @click="clearDiagnosticLog()"
+                />
+              </template>
+              <USwitch v-model="diagnosticLog" :aria-label="t('settings.diagnosticLog')" />
+            </div>
+          </UFormField>
         </template>
         <UFormField
           v-if="developerMode || viewportReloadRequired"

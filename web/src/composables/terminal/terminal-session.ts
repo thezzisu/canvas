@@ -14,6 +14,7 @@ import type { bindDesktopInput } from './desktop-input'
 import type { bindMobileInput } from './mobile-input'
 import type { bindMobileKeyboard } from './mobile-keyboard'
 import type { TerminalConnection } from '../../utils/terminal/terminal-channels'
+import { log, logging, type WindowId } from '../../utils/diagnostics/log'
 import type { bindTerminalKeyboardLock } from './terminal-keyboard-lock'
 import type { bindTerminalMouse } from './terminal-mouse'
 import type { TerminalSelection } from './terminal-selection'
@@ -58,6 +59,8 @@ export interface CompletionFrame {
  */
 export interface Session {
   resource: { sourceId: string; spaceId: string; windowId: string }
+  /** The window's name in the diagnostic log. */
+  logId: WindowId
   state: TerminalStatus
   listeners: Set<(state: TerminalStatus) => void>
   /** Runs after every state change. */
@@ -177,6 +180,17 @@ export function inputElement(session: Session) {
   return session.mobile ? session.mobileInput?.element : session.desktopInput?.element
 }
 
+/** The part of a status the diagnostic log follows. */
+const logged = (state: TerminalStatus) => ({
+  status: state.status,
+  retry: state.retryAttempt,
+  ready: state.screenReady,
+  readOnly: state.readOnly,
+  maximized: state.presentation?.maximized,
+  owned: state.presentation?.owned,
+  sizeOwned: state.focusResize?.owned,
+  resuming: state.layoutRestoring,
+})
 export function setState(session: Session, state: TerminalStatus) {
   if (
     state.status !== 'connected' ||
@@ -184,12 +198,18 @@ export function setState(session: Session, state: TerminalStatus) {
     (state.presentation?.maximized && !state.presentation.owned)
   )
     session.touchpad.cancel()
+  const previous = session.state
   const next = (session.state = {
     ...state,
     modifiers: session.modifiers,
     touchMode: session.touchMode,
     keyboardRequested: session.keyboardRequested,
   })
+  if (logging()) {
+    const told = logged(previous),
+      tells = logged(next)
+    if (JSON.stringify(told) !== JSON.stringify(tells)) log('state', { w: session.logId, ...tells })
+  }
   session.desktopInput?.refresh()
   session.keyboardLock?.refresh()
   session.touchpad.refresh()

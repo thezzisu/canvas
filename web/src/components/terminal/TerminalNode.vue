@@ -15,6 +15,7 @@ import type { NodeProps } from '@vue-flow/core'
 import UButton from '@nuxt/ui/components/Button.vue'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import { NodeResizer } from '@vue-flow/node-resizer'
+import { log, logWindow } from '../../utils/diagnostics/log'
 import UploadProgress from '../UploadProgress.vue'
 import CardLayoutControls from '../canvas/CardLayoutControls.vue'
 import { useLayoutCard } from '../../composables/canvas/layout-editing'
@@ -257,6 +258,16 @@ watchEffect(() => {
     loaded.value = true
 })
 const firstFrame = computed(() => !status.value.screenReady || !loaded.value)
+const loading = computed(
+  () =>
+    !showApp.value &&
+    !closed.value &&
+    keepTerminal.value &&
+    !maximizedElsewhere.value &&
+    (status.value.status === 'connecting' ||
+      (status.value.status === 'connected' && firstFrame.value)),
+)
+watch(loading, (on) => log('loading', { w: logWindow(props.data), on, opaque: firstFrame.value }))
 const resizeState = computed(() =>
   !props.data.focus
     ? 'passive'
@@ -1108,13 +1119,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
       </div>
       <Transition name="terminal-loading">
         <div
-          v-if="
-            !showApp &&
-            !closed &&
-            keepTerminal &&
-            !maximizedElsewhere &&
-            (status.status === 'connecting' || (status.status === 'connected' && firstFrame))
-          "
+          v-if="loading"
           class="terminal-loading nodrag"
           :class="{ 'terminal-loading-initial': firstFrame }"
           role="status"

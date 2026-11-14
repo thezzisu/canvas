@@ -4,6 +4,8 @@ import ui from '@nuxt/ui/vue-plugin'
 import App from './App.vue'
 import { followInstance, router } from './plugins/router'
 import { initializeViewportPolicy } from './composables/developer-mode'
+// The diagnostic log follows the page from its start when it is on.
+import './composables/diagnostic-log'
 import { initializePwa } from './plugins/pwa'
 import { i18n, watchDocumentLocale } from './plugins/i18n'
 import { initializeStatusPulse } from './utils/status-pulse'

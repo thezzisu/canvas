@@ -1,6 +1,10 @@
 /** While any hold is open, writes wait in order; releasing the last hold runs them. */
 export class TerminalInputHold {
   private holds = 0
+  /** Writes wait now. */
+  get held() {
+    return this.holds > 0
+  }
   private queued: Array<() => void> = []
   hold() {
     this.holds++
