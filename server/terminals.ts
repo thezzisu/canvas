@@ -243,6 +243,8 @@ export class LiveTerminal {
       (pane) => (paneId === undefined || pane.id === paneId) && pane.status !== 'unknown',
     )
   }
+  private readonly diagWatch = new Set<TerminalChannel>()
+  private readonly diagSent = new Map<TerminalChannel, number>()
   private publishMetadata() {
     if (this.closed || !this.rawMetadata) return
     this.metadata = this.reads?.project(this.source, this.rawMetadata) || this.rawMetadata
@@ -292,6 +294,7 @@ export class LiveTerminal {
     const view = this.views.get(ws)
     if (!view || view.sending || !this.grid || ws.readyState !== 1 || !this.canRender(ws)) return
     const message = view.encoder.encode(this.grid, this.revision)
+    this.diagSent.set(ws, this.revision)
     if (message) {
       view.sending = true
       const started = Date.now()
@@ -491,6 +494,19 @@ export class LiveTerminal {
     ws.on('message', (msg) => {
       if (this.closed || ws.readyState !== 1 || !this.clients.has(ws)) return
       try {
+        if (msg.type === 'cell-seen') {
+          console.log(
+            `diag ${this.key} channel ${ws.id} applied`,
+            JSON.stringify({
+              revision: msg.revision,
+              frame: msg.frame,
+              painted: msg.shown,
+              hidden: msg.hidden,
+              grid: this.revision,
+            }),
+          )
+          return
+        }
         if (msg.type === 'cell-error') {
           console.log(
             `diag ${this.key} channel ${ws.id} could not read a cell message:`,
@@ -619,6 +635,39 @@ export class LiveTerminal {
           if (msg.data !== '\x1b[I' && msg.data !== '\x1b[O' && !isTerminalHoverInput(msg.data))
             this.sentFrames.delete(ws)
           if (this.pasting) console.log(`diag ${this.key} input held behind a paste`)
+          // diag: a view that typed and, 1.5 s later, was not sent the grid the window has.
+          if (!this.diagWatch.has(ws)) {
+            const at = this.revision
+            this.diagWatch.add(ws)
+            setTimeout(() => {
+              this.diagWatch.delete(ws)
+              const view = this.views.get(ws)
+              if (
+                this.closed ||
+                !view ||
+                this.revision === at ||
+                this.diagSent.get(ws) === this.revision
+              )
+                return
+              console.log(
+                `diag ${this.key} channel ${ws.id} is behind after input:`,
+                JSON.stringify({
+                  grid: this.revision,
+                  atInput: at,
+                  sent: this.diagSent.get(ws),
+                  shown: view.shown,
+                  sending: view.sending,
+                  hidden: this.hidden.has(ws),
+                  canRender: this.canRender(ws),
+                  ready: ws.readyState,
+                  maximized: this.maximized
+                    ? { owner: this.maximized.owner === ws, releasing: !!this.maximized.releasing }
+                    : null,
+                  controller: this.controller === ws,
+                }),
+              )
+            }, 1500)
+          }
           if (this.pasting)
             this.holdInput(
               this.pasting.then(() => {
