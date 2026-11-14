@@ -1,6 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { containTerminalScale, fitTerminalGrid, sameTerminalGrid } from './terminal-geometry.ts'
+import {
+  containTerminalScale,
+  fitTerminalGrid,
+  ownedFrameTop,
+  sameTerminalGrid,
+} from './terminal-geometry.ts'
 
 test('containment preserves aspect ratio and upscales only on request', () => {
   const available = { width: 273.6, height: 528.8 },
@@ -14,6 +19,15 @@ test('containment preserves aspect ratio and upscales only on request', () => {
     containTerminalScale({ width: 400, height: 800 }, { width: 100, height: 200 }, true),
     4,
   )
+})
+
+test('a frame of another height keeps its bottom row where the asked grid ends', () => {
+  // 55 rows shown, 35 asked for as a keyboard opens: the top 20 rows are cut.
+  assert.equal(ownedFrameTop(55 * 16, 35, 16), -20 * 16)
+  // The keyboard closes: 20 rows of room above the old frame.
+  assert.equal(ownedFrameTop(35 * 16, 55, 16), 20 * 16)
+  // The frame of the asked grid starts at the top.
+  assert.equal(ownedFrameTop(35 * 16, 35, 16), 0)
 })
 
 test('a box of whole cells keeps every cell, including fractional cell widths', () => {

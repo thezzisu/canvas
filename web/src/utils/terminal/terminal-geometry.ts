@@ -24,6 +24,14 @@ export function fitTerminalGrid(
   }
 }
 
+/**
+ * Where the top of a frame goes in a view that owns the window's size: its bottom row sits where
+ * the bottom row of the grid the view asks for will be. A frame of another height is cut at the
+ * top or leaves room there, and the frame that follows lands on the same rows.
+ */
+export const ownedFrameTop = (frameHeight: number, askedRows: number, cellHeight: number) =>
+  askedRows * cellHeight - frameHeight
+
 export function containTerminalScale(
   available: { width: number; height: number },
   content: { width: number; height: number },

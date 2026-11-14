@@ -3,6 +3,7 @@ import { coversResize } from '../../utils/terminal/resize-cover'
 import {
   containTerminalScale,
   fitTerminalGrid,
+  ownedFrameTop,
   sameTerminalGrid as sameGrid,
   type TerminalGrid,
 } from '../../utils/terminal/terminal-geometry'
@@ -21,7 +22,7 @@ function proposedSize(session: Session): TerminalGrid | undefined {
   return fitTerminalGrid(available, session.painter.metrics)
 }
 
-/** Fits the painted screen into the host, and covers a frame that is not the settled one. */
+/** Places the painted screen in the host, and covers a frame that is not the settled one. */
 export function present(session: Session) {
   if (!session.host?.isConnected) return
   // Cover a card being resized and an old frame waiting for the native resize this view asked for.
@@ -35,22 +36,20 @@ export function present(session: Session) {
   const { painted, available } = session
   // The host is measured once its ResizeObserver first reports.
   if (paused(session) || !painted || !available) return
-  const requested = session.focusResize?.requested
-  // The complete old frame stays fitted while the native resize is in flight.
-  const native =
-    session.magnified &&
-    session.state.focusResize?.owned === true &&
-    sameGrid(requested, painted) &&
-    sameGrid(requested, proposedSize(session))
-  // A card can change aspect ratio while its shared native grid stays unchanged.
-  // Keep the whole frame visible until the native grid catches up.
-  const scale = containTerminalScale(available, painted, session.magnified && !native)
-  if (!(scale > 0)) return
-  Object.assign(session.surface.style, {
-    width: `${painted.width}px`,
-    height: `${painted.height}px`,
-    transform: scale === 1 ? 'none' : `scale(${scale})`,
-  })
+  const { style } = session.surface
+  style.width = `${painted.width}px`
+  style.height = `${painted.height}px`
+  // The view that owns the size shows every frame at its own font, the one it is waiting to
+  // replace too: that frame keeps its bottom rows in place and is cut where it does not fit.
+  if (session.magnified && session.state.focusResize?.owned) {
+    const rows = proposedSize(session)?.rows ?? painted.rows
+    const top = ownedFrameTop(painted.height, rows, session.painter.metrics.height)
+    style.transform = top ? `translateY(${top}px)` : 'none'
+    return
+  }
+  // Any other view shows the whole shared window, whatever shape its card has.
+  const scale = containTerminalScale(available, painted, session.magnified)
+  if (scale > 0) style.transform = scale === 1 ? 'none' : `scale(${scale})`
 }
 export function schedulePresentation(session: Session) {
   if (session.presentationFrame !== undefined) return
