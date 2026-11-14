@@ -1,4 +1,5 @@
 import { shallowRef, watch } from 'vue'
+import { boundAnswer } from './terminal-presentation'
 import { sameCompletion } from '../../../../shared/completion'
 import type { PaneFocus, WindowFocus } from '../../utils/workspace/completion-focus'
 import {
@@ -144,6 +145,7 @@ export function reportViewState(session: Session) {
   session.reportedVisible = visible
   session.reportedFocused = focused
   session.connection!.send({ type: 'view-visible', visible, focused })
+  boundAnswer(session)
 }
 export function syncViewVisibility(session: Session) {
   refreshReadFocus()

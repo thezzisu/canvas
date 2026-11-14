@@ -1,9 +1,8 @@
 import { uuid } from '../../api/api'
-import { coversResize, resizesRowsOnly } from '../../utils/terminal/resize-cover'
+import { coversResize, resizesRowsOnly, showsCover } from '../../utils/terminal/resize-cover'
 import {
-  containTerminalScale,
   fitTerminalGrid,
-  ownedFrameTop,
+  placeFrame,
   sameTerminalGrid as sameGrid,
   type TerminalGrid,
 } from '../../utils/terminal/terminal-geometry'
@@ -23,35 +22,39 @@ function proposedSize(session: Session): TerminalGrid | undefined {
   return fitTerminalGrid(available, session.painter.metrics)
 }
 
-/** Places the painted screen in the host, and covers a frame that is not the settled one. */
+/** Places the painted screen in the host, and covers a frame that is not the one to look at. */
 export function present(session: Session) {
   if (!session.host?.isConnected) return
-  // Cover a card being resized and an old frame waiting for the native resize this view asked for.
-  const transitioning =
-    session.state.status === 'connected' &&
-    !!session.state.screenReady &&
-    !session.appShowing &&
-    (!!session.resizing || session.nativeResize !== undefined)
+  const transitioning = showsCover({
+    connected: session.state.status === 'connected',
+    painted: !!session.state.screenReady,
+    appShowing: !!session.appShowing,
+    dragging: !!session.resizing,
+    awaitingFrame: session.awaitingFrame,
+  })
   if (session.state.transitioning !== transitioning)
     setState(session, { ...session.state, transitioning })
   const { painted, available } = session
   // The host is measured once its ResizeObserver first reports.
   if (paused(session) || !painted || !available) return
+  // A maximized view asks for the window's size until another view takes the window.
+  const asking = session.magnified && !session.focusResize?.suspended
+  const { scale, top } = placeFrame({
+    frame: painted,
+    available,
+    asked: asking
+      ? {
+          rows: proposedSize(session)?.rows ?? painted.rows,
+          cellHeight: session.painter.metrics.height,
+        }
+      : undefined,
+    upscale: session.magnified,
+  })
+  if (!(scale > 0)) return
   const { style } = session.surface
   style.width = `${painted.width}px`
   style.height = `${painted.height}px`
-  // A frame made for this view's own size is shown at its font whatever the view waits for,
-  // another size or its connection: it keeps its bottom rows in place and is cut where it
-  // does not fit.
-  if (session.magnified && painted.own) {
-    const rows = proposedSize(session)?.rows ?? painted.rows
-    const top = ownedFrameTop(painted.height, rows, session.painter.metrics.height)
-    style.transform = top ? `translateY(${top}px)` : 'none'
-    return
-  }
-  // Any other view shows the whole shared window, whatever shape its card has.
-  const scale = containTerminalScale(available, painted, session.magnified)
-  if (scale > 0) style.transform = scale === 1 ? 'none' : `scale(${scale})`
+  style.transform = top ? `translateY(${top}px)` : scale === 1 ? 'none' : `scale(${scale})`
 }
 export function schedulePresentation(session: Session) {
   if (session.presentationFrame !== undefined) return
@@ -62,16 +65,29 @@ export function schedulePresentation(session: Session) {
   })
 }
 
-// The server answers a native resize well within this; a view never waits on it for longer.
-const nativeResizeLimit = 500
-function awaitNativeResize(session: Session) {
-  clearTimeout(session.nativeResize)
-  session.nativeResize = setTimeout(() => nativeResizeSettled(session), nativeResizeLimit)
+// The answer is a frame from the window's backend. One that is slow, or holds the frame back,
+// must not leave the terminal covered: after this long the frame on screen is shown as it is.
+const answerLimit = 500
+/** The frame on screen is about to be replaced: it is covered until the next one is painted. */
+function awaitFrame(session: Session) {
+  session.awaitingFrame = true
+  boundAnswer(session)
 }
-export function nativeResizeSettled(session: Session) {
-  if (session.nativeResize === undefined) return
-  clearTimeout(session.nativeResize)
-  session.nativeResize = undefined
+/**
+ * Starts the wait for the answer, or stops it. A view the server holds hidden is sent no frame,
+ * so its wait starts when it shows again.
+ */
+export function boundAnswer(session: Session) {
+  clearTimeout(session.answerLimit)
+  session.answerLimit =
+    session.awaitingFrame && session.reportedVisible
+      ? setTimeout(() => frameSettled(session), answerLimit)
+      : undefined
+}
+export function frameSettled(session: Session) {
+  if (!session.awaitingFrame) return
+  session.awaitingFrame = false
+  boundAnswer(session)
   present(session)
 }
 
@@ -88,7 +104,8 @@ export function updateFocusSize(session: Session) {
       token: session.focusResize.token,
       ...proposed,
     })
-    if (!sameGrid(proposed, session.mirror)) awaitNativeResize(session)
+    // The mirror holds this connection's frame: the server sends one before it says connected.
+    if (!sameGrid(proposed, session.mirror)) awaitFrame(session)
     return
   }
   const request = session.focusResize
@@ -104,7 +121,7 @@ export function updateFocusSize(session: Session) {
   })
   session.resizePrompted = false
   if (covers && !(uncoversRowResize.value && resizesRowsOnly(session.mirror, proposed)))
-    awaitNativeResize(session)
+    awaitFrame(session)
 }
 export function endFocusSize(session: Session) {
   const request = session.focusResize
@@ -113,7 +130,7 @@ export function endFocusSize(session: Session) {
   if (session.connection?.send({ type: 'focus-resize-end', token: request.token })) {
     // The server answers the owner's release with a frame of the window at its shared size.
     // The view stays covered until that arrives, whatever size it has.
-    if (!request.suspended) awaitNativeResize(session)
+    if (!request.suspended) awaitFrame(session)
   }
   setState(session, { ...session.state, focusResize: undefined })
 }

@@ -24,14 +24,6 @@ export function fitTerminalGrid(
   }
 }
 
-/**
- * Where the top of a frame goes in a view that owns the window's size: its bottom row sits where
- * the bottom row of the grid the view asks for will be. A frame of another height is cut at the
- * top or leaves room there, and the frame that follows lands on the same rows.
- */
-export const ownedFrameTop = (frameHeight: number, askedRows: number, cellHeight: number) =>
-  askedRows * cellHeight - frameHeight
-
 export function containTerminalScale(
   available: { width: number; height: number },
   content: { width: number; height: number },
@@ -42,4 +34,26 @@ export function containTerminalScale(
     available.width / content.width,
     available.height / content.height,
   )
+}
+
+/**
+ * Where a frame goes in its host, from its top left corner.
+ *
+ * A view that asks for the window's size shows text at its own font, whatever frame it has: the
+ * frame's bottom row sits where the bottom row of the asked grid will be, a taller frame is cut
+ * at the top and a wider one at the right, and the frame that answers lands on the same rows.
+ *
+ * Every other view is a projection of a window sized elsewhere: the whole frame, scaled to fit.
+ */
+export function placeFrame(view: {
+  frame: { width: number; height: number }
+  available: { width: number; height: number }
+  /** The rows of the grid a view asks for, with its cell's height; none for a projection. */
+  asked?: { rows: number; cellHeight: number }
+  /** A projection may grow to fill a maximized view; a card shows it at most at its size. */
+  upscale: boolean
+}): { scale: number; top: number } {
+  return view.asked
+    ? { scale: 1, top: view.asked.rows * view.asked.cellHeight - view.frame.height }
+    : { scale: containTerminalScale(view.available, view.frame, view.upscale), top: 0 }
 }

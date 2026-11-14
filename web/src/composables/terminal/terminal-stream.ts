@@ -11,8 +11,9 @@ import type { TerminalConnection } from '../../utils/terminal/terminal-channels'
 import { openTerminalConnection, terminalAccess } from './terminal-connection'
 import { liveTerminalMetadata, metadataKey, updateMetadata } from './terminal-metadata'
 import {
+  boundAnswer,
   endFocusSize,
-  nativeResizeSettled,
+  frameSettled,
   present,
   schedulePresentation,
 } from './terminal-presentation'
@@ -94,8 +95,8 @@ export function disconnect(session: Session) {
     connection.close()
   }
   session.uploads.disconnected()
-  clearTimeout(session.nativeResize)
-  session.nativeResize = undefined
+  session.awaitingFrame = false
+  boundAnswer(session)
   session.presentationRevision = (session.presentationRevision || 0) + 1
   setState(session, {
     ...session.state,
@@ -196,8 +197,8 @@ function cells(session: Session, bytes: Uint8Array) {
   if (session.resuming) afterPaint(session, () => resumed(session))
   // A grid on the way to the one this view asked for stays covered.
   const asked = session.focusResize?.suspended ? undefined : session.focusResize?.requested
-  if (session.nativeResize !== undefined && (!asked || sameTerminalGrid(asked, session.mirror)))
-    afterPaint(session, () => nativeResizeSettled(session))
+  if (session.awaitingFrame && (!asked || sameTerminalGrid(asked, session.mirror)))
+    afterPaint(session, () => frameSettled(session))
 }
 /** The painter put a revision on screen. */
 export function painted(session: Session, revision: number) {
@@ -209,10 +210,6 @@ export function painted(session: Session, revision: number) {
     rows: mirror.rows,
     width: mirror.cols * cell.width,
     height: mirror.rows * cell.height,
-    own:
-      (session.state.focusResize?.owned === true &&
-        sameTerminalGrid(session.focusResize?.requested, mirror)) ||
-      (previous?.own === true && sameTerminalGrid(previous, mirror)),
   })
   session.shown = revision
   const cursor = painter.cursorBox()
@@ -343,7 +340,7 @@ function receive(
     const revoked = !message.owned && message.reason === 'superseded'
     if (message.token !== request.token && !revoked) return
     request.suspended = message.owned !== true
-    if (request.suspended) nativeResizeSettled(session)
+    if (request.suspended) frameSettled(session)
     setState(session, { ...session.state, focusResize: { owned: message.owned === true } })
     schedulePresentation(session)
   }

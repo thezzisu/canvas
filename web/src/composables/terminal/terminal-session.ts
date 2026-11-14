@@ -72,12 +72,8 @@ export interface Session {
   fontSize: number
   /** The revision on screen; -1 before this connection's first paint. */
   shown: number
-  /**
-   * The grid on screen, with its size in the surface's own pixels. `own` says the grid is one
-   * this view asked for as owner of the size; it stays so while the same grid is on screen,
-   * through the wait for another size and through a lost connection.
-   */
-  painted?: TerminalGrid & { width: number; height: number; own: boolean }
+  /** The grid on screen, with its size in the surface's own pixels. */
+  painted?: TerminalGrid & { width: number; height: number }
   /** Work that waits until the screen shows the revision it arrived with. */
   awaitingPaint: { revision: number; run(): void }[]
   /** Content that was hidden stays covered until a fresh FRAME is on screen. */
@@ -94,8 +90,10 @@ export interface Session {
   editing?: boolean
   appShowing?: boolean
   resizing?: boolean
-  /** A native resize this view asked for is on its way; the old frame stays covered until then. */
-  nativeResize?: ReturnType<typeof setTimeout>
+  /** The server is about to replace the frame on screen, which stays covered until then. */
+  awaitingFrame: boolean
+  /** Ends that wait if no answer comes; see `boundAnswer`. */
+  answerLimit?: ReturnType<typeof setTimeout>
   /** What decides whether the next resize is covered; see `coversResize`. */
   covered?: boolean
   uncoveredAt?: number

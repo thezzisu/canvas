@@ -105,6 +105,7 @@ export function createSession(
     shown: -1,
     awaitingPaint: [],
     resuming: false,
+    awaitingFrame: false,
     magnified: false,
     mobile: false,
     connectionRevision: 0,

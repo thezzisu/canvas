@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   containTerminalScale,
   fitTerminalGrid,
-  ownedFrameTop,
+  placeFrame,
   sameTerminalGrid,
 } from './terminal-geometry.ts'
 
@@ -21,13 +21,28 @@ test('containment preserves aspect ratio and upscales only on request', () => {
   )
 })
 
-test('a frame of another height keeps its bottom row where the asked grid ends', () => {
+test('a view that asks for the size shows any frame at its font, bottom rows in place', () => {
+  const available = { width: 400, height: 35 * 16 },
+    asked = { rows: 35, cellHeight: 16 }
+  const place = (width: number, rows: number) =>
+    placeFrame({ frame: { width, height: rows * 16 }, available, asked, upscale: true })
   // 55 rows shown, 35 asked for as a keyboard opens: the top 20 rows are cut.
-  assert.equal(ownedFrameTop(55 * 16, 35, 16), -20 * 16)
-  // The keyboard closes: 20 rows of room above the old frame.
-  assert.equal(ownedFrameTop(35 * 16, 55, 16), 20 * 16)
+  assert.deepEqual(place(400, 55), { scale: 1, top: -20 * 16 })
+  // The keyboard closed again: 20 rows of room above a frame of 15.
+  assert.deepEqual(place(400, 15), { scale: 1, top: 20 * 16 })
   // The frame of the asked grid starts at the top.
-  assert.equal(ownedFrameTop(35 * 16, 35, 16), 0)
+  assert.deepEqual(place(400, 35), { scale: 1, top: 0 })
+  // The shared window's wider frame, after a reconnect or before the first answer: not scaled.
+  assert.deepEqual(place(1080, 40), { scale: 1, top: -5 * 16 })
+})
+
+test('a projection shows the whole frame, and grows only in a maximized view', () => {
+  const frame = { width: 1080, height: 640 },
+    place = (width: number, height: number, upscale: boolean) =>
+      placeFrame({ frame, available: { width, height }, upscale })
+  assert.deepEqual(place(540, 640, false), { scale: 0.5, top: 0 })
+  assert.deepEqual(place(2160, 1280, false), { scale: 1, top: 0 })
+  assert.deepEqual(place(2160, 1280, true), { scale: 2, top: 0 })
 })
 
 test('a box of whole cells keeps every cell, including fractional cell widths', () => {
