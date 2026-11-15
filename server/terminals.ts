@@ -113,6 +113,7 @@ export class LiveTerminal {
   private rawMetadata?: WindowMetadata
   private frame?: WindowMetadata
   private sentFrames = new WeakMap<TerminalChannel, WindowMetadata>()
+  private metadataSends = new WeakMap<TerminalChannel, { due: boolean }>()
   private readGenerations = new WeakMap<TerminalChannel, number>()
   private pendingFences = new WeakMap<TerminalChannel, number>()
   private readSubscription?: { dispose(): unknown }
@@ -199,7 +200,25 @@ export class LiveTerminal {
   private publishMetadata() {
     if (this.closed || !this.rawMetadata) return
     this.metadata = this.reads?.project(this.source, this.rawMetadata) || this.rawMetadata
-    for (const ws of this.clients) json(ws, { type: 'metadata', window: this.metadata })
+    for (const ws of this.clients) this.sendMetadata(ws)
+  }
+  /**
+   * Like cells, a browser has at most one metadata message in flight; the current metadata
+   * follows it, so a slow socket skips the states in between.
+   */
+  private sendMetadata(ws: TerminalChannel) {
+    if (!this.metadata) return
+    const sending = this.metadataSends.get(ws)
+    if (sending) {
+      sending.due = true
+      return
+    }
+    const state = { due: false }
+    this.metadataSends.set(ws, state)
+    ws.send({ type: 'metadata', window: this.metadata }, () => {
+      this.metadataSends.delete(ws)
+      if (state.due && !this.closed) this.sendMetadata(ws)
+    })
   }
   private publishFrame(ws: TerminalChannel) {
     if (!this.frame || this.pendingFences.has(ws)) return
@@ -408,7 +427,7 @@ export class LiveTerminal {
         presentationDue: false,
       })
       if (!this.controller) this.controller = ws
-      if (this.metadata) json(ws, { type: 'metadata', window: this.metadata })
+      this.sendMetadata(ws)
       json(ws, { type: 'capture', capture: this.capture() } satisfies CaptureState)
       this.snapshot(ws)
       this.status()

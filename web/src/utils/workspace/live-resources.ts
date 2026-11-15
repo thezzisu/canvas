@@ -51,8 +51,7 @@ export function mergeLiveResources(
             ...live,
             panes: live.panes.map((pane) => ({
               ...pane,
-              // The endpoint only includes titles for agent panes. Keep ordinary
-              // shell titles from session.snapshot until that API reports a change.
+              // A pane the server has no title for yet keeps the polled one.
               terminalTitle:
                 pane.terminalTitle ??
                 window.panes?.find((previous) => previous.id === pane.id)?.terminalTitle,

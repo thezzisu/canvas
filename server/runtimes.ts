@@ -7,6 +7,12 @@ import { join } from 'node:path'
 import type { Source } from './state.ts'
 import { createHerdrClient, type HerdrClientTransport } from './herdr/client.ts'
 import {
+  PaneTitles,
+  paneTitle,
+  subscribePaneUpdates,
+  type PaneRecord,
+} from './herdr/pane-titles.ts'
+import {
   discoverHerdrPython,
   herdrApiRequest,
   localHerdrSockets,
@@ -284,6 +290,68 @@ async function connectedHerdrSockets(source: Source, signal?: AbortSignal): Prom
     signal,
   })
   return { api: tunnel.sockets['herdr.sock']!, client: tunnel.sockets['herdr-client.sock']! }
+}
+
+/** Pane titles of each herdr source that has an open window, followed through its API. */
+const followedTitles = new Map<string, { titles: PaneTitles; stop(): void }>()
+
+/**
+ * Subscribes to the source's `pane.updated` events, then reads `session.snapshot`, so no change
+ * falls between the two. A subscription that ends forgets the titles and starts again.
+ */
+function followPaneTitles(source: Source): PaneTitles {
+  const followed = followedTitles.get(source.id)
+  if (followed) return followed.titles
+  const titles = new PaneTitles()
+  let subscription: { close(): void } | undefined,
+    retry: ReturnType<typeof setTimeout> | undefined,
+    delay = 1000,
+    stopped = false
+  const restart = () => {
+    if (stopped) return
+    titles.clear()
+    retry = setTimeout(() => void start(), delay)
+    retry.unref()
+    delay = Math.min(delay * 2, 30_000)
+  }
+  const start = async () => {
+    let api: string
+    try {
+      api = (await connectedHerdrSockets(source)).api
+    } catch {
+      restart()
+      return
+    }
+    if (stopped) return
+    subscription = subscribePaneUpdates(api, {
+      started: () =>
+        void herdrApiRequest(api, 'session.snapshot')
+          .then((result) => {
+            if (stopped) return
+            titles.replace(snapshotPanes(result))
+            delay = 1000
+          })
+          .catch(() => subscription?.close()),
+      pane: (record) => titles.update(record),
+      ended: restart,
+    })
+  }
+  followedTitles.set(source.id, {
+    titles,
+    stop: () => {
+      stopped = true
+      clearTimeout(retry)
+      subscription?.close()
+      titles.clear()
+    },
+  })
+  void start()
+  return titles
+}
+
+function snapshotPanes(result: Record<string, unknown>): PaneRecord[] {
+  const panes = (result.snapshot as { panes?: unknown } | undefined)?.panes
+  return Array.isArray(panes) ? panes.filter((pane) => pane && typeof pane === 'object') : []
 }
 
 async function discoverCoreSocket(source: Source, signal?: AbortSignal): Promise<string> {
@@ -670,6 +738,11 @@ function commandEnvironment(): NodeJS.ProcessEnv {
 
 /** Close only Canvas-owned socket forwards; no workstation SSH configuration changes. */
 export async function closeRuntimeConnections(sourceId?: string): Promise<void> {
+  for (const [id, followed] of followedTitles)
+    if (sourceId === undefined || id === sourceId) {
+      followed.stop()
+      followedTitles.delete(id)
+    }
   await closeSocketTunnels(sourceId)
 }
 
@@ -734,6 +807,9 @@ async function herdrResources(
   }
   if (!snapshot || !Array.isArray(snapshot.workspaces) || !Array.isArray(snapshot.tabs))
     throw new Error('Unexpected herdr snapshot response')
+  // A followed source's titles may be newer than this snapshot: per pane, the newer wins.
+  const titles = followedTitles.get(source.id)?.titles
+  titles?.replace(snapshotPanes(response))
   // PaneInfo.focused is global; layouts retain each tab's selected pane.
   const focusedPanes = new Map(
     (Array.isArray(snapshot.layouts) ? snapshot.layouts : []).map((layout) => [
@@ -765,14 +841,7 @@ async function herdrResources(
               id: pane.pane_id,
               name: pane.label || pane.display_agent || pane.agent || String(index + 1),
               active: focusedPanes.get(tab.tab_id) === pane.pane_id,
-              terminalTitle:
-                typeof pane.terminal_title_stripped === 'string'
-                  ? Array.from(
-                      pane.terminal_title_stripped.replace(/[\x00-\x1f\x7f-\x9f]/gu, '').trim(),
-                    )
-                      .slice(0, 1024)
-                      .join('')
-                  : '',
+              terminalTitle: titles?.title(pane.pane_id) ?? paneTitle(pane.terminal_title_stripped),
               ...(pane.display_agent || pane.agent
                 ? { agent: pane.display_agent || pane.agent }
                 : {}),
@@ -1041,6 +1110,7 @@ async function prepareTerminal(
         readSelection: (params) => herdrApiRequest(sockets.api, 'pane.selection.read', params),
         readContent: async (params) =>
           (await herdrApiRequest(sockets.api, 'pane.read', params, { timeoutMs: 5000 })).read,
+        titles: followPaneTitles(source),
       }),
     cleanup,
   }

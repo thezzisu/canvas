@@ -5,6 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHerdrClient, type HerdrClientExit } from './client.ts'
+import { PaneTitles } from './pane-titles.ts'
 import { gridText, watch } from '../test-grid.ts'
 import { Writer } from './wire.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
@@ -57,6 +58,7 @@ async function fixture(
     missingTarget?: boolean
     readSelection?: (params: Record<string, unknown>) => Promise<unknown>
     readContent?: (params: Record<string, unknown>) => Promise<unknown>
+    titles?: PaneTitles
   } = {},
 ) {
   const directory = await mkdtemp(join(tmpdir(), 'cv-native-')),
@@ -227,6 +229,7 @@ async function fixture(
         handshakeTimeoutMs,
         readSelection: options.readSelection,
         readContent: options.readContent,
+        titles: options.titles,
       }),
   }
 }
@@ -749,7 +752,7 @@ test('native metadata changes arrive independently of frames, deduplicate and re
   const updates: WindowMetadata[] = []
   const subscription = client.onMetadata((metadata) => updates.push(metadata))
   await until(() => updates.length === 1)
-  const snapshot = (revision: number, status: string, title = 'Task') =>
+  const snapshot = (revision: number, status: string) =>
     f.control('shell.snapshot.v1', {
       boot_id: 'boot',
       revision,
@@ -766,9 +769,7 @@ test('native metadata changes arrive independently of frames, deduplicate and re
           right_click_passthrough: false,
         },
       ],
-      agents: [
-        { pane_id: 'pane', agent_status: status, agent: 'codex', terminal_title_stripped: title },
-      ],
+      agents: [{ pane_id: 'pane', agent_status: status, agent: 'codex' }],
     })
   snapshot(2, 'done')
   await until(() => updates.at(-1)?.status === 'done')
@@ -777,9 +778,8 @@ test('native metadata changes arrive independently of frames, deduplicate and re
   snapshot(1, 'working')
   await delay(20)
   assert.equal(updates.length, count, 'duplicate and stale snapshots changed metadata')
-  snapshot(4, 'idle', 'Ready')
+  snapshot(4, 'idle')
   await until(() => updates.at(-1)?.status === 'idle')
-  assert.equal(updates.at(-1)?.panes[0]?.terminalTitle, 'Ready')
   const late: WindowMetadata[] = []
   client.onMetadata((metadata) => late.push(metadata))
   await until(() => late.length === 1)
@@ -788,6 +788,47 @@ test('native metadata changes arrive independently of frames, deduplicate and re
   snapshot(5, 'blocked')
   await until(() => late.at(-1)?.status === 'attention')
   assert.equal(updates.at(-1)?.status, 'idle')
+})
+
+test('titles come from the API source: a title change alone republishes, the endpoint snapshot is ignored', async (t) => {
+  const titles = new PaneTitles(),
+    f = await fixture(t, { titles }),
+    client = await f.connect()
+  t.after(() => client.kill())
+  const updates: WindowMetadata[] = []
+  client.onMetadata((metadata) => updates.push(metadata))
+  f.control('shell.snapshot.v1', {
+    boot_id: 'boot',
+    revision: 2,
+    focused_workspace_id: 'space',
+    focused_tab_id: 'target',
+    focused_pane_id: 'pane',
+    tabs: [{ tab_id: 'target', workspace_id: 'space', focused: true, label: 'Tab' }],
+    panes: [
+      {
+        pane_id: 'pane',
+        tab_id: 'target',
+        workspace_id: 'space',
+        focused: true,
+        right_click_passthrough: false,
+      },
+    ],
+    agents: [
+      { pane_id: 'pane', agent_status: 'working', agent: 'codex', terminal_title_stripped: 'Old' },
+    ],
+  })
+  await until(() => updates.at(-1)?.status === 'working')
+  assert.equal(updates.at(-1)?.panes[0]?.terminalTitle, undefined)
+  const count = updates.length
+  titles.update({ pane_id: 'other', revision: 1, terminal_title_stripped: 'Elsewhere' })
+  await delay(20)
+  assert.equal(updates.length, count, 'another window’s title republished this one')
+  titles.update({ pane_id: 'pane', revision: 1, terminal_title_stripped: '⠋ Working' })
+  await until(() => updates.at(-1)?.panes[0]?.terminalTitle === '⠋ Working')
+  titles.update({ pane_id: 'pane', revision: 2, terminal_title_stripped: '⠙ Working' })
+  await until(() => updates.at(-1)?.panes[0]?.terminalTitle === '⠙ Working')
+  titles.clear()
+  await until(() => updates.at(-1)?.panes[0]?.terminalTitle === undefined)
 })
 
 test('completion companions identify idle work and frame fences follow the coherent output', async (t) => {

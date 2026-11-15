@@ -1,14 +1,19 @@
 import { aggregateStatus, herdrStatus } from '../../shared/status.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
+import type { PaneTitleSource } from './pane-titles.ts'
 import type { ClientShellSnapshot } from './wire.ts'
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '')
 
-/** Endpoint snapshots carry agent metadata separately from pane geometry. */
+/**
+ * Endpoint snapshots carry agent metadata separately from pane geometry. Titles come from
+ * herdr's API instead (pane-titles.ts); a pane it has not described yet has none.
+ */
 export function windowMetadata(
   snapshot: ClientShellSnapshot,
   tabId: string,
   completions?: ReadonlyMap<string, number>,
+  titles?: Pick<PaneTitleSource, 'title'>,
 ): WindowMetadata {
   const tab = snapshot.tabs.find((tab) => tab.tab_id === tabId)!
   const agents = new Map(
@@ -29,6 +34,7 @@ export function windowMetadata(
       const completed =
         sequence !== undefined &&
         (status === 'done' || (status === 'idle' && completions?.get(pane.pane_id) === sequence))
+      const terminalTitle = titles?.title(pane.pane_id)
       return {
         id: pane.pane_id,
         name: text(pane.label) || label || String(index + 1),
@@ -37,17 +43,7 @@ export function windowMetadata(
         ...(sequence === undefined ? {} : { stateSequence: sequence }),
         ...(completed ? { completion: { bootId: snapshot.boot_id, sequence: sequence! } } : {}),
         ...(label ? { agent: label } : {}),
-        ...(agent
-          ? {
-              terminalTitle: Array.from(
-                text(agent.terminal_title_stripped)
-                  .replace(/[\x00-\x1f\x7f-\x9f]/gu, '')
-                  .trim(),
-              )
-                .slice(0, 1024)
-                .join(''),
-            }
-          : {}),
+        ...(terminalTitle === undefined ? {} : { terminalTitle }),
       }
     })
   return {

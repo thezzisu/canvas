@@ -18,6 +18,7 @@ import {
 } from './wire.ts'
 import { readWindowContent, type NativeContentPane } from './content.ts'
 import { windowMetadata } from './metadata.ts'
+import type { PaneTitleSource } from './pane-titles.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import type { NativeNotification } from '../../shared/notification.ts'
 import type { PaneAction, PaneContext, PanePoint } from '../../shared/pane-context.ts'
@@ -62,6 +63,8 @@ export interface HerdrClientOptions {
   /** Independent API reads leave the endpoint keyboard lane available. */
   readSelection?(params: Record<string, unknown>): Promise<unknown>
   readContent?(params: Record<string, unknown>): Promise<unknown>
+  /** Pane titles from herdr's API; the endpoint snapshot carries none that are current. */
+  titles?: PaneTitleSource
 }
 export type HerdrClientExit = { exitCode: number; signal?: number; reason?: 'removed' }
 interface Request {
@@ -126,6 +129,7 @@ class HerdrClient implements HerdrClientTransport {
   private readonly notificationListeners = new Set<(notification: NativeNotification) => void>()
   private metadata?: WindowMetadata
   private metadataSignature = ''
+  private readonly titleSubscription?: { dispose(): void }
   private focusedPaneId?: string
   private readonly exitListeners = new Set<(event: HerdrClientExit) => void>()
   private readonly requests = new Map<string, Request>()
@@ -179,6 +183,9 @@ class HerdrClient implements HerdrClientTransport {
         this.selection = selection
         this.render()
       },
+    })
+    this.titleSubscription = options.titles?.onChange((paneIds) => {
+      if (this.snapshot?.panes.some((pane) => paneIds.has(pane.pane_id))) this.updateMetadata()
     })
     this.socket = createConnection(options.socketPath)
     this.deadline = setTimeout(
@@ -422,13 +429,7 @@ class HerdrClient implements HerdrClientTransport {
       for (const id of this.working) if (!present.has(id)) this.working.delete(id)
       this.snapshotWindows = undefined
       for (const listener of this.snapshotListeners) listener()
-      const metadata = windowMetadata(snapshot, this.options.tabId, this.completed),
-        signature = JSON.stringify(metadata)
-      if (signature !== this.metadataSignature) {
-        this.metadata = metadata
-        this.metadataSignature = signature
-        for (const listener of this.metadataListeners) listener(metadata)
-      }
+      this.updateMetadata()
       if (
         !this.focusRequested &&
         (!this.focusReady || snapshot.focused_tab_id !== this.options.tabId)
@@ -817,6 +818,20 @@ class HerdrClient implements HerdrClientTransport {
       },
     })
   }
+  private updateMetadata() {
+    if (this.closed || !this.snapshot) return
+    const metadata = windowMetadata(
+        this.snapshot,
+        this.options.tabId,
+        this.completed,
+        this.options.titles,
+      ),
+      signature = JSON.stringify(metadata)
+    if (signature === this.metadataSignature) return
+    this.metadata = metadata
+    this.metadataSignature = signature
+    for (const listener of this.metadataListeners) listener(metadata)
+  }
   kill() {
     if (this.closed) return
     try {
@@ -838,6 +853,7 @@ class HerdrClient implements HerdrClientTransport {
     clearTimeout(this.deadline)
     if (!this.initialized) this.reject(error)
     this.input.dispose()
+    this.titleSubscription?.dispose()
     for (const request of this.requests.values()) {
       clearTimeout(request.timer)
       request.reject(error)

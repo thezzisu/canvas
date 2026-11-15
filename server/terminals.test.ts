@@ -1670,6 +1670,7 @@ function fakeWindow(cols = 8, rows = 2) {
   type Listener<T> = (value: T) => void
   const screens = new Set<Listener<FrameData>>(),
     frames = new Set<Listener<WindowMetadata>>(),
+    metadatas = new Set<Listener<WindowMetadata>>(),
     clipboards = new Set<Listener<string>>()
   const on =
     <T>(listeners: Set<T>) =>
@@ -1685,7 +1686,7 @@ function fakeWindow(cols = 8, rows = 2) {
     onClipboard: on(clipboards),
     onPaneFocus: none,
     onSnapshot: none,
-    onMetadata: none,
+    onMetadata: on(metadatas),
     onNotification: none,
     onExit: none,
     completionSnapshot: () => undefined,
@@ -1745,6 +1746,13 @@ function fakeWindow(cols = 8, rows = 2) {
     },
     copy: (data: string) => {
       for (const listener of clipboards) listener(data)
+    },
+    describe: (terminalTitle: string) => {
+      const value: WindowMetadata = {
+        ...metadata('layout'),
+        panes: [{ id: 'pane', name: '1', active: true, status: 'working', terminalTitle }],
+      }
+      for (const listener of metadatas) listener(value)
     },
   }
 }
@@ -1813,6 +1821,32 @@ test('a socket that cannot drain is owed only the latest grid', async () => {
     [slow.mirror.revision, mirrorText(slow.mirror)[0]],
     [fast.mirror.revision, 'four'],
   )
+  await f.terminal.close()
+})
+
+test('a socket that cannot drain is owed only the latest metadata', async () => {
+  const f = fakeWindow(),
+    fast = new Client(),
+    slow = new Client()
+  f.describe('⠋ start')
+  f.terminal.join(fast.socket)
+  f.terminal.join(slow.socket)
+  await tick()
+  slow.stalled = []
+  const titles = (client: Client) =>
+    messages(client)
+      .filter((message) => message.type === 'metadata')
+      .map((message) => message.window.panes[0].terminalTitle)
+  const before = titles(slow).length
+  for (const title of ['⠙ one', '⠹ two', '⠸ three']) {
+    f.describe(title)
+    await tick()
+  }
+  assert.deepEqual(titles(slow).slice(before), ['⠙ one'], 'nothing queues behind it')
+  assert.deepEqual(titles(fast).slice(-3), ['⠙ one', '⠹ two', '⠸ three'])
+  slow.drain()
+  await tick()
+  assert.deepEqual(titles(slow).slice(before), ['⠙ one', '⠸ three'], 'then the current one')
   await f.terminal.close()
 })
 

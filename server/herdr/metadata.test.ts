@@ -1,9 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { windowMetadata } from './metadata.ts'
+import { PaneTitles } from './pane-titles.ts'
 import type { ClientShellSnapshot } from './wire.ts'
 
-test('native agent metadata joins pane IDs and applies the shared status order without losing shell titles', () => {
+test('native agent metadata joins pane IDs and applies the shared status order; titles come from the API', () => {
   const snapshot: ClientShellSnapshot = {
     boot_id: 'boot',
     revision: 1,
@@ -34,14 +35,20 @@ test('native agent metadata joins pane IDs and applies the shared status order w
       { pane_id: 'unrelated', agent_status: 'blocked' },
     ],
   }
-  const metadata = windowMetadata(snapshot, 'tab')
+  const titles = new PaneTitles()
+  titles.replace([
+    { pane_id: 'busy', revision: 3, terminal_title_stripped: '⠋ Busy' },
+    { pane_id: 'shell', revision: 1, terminal_title_stripped: 'vim notes.md' },
+  ])
+  const metadata = windowMetadata(snapshot, 'tab', undefined, titles)
   assert.equal(metadata.status, 'done')
+  // The endpoint's agent titles are not used; a pane the API has not described has none.
   assert.deepEqual(
     metadata.panes.map((pane) => [pane.id, pane.status, pane.terminalTitle]),
     [
-      ['busy', 'working', ''],
-      ['complete', 'done', 'Finished'],
-      ['shell', 'unknown', undefined],
+      ['busy', 'working', '⠋ Busy'],
+      ['complete', 'done', undefined],
+      ['shell', 'unknown', 'vim notes.md'],
     ],
   )
   assert.equal(metadata.panes[0]!.active, true)

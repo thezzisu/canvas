@@ -41,11 +41,11 @@ export class TerminalChannel extends EventEmitter<{
     }
     this.prefix = Uint8Array.from(prefix)
   }
-  /** `sent` runs once a cell message has left for the network. */
+  /** `sent` runs once the message has left for the network. */
   send(message: object | Uint8Array, sent?: () => void) {
     if (this.readyState !== 1 || this.socket.readyState !== 1) return
     if (!(message instanceof Uint8Array)) {
-      this.socket.send(JSON.stringify({ ...message, channel: this.id }))
+      this.socket.send(JSON.stringify({ ...message, channel: this.id }), sent)
       return
     }
     const bytes = new Uint8Array(this.prefix.length + message.length)
