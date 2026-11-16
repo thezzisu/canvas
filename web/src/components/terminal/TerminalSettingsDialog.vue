@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UModal from '../CanvasModal.vue'
 import TerminalSettingsFields from './TerminalSettingsFields.vue'
+import { provideSegmentedFit } from '../../composables/settings/segmented-fit'
 import {
   useTerminalDefaults,
   type TerminalOverrides,
@@ -14,6 +15,7 @@ const emit = defineEmits<{ close: [] }>()
 const settings = defineModel<TerminalOverrides>({ default: () => ({}) })
 const defaults = useTerminalDefaults()
 const { t } = useI18n()
+provideSegmentedFit()
 function update(value: TerminalOverrides) {
   if (props.defaultsMode) defaults.value = { ...defaults.value, ...value }
   else settings.value = value

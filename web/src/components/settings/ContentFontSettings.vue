@@ -3,6 +3,7 @@ import { useI18n } from 'vue-i18n'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UFieldGroup from '@nuxt/ui/components/FieldGroup.vue'
 import UFormField from '@nuxt/ui/components/FormField.vue'
+import { settingsField } from '../../utils/settings/settings-field'
 import UInputMenu from '@nuxt/ui/components/InputMenu.vue'
 import UAlert from '@nuxt/ui/components/Alert.vue'
 import USwitch from '@nuxt/ui/components/Switch.vue'
@@ -12,7 +13,7 @@ import type { useContentFontEditor } from '../../composables/settings/content-fo
 // A view of the settings dialog's font draft; it owns no lifecycle of its own.
 defineProps<{ editor: ReturnType<typeof useContentFontEditor> }>()
 const { t, n } = useI18n()
-const field = { root: 'items-center gap-4', labelWrapper: 'justify-start', description: 'text-xs' }
+const field = settingsField
 </script>
 
 <template>

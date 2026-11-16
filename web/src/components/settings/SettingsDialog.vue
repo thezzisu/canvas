@@ -9,6 +9,8 @@ import USwitch from '@nuxt/ui/components/Switch.vue'
 import FeaturesDialog from './FeaturesDialog.vue'
 import SegmentedControl from '../SegmentedControl.vue'
 import ZoomStepper from '../ZoomStepper.vue'
+import { settingsField } from '../../utils/settings/settings-field'
+import { provideSegmentedFit } from '../../composables/settings/segmented-fit'
 import UFormField from '@nuxt/ui/components/FormField.vue'
 import USeparator from '@nuxt/ui/components/Separator.vue'
 import TerminalSettingsDialog from '../terminal/TerminalSettingsDialog.vue'
@@ -171,13 +173,8 @@ function reloadPage() {
 }
 const subdialog = ref<'terminal' | 'font' | 'features'>()
 // One row layout for every setting; status text sits under the label.
-const field = {
-  root: 'items-center gap-4',
-  container: 'min-w-0 shrink',
-  labelWrapper: 'justify-start',
-  description: 'text-xs',
-  error: 'mt-0.5 text-xs',
-}
+const field = settingsField
+provideSegmentedFit()
 const separator = { root: 'my-1', label: 'text-xs text-muted font-normal' }
 const wakeStatus = computed(
   () =>
@@ -415,13 +412,13 @@ defineExpose({ close })
           <UFormField
             label="viewport-fit"
             orientation="horizontal"
-            :ui="{ ...field, label: 'font-mono font-normal text-muted' }"
+            :ui="{ ...field, label: `${field.label} font-mono font-normal text-muted` }"
             ><SegmentedControl v-model="viewportFit" :items="viewportFits" label="viewport-fit"
           /></UFormField>
           <UFormField
             label="interactive-widget"
             orientation="horizontal"
-            :ui="{ ...field, label: 'font-mono font-normal text-muted' }"
+            :ui="{ ...field, label: `${field.label} font-mono font-normal text-muted` }"
             ><USelect
               v-model="interactiveWidget"
               :items="interactiveWidgets"

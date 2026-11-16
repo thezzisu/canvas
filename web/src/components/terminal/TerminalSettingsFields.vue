@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import UFormField from '@nuxt/ui/components/FormField.vue'
 import SegmentedControl from '../SegmentedControl.vue'
 import ZoomStepper from '../ZoomStepper.vue'
+import { settingsField } from '../../utils/settings/settings-field'
 import {
   defaultTerminalSettings,
   type TerminalOverrides,
@@ -62,14 +63,11 @@ function update(key: 'rightClick' | 'shiftPaste' | 'mouseHover', value: string) 
   else Object.assign(next, { [key]: key === 'mouseHover' ? value === 'true' : value })
   emit('update:modelValue', next)
 }
-const field = {
-  root: 'items-center gap-4 @max-[360px]:flex-col @max-[360px]:items-stretch @max-[360px]:gap-2',
-  container: 'w-60 shrink-0 @max-[360px]:w-full',
-}
+const field = settingsField
 </script>
 
 <template>
-  <div class="@container grid gap-4">
+  <div class="grid gap-4">
     <UFormField
       v-for="row in rows"
       :key="row.key"
@@ -82,7 +80,6 @@ const field = {
         :items="row.items"
         :label="row.label"
         :inherited="row.value === '__default' ? row.inherited : undefined"
-        class="w-full"
         @update:model-value="(value) => update(row.key, value)"
       />
     </UFormField>
