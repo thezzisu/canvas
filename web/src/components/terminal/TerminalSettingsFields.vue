@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import USelect from '@nuxt/ui/components/Select.vue'
 import UFormField from '@nuxt/ui/components/FormField.vue'
-import UInputNumber from '@nuxt/ui/components/InputNumber.vue'
-import type {
-  TerminalOverrides,
-  TerminalSettings,
+import SegmentedControl from '../SegmentedControl.vue'
+import ZoomStepper from '../ZoomStepper.vue'
+import {
+  defaultTerminalSettings,
+  type TerminalOverrides,
+  type TerminalSettings,
 } from '../../composables/terminal/terminal-settings'
 import { contentZoomLimits } from '../../composables/canvas/content-zoom'
 
@@ -46,10 +47,10 @@ const rows = computed(() =>
     },
   ].map((row) => ({
     ...row,
-    // An inherited row has no value of its own: its placeholder names the default in effect.
-    inherited: props.defaults
-      ? row.items.find((item) => item.value === String(props.defaults![row.key]))!.label
-      : undefined,
+    // "Default" has no value of its own: the option it stands for is marked faintly.
+    value:
+      props.modelValue[row.key] === undefined ? '__default' : String(props.modelValue[row.key]),
+    inherited: props.defaults ? String(props.defaults[row.key]) : undefined,
     items: props.defaults
       ? [{ value: '__default', label: t('terminal.settings.inherit') }, ...row.items]
       : row.items,
@@ -76,16 +77,11 @@ const field = {
       orientation="horizontal"
       :ui="field"
     >
-      <USelect
-        :model-value="modelValue[row.key] === undefined ? undefined : String(modelValue[row.key])"
+      <SegmentedControl
+        :model-value="row.value"
         :items="row.items"
-        :placeholder="row.inherited"
-        :aria-label="row.label"
-        :title="
-          row.items.find((item) => item.value === String(modelValue[row.key]))?.label ??
-          row.inherited
-        "
-        color="neutral"
+        :label="row.label"
+        :inherited="row.value === '__default' ? row.inherited : undefined"
         class="w-full"
         @update:model-value="(value) => update(row.key, value)"
       />
@@ -96,18 +92,18 @@ const field = {
       orientation="horizontal"
       :ui="field"
     >
-      <UInputNumber
-        :model-value="modelValue.maximizedZoom"
-        :aria-label="t('terminal.settings.defaultZoom')"
-        :min="contentZoomLimits.min"
-        :max="contentZoomLimits.max"
-        :step="contentZoomLimits.step"
-        :step-snapping="false"
-        :format-options="{ style: 'unit', unit: 'percent' }"
-        class="w-full"
-        color="neutral"
+      <ZoomStepper
+        :model-value="modelValue.maximizedZoom ?? defaultTerminalSettings.maximizedZoom"
+        :range="contentZoomLimits"
+        :label="t('terminal.settings.defaultZoom')"
         @update:model-value="
           (value) => emit('update:modelValue', { ...modelValue, maximizedZoom: value })
+        "
+        @reset="
+          emit('update:modelValue', {
+            ...modelValue,
+            maximizedZoom: defaultTerminalSettings.maximizedZoom,
+          })
         "
       />
     </UFormField>

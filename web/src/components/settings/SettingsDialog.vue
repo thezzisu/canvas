@@ -7,7 +7,8 @@ import USelect from '@nuxt/ui/components/Select.vue'
 import USlider from '@nuxt/ui/components/Slider.vue'
 import USwitch from '@nuxt/ui/components/Switch.vue'
 import FeaturesDialog from './FeaturesDialog.vue'
-import UTabs from '@nuxt/ui/components/Tabs.vue'
+import SegmentedControl from '../SegmentedControl.vue'
+import ZoomStepper from '../ZoomStepper.vue'
 import UFormField from '@nuxt/ui/components/FormField.vue'
 import USeparator from '@nuxt/ui/components/Separator.vue'
 import TerminalSettingsDialog from '../terminal/TerminalSettingsDialog.vue'
@@ -15,7 +16,7 @@ import ContentFontSettings from './ContentFontSettings.vue'
 import { useContentFontEditor } from '../../composables/settings/content-font-editor'
 import type { GlobalSettings } from '../../../../shared/settings'
 import { inputMode, useMobileLayout } from '../../composables/mobile-layout'
-import { uiScale, uiZoom } from '../../composables/ui-scale'
+import { uiScale, uiScaleLimits, uiZoom } from '../../composables/ui-scale'
 import { cutoutPosition, cutoutWidth, type CutoutPosition } from '../../composables/display-cutout'
 import {
   developerMode,
@@ -114,7 +115,7 @@ async function testNotification(kind: 'sound' | 'system') {
     if (valid()) testingNotification.value = undefined
   }
 }
-const viewportFits = ['cover', 'contain']
+const viewportFits = ['cover', 'contain'].map((value) => ({ value, label: value }))
 // The stored log's size and the span of time it covers.
 const logSummary = computed(() => {
   const status = diagnosticLogStatus.value
@@ -139,7 +140,6 @@ const inputModes = computed(() => [
   { value: 'touch', label: t('settings.inputTouch') },
   { value: 'keyboard', label: t('settings.inputKeyboard') },
 ])
-const uiScales = [75, 90, 100, 110, 125, 150].map((value) => ({ value, label: `${value}%` }))
 const cutoutPositions = computed<Array<{ value: CutoutPosition; label: string }>>(() => [
   { value: 'left', label: t('settings.left') },
   { value: 'center', label: t('settings.center') },
@@ -249,20 +249,17 @@ defineExpose({ close })
           ><LanguageSelect
         /></UFormField>
         <UFormField :label="t('settings.inputMode')" orientation="horizontal" :ui="field"
-          ><USelect
+          ><SegmentedControl
             v-model="inputMode"
             :items="inputModes"
-            color="neutral"
-            class="w-36 max-w-full"
-            :aria-label="t('settings.inputMode')"
+            :label="t('settings.inputMode')"
         /></UFormField>
         <UFormField :label="t('settings.uiScale')" orientation="horizontal" :ui="field"
-          ><USelect
+          ><ZoomStepper
             v-model="uiScale"
-            :items="uiScales"
-            color="neutral"
-            class="w-36 max-w-full"
-            :aria-label="t('settings.uiScale')"
+            :range="uiScaleLimits"
+            :label="t('settings.uiScale')"
+            @reset="uiScale = 100"
         /></UFormField>
         <UFormField :label="t('terminal.settings.defaults')" orientation="horizontal" :ui="field"
           ><UButton color="neutral" variant="outline" size="sm" @click="subdialog = 'terminal'">{{
@@ -284,14 +281,10 @@ defineExpose({ close })
         <USeparator :label="t('settings.cutout')" :ui="separator" />
         <section class="settings-section" :aria-label="t('settings.cutout')">
           <UFormField :label="t('settings.position')" orientation="horizontal" :ui="field"
-            ><UTabs
+            ><SegmentedControl
               v-model="cutoutPosition"
               :items="cutoutPositions"
-              :content="false"
-              color="neutral"
-              variant="pill"
-              size="sm"
-              :aria-label="t('settings.position')"
+              :label="t('settings.position')"
           /></UFormField>
           <UFormField :label="t('settings.width')" :hint="`${n(displayedCutoutWidth)} px`">
             <USlider
@@ -423,12 +416,7 @@ defineExpose({ close })
             label="viewport-fit"
             orientation="horizontal"
             :ui="{ ...field, label: 'font-mono font-normal text-muted' }"
-            ><USelect
-              v-model="viewportFit"
-              :items="viewportFits"
-              color="neutral"
-              class="w-36 max-w-full"
-              aria-label="viewport-fit"
+            ><SegmentedControl v-model="viewportFit" :items="viewportFits" label="viewport-fit"
           /></UFormField>
           <UFormField
             label="interactive-widget"

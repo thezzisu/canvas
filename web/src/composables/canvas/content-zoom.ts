@@ -1,7 +1,7 @@
 import { computed, type MaybeRefOrGetter } from 'vue'
 import { useLocalStorage, type UseStorageOptions } from '@vueuse/core'
 
-export const contentZoomLimits = { min: 50, max: 200, step: 10 } as const
+export const contentZoomLimits = { min: 50, max: 200 } as const
 export function normalizeContentZoom(value: unknown): number {
   return typeof value === 'number' &&
     Number.isFinite(value) &&

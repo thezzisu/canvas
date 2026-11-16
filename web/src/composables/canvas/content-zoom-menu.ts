@@ -1,6 +1,7 @@
 import type { Ref } from 'vue'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import { t } from '../../plugins/i18n'
+import { zoomIn, zoomOut } from '../../utils/zoom/zoom-steps'
 import { contentZoomLimits } from './content-zoom'
 
 export interface ZoomReset {
@@ -19,9 +20,9 @@ export function contentZoomMenu(
       slot: 'zoom',
       label: t('common.zoomOut'),
       icon: 'i-lucide-minus',
-      disabled: disabled || zoom.value <= contentZoomLimits.min,
+      disabled: disabled || zoomOut(zoom.value, contentZoomLimits) === zoom.value,
       onSelect: () => {
-        zoom.value = Math.max(contentZoomLimits.min, zoom.value - contentZoomLimits.step)
+        zoom.value = zoomOut(zoom.value, contentZoomLimits)
       },
     },
     {
@@ -38,9 +39,9 @@ export function contentZoomMenu(
       slot: 'zoom',
       label: t('common.zoomIn'),
       icon: 'i-lucide-plus',
-      disabled: disabled || zoom.value >= contentZoomLimits.max,
+      disabled: disabled || zoomIn(zoom.value, contentZoomLimits) === zoom.value,
       onSelect: () => {
-        zoom.value = Math.min(contentZoomLimits.max, zoom.value + contentZoomLimits.step)
+        zoom.value = zoomIn(zoom.value, contentZoomLimits)
       },
     },
   ]

@@ -1,8 +1,12 @@
 import { computed, watch } from 'vue'
 import { useLocalStorage } from '@vueuse/core'
 
+export const uiScaleLimits = { min: 75, max: 150 } as const
 export function normalizeUiScale(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 75 && value <= 150
+  return typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value >= uiScaleLimits.min &&
+    value <= uiScaleLimits.max
     ? value
     : 100
 }

@@ -5,16 +5,15 @@ import { useI18n } from 'vue-i18n'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UPopover from '@nuxt/ui/components/Popover.vue'
 import { contentZoomLimits } from '../../composables/canvas/content-zoom'
+import ZoomStepper from '../ZoomStepper.vue'
 import type { ZoomReset } from '../../composables/canvas/content-zoom-menu'
 
-const props = defineProps<
-  { modelValue: number; label: string; mobile?: boolean; disabled?: boolean } & ZoomReset
->()
-const emit = defineEmits<{ 'update:modelValue': [value: number] }>()
-const { t, n } = useI18n()
+defineProps<{ label: string; mobile?: boolean; disabled?: boolean } & ZoomReset>()
+const zoom = defineModel<number>({ required: true })
+const { n } = useI18n()
 const open = ref(false),
   pointer = ref(false)
-const percentage = computed(() => n(props.modelValue / 100, { style: 'percent' }))
+const percentage = computed(() => n(zoom.value / 100, { style: 'percent' }))
 const content = {
   side: 'bottom' as const,
   align: 'end' as const,
@@ -43,10 +42,6 @@ useEventListener(
   },
   { capture: true },
 )
-const touchTarget = computed(() => (props.mobile ? 'min-w-[44px] min-h-[44px] justify-center' : ''))
-function change(value: number) {
-  emit('update:modelValue', Math.max(contentZoomLimits.min, Math.min(contentZoomLimits.max, value)))
-}
 </script>
 
 <template>
@@ -64,54 +59,19 @@ function change(value: number) {
       @keydown="pointer = false"
     />
     <template #content
-      ><div
-        class="content-zoom-controls flex items-center gap-0.5"
+      ><ZoomStepper
+        v-model="zoom"
+        class="content-zoom-controls"
         data-preserve-content-focus
-        role="group"
-        :aria-label="label"
+        :range="contentZoomLimits"
+        :label="label"
+        :reset-label="resetLabel"
+        :mobile="mobile"
+        :disabled="disabled"
         @pointerdown.stop
         @wheel.stop
         @keydown="pointer = false"
-      >
-        <UButton
-          color="neutral"
-          variant="ghost"
-          :size="mobile ? 'xl' : 'md'"
-          square
-          icon="i-lucide-minus"
-          :class="touchTarget"
-          :disabled="disabled || modelValue <= contentZoomLimits.min"
-          :aria-label="t('common.zoomOut')"
-          :title="t('common.zoomOut')"
-          @pointerdown.prevent
-          @click="change(modelValue - contentZoomLimits.step)"
-        />
-        <UButton
-          color="neutral"
-          variant="ghost"
-          :size="mobile ? 'xl' : 'md'"
-          class="content-zoom-reset min-w-14 justify-center tabular-nums"
-          :class="touchTarget"
-          :label="percentage"
-          :disabled="disabled"
-          :aria-label="resetLabel || t('common.resetZoom')"
-          :title="resetLabel || t('common.resetZoom')"
-          @pointerdown.prevent
-          @click="reset ? reset() : change(100)"
-        />
-        <UButton
-          color="neutral"
-          variant="ghost"
-          :size="mobile ? 'xl' : 'md'"
-          square
-          icon="i-lucide-plus"
-          :class="touchTarget"
-          :disabled="disabled || modelValue >= contentZoomLimits.max"
-          :aria-label="t('common.zoomIn')"
-          :title="t('common.zoomIn')"
-          @pointerdown.prevent
-          @click="change(modelValue + contentZoomLimits.step)"
-        /></div
-    ></template>
+        @reset="reset ? reset() : (zoom = 100)"
+    /></template>
   </UPopover>
 </template>
