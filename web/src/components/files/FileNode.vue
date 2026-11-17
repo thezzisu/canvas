@@ -405,13 +405,15 @@ const size = computed(() => {
         v-else
         color="neutral"
         variant="ghost"
-        icon="i-lucide-file"
         :label="data.asset.filename"
         class="file-download min-w-0 flex-1 flex-col justify-center gap-3.5 rounded-none p-6"
-        :ui="{ leadingIcon: 'size-10', label: 'max-w-full' }"
+        :ui="{ label: 'max-w-full' }"
         :aria-label="t('panels.file.downloadNamed', { name: data.asset.filename })"
         @click="download"
-      />
+      >
+        <!-- The file's own type icon, as in the header. -->
+        <template #leading><FileIcon :name="data.asset.filename" size="2.5rem" /></template>
+      </UButton>
     </div>
     <CardPreview
       v-if="mobilePreview && !editing"
