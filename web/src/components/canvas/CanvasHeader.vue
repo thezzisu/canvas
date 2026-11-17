@@ -231,6 +231,12 @@ const menuUi = ref({
         :aria-label="t('app.refresh')"
         @click="workspace.refresh()"
       />
+      <!-- The canvas's own save state follows its name; its fixed slot never reflows the row. -->
+      <SaveStatus
+        v-if="scene.custom.value && !shell.mobile"
+        :owner="layoutOwner(scene.route.canvasId.value)"
+        size="xs"
+      />
     </div>
     <div
       class="header-actions flex shrink-0 items-center gap-1"
@@ -253,11 +259,6 @@ const menuUi = ref({
             :aria-label="t('app.addContent')"
           />
         </UDropdownMenu>
-        <SaveStatus
-          v-if="!shell.mobile"
-          :owner="layoutOwner(scene.route.canvasId.value)"
-          size="xs"
-        />
       </template>
       <UDropdownMenu
         v-model:open="menus.canvas.value"
@@ -277,7 +278,8 @@ const menuUi = ref({
           :aria-label="t('app.canvasSettings')"
         />
       </UDropdownMenu>
-      <template v-if="!shell.mobile">
+      <!-- Labelled actions form their own group, set apart from the icon actions. -->
+      <div v-if="!shell.mobile" class="header-labelled-actions ms-1 flex items-center gap-2">
         <UButton
           icon="i-lucide-server"
           color="neutral"
@@ -306,7 +308,7 @@ const menuUi = ref({
           :ui="labelled"
           @click="scene.cards.addToCanvas()"
         />
-      </template>
+      </div>
     </div>
   </header>
 </template>
