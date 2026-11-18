@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   ATTR,
   DEFAULT_COLOUR,
+  UNDERLINE_SHIFT,
   type CellCursor,
   type CellRun,
   type CellStyle,
@@ -383,6 +384,8 @@ test('hit testing, links and the selection work in the scaled box the page shows
   const clicks: string[] = []
   const { painter, frame, patch } = mount(dom.body, { onLink: (uri) => clicks.push(uri) })
   const linked: CellStyle = { ...plain, attrs: ATTR.bold, link: 1 }
+  // The same link as a program draws it under its own hover.
+  const ownUnderline: CellStyle = { ...linked, attrs: ATTR.bold | (1 << UNDERLINE_SHIFT) }
   frame(
     [
       runs([
@@ -392,7 +395,7 @@ test('hit testing, links and the selection work in the scaled box the page shows
       ]),
       line('see https://example.com/x.'),
     ],
-    { cols: 30, styles: [plain, linked], links: ['file:///srv/readme.md'] },
+    { cols: 30, styles: [plain, linked, ownUnderline], links: ['file:///srv/readme.md'] },
   )
   dom.frame()
   // The card is drawn at half size, 100 px into the page.
@@ -421,13 +424,24 @@ test('hit testing, links and the selection work in the scaled box the page shows
   move(2, 0)
   assert.equal(underlined(), 1)
   assert.equal(root.className, 'terminal-grid tg-link')
+  // The program underlines the hovered link itself: its line is the only one.
+  const own = runs([
+    { style: 2, text: 'docs' },
+    { style: 0, text: ' and ' },
+    { style: 0, text: ['中'], wide: true },
+  ])
+  patch(2, { 0: own })
+  dom.frame()
+  assert.equal(underlined(), 0)
+  assert.equal(root.className, 'terminal-grid tg-link')
+  assert.equal(painter.linkAt(2, 0), 'file:///srv/readme.md')
   move(6, 0)
   assert.equal(underlined(), 0)
   assert.equal(root.className, 'terminal-grid')
   painter.setPointer({ column: 12, row: 1 })
   assert.equal(underlined(), 1)
   // The row under the pointer changes: the underline goes with the link.
-  patch(2, { 1: line('gone') })
+  patch(3, { 1: line('gone') })
   dom.frame()
   assert.equal(underlined(), 0)
   root.dispatchEvent(new Event('mouseleave'))

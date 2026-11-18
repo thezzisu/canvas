@@ -1,4 +1,9 @@
-import type { CellMirror, CellRun, CellStyle } from '../../../../shared/cell-wire'
+import {
+  UNDERLINE_MASK,
+  type CellMirror,
+  type CellRun,
+  type CellStyle,
+} from '../../../../shared/cell-wire'
 import { isDrawnGlyph } from '../../utils/terminal/cell-glyphs'
 import { detectLinks } from '../../utils/terminal/cell-links'
 import {
@@ -521,7 +526,12 @@ export class CellPainter {
         const paint = this.paintOf(run.style)
         const left = Math.max(run.column, from)
         const right = Math.min(run.column + run.columns, to)
-        if (left < right && (!link || paint.link === link)) {
+        // A cell the program already underlines keeps its own line: the hover adds none.
+        if (
+          left < right &&
+          (!link || paint.link === link) &&
+          !((this.screen.styles[run.style] ?? NO_STYLE).attrs & UNDERLINE_MASK)
+        ) {
           const last = pieces.at(-1)
           if (last && last.column + last.cells === left && last.ink === paint.ink)
             last.cells += right - left
