@@ -6,7 +6,8 @@ import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import { cellWidth } from '../ghostty/module.ts'
 import { GhosttyTerminal } from '../ghostty/terminal.ts'
 import { HerdrInputRouter, thumb } from '../herdr/input.ts'
-import { SELECTED, type ScreenSelection } from '../herdr/screen.ts'
+import { SELECTED, mouseAreas, type ScreenSelection } from '../herdr/screen.ts'
+import type { MouseArea } from '../../shared/terminal-mouse.ts'
 import { windowContent, type NativeContentPane } from '../herdr/content.ts'
 import type { HerdrClientExit, HerdrClientTransport } from '../herdr/client.ts'
 import type {
@@ -166,7 +167,10 @@ class CoreWindowClient implements HerdrClientTransport {
   private parseQueue: Promise<void> = Promise.resolve()
   private refreshQueue: Promise<void> = Promise.resolve()
   private readonly input: HerdrInputRouter
-  private readonly screenListeners = new Set<(screen: FrameData) => void>()
+  private readonly screenListeners = new Set<
+    (screen: FrameData, mouse: readonly MouseArea[]) => void
+  >()
+  private mouse: readonly MouseArea[] = []
   private readonly clipboardListeners = new Set<(data: string) => void>()
   private readonly paneFocusListeners = new Set<(id: string | undefined) => void>()
   private readonly metadataListeners = new Set<(metadata: WindowMetadata) => void>()
@@ -872,8 +876,9 @@ class CoreWindowClient implements HerdrClientTransport {
         display = { ...surface, frame: { ...frame, cells } }
       }
       const screen = (this.screen = display.frame),
+        mouse = (this.mouse = mouseAreas(surface)),
         painted = (this.painted = this.renderedMetadata)
-      for (const listener of this.screenListeners) listener(screen)
+      for (const listener of this.screenListeners) listener(screen, mouse)
       if (painted) for (const listener of this.frameListeners) listener(painted)
     })
   }
@@ -1235,10 +1240,11 @@ class CoreWindowClient implements HerdrClientTransport {
       return
     for (const listener of this.clipboardListeners) listener(data)
   }
-  onScreen(listener: (screen: FrameData) => void) {
+  onScreen(listener: (screen: FrameData, mouse: readonly MouseArea[]) => void) {
     this.screenListeners.add(listener)
     queueMicrotask(() => {
-      if (!this.closed && this.screen && this.screenListeners.has(listener)) listener(this.screen)
+      if (!this.closed && this.screen && this.screenListeners.has(listener))
+        listener(this.screen, this.mouse)
     })
     return {
       dispose: () => {

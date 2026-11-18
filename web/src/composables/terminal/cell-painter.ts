@@ -1,3 +1,4 @@
+import { programTakesMouse, type MouseArea } from '../../../../shared/terminal-mouse'
 import {
   UNDERLINE_MASK,
   type CellMirror,
@@ -177,6 +178,11 @@ export class CellPainter {
   private cursorPhase = 'a'
   private preedit = ''
   private pointer: { column: number; row: number } | undefined
+  /** The pointer is a touchpad's, which sends the program no hover: its links are the browser's. */
+  private virtual = false
+  /** Ctrl or ⌘ is held over the grid. */
+  private modifier = false
+  private mouseAreas: readonly MouseArea[] = []
   private hoverKey = ''
   private selection: CellRange | undefined
 
@@ -288,7 +294,41 @@ export class CellPainter {
   /** Where a pointer that sends no mouse events is: the link under it is underlined. */
   setPointer(cell?: { column: number; row: number }) {
     this.pointer = cell
+    this.virtual = !!cell
     this.showHover()
+  }
+
+  /** Where the window's programs take the mouse (`MouseArea`). */
+  setMouseAreas(areas: readonly MouseArea[]) {
+    this.mouseAreas = areas
+    this.showHover(true)
+  }
+
+  /**
+   * Whether the browser handles a mouse event on a link itself: where the program takes the mouse,
+   * only with Ctrl or ⌘ held; such an event is not the program's.
+   */
+  ownsLink(event: MouseEvent): boolean {
+    const { column, row } = this.cellAt(event.clientX, event.clientY)
+    return (
+      !!this.link(column, row) &&
+      (!programTakesMouse(this.mouseAreas, column, row) || event.ctrlKey || event.metaKey)
+    )
+  }
+  /**
+   * A press or move with Ctrl or ⌘ on a link where the program takes the mouse: the browser's
+   * link, so the program is not told of it.
+   */
+  withholds(event: MouseEvent): boolean {
+    if (!event.ctrlKey && !event.metaKey) return false
+    const { column, row } = this.cellAt(event.clientX, event.clientY)
+    return programTakesMouse(this.mouseAreas, column, row) && !!this.link(column, row)
+  }
+  /** A program that takes the mouse keeps its links from a plain pointer. */
+  private linkForPointer(column: number, row: number) {
+    return this.virtual || this.modifier || !programTakesMouse(this.mouseAreas, column, row)
+      ? this.link(column, row)
+      : undefined
   }
 
   /** The hyperlink or web address at a cell. */
@@ -347,6 +387,8 @@ export class CellPainter {
     this.element.removeEventListener('mousemove', this.pointerMoved)
     this.element.removeEventListener('mouseleave', this.pointerLeft)
     this.element.removeEventListener('click', this.clicked)
+    window.removeEventListener('keydown', this.modifierChanged)
+    window.removeEventListener('keyup', this.modifierChanged)
     this.element.remove()
   }
 
@@ -563,7 +605,7 @@ export class CellPainter {
   /** Underlines the link under the pointer, on every row it covers. */
   private showHover(repainted = false) {
     const { pointer, font } = this
-    const link = pointer && this.link(pointer.column, pointer.row)
+    const link = pointer && this.linkForPointer(pointer.column, pointer.row)
     const key = link?.key ?? ''
     // The same link is redrawn only when the rows under it may have changed.
     if (key === this.hoverKey && !(repainted && key)) return
@@ -581,19 +623,37 @@ export class CellPainter {
   }
 
   private readonly pointerMoved = (event: MouseEvent) => {
-    const cell = this.cellAt(event.clientX, event.clientY)
-    if (cell.column === this.pointer?.column && cell.row === this.pointer.row) return
+    const cell = this.cellAt(event.clientX, event.clientY),
+      modifier = event.ctrlKey || event.metaKey
+    // Only while the pointer is over the grid; adding the same listener again does nothing.
+    window.addEventListener('keydown', this.modifierChanged)
+    window.addEventListener('keyup', this.modifierChanged)
+    const same = cell.column === this.pointer?.column && cell.row === this.pointer.row
+    if (same && !this.virtual && modifier === this.modifier) return
     this.pointer = cell
+    this.virtual = false
+    this.modifier = modifier
+    this.showHover()
+  }
+
+  /** Ctrl or ⌘ pressed or let go over a still pointer. */
+  private readonly modifierChanged = (event: KeyboardEvent) => {
+    const modifier = event.ctrlKey || event.metaKey
+    if (modifier === this.modifier) return
+    this.modifier = modifier
     this.showHover()
   }
 
   private readonly pointerLeft = () => {
+    window.removeEventListener('keydown', this.modifierChanged)
+    window.removeEventListener('keyup', this.modifierChanged)
     this.pointer = undefined
+    this.modifier = false
     this.showHover()
   }
 
   private readonly clicked = (event: MouseEvent) => {
-    if (!this.options.onLink || event.button !== 0) return
+    if (!this.options.onLink || event.button !== 0 || !this.ownsLink(event)) return
     const cell = this.cellAt(event.clientX, event.clientY)
     const uri = this.linkAt(cell.column, cell.row)
     if (uri) this.options.onLink(uri, event)

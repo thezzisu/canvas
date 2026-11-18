@@ -1,4 +1,5 @@
 import { isCompletionToken } from '../../../../shared/completion'
+import { isMouseAreas } from '../../../../shared/terminal-mouse'
 import { isWindowMetadata } from '../../../../shared/window-metadata'
 import { apiContext, isCurrentApi, uuid } from '../../api/api'
 import { t } from '../../plugins/i18n'
@@ -90,6 +91,7 @@ export function disconnect(session: Session) {
   session.readGesture = false
   session.connectionRevision++
   session.mirror.detach()
+  session.painter.setMouseAreas([])
   session.shown = -1
   session.awaitingPaint = []
   endFocusSize(session)
@@ -297,7 +299,9 @@ function receive(
     session.uploads.receive(message)
   )
     return
-  else if (message.type === 'metadata') {
+  else if (message.type === 'mouse-areas') {
+    if (isMouseAreas(message.areas)) session.painter.setMouseAreas(message.areas)
+  } else if (message.type === 'metadata') {
     if (isWindowMetadata(message.window) && message.window.id === windowId)
       updateMetadata(session, message.window)
   } else if (message.type === 'completion-frame') {

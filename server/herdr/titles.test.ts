@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
+import type { MouseArea } from '../../shared/terminal-mouse.ts'
 import type { HerdrClientTransport } from './client.ts'
 import {
   closeRuntimeConnections,
@@ -14,7 +15,7 @@ import {
   type Source,
 } from '../runtimes.ts'
 
-test('an open window shows each title herdr publishes, as published, without waiting for a redraw', async (t) => {
+test('an open window shows each title herdr publishes without waiting for a redraw, and where its programs take the mouse', async (t) => {
   const serverBinary = process.env.CANVAS_TEST_HERDR_SERVER_BINARY
   if (!serverBinary) {
     t.skip('Set CANVAS_TEST_HERDR_SERVER_BINARY to an unmodified upstream server')
@@ -90,9 +91,10 @@ test('an open window shows each title herdr publishes, as published, without wai
     )
     command = await openTerminal(source, spaceId, windowId)
     terminal = await command.connect(120, 30)
-    let metadata: WindowMetadata | undefined
+    let metadata: WindowMetadata | undefined,
+      mouse = [] as readonly MouseArea[]
     terminal.onMetadata((value) => (metadata = value))
-    terminal.onScreen(() => {})
+    terminal.onScreen((_, areas) => (mouse = areas))
     const title = (paneId: string) =>
       metadata?.panes.find((pane) => pane.id === paneId)?.terminalTitle
     await waitFor(() => title(agent) !== undefined, 'the window has no titles from the API')
@@ -107,6 +109,18 @@ test('an open window shows each title herdr publishes, as published, without wai
       // herdr batches its events about every 100 ms; the 2 s poll is not involved.
       assert.ok(Date.now() - started < 1500, `${text} took ${Date.now() - started} ms`)
     }
+    assert.equal(mouse.length, 0, 'shells do not take the mouse')
+    cli('pane', 'run', plain, "printf '\\033[?1000h\\033[?1006h'; sleep 30")
+    await waitFor(
+      () => mouse.length === 1,
+      'a program that reports the mouse is not reported to Canvas',
+    )
+    const [area] = mouse
+    assert.equal(area!.reports, true)
+    assert.ok(
+      area!.x > 0 && area!.width > 0 && area!.height > 0,
+      'the right-hand pane, inside its frame',
+    )
   } finally {
     terminal?.kill()
     await command?.cleanup()

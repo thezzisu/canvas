@@ -3,6 +3,7 @@ import { CellMirror } from '../shared/cell-wire.ts'
 import { GridEncoder } from './cell-grid.ts'
 import type { HerdrClientTransport } from './herdr/client.ts'
 import type { FrameData } from './herdr/wire.ts'
+import type { MouseArea } from '../shared/terminal-mouse.ts'
 
 /** The text of each row, without trailing blanks. */
 export function mirrorText(mirror: CellMirror): string[] {
@@ -35,10 +36,12 @@ export function watch(client: HerdrClientTransport) {
     grid: undefined as FrameData | undefined,
     text: '',
     clipboard: [] as string[],
+    mouse: [] as readonly MouseArea[],
   }
-  client.onScreen((grid) => {
+  client.onScreen((grid, mouse) => {
     seen.paints++
     seen.grid = grid
+    seen.mouse = mouse
     seen.text = gridText(grid).join('\n')
   })
   client.onClipboard((data) => seen.clipboard.push(data))

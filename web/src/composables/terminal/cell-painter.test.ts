@@ -95,7 +95,7 @@ function page(t: TestContext, ratio = 1) {
   const measured: string[] = []
   const globals: Record<string, unknown> = {
     document: { createElement: () => new FakeElement(), body },
-    window: { devicePixelRatio: ratio },
+    window: Object.assign(new EventTarget(), { devicePixelRatio: ratio }),
     getComputedStyle: () => ({ borderTopWidth: `${1 / ratio}px` }),
     matchMedia: () => new EventTarget(),
     requestAnimationFrame: (callback: () => void) => frames.push(callback),
@@ -455,5 +455,68 @@ test('hit testing, links and the selection work in the scaled box the page shows
   ])
   painter.setSelection()
   assert.deepEqual(selected(), [])
+  painter.dispose()
+})
+
+test("where the program takes the mouse, its links are the browser's only with Ctrl or ⌘", (t) => {
+  const dom = page(t)
+  const clicks: string[] = []
+  const { painter, frame } = mount(dom.body, { onLink: (uri) => clicks.push(uri) })
+  frame([line('see https://example.com/a'), line('see https://example.com/b')], { cols: 30 })
+  dom.frame()
+  const root = fake(painter.element)
+  root.box = { left: 0, top: 0, width: 30 * 8.4, height: 2 * 18 }
+  const at = (column: number, row: number, extra = {}) => ({
+    clientX: (column + 0.5) * 8.4,
+    clientY: (row + 0.5) * 18,
+    ctrlKey: false,
+    metaKey: false,
+    ...extra,
+  })
+  const event = (type: string, column: number, row: number, extra = {}) =>
+    root.dispatchEvent(Object.assign(new Event(type), at(column, row, extra), { button: 0 }))
+  const underlined = () => fake(root.children.at(-2)).children.length
+  // The program on row 0 takes the mouse; row 1 is the browser's.
+  painter.setMouseAreas([{ x: 0, y: 0, width: 30, height: 1, reports: true }])
+  event('mousemove', 6, 0)
+  assert.equal(underlined(), 0, 'a plain pointer leaves the program its link')
+  assert.equal(root.className, 'terminal-grid')
+  event('click', 6, 0)
+  assert.deepEqual(clicks, [])
+  assert.equal(
+    painter.withholds(Object.assign(new Event('mousedown'), at(6, 0)) as MouseEvent),
+    false,
+  )
+  // Ctrl pressed over the still pointer: the link is the browser's.
+  window.dispatchEvent(Object.assign(new Event('keydown'), { ctrlKey: true, metaKey: false }))
+  assert.equal(underlined(), 1)
+  assert.equal(
+    painter.withholds(
+      Object.assign(new Event('mousedown'), at(6, 0, { ctrlKey: true })) as MouseEvent,
+    ),
+    true,
+  )
+  event('click', 6, 0, { ctrlKey: true })
+  assert.deepEqual(clicks, ['https://example.com/a'])
+  window.dispatchEvent(Object.assign(new Event('keyup'), { ctrlKey: false, metaKey: false }))
+  assert.equal(underlined(), 0)
+  // ⌘ does the same.
+  event('mousemove', 7, 0, { metaKey: true })
+  assert.equal(underlined(), 1)
+  // Outside the program's area a plain pointer has the link, as before.
+  event('mousemove', 6, 1)
+  assert.equal(underlined(), 1)
+  event('click', 6, 1)
+  assert.deepEqual(clicks, ['https://example.com/a', 'https://example.com/b'])
+  // A touchpad's pointer sends the program no hover: its links stay the browser's.
+  root.dispatchEvent(new Event('mouseleave'))
+  painter.setPointer({ column: 6, row: 0 })
+  assert.equal(underlined(), 1)
+  // The program stops taking the mouse.
+  painter.setPointer()
+  event('mousemove', 6, 0)
+  assert.equal(underlined(), 0)
+  painter.setMouseAreas([])
+  assert.equal(underlined(), 1)
   painter.dispose()
 })

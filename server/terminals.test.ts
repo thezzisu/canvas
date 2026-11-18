@@ -17,6 +17,7 @@ import { LiveTerminal, PASTE_SETTLE_QUIET_MS, TerminalManager } from './terminal
 import type { HerdrClientTransport } from './herdr/client.ts'
 import type { FrameData } from './herdr/wire.ts'
 import type { WindowMetadata } from '../shared/window-metadata.ts'
+import type { MouseArea } from '../shared/terminal-mouse.ts'
 import { createSpace, createWindow, listResources, shellQuote, type Source } from './runtimes.ts'
 import type { CanvasNotification } from '../shared/notification.ts'
 import { herdrApiRequest } from './herdr/api.ts'
@@ -1668,7 +1669,7 @@ test('initial completed panes remain unread without replaying notifications, the
 /** A herdr client stand-in that shows whatever grid a test gives it. */
 function fakeWindow(cols = 8, rows = 2) {
   type Listener<T> = (value: T) => void
-  const screens = new Set<Listener<FrameData>>(),
+  const screens = new Set<(screen: FrameData, mouse: readonly MouseArea[]) => void>(),
     frames = new Set<Listener<WindowMetadata>>(),
     metadatas = new Set<Listener<WindowMetadata>>(),
     clipboards = new Set<Listener<string>>()
@@ -1737,9 +1738,9 @@ function fakeWindow(cols = 8, rows = 2) {
   return {
     terminal,
     sizes,
-    show(text: string, width?: number, height?: number) {
+    show(text: string, width?: number, height?: number, mouse: readonly MouseArea[] = []) {
       const value = grid(text, width, height)
-      for (const listener of screens) listener(value)
+      for (const listener of screens) listener(value, mouse)
     },
     paint: (layout: string) => {
       for (const listener of frames) listener(metadata(layout))
@@ -1821,6 +1822,32 @@ test('a socket that cannot drain is owed only the latest grid', async () => {
     [slow.mirror.revision, mirrorText(slow.mirror)[0]],
     [fast.mirror.revision, 'four'],
   )
+  await f.terminal.close()
+})
+
+test('browsers learn where the programs take the mouse when it changes, and on joining', async () => {
+  const f = fakeWindow(),
+    early = new Client(),
+    late = new Client()
+  f.show('zero')
+  f.terminal.join(early.socket)
+  await tick()
+  const areas = (client: Client) =>
+    messages(client)
+      .filter((message) => message.type === 'mouse-areas')
+      .map((message) => message.areas)
+  assert.deepEqual(areas(early), [], 'nothing is sent while no program takes the mouse')
+  const area = { x: 0, y: 0, width: 8, height: 2, reports: true }
+  f.show('one', undefined, undefined, [area])
+  f.show('two', undefined, undefined, [area])
+  await tick()
+  assert.deepEqual(areas(early), [[area]], 'once per change')
+  f.terminal.join(late.socket)
+  await tick()
+  assert.deepEqual(areas(late), [[area]])
+  f.show('three')
+  await tick()
+  assert.deepEqual(areas(early), [[area], []])
   await f.terminal.close()
 })
 

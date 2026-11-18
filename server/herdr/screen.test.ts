@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { applySurfacePatch, popupInnerRect } from './screen.ts'
+import { applySurfacePatch, mouseAreas, popupInnerRect } from './screen.ts'
 import type { CellData, PaneSurfaceFrame } from './wire.ts'
 
 const blank = (symbol = ' '): CellData => ({
@@ -69,4 +69,25 @@ test('popup geometry matches upstream border and reserved scrollbar column', () 
     pixel_height: 0,
   }
   assert.deepEqual(popupInnerRect(value), { x: 21, y: 7, width: 37, height: 10 })
+})
+
+test('mouse areas are the panes whose programs report the mouse, then a popup over them', () => {
+  const pane = (id: string, x: number, reports: boolean) => ({
+    pane_id: id,
+    inner_rect: { x, y: 1, width: 10, height: 5 },
+    mouse_reporting: reports,
+  })
+  const surface = {
+    frame: { width: 40, height: 12 },
+    panes: [pane('a', 0, true), pane('b', 20, false)],
+    popup: null,
+  } as unknown as PaneSurfaceFrame
+  assert.deepEqual(mouseAreas(surface), [{ x: 0, y: 1, width: 10, height: 5, reports: true }])
+  const withPopup = {
+    ...surface,
+    popup: { width: { Cells: 10 }, height: { Cells: 4 }, mouse_reporting: false },
+  } as unknown as PaneSurfaceFrame
+  const areas = mouseAreas(withPopup)
+  assert.equal(areas.length, 2)
+  assert.equal(areas[1]!.reports, false, 'a popup that takes no mouse covers the pane under it')
 })

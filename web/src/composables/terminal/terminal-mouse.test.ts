@@ -33,6 +33,9 @@ function fixture(t: TestContext) {
     hover: () => state.hover,
     selection,
     selects: (event) => event.shiftKey,
+    // A link at column 1-2 of row 0, kept by the browser with Ctrl held.
+    withholds: (event) =>
+      event.ctrlKey && event.clientY < 20 && event.clientX >= 10 && event.clientX < 30,
     rowHeight: () => 20,
   })
   t.after(() => {
@@ -104,6 +107,17 @@ test('a selecting press and its drag stay in the browser', (t) => {
   fire(page, 'mousemove', 85, 85, { buttons: 1 })
   assert.deepEqual(selected, ['begin 1,1 x2', 'extend 4,2'])
   assert.deepEqual(sent, [])
+})
+
+test('a Ctrl press or move on a link the browser keeps never reaches the program', (t) => {
+  const { surface, sent, fire } = fixture(t)
+  fire(surface, 'mousemove', 15, 5, { ctrlKey: true })
+  fire(surface, 'mousedown', 15, 5, { ctrlKey: true })
+  assert.deepEqual(sent, [])
+  // Off the link, or without Ctrl, the program has it as before.
+  fire(surface, 'mousemove', 45, 5, { ctrlKey: true })
+  fire(surface, 'mousemove', 15, 5)
+  assert.equal(sent.length, 2)
 })
 
 test('the wheel sends whole rows and carries the rest', (t) => {

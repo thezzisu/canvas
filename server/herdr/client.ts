@@ -4,6 +4,7 @@ import { HerdrInputRouter } from './input.ts'
 import {
   applySurfacePatch,
   composedFrame,
+  mouseAreas,
   validateSurface,
   type ScreenSelection,
 } from './screen.ts'
@@ -17,6 +18,7 @@ import {
   type ServerMessage,
 } from './wire.ts'
 import { readWindowContent, type NativeContentPane } from './content.ts'
+import type { MouseArea } from '../../shared/terminal-mouse.ts'
 import { windowMetadata } from './metadata.ts'
 import type { PaneTitleSource } from './pane-titles.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
@@ -25,8 +27,11 @@ import type { PaneAction, PaneContext, PanePoint } from '../../shared/pane-conte
 import { isTerminalHoverInput } from '../../shared/terminal-mouse.ts'
 
 export interface HerdrClientTransport {
-  /** The composed grid of the window. A new listener is first given the current one. */
-  onScreen(listener: (screen: FrameData) => void): { dispose(): void }
+  /**
+   * The composed grid of the window, with where its programs take the mouse. A new listener is
+   * first given the current one.
+   */
+  onScreen(listener: (screen: FrameData, mouse: readonly MouseArea[]) => void): { dispose(): void }
   /** Base64 text a pane or a Canvas selection copied. */
   onClipboard(listener: (data: string) => void): { dispose(): void }
   onPaneFocus(listener: (paneId: string | undefined) => void): { dispose(): void }
@@ -113,7 +118,10 @@ function parseSnapshot(data: string): ClientShellSnapshot {
 class HerdrClient implements HerdrClientTransport {
   private readonly socket: Socket
   private readonly reader = new FrameReader()
-  private readonly screenListeners = new Set<(screen: FrameData) => void>()
+  private readonly screenListeners = new Set<
+    (screen: FrameData, mouse: readonly MouseArea[]) => void
+  >()
+  private mouse: readonly MouseArea[] = []
   private readonly clipboardListeners = new Set<(data: string) => void>()
   private screen?: FrameData
   /** Metadata of the current screen, when it is safe to acknowledge. */
@@ -531,12 +539,13 @@ class HerdrClient implements HerdrClientTransport {
     this.renderedMetadata = this.metadata
       ? { ...this.metadata, layout: this.layout.token, ...(surface.popup ? { panes: [] } : {}) }
       : undefined
-    const screen = (this.screen = composedFrame(surface, this.selection))
+    const screen = (this.screen = composedFrame(surface, this.selection)),
+      mouse = (this.mouse = mouseAreas(surface))
     const painted = (this.painted =
       !this.pendingInputBytes && !this.inputFocusPending && this.input.focusSettled
         ? this.renderedMetadata
         : undefined)
-    for (const listener of this.screenListeners) listener(screen)
+    for (const listener of this.screenListeners) listener(screen, mouse)
     if (painted) for (const listener of this.frameListeners) listener(painted)
     this.flushInput()
   }
@@ -624,10 +633,11 @@ class HerdrClient implements HerdrClientTransport {
       return
     for (const listener of this.clipboardListeners) listener(data)
   }
-  onScreen(listener: (screen: FrameData) => void) {
+  onScreen(listener: (screen: FrameData, mouse: readonly MouseArea[]) => void) {
     this.screenListeners.add(listener)
     queueMicrotask(() => {
-      if (!this.closed && this.screen && this.screenListeners.has(listener)) listener(this.screen)
+      if (!this.closed && this.screen && this.screenListeners.has(listener))
+        listener(this.screen, this.mouse)
     })
     return {
       dispose: () => {

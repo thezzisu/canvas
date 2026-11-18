@@ -6,6 +6,7 @@ import type {
   SurfaceRect,
 } from './wire.ts'
 import { cellWidth } from '../ghostty/module.ts'
+import type { MouseArea } from '../../shared/terminal-mouse.ts'
 export { cellWidth }
 
 export interface ScreenSelection {
@@ -112,6 +113,18 @@ export function popupInnerRect(surface: PaneSurfaceFrame): SurfaceRect | undefin
     height: height - 2,
   }
 }
+
+/** Where the surface's programs take the mouse: the panes that report it, then any popup over them. */
+export function mouseAreas(surface: PaneSurfaceFrame): MouseArea[] {
+  const areas: MouseArea[] = surface.panes
+    .filter((pane) => pane.mouse_reporting)
+    .map(({ inner_rect: rect }) => ({ ...area(rect), reports: true }))
+  const popup = surface.popup,
+    rect = popupInnerRect(surface)
+  if (popup && rect) areas.push({ ...area(rect), reports: popup.mouse_reporting })
+  return areas
+}
+const area = ({ x, y, width, height }: SurfaceRect) => ({ x, y, width, height })
 
 /** The grid a browser shows: the surface with the selection marked and any popup drawn over it. */
 export function composedFrame(surface: PaneSurfaceFrame, selection?: ScreenSelection): FrameData {

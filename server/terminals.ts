@@ -32,6 +32,8 @@
 //   focus-resize      { active, owned, token?, reason? }, the maximized viewport lease
 //   pane-focus        { paneId }
 //   metadata          { window }
+//   mouse-areas       { areas }, where the window's programs take the mouse (MouseArea[]);
+//                     sent when it changes, and on joining when any program takes it
 //   completion-frame  { generation, focusedPaneId, layout, panes }; follows the cell message
 //                     that painted it
 //   capture           { capture }
@@ -114,6 +116,8 @@ export class LiveTerminal {
   private frame?: WindowMetadata
   private sentFrames = new WeakMap<TerminalChannel, WindowMetadata>()
   private metadataSends = new WeakMap<TerminalChannel, { due: boolean }>()
+  /** Where the window's programs take the mouse, as last sent. */
+  private mouseAreas = '[]'
   private readGenerations = new WeakMap<TerminalChannel, number>()
   private pendingFences = new WeakMap<TerminalChannel, number>()
   private readSubscription?: { dispose(): unknown }
@@ -176,8 +180,13 @@ export class LiveTerminal {
       this.rawMetadata = metadata
       this.publishMetadata()
     })
-    this.proc.onScreen((grid) => {
+    this.proc.onScreen((grid, mouse) => {
       if (this.closed) return
+      const areas = JSON.stringify(mouse)
+      if (areas !== this.mouseAreas) {
+        this.mouseAreas = areas
+        for (const ws of this.clients) this.sendMouseAreas(ws)
+      }
       for (const waiter of this.outputWaiters) waiter()
       this.grid = grid
       this.revision++
@@ -219,6 +228,9 @@ export class LiveTerminal {
       this.metadataSends.delete(ws)
       if (state.due && !this.closed) this.sendMetadata(ws)
     })
+  }
+  private sendMouseAreas(ws: TerminalChannel) {
+    json(ws, { type: 'mouse-areas', areas: JSON.parse(this.mouseAreas) })
   }
   private publishFrame(ws: TerminalChannel) {
     if (!this.frame || this.pendingFences.has(ws)) return
@@ -428,6 +440,7 @@ export class LiveTerminal {
       })
       if (!this.controller) this.controller = ws
       this.sendMetadata(ws)
+      if (this.mouseAreas !== '[]') this.sendMouseAreas(ws)
       json(ws, { type: 'capture', capture: this.capture() } satisfies CaptureState)
       this.snapshot(ws)
       this.status()

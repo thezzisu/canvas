@@ -124,6 +124,7 @@ export function createSession(
       hover: () => session.settings.mouseHover,
       selection,
       selects,
+      withholds: (event) => painter.withholds(event),
       rowHeight,
     }),
     touchpad: bindTerminalTouchpad(surface, painter.element, {

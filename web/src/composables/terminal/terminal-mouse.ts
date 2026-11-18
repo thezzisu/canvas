@@ -13,6 +13,8 @@ interface MouseOptions {
   selection: TerminalSelection
   /** A press that selects in this browser instead of reaching the program. */
   selects(event: MouseEvent): boolean
+  /** A press or move that the browser keeps for itself, such as Ctrl or ⌘ on a link. */
+  withholds(event: MouseEvent): boolean
   /** A row's height on screen, in CSS pixels. */
   rowHeight(): number
 }
@@ -72,7 +74,7 @@ export function bindTerminalMouse(surface: HTMLElement, options: MouseOptions) {
   const press = (event: MouseEvent) => {
     // The hidden input keeps the keyboard: a press on the grid must not take focus from it.
     event.preventDefault()
-    if (event.button > 1 || held || !options.active()) return
+    if (event.button > 1 || held || !options.active() || options.withholds(event)) return
     const cell = at(event)
     if (event.button === 0 && options.selects(event)) {
       held = 'select'
@@ -88,7 +90,8 @@ export function bindTerminalMouse(surface: HTMLElement, options: MouseOptions) {
   const hover = (event: MouseEvent) => {
     // A pointer on its way to select, or beside a selection, is not the program's.
     if (held || event.buttons || !options.hover() || options.selection.active) return
-    if (options.active() && !options.selects(event)) moved('none', at(event), event)
+    if (options.active() && !options.selects(event) && !options.withholds(event))
+      moved('none', at(event), event)
   }
   const left = () => {
     if (!held) last = undefined

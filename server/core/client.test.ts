@@ -1498,6 +1498,7 @@ test('Core hover follows native tracking without clearing history, focusing or r
     await tick()
     const history = (await client.content())?.[0]?.lines
     assert.notDeepEqual(history, bottom)
+    assert.deepEqual(seen.mouse, [], 'a shell does not take the mouse')
     for (const mode of [1002, 1003]) {
       f.stream.receive({ kind: 'data', data: Buffer.from(`\x1b[?${mode}h\x1b[?1006h`) })
       await tick()
@@ -1517,6 +1518,11 @@ test('Core hover follows native tracking without clearing history, focusing or r
         f.sent.slice(before).map((frame) => ({ kind: frame.kind, data: frame.data.toString() })),
         mode === 1003 ? [{ kind: 0, data: '\x1b[<35;2;2M' }] : [],
         'only a native ANY-motion application receives hover',
+      )
+      assert.deepEqual(
+        seen.mouse,
+        [{ x: 0, y: 0, width: 20, height: 3, reports: true }],
+        'the browser learns where the program takes the mouse',
       )
     }
     assert.deepEqual(f.failures, [])
