@@ -22,7 +22,7 @@ const status = computed(() =>
   pwaFailure.value
     ? t('settings.pwaFailed')
     : updateAvailable.value
-      ? t('settings.updateReady')
+      ? undefined
       : updateCheck.value === 'failed'
         ? t('settings.checkUpdateFailed')
         : updateCheck.value === 'current'

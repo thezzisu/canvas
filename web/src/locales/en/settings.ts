@@ -56,8 +56,6 @@ export default {
   fontFailed: 'Could not apply font settings',
   retryFont: 'Retry font settings',
   keepAwake: 'Keep screen awake',
-  active: 'Active',
-  requesting: 'Requesting…',
   wakeDenied: 'Could not keep screen awake',
   wakePaused: 'Wake lock paused',
   retryWake: 'Retry wake lock',
@@ -68,6 +66,7 @@ export default {
   developerAdvanced: 'Advanced developer settings',
   adjustAdvanced: 'Adjust advanced settings',
   reload: 'Reload page',
+  reloadAction: 'Reload',
   reloadRequired: 'Reload required',
   finishFont: 'Finish font settings first',
 }

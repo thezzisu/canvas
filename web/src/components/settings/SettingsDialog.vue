@@ -84,11 +84,9 @@ const systemNotificationStatus = computed(() =>
     ? window.isSecureContext
       ? 'common.unsupportedBrowser'
       : 'common.httpsRequired'
-    : systemNotificationRequesting.value
-      ? 'settings.requesting'
-      : systemNotificationPermission.value === 'denied'
-        ? 'settings.notificationPermissionDenied'
-        : '',
+    : systemNotificationPermission.value === 'denied'
+      ? 'settings.notificationPermissionDenied'
+      : '',
 )
 let disposed = false
 const testingNotification = ref<'sound' | 'system'>()
@@ -176,20 +174,17 @@ const subdialog = ref<'terminal' | 'font' | 'features'>()
 const field = settingsField
 provideSegmentedFit()
 const separator = { root: 'my-1', label: 'text-xs text-muted font-normal' }
+// The switch shows on, off and waiting; text says only why the screen is not kept awake.
 const wakeStatus = computed(
   () =>
     screenWakeLockUnavailable.value ||
     (!keepScreenAwake.value
       ? undefined
-      : screenWakeLockState.value === 'active'
-        ? t('settings.active')
-        : screenWakeLockState.value === 'pending'
-          ? t('settings.requesting')
-          : screenWakeLockState.value === 'denied'
-            ? t('settings.wakeDenied')
-            : screenWakeLockState.value === 'released'
-              ? t('settings.wakePaused')
-              : undefined),
+      : screenWakeLockState.value === 'denied'
+        ? t('settings.wakeDenied')
+        : screenWakeLockState.value === 'released'
+          ? t('settings.wakePaused')
+          : undefined),
 )
 const wakeRetry = computed(
   () =>
@@ -369,7 +364,8 @@ defineExpose({ close })
                 notificationSystemEnabled &&
                 systemNotificationPermission === 'granted'
               "
-              :disabled="!systemNotificationSupported || systemNotificationRequesting"
+              :disabled="!systemNotificationSupported"
+              :loading="systemNotificationRequesting"
               :aria-label="t('settings.systemNotifications')"
               @update:model-value="setSystemNotifications"
             />
@@ -396,6 +392,7 @@ defineExpose({ close })
             <USwitch
               :model-value="!screenWakeLockUnavailable && keepScreenAwake"
               :disabled="!!screenWakeLockUnavailable"
+              :loading="keepScreenAwake && screenWakeLockState === 'pending'"
               :aria-label="t('settings.keepAwake')"
               @update:model-value="keepScreenAwake = $event"
             />
@@ -472,7 +469,7 @@ defineExpose({ close })
             :disabled="!canReload"
             :title="canReload ? undefined : t('settings.finishFont')"
             @click="reloadPage"
-            >{{ t('settings.reload') }}</UButton
+            >{{ t('settings.reloadAction') }}</UButton
           >
         </UFormField>
       </section>
