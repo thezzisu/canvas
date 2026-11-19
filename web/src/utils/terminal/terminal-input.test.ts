@@ -1,99 +1,73 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { terminalKey, terminalShortcut, modifiedText } from './terminal-input.ts'
+import { encodeKey } from './terminal-encoder.ts'
+import { pressedKey, terminalShortcut } from './terminal-input.ts'
 
-test('soft terminal keys send application-mode cursor keys', () => {
-  assert.equal(terminalKey('ArrowUp'), '\x1bOA')
-  assert.equal(terminalKey('ArrowLeft', {}), '\x1bOD')
-  assert.equal(terminalKey('Home', {}), '\x1bOH')
-  assert.equal(terminalKey('End'), '\x1bOF')
-  assert.equal(terminalKey('ArrowDown', { ctrl: true }), '\x1b[1;5B')
-  assert.equal(terminalKey('ArrowRight', { ctrl: true, alt: true }), '\x1b[1;7C')
-  assert.equal(terminalKey('PageDown', { alt: true }), '\x1b[6;3~')
-  assert.equal(terminalKey('Delete'), '\x1b[3~')
-  assert.equal(terminalKey('F1'), '\x1bOP')
-  assert.equal(terminalKey('F12', { ctrl: true }), '\x1b[24;5~')
-})
-
-test('soft modifiers generate terminal chords rather than browser shortcuts', () => {
-  assert.equal(terminalKey('c', { ctrl: true }), '\x03')
-  assert.equal(terminalKey('d', { ctrl: true }), '\x04')
-  assert.equal(terminalKey('z', { ctrl: true }), '\x1a')
-  assert.equal(terminalKey('[', { ctrl: true }), '\x1b')
-  assert.equal(terminalKey(' ', { ctrl: true }), '\x00')
-  assert.equal(terminalKey('?', { ctrl: true }), '\x7f')
-  assert.equal(terminalKey('b', { alt: true }), '\x1bb')
-  assert.equal(terminalKey('Tab'), '\t')
-  assert.equal(terminalKey('Escape'), '\x1b')
-  assert.equal(terminalKey('Enter'), '\r')
-  assert.equal(terminalKey('BackTab'), '\x1b[Z')
-})
-
-test('IME and pasted text are never rewritten as control chords', () => {
-  for (const text of ['中文', '😀', 'echo safe\n', '\x1b[200~clipboard\x1b[201~', '\r']) {
-    assert.equal(modifiedText(text, { ctrl: true, alt: true }), text)
+const MASKS = Array.from({ length: 16 }, (_, mask) => ({
+  shift: !!(mask & 1),
+  alt: !!(mask & 2),
+  ctrl: !!(mask & 4),
+  meta: !!(mask & 8),
+}))
+const US_KEYS = [..."`1234567890-=qwertyuiop[]\\asdfghjkl;'zxcvbnm,./ "]
+const SHIFTED = '~!@#$%^&*()_+QWERTYUIOP{}|ASDFGHJKL:"ZXCVBNM<>? '
+const NAMED = [
+  ...['Escape', 'Tab', 'Enter', 'Backspace', 'Insert', 'Delete', 'Home', 'End'],
+  ...['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'],
+  ...Array.from({ length: 12 }, (_, index) => `F${index + 1}`),
+]
+const CODES: Record<string, string> = { ' ': 'Space', '/': 'Slash', '[': 'BracketLeft' }
+/** What a desktop keyboard sends for a key held with `modifiers`, on a US layout. */
+function physical(key: string, modifiers: (typeof MASKS)[number]) {
+  const index = US_KEYS.indexOf(key)
+  const event = {
+    key: index >= 0 && modifiers.shift ? SHIFTED[index]! : key,
+    code: CODES[key] ?? '',
+    shiftKey: modifiers.shift,
+    ctrlKey: modifiers.ctrl,
+    altKey: modifiers.alt,
+    metaKey: modifiers.meta,
   }
-  assert.equal(modifiedText('v', { ctrl: false, alt: false }), 'v')
-  assert.equal(terminalKey('UnsupportedKey', { ctrl: true }), '')
+  return terminalShortcut(event) || encodeKey(event)
+}
+
+test('a built-in key sends exactly what the same key sends from a physical keyboard', () => {
+  for (const modifiers of MASKS)
+    for (const key of [...US_KEYS, ...NAMED])
+      assert.equal(
+        pressedKey(key, modifiers),
+        physical(key, modifiers),
+        `${key} ${JSON.stringify(modifiers)}`,
+      )
 })
 
-test('all modifier combinations retain their independent bits on special keys', () => {
-  for (let mask = 0; mask < 16; mask++) {
-    const modifiers = {
-      shift: !!(mask & 1),
-      alt: !!(mask & 2),
-      ctrl: !!(mask & 4),
-      meta: !!(mask & 8),
-    }
-    assert.equal(terminalKey('ArrowLeft', modifiers), mask ? `\x1b[1;${mask + 1}D` : '\x1bOD')
-    assert.equal(terminalKey('Delete', modifiers), `\x1b[3${mask ? `;${mask + 1}` : ''}~`)
-    assert.equal(terminalKey('F4', modifiers), mask ? `\x1b[1;${mask + 1}S` : '\x1bOS')
-  }
-  assert.equal(terminalKey('ArrowLeft', { shift: true }), '\x1b[1;2D')
-  assert.equal(terminalKey('ArrowLeft', { shift: true, ctrl: true }), '\x1b[1;6D')
-  assert.equal(terminalKey('Home', { meta: true }), '\x1b[1;9H')
+test('built-in chords keep their modifiers for the terminal engine to encode', () => {
+  assert.equal(pressedKey('/', { ctrl: true }), '\x1b[47;5u')
+  assert.equal(pressedKey('c', { ctrl: true }), '\x1b[99;5u')
+  assert.equal(pressedKey('c', { ctrl: true, shift: true }), '\x1b[67;6u')
+  assert.equal(pressedKey('C', { ctrl: true }), '\x1b[99;5u', 'Caps Lock does not add Shift')
+  assert.equal(pressedKey('b', { alt: true }), '\x1b[98;3u')
+  assert.equal(pressedKey('b', { meta: true }), '\x1b[98;9u')
+  assert.equal(pressedKey('Tab', { ctrl: true }), '\x1b[9;5u')
+  assert.equal(pressedKey('Enter', { alt: true }), '\x1b[13;3u')
+  assert.equal(pressedKey('Backspace', { ctrl: true }), '\x1b[127;5u')
+  assert.equal(pressedKey('ArrowRight', { ctrl: true, alt: true }), '\x1b[1;7C')
+  assert.equal(pressedKey('F12', { ctrl: true }), '\x1b[24;5~')
 })
 
-test('virtual Shift and Caps affect letters and symbols before terminal control encoding', () => {
-  assert.equal(terminalKey('a', { shift: true }), 'A')
-  assert.equal(terminalKey('A', { shift: true }), 'a')
-  assert.equal(terminalKey('/', { shift: true }), '?')
-  assert.equal(terminalKey('[', { shift: true }), '{')
-  assert.equal(terminalKey('c', { shift: true, ctrl: true }), '\x03')
-  assert.equal(terminalKey('-', { shift: true, ctrl: true }), '\x1f')
-  assert.equal(terminalKey('[', { shift: true, ctrl: true }), '\x1b')
-  assert.equal(terminalKey('\\', { shift: true, ctrl: true }), '\x1c')
-  assert.equal(terminalKey(']', { shift: true, ctrl: true }), '\x1d')
-  assert.equal(terminalKey('/', { shift: true, ctrl: true }), '\x7f')
-  assert.equal(terminalKey('b', { alt: true, meta: true, shift: true }), '\x1bB')
-  assert.equal(terminalKey('b', { meta: true }), '\x1bb')
-})
-
-test('modified Enter preserves its semantic modifiers for the native client', () => {
-  for (let mask = 0; mask < 16; mask++) {
-    const modifiers = {
-      shift: !!(mask & 1),
-      alt: !!(mask & 2),
-      ctrl: !!(mask & 4),
-      meta: !!(mask & 8),
-    }
-    assert.equal(
-      terminalKey('Enter', modifiers),
-      !mask ? '\r' : mask === 2 ? '\x1b\r' : `\x1b[13;${mask + 1}u`,
-    )
-  }
-})
-
-test('other basic keys keep traditional terminal semantics', () => {
-  assert.equal(terminalKey('Tab', { shift: true }), '\x1b[Z')
-  assert.equal(terminalKey('Tab', { shift: true, ctrl: true, alt: true, meta: true }), '\x1b[Z')
-  assert.equal(terminalKey('Tab', { ctrl: true }), '\t')
-  assert.equal(terminalKey('Backspace', { shift: true }), '\x7f')
-  assert.equal(terminalKey('Backspace', { ctrl: true, alt: true }), '\x1b\b')
-  assert.equal(terminalKey('Escape', { meta: true }), '\x1b\x1b')
-  for (const text of ['中文', '😀', 'echo ok\n', '\x1b[0n']) {
-    assert.equal(modifiedText(text, { shift: true, ctrl: true, alt: true, meta: true }), text)
-  }
+test('built-in keys without a chord type their text and the fixed-mode keys', () => {
+  assert.equal(pressedKey('a'), 'a')
+  assert.equal(pressedKey('a', { shift: true }), 'A')
+  assert.equal(pressedKey('A', { shift: true }), 'a', 'Shift lowers a letter Caps Lock raised')
+  assert.equal(pressedKey('/', { shift: true }), '?')
+  assert.equal(pressedKey('Tab', { shift: true }), '\x1b[Z')
+  assert.equal(pressedKey('ArrowUp'), '\x1bOA')
+  assert.equal(pressedKey('ArrowLeft', { shift: true }), '\x1b[1;2D')
+  assert.equal(pressedKey('Delete'), '\x1b[3~')
+  assert.equal(pressedKey('F1'), '\x1bOP')
+  assert.equal(pressedKey('Enter'), '\r')
+  assert.equal(pressedKey('Escape'), '\x1b')
+  assert.equal(pressedKey('Backspace'), '\x7f')
 })
 
 test('physical browser chords preserve Tab, Meta and control-key distinctions', () => {
@@ -115,7 +89,7 @@ test('physical chords use the produced layout glyph without applying Shift or Ca
   assert.equal(terminalShortcut(azerty), '\x1b[97;5u')
   assert.equal(terminalShortcut(qwertz), '\x1b[122;9u')
   assert.equal(terminalShortcut({ key: 'A', shiftKey: true, ctrlKey: true }), '\x1b[65;6u')
-  assert.equal(terminalShortcut({ key: 'A', ctrlKey: true }), '\x1b[65;5u')
+  assert.equal(terminalShortcut({ key: 'A', ctrlKey: true }), '\x1b[97;5u', 'Caps Lock')
   assert.equal(terminalShortcut({ key: 'a', shiftKey: true, ctrlKey: true }), '\x1b[97;6u')
   assert.equal(terminalShortcut({ key: '$', shiftKey: true, ctrlKey: true }), '\x1b[36;6u')
   assert.equal(terminalShortcut({ key: 'é', ctrlKey: true }), '\x1b[233;5u')

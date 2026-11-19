@@ -71,10 +71,14 @@ export function terminalShortcut(
     !/^F([1-9]|1[0-2])$/.test(event.key)
   )
     return ''
+  // Caps Lock raises a letter's text, not its control code: Ctrl+C under Caps Lock is Ctrl+C,
+  // and only Shift makes it Ctrl+Shift+C.
   const key =
     printable && virtual.shift && !event.shiftKey
-      ? modifiedText(event.key, { shift: true })
-      : event.key
+      ? shifted(event.key)
+      : modifiers.ctrl && !modifiers.shift && /^[A-Z]$/.test(event.key)
+        ? event.key.toLowerCase()
+        : event.key
   const modifier =
     1 +
     Number(modifiers.shift) +
@@ -89,7 +93,7 @@ export function terminalShortcut(
   return terminalKey(key, modifiers)
 }
 
-const shifted: Record<string, string> = {
+const shiftedSymbols: Record<string, string> = {
   '`': '~',
   '1': '!',
   '2': '@',
@@ -112,33 +116,32 @@ const shifted: Record<string, string> = {
   '.': '>',
   '/': '?',
 }
-
-export function modifiedText(text: string, modifiers: Partial<TerminalModifiers>): string {
-  // Compose/paste text is not a sequence of keyboard chords. Only a single
-  // ASCII key can consume the on-screen modifier latch.
-  if (text.length !== 1 || text.charCodeAt(0) < 32 || text.charCodeAt(0) > 126) return text
-  let value = text
-  if (modifiers.shift)
-    value = /[a-z]/.test(value)
-      ? value.toUpperCase()
-      : /[A-Z]/.test(value)
-        ? value.toLowerCase()
-        : shifted[value] || value
-  if (modifiers.ctrl) {
-    const code = value.toUpperCase().charCodeAt(0)
-    if (value === ' ' || value === '2') value = '\x00'
-    else if (value === '?' || value === '8') value = '\x7f'
-    else if (code >= 64 && code <= 95) value = String.fromCharCode(code - 64)
-    else if (code >= 96 && code <= 126) value = String.fromCharCode(code & 31)
-    else if (value >= '3' && value <= '7') value = String.fromCharCode(value.charCodeAt(0) - 24)
-  }
-  // Traditional terminal Meta uses the same ESC prefix as Alt for characters.
-  // Special keys below retain the distinct Meta modifier bit.
-  return (modifiers.alt || modifiers.meta ? '\x1b' : '') + value
+/** The character Shift makes of a key on a US layout; Shift swaps a letter Caps Lock raised. */
+function shifted(text: string) {
+  if (/^[a-z]$/.test(text)) return text.toUpperCase()
+  if (/^[A-Z]$/.test(text)) return text.toLowerCase()
+  return shiftedSymbols[text] ?? text
 }
 
-/** A key as the window's fixed modes take it; cursor keys are in application mode. */
-export function terminalKey(key: string, modifiers: Partial<TerminalModifiers> = {}): string {
+/**
+ * The bytes for a key pressed on the built-in keyboard, or for one character typed while its
+ * modifiers are latched: exactly what that key sends from a physical keyboard. The server's
+ * terminal engine encodes the chord for the program's own keyboard mode.
+ */
+export function pressedKey(key: string, modifiers: Partial<TerminalModifiers> = {}): string {
+  const printable = [...key].length === 1
+  const event = {
+    key: printable && modifiers.shift ? shifted(key) : key,
+    shiftKey: !!modifiers.shift,
+    ctrlKey: !!modifiers.ctrl,
+    altKey: !!modifiers.alt,
+    metaKey: !!modifiers.meta,
+  }
+  return terminalShortcut(event) || (printable ? event.key : terminalKey(key))
+}
+
+/** A named key as the window's fixed modes take it; cursor keys are in application mode. */
+function terminalKey(key: string, modifiers: Partial<TerminalModifiers> = {}): string {
   const modifier =
     1 +
     (modifiers.shift ? 1 : 0) +
@@ -171,17 +174,12 @@ export function terminalKey(key: string, modifiers: Partial<TerminalModifiers> =
   if (tilde[key]) return `\x1b[${tilde[key]}${modifier > 1 ? `;${modifier}` : ''}~`
   const fn: Record<string, string> = { F1: 'P', F2: 'Q', F3: 'R', F4: 'S' }
   if (fn[key]) return modifier > 1 ? `\x1b[1;${modifier}${fn[key]}` : `\x1bO${fn[key]}`
-  // Preserve Enter modifiers on the Canvas→herdr link. Herdr chooses the
-  // child application's negotiated keyboard encoding from this semantic key.
-  if (key === 'Enter' && (modifiers.shift || modifiers.ctrl || modifiers.meta))
-    return `\x1b[13;${modifier}u`
-  if (key === 'BackTab' || (key === 'Tab' && modifiers.shift)) return '\x1b[Z'
+  // A chord on one of these is sent whole above; here they are pressed alone.
   const basic: Record<string, string> = {
     Escape: '\x1b',
     Tab: '\t',
     Enter: '\r',
-    Backspace: modifiers.ctrl ? '\b' : '\x7f',
+    Backspace: '\x7f',
   }
-  if (basic[key]) return (modifiers.alt || modifiers.meta ? '\x1b' : '') + basic[key]
-  return key.length === 1 ? modifiedText(key, modifiers) : ''
+  return basic[key] ?? ''
 }

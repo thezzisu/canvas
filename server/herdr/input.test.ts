@@ -11,7 +11,7 @@ import {
   type PaneSurfaceFrame,
   type PaneSurfacePane,
 } from './wire.ts'
-import { terminalKey, terminalShortcut } from '../../web/src/utils/terminal/terminal-input.ts'
+import { pressedKey, terminalShortcut } from '../../web/src/utils/terminal/terminal-input.ts'
 
 type Parsed = Parameters<ConstructorParameters<typeof VtInputParser>[0]>[0]
 const mouse = (code: number, column: number, row: number, up = false) =>
@@ -233,7 +233,7 @@ test('all softkey modifiers, navigation and function keys map to native semantic
     const mods = { shift: !!(mask & 1), alt: !!(mask & 2), ctrl: !!(mask & 4), meta: !!(mask & 8) }
     const native = (mask & 1) | (mask & 2 ? 4 : 0) | (mask & 4 ? 2 : 0) | (mask & 8)
     for (const [name, expected] of Object.entries(names)) {
-      const input = events(parse(terminalKey(name, mods)))
+      const input = events(parse(pressedKey(name, mods)))
       assert.equal(input.length, 1)
       assert.deepEqual(
         keyShape(input[0]!),
@@ -242,7 +242,7 @@ test('all softkey modifiers, navigation and function keys map to native semantic
       )
     }
     for (let number = 1; number <= 12; number++)
-      assert.deepEqual(keyShape(events(parse(terminalKey(`F${number}`, mods)))[0]!), {
+      assert.deepEqual(keyShape(events(parse(pressedKey(`F${number}`, mods)))[0]!), {
         code: { F: number },
         modifiers: native,
       })
@@ -284,7 +284,7 @@ test('every Enter modifier combination survives the browser link as a native sem
     const mods = { shift: !!(mask & 1), alt: !!(mask & 2), ctrl: !!(mask & 4), meta: !!(mask & 8) }
     const native =
       (mods.shift ? 1 : 0) | (mods.ctrl ? 2 : 0) | (mods.alt ? 4 : 0) | (mods.meta ? 8 : 0)
-    assert.deepEqual(events(parse(terminalKey('Enter', mods))).map(keyShape), [
+    assert.deepEqual(events(parse(pressedKey('Enter', mods))).map(keyShape), [
       { code: 'Enter', modifiers: native },
     ])
   }
@@ -361,18 +361,20 @@ test('physical layout characters keep their codepoints and independent modifier 
     }
     const native = (mask & 1) | (mask & 2 ? 4 : 0) | (mask & 4 ? 2 : 0) | (mask & 8)
     for (const char of ['a', 'A', '$', 'é', '中', '😀']) {
+      // Caps Lock's capital names the key's own control code unless Shift is held too.
+      const capsLock = char === 'A' && modifiers.ctrlKey && !modifiers.shiftKey
       const data = terminalShortcut({ key: char, ...modifiers }, {}, 'Linux')
       const bytes = Buffer.from(data),
         split = Math.floor(bytes.length / 2)
       assert.deepEqual(
         events(parse(bytes.subarray(0, split), bytes.subarray(split))).map(keyShape),
-        [{ code: { Char: char }, modifiers: native }],
+        [{ code: { Char: capsLock ? 'a' : char }, modifiers: native }],
         `${char}/${mask}`,
       )
     }
   }
   assert.deepEqual(events(parse(terminalShortcut({ key: 'A', ctrlKey: true }))).map(keyShape), [
-    { code: { Char: 'A' }, modifiers: 2 },
+    { code: { Char: 'a' }, modifiers: 2 },
   ])
   assert.deepEqual(
     events(parse(terminalShortcut({ key: 'a', ctrlKey: true, shiftKey: true }))).map(keyShape),

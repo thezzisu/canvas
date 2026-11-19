@@ -10,6 +10,7 @@ import { serveTerminalChannels, type TerminalChannel } from './terminal-channels
 import { CellMirror } from '../shared/cell-wire.ts'
 import { gridText, mirrorText } from './test-grid.ts'
 import { terminalInputChunks } from '../web/src/utils/terminal/terminal-input-chunks.ts'
+import { pressedKey } from '../web/src/utils/terminal/terminal-input.ts'
 import { Store, sourceConnectionKey, type Canvas, type TerminalNode } from './state.ts'
 import { CompletionReads } from './completion-reads.ts'
 import { CaptureService } from './capture.ts'
@@ -1226,6 +1227,28 @@ test('UTF-8 input passes through the native herdr client', async (t) => {
     'UTF-8 text did not arrive',
   )
   assert.deepEqual(readFileSync(f.bytes), Buffer.from('中文'))
+})
+
+test("built-in keyboard chords reach a native pane as that program's own keys", async (t) => {
+  const f = await fixture(t, true)
+  if (!f) return
+  const { manager, source, target } = f,
+    client = new Client()
+  await manager.connect(source, target, client.socket)
+  await f.ready()
+  const expected = Buffer.from('\x1f\x03\x1bx\b')
+  for (const [key, modifiers] of [
+    ['/', { ctrl: true }],
+    ['c', { ctrl: true }],
+    ['x', { alt: true }],
+    ['Backspace', { ctrl: true }],
+  ] as const)
+    client.command({ type: 'input', data: pressedKey(key, modifiers) })
+  await waitFor(
+    () => existsSync(f.bytes) && readFileSync(f.bytes).length >= expected.length,
+    'chords did not arrive',
+  )
+  assert.deepEqual(readFileSync(f.bytes), expected)
 })
 
 test('explicit native right and middle input preserve Unicode paste bytes without duplicate insertion', async (t) => {

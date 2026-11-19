@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { GhosttyTerminal } from '../ghostty/terminal.ts'
 import { coreInput } from './input.ts'
+import { VtInputParser } from '../herdr/input.ts'
+import { pressedKey } from '../../web/src/utils/terminal/terminal-input.ts'
 import type { ClientKeyCode, ClientPaneInputEvent } from '../herdr/wire.ts'
 
 /** What the event sends to a program that wrote `modes` to its terminal. */
@@ -190,4 +192,32 @@ test('hover follows the child application tracking mode without inventing a pres
   for (const mode of ['', '\x1b[?9h', '\x1b[?1000h', '\x1b[?1002h'])
     assert.equal(sent(hover, `${mode}\x1b[?1006h`), '')
   assert.equal(sent(hover, '\x1b[?1003h\x1b[?1006h'), '\x1b[<63;5;3M')
+})
+
+/** What a key pressed on the built-in keyboard reaches the program as, through the browser link. */
+function pressed(key: string, modifiers: Parameters<typeof pressedKey>[1], modes = '') {
+  const events: ClientPaneInputEvent[] = []
+  const parser = new VtInputParser(
+    (value) => {
+      if ('event' in value) events.push(value.event)
+    },
+    (error) => assert.fail(error),
+  )
+  parser.write(pressedKey(key, modifiers))
+  parser.flushEscape()
+  parser.dispose()
+  return events.map((event) => sent(event, modes)).join('')
+}
+
+test('a built-in key chord reaches the program in the encoding it asked for', () => {
+  assert.equal(pressed('/', { ctrl: true }), '\x1f')
+  assert.equal(pressed('c', { ctrl: true }), '\x03')
+  assert.equal(pressed('C', { ctrl: true }), '\x03', 'Caps Lock')
+  assert.equal(pressed('2', { ctrl: true }), '\0')
+  assert.equal(pressed('-', { ctrl: true, shift: true }), '\x1f')
+  assert.equal(pressed('x', { alt: true }), '\x1bx')
+  assert.equal(pressed('Backspace', { ctrl: true }), '\b')
+  assert.equal(pressed('/', { ctrl: true }, '\x1b[>1u'), '\x1b[47;5u')
+  assert.equal(pressed('a', { ctrl: true, shift: true }, '\x1b[>1u'), '\x1b[97;6u')
+  assert.equal(pressed('Enter', { shift: true }, '\x1b[>1u'), '\x1b[13;2u')
 })

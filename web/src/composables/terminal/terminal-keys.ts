@@ -3,8 +3,7 @@ import { clipboardBorrowingFocus } from '../../utils/clipboard'
 import { encodeFocus, encodePaste } from '../../utils/terminal/terminal-encoder'
 import {
   hasModifiers,
-  modifiedText,
-  terminalKey,
+  pressedKey,
   terminalShortcut,
   type TerminalModifiers,
 } from '../../utils/terminal/terminal-input'
@@ -37,6 +36,9 @@ export function ownsWheel(session: Session, event: WheelEvent) {
   )
 }
 
+/** A single key of a US keyboard; other text is an input method's and takes no modifiers. */
+const typedCharacter = (data: string) => /^[\x20-\x7e]$/.test(data)
+
 /**
  * Bytes for the window, from the browser that controls it. Input never claims control by itself,
  * so a view that only watches sends nothing. `typed` input ends a selection.
@@ -47,8 +49,9 @@ export function sendInput(session: Session, data: string, typed = true) {
     session.connection === connection && operable(session) && !session.state.readOnly
   if (!data || !writable()) return
   if (typed) session.selection.clear()
-  if (session.mobile && data.length === 1 && hasModifiers(session.modifiers)) {
-    data = modifiedText(data, session.modifiers)
+  // One character typed while the touch modifiers are latched is that key pressed with them.
+  if (session.mobile && typedCharacter(data) && hasModifiers(session.modifiers)) {
+    data = pressedKey(data, session.modifiers)
     setModifiers(session)
   }
   if (logging())
@@ -78,7 +81,7 @@ export function sendTerminalKey(
   key: string,
   modifiers: Partial<TerminalModifiers>,
 ) {
-  return sendTerminalData(session, terminalKey(key, modifiers))
+  return sendTerminalData(session, pressedKey(key, modifiers))
 }
 export function pasteText(session: Session, text: string) {
   clearTimeout(session.shiftPaste)
