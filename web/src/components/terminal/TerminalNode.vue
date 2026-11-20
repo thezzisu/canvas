@@ -1286,7 +1286,6 @@ async function resized(event: { params: { width: number; height: number; x: numb
 }
 .terminal-loading {
   inset: 0;
-  background: var(--scrim);
   color: var(--ui-text-toned);
 }
 /* Without a settled frame a terminal is covered by the same material as during a resize, so the

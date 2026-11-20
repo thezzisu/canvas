@@ -20,7 +20,7 @@ const document = computed(() => isolatedHtml(props.text))
   min-height: 0;
   width: 100%;
   border: 0;
-  background: white;
-  color: black;
+  background: var(--paper);
+  color: var(--ui-text-inverted);
 }
 </style>

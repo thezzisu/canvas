@@ -109,6 +109,6 @@ const percentage = computed(() =>
   border-radius: var(--ui-radius);
 }
 .upload-failed .file-transfer-status {
-  color: var(--danger);
+  color: var(--ui-error);
 }
 </style>

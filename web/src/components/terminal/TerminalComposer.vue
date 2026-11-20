@@ -274,7 +274,7 @@ defineExpose({ send })
 .terminal-composer-handle span {
   width: 36px;
   height: 4px;
-  border-radius: calc(var(--ui-radius) * 0.5);
+  border-radius: 999px;
   background: var(--ui-color-neutral-600);
 }
 .mobile .terminal-composer-actions :deep(button) {

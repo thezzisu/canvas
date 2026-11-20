@@ -57,6 +57,10 @@ export default defineConfig({
       dts: false,
       icon: { clientBundle: { scan: { globInclude: ['src/**/*.{vue,ts}'] } } },
       ui: {
+        // tailwind-merge must read the app's own type sizes as sizes, not as text colours.
+        tv: {
+          twMergeConfig: { extend: { theme: { text: ['2xs', 'touch', 'display', 'display-lg'] } } },
+        },
         colors: { primary: 'peach', neutral: 'canvas' },
         // One modal geometry: centred in the unobstructed frame (window controls, visual
         // viewport, safe areas); dialogs choose only --dialog-width.

@@ -606,7 +606,7 @@ onBeforeUnmount(() => request?.abort())
   width: 100%;
   min-width: 0;
   min-height: 0;
-  background: var(--ui-bg-muted);
+  background: var(--ui-bg);
 }
 .download-preview-status {
   display: flex;

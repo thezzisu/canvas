@@ -825,7 +825,6 @@ onBeforeUnmount(() => {
       :content="{ onCloseAutoFocus: (event) => event.preventDefault() }"
       :ui="{
         content: 'mobile-text-sheet',
-        overlay: 'mobile-text-backdrop',
         header: 'shrink-0 px-4 py-3',
         title: 'text-sm font-medium',
         body: 'flex flex-1 min-h-0 p-0 sm:p-0',
@@ -1036,7 +1035,7 @@ onBeforeUnmount(() => {
   font-size: clamp(14px, 4cqw, 20px);
 }
 .mobile-key-deck :is(.shift-key, .backspace-key, .enter-key):not([aria-pressed='true']) {
-  background: var(--ui-bg-elevated);
+  background: color-mix(in oklab, var(--ui-bg-elevated) 50%, var(--ui-bg-muted));
 }
 .mobile-key-actions {
   position: relative;
@@ -1045,7 +1044,7 @@ onBeforeUnmount(() => {
   gap: 3px;
 }
 .mobile-key-actions button:not([aria-pressed='true']) {
-  background: var(--ui-bg-elevated);
+  background: color-mix(in oklab, var(--ui-bg-elevated) 50%, var(--ui-bg-muted));
   border-color: var(--ui-border-accented);
   color: var(--ui-text-toned);
 }
@@ -1097,9 +1096,6 @@ onBeforeUnmount(() => {
 </style>
 
 <style>
-.mobile-text-backdrop {
-  background: color-mix(in oklab, var(--ui-bg-elevated) 75%, transparent);
-}
 .mobile-text-sheet {
   --text-safe-top: var(--mobile-safe-top, var(--ui-safe-top));
   --text-safe-bottom: var(--mobile-safe-bottom, var(--ui-safe-bottom));

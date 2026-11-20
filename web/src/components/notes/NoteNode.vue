@@ -226,7 +226,7 @@ function dragNote(event: DragEvent) {
           @click.stop
           ><span class="grid size-5 place-items-center"
             ><span
-              class="note-color-dot size-2.5 rounded-full ring ring-white/15"
+              class="note-color-dot size-2.5 rounded-full ring ring-scene"
               :style="{ background: noteColor(color) }" /></span
         ></UButton>
         <template #content

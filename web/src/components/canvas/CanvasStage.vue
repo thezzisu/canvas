@@ -40,11 +40,11 @@ const { url: backgroundUrl, material } = useBackgroundUrl(() => background.value
 })
 /** What covers a terminal with no settled frame: the wallpaper as seen through the canvas. */
 const terminalMaterial = computed(() => {
-  const tint = `rgb(27 31 38 / ${1 - (background.value?.opacity ?? 0)})`
+  const tint = `color-mix(in srgb, var(--material) ${(1 - (background.value?.opacity ?? 0)) * 100}%, transparent)`
   return {
     '--terminal-transition-background': material.value
-      ? `linear-gradient(${tint}, ${tint}), url("${material.value}") center / cover #1b1f26`
-      : '#1b1f26',
+      ? `linear-gradient(${tint}, ${tint}), url("${material.value}") center / cover var(--material)`
+      : 'var(--material)',
   }
 })
 // A maximized card is outside this stage and takes the material from here.
@@ -239,7 +239,6 @@ function minimapColor(node: Node) {
           :node-class-name="minimapClass"
           :node-color="minimapColor"
           :node-stroke-width="0"
-          mask-color="rgba(17,19,23,.7)"
           :pannable="!paging.active.value"
           :zoomable="!shell.mobile && !paging.active.value"
           @node-click="camera.showFromMinimap"

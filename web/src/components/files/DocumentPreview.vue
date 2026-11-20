@@ -140,7 +140,6 @@ html.document-mode {
     BlinkMacSystemFont,
     'Segoe UI',
     sans-serif;
-  font-size: 13px;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;

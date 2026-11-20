@@ -75,7 +75,7 @@ const favicon = computed(() => {
     ? `data:image/svg+xml,${encodeURIComponent(
         canvasIcon.replace(
           '</svg>',
-          `<circle cx="51" cy="51" r="11" fill="${statusColor(status)}" stroke="#17191d" stroke-width="4"/></svg>`,
+          `<circle cx="51" cy="51" r="11" fill="${statusColor(status)}" stroke="#15191d" stroke-width="4"/></svg>`,
         ),
       )}`
     : originalIcon

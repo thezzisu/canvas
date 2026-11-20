@@ -184,7 +184,7 @@ const content = {
 }
 .rich-paste-error {
   margin: 0;
-  color: var(--danger);
+  color: var(--ui-error);
   font-size: var(--text-sm);
   line-height: 1.5;
 }

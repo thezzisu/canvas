@@ -70,7 +70,7 @@
   --scene-panel: color-mix(in oklab, var(--ui-bg-muted) 40%, transparent);
   --scene-tint: color-mix(in oklab, var(--ui-bg) 30%, transparent);
   --scene-dot: var(--ui-border-accented);
-  /* Covers inside a card (closed, dropping, unavailable) and behind a sheet. */
+  /* Covers inside a card: closed, loading, dropping, unavailable. */
   --scrim: color-mix(in oklab, var(--ui-bg) 80%, transparent);
   /* The terminal theme's default background (terminal-create.ts) and the transition material
      that covers a terminal without a wallpaper (CanvasStage.vue, wallpaper-material.ts); a test
@@ -90,16 +90,13 @@
 
   --duration: 150ms;
 }
-/* The scene tokens as utilities, the way Nuxt UI exposes its own (`border-scene`, `bg-scene-tint`). */
+/* Tokens that templates use as utilities, the way Nuxt UI exposes its own (`border-scene`, `bg-paper`). */
 @theme inline {
   --border-color-scene: var(--scene-line);
   --border-color-scene-strong: var(--scene-line-strong);
-  --background-color-scene-panel: var(--scene-panel);
+  --ring-color-scene: var(--scene-line);
   --background-color-scene-tint: var(--scene-tint);
-  --background-color-scrim: var(--scrim);
-  --shadow-card: var(--card-shadow);
-  --shadow-float: var(--float-shadow);
-  --shadow-dialog: var(--dialog-shadow);
+  --background-color-paper: var(--paper);
 }
 /* Native buttons not yet migrated to UButton keep their old base; Nuxt UI controls carry data-slot. */
 @layer base {

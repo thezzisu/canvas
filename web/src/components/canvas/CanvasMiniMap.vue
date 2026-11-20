@@ -40,7 +40,6 @@ function clicked(event: MouseEvent, node: GraphNode) {
             :height="node.dimensions.height"
             :rx="slot.borderRadius"
             :ry="slot.borderRadius"
-            fill="#191c21"
             pointer-events="none"
           />
           <MiniMapNode
@@ -51,7 +50,7 @@ function clicked(event: MouseEvent, node: GraphNode) {
             :selected="node.selected"
             :dragging="node.dragging"
             :class="value(props.nodeClassName, node)"
-            :color="value(props.nodeColor, node) || '#e2e2e2'"
+            :color="value(props.nodeColor, node)"
             :border-radius="slot.borderRadius"
             :stroke-color="value(props.nodeStrokeColor, node)"
             :stroke-width="slot.strokeWidth"

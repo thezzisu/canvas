@@ -71,8 +71,8 @@ const shortcuts = computed(() => (props.captured ? [] : ['keyboard', 'zoom']))
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--green);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 8%, transparent);
+  background: var(--ui-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-success) 8%, transparent);
 }
 .cutout-preview[data-cutout-position]::before {
   content: '';

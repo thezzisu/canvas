@@ -43,7 +43,7 @@ function copy() {
 <template>
   <div class="instance-qr-share flex flex-col items-center gap-4">
     <div
-      class="instance-qr-image grid aspect-square w-[min(100%,280px)] place-items-center overflow-hidden rounded-md bg-white text-neutral-950"
+      class="instance-qr-image grid aspect-square w-[min(100%,280px)] place-items-center overflow-hidden rounded-md bg-paper text-inverted"
       :aria-busy="!image && !failed"
     >
       <img

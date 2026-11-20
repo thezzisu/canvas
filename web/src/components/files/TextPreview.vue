@@ -317,7 +317,7 @@ watch(
   width: auto;
   zoom: var(--content-zoom, 1);
   overflow: hidden;
-  background: var(--ui-bg-muted);
+  background: var(--ui-bg);
   color: var(--ui-text);
 }
 .text-preview-source,
