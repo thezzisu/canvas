@@ -25,7 +25,7 @@ defineProps<
     :class="
       data.spaceId
         ? 'overview-create-tab flex-col justify-center gap-2.5 border border-dashed border-inverted/15 text-muted enabled:hover:border-inverted/45 enabled:hover:bg-default/30 enabled:hover:text-highlighted enabled:active:border-inverted/45 enabled:active:bg-default/30 enabled:active:text-highlighted'
-        : 'overview-create-space group text-muted hover:bg-transparent hover:text-highlighted active:bg-transparent'
+        : 'overview-create-space group text-muted hover:bg-transparent active:bg-transparent enabled:hover:text-highlighted enabled:active:text-highlighted'
     "
     :size="data.spaceId ? 'md' : 'xs'"
     :icon="data.spaceId ? 'i-lucide-square-plus' : 'i-lucide-layers'"
@@ -48,7 +48,7 @@ defineProps<
   >
     <template v-if="!data.spaceId" #trailing
       ><span
-        class="ms-1 flex-1 border-t border-dashed border-default transition-colors group-hover:border-inverted/60"
+        class="ms-1 flex-1 border-t border-dashed border-default transition-colors group-enabled:group-hover:border-inverted/60 group-enabled:group-active:border-inverted/60"
     /></template>
   </UButton>
 </template>
