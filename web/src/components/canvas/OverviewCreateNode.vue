@@ -24,7 +24,7 @@ defineProps<
     class="overview-create nodrag nopan size-full"
     :class="
       data.spaceId
-        ? 'overview-create-tab flex-col justify-center gap-2.5 border border-dashed border-accented'
+        ? 'overview-create-tab flex-col justify-center gap-2.5 border border-dashed border-inverted/15 text-muted enabled:hover:border-inverted/45 enabled:hover:bg-default/30 enabled:hover:text-highlighted enabled:active:border-inverted/45 enabled:active:bg-default/30 enabled:active:text-highlighted'
         : 'overview-create-space group text-muted hover:bg-transparent hover:text-highlighted active:bg-transparent'
     "
     :size="data.spaceId ? 'md' : 'xs'"
