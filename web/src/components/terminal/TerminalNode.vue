@@ -1442,7 +1442,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
   position: absolute;
   inset: 0;
   z-index: 6;
-  background: var(--ui-bg-muted);
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   align-items: center;

@@ -483,7 +483,7 @@ onBeforeUnmount(() => request?.abort())
   max-height: none;
   overflow: auto;
   overscroll-behavior: contain;
-  background: var(--ui-bg-muted);
+  background: var(--surface);
   border: 1px solid var(--ui-border-accented);
   box-shadow: var(--dialog-shadow);
 }

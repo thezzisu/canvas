@@ -439,7 +439,7 @@ const size = computed(() => {
   overflow: hidden;
   border: 1px solid var(--ui-border-accented);
   border-radius: calc(var(--ui-radius) * 2);
-  background: var(--ui-bg-muted);
+  background: var(--surface);
   box-shadow: var(--card-shadow);
 }
 .file-header {

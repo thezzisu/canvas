@@ -207,7 +207,7 @@ html {
   box-shadow: none;
 }
 .vue-flow__minimap {
-  background: var(--ui-bg-muted);
+  background: var(--surface);
   border: 1px solid var(--ui-border-accented);
   border-radius: calc(var(--ui-radius) * 2);
   box-shadow: var(--float-shadow);
@@ -495,7 +495,7 @@ html {
   border: 1px solid color-mix(in srgb, var(--note-color) 45%, var(--ui-border-accented));
   border-radius: calc(var(--ui-radius) * 2);
   overflow: visible;
-  background: color-mix(in srgb, var(--note-color) 10%, var(--ui-bg-muted));
+  background: color-mix(in srgb, var(--note-color) 10%, var(--surface));
   color: var(--ui-text);
   box-shadow: var(--card-shadow);
 }
@@ -830,7 +830,7 @@ html {
   fill: color-mix(in oklab, var(--ui-bg) 70%, transparent);
 }
 .minimap-card-backing {
-  fill: var(--ui-bg-muted);
+  fill: var(--surface);
 }
 .vue-flow__minimap-node.minimap-card {
   cursor: pointer;

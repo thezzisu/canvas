@@ -51,8 +51,9 @@
    anywhere else. Text, surfaces and borders use Nuxt UI's semantic tokens, so stock components
    and Canvas's own CSS share one scale:
    - text: highlighted > default > toned > muted > dimmed;
-   - surfaces: default (terminal and content wells) < muted (app, canvas, sidebar, panels)
-     < elevated (headers, chips) < accented (pressed, scrollbars);
+   - surfaces: default (content wells) < muted (app chrome and canvas) < --surface (what sits
+     on them: cards, sidebar, minimap, keyboard, preview dialog) < elevated (headers, keys, chips)
+     < accented (pressed, scrollbars);
    - borders: default (app chrome) < accented (cards, controls).
    Canvas surfaces are darker than Nuxt UI's defaults; the brand primary is peach 300, and cards
    override --ui-primary with their own colour. Error and success are the status colours. */
@@ -70,6 +71,8 @@
   --scene-panel: color-mix(in oklab, var(--ui-bg-muted) 40%, transparent);
   --scene-tint: color-mix(in oklab, var(--ui-bg) 30%, transparent);
   --scene-dot: var(--ui-border-accented);
+  /* Between the canvas and a header: card bodies and panels that lift off the canvas. */
+  --surface: color-mix(in oklab, var(--ui-bg-muted) 60%, var(--ui-bg-elevated));
   /* Covers inside a card: closed, loading, dropping, unavailable. */
   --scrim: color-mix(in oklab, var(--ui-bg) 80%, transparent);
   /* The terminal theme's default background (terminal-create.ts) and the transition material

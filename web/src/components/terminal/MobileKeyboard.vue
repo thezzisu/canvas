@@ -901,14 +901,14 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .mobile-keyboard {
-  --key-on: color-mix(in srgb, var(--ui-primary) 55%, var(--ui-bg-muted));
+  --key-on: color-mix(in srgb, var(--ui-primary) 55%, var(--surface));
   --key-on-fg: color-mix(in srgb, var(--ui-primary) 30%, var(--ui-text-highlighted));
   --key-gap: 5px;
   position: relative;
   flex: 0 0 auto;
   min-width: 0;
   border-top: 1px solid var(--ui-border-accented);
-  background: var(--ui-bg-muted);
+  background: var(--surface);
   /* One gutter around every row and one gap between rows. */
   display: flex;
   flex-direction: column;
@@ -932,7 +932,8 @@ onBeforeUnmount(() => {
   border: 1px solid var(--ui-border-accented);
   border-bottom-color: var(--ui-color-neutral-600);
   border-radius: calc(var(--ui-radius) * 1.5);
-  background: var(--ui-bg-elevated);
+  /* Letter keys above modifier keys above the panel, as on a system keyboard. */
+  background: color-mix(in oklab, var(--ui-bg-elevated) 60%, var(--ui-bg-accented));
   box-shadow: var(--key-rest-shadow);
   color: var(--ui-text);
   font-size: var(--text-sm);
@@ -1035,7 +1036,7 @@ onBeforeUnmount(() => {
   font-size: clamp(14px, 4cqw, 20px);
 }
 .mobile-key-deck :is(.shift-key, .backspace-key, .enter-key):not([aria-pressed='true']) {
-  background: color-mix(in oklab, var(--ui-bg-elevated) 50%, var(--ui-bg-muted));
+  background: var(--ui-bg-elevated);
 }
 .mobile-key-actions {
   position: relative;
@@ -1044,7 +1045,7 @@ onBeforeUnmount(() => {
   gap: 3px;
 }
 .mobile-key-actions button:not([aria-pressed='true']) {
-  background: color-mix(in oklab, var(--ui-bg-elevated) 50%, var(--ui-bg-muted));
+  background: var(--ui-bg-elevated);
   border-color: var(--ui-border-accented);
   color: var(--ui-text-toned);
 }
