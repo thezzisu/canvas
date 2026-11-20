@@ -902,20 +902,20 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .mobile-keyboard {
-  --key-on: color-mix(in srgb, var(--ui-primary) 55%, #1c1f25);
-  --key-on-fg: color-mix(in srgb, var(--ui-primary) 30%, #fff);
+  --key-on: color-mix(in srgb, var(--ui-primary) 55%, var(--ui-bg-muted));
+  --key-on-fg: color-mix(in srgb, var(--ui-primary) 30%, var(--ui-text-highlighted));
   --key-gap: 5px;
   position: relative;
   flex: 0 0 auto;
   min-width: 0;
-  border-top: 1px solid #353c47;
-  background: #1a1e25;
+  border-top: 1px solid var(--ui-border-accented);
+  background: var(--ui-bg-muted);
   /* One gutter around every row and one gap between rows. */
   display: flex;
   flex-direction: column;
   gap: var(--key-gap);
   padding: var(--key-gap) var(--key-gap) calc(var(--key-gap) + var(--mobile-safe-bottom, 0px));
-  color: #cbd2dd;
+  color: var(--ui-text);
   z-index: 6;
   touch-action: manipulation;
 }
@@ -930,15 +930,13 @@ onBeforeUnmount(() => {
   min-height: 44px;
   min-width: 44px;
   padding: 0 6px;
-  border: 1px solid #3a4350;
-  border-bottom-color: #48515e;
-  border-radius: 5px;
-  background: rgb(43 50 61);
-  box-shadow:
-    inset 0 1px 0 #ffffff05,
-    0 1px 1px #0003;
-  color: #cbd2dd;
-  font-size: 12px;
+  border: 1px solid var(--ui-border-accented);
+  border-bottom-color: var(--ui-color-neutral-600);
+  border-radius: calc(var(--ui-radius) * 1.5);
+  background: var(--ui-bg-elevated);
+  box-shadow: var(--key-rest-shadow);
+  color: var(--ui-text);
+  font-size: var(--text-sm);
   line-height: 1;
   touch-action: manipulation;
   user-select: none;
@@ -954,15 +952,15 @@ onBeforeUnmount(() => {
   height: 44px;
 }
 .mobile-keyboard button:active {
-  background: #414955;
-  border-color: #637082;
-  box-shadow: inset 0 1px 2px #0003;
+  background: var(--ui-bg-accented);
+  border-color: var(--ui-color-neutral-500);
+  box-shadow: var(--key-pressed-shadow);
 }
 .mobile-keyboard button:is([aria-pressed='true'], .active) {
   background: var(--key-on);
   border-color: var(--ui-primary);
   color: var(--key-on-fg);
-  box-shadow: inset 0 1px 0 #ffffff12;
+  box-shadow: var(--key-shadow);
 }
 .mobile-keyboard button:focus-visible {
   outline: 2px solid var(--key-on-fg);
@@ -973,7 +971,7 @@ onBeforeUnmount(() => {
   cursor: default;
 }
 .mobile-keyboard .arrow-key {
-  font-size: 21px;
+  font-size: var(--text-display);
   font-family: system-ui, sans-serif;
 }
 .mobile-key-dock {
@@ -997,7 +995,7 @@ onBeforeUnmount(() => {
   overscroll-behavior: contain;
   touch-action: pan-y;
   scrollbar-width: thin;
-  scrollbar-color: #515c6b transparent;
+  scrollbar-color: var(--scrollbar) transparent;
 }
 .mobile-key-deck-row {
   flex: none;
@@ -1013,7 +1011,7 @@ onBeforeUnmount(() => {
   padding: 0 1px;
   touch-action: pan-y;
   font-size: clamp(10px, 3cqw, 13px);
-  border-radius: 5px;
+  border-radius: calc(var(--ui-radius) * 1.5);
 }
 .mobile-key-deck .letter-key {
   font-size: clamp(14px, 4.3cqw, 18px);
@@ -1038,7 +1036,7 @@ onBeforeUnmount(() => {
   font-size: clamp(14px, 4cqw, 20px);
 }
 .mobile-key-deck :is(.shift-key, .backspace-key, .enter-key):not([aria-pressed='true']) {
-  background: rgb(37 44 54);
+  background: var(--ui-bg-elevated);
 }
 .mobile-key-actions {
   position: relative;
@@ -1047,9 +1045,9 @@ onBeforeUnmount(() => {
   gap: 3px;
 }
 .mobile-key-actions button:not([aria-pressed='true']) {
-  background: rgb(37 45 55);
-  border-color: #35414f;
-  color: #b7c3d2;
+  background: var(--ui-bg-elevated);
+  border-color: var(--ui-border-accented);
+  color: var(--ui-text-toned);
 }
 .mobile-key-actions button {
   display: flex;
@@ -1064,13 +1062,13 @@ onBeforeUnmount(() => {
   touch-action: none;
 }
 .mobile-tool-move {
-  transition: transform 160ms ease-out;
+  transition: transform var(--duration) ease-out;
 }
 .mobile-tool-enter-active,
 .mobile-tool-leave-active {
   transition:
-    opacity 120ms ease-out,
-    transform 160ms ease-out;
+    opacity var(--duration) ease-out,
+    transform var(--duration) ease-out;
 }
 .mobile-tool-enter-from,
 .mobile-tool-leave-to {
@@ -1085,22 +1083,22 @@ onBeforeUnmount(() => {
   transition: none;
 }
 .mobile-key-actions button:active {
-  background: #3b4654;
+  background: var(--ui-bg-accented);
 }
 .mobile-file-input {
   display: none;
 }
 @media (hover: hover) {
   .mobile-keyboard button:hover:not(:disabled):not([aria-pressed='true']):not(.active) {
-    background: #37414e;
-    border-color: #526071;
+    background: var(--ui-bg-accented);
+    border-color: var(--ui-color-neutral-600);
   }
 }
 </style>
 
 <style>
 .mobile-text-backdrop {
-  background: #070a10b0;
+  background: color-mix(in oklab, var(--ui-bg-elevated) 75%, transparent);
 }
 .mobile-text-sheet {
   --text-safe-top: var(--mobile-safe-top, var(--ui-safe-top));
@@ -1137,8 +1135,8 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 8px;
   padding: 12px;
-  color: #a0adbf;
-  font-size: 13px;
+  color: var(--ui-text-muted);
+  font-size: var(--text-base);
 }
 .mobile-text-sheet textarea {
   display: block;
@@ -1148,15 +1146,15 @@ onBeforeUnmount(() => {
   width: 100%;
   padding: 12px;
   margin: 0;
-  color: #d7dce5;
+  color: var(--ui-text);
   border: 0;
   border-radius: 0;
   outline: none;
   box-shadow: none;
-  background: #15191f;
+  background: var(--ui-bg-muted);
   font-family: var(--content-font-family, monospace);
   font-feature-settings: var(--content-font-features, normal);
-  font-size: 16px;
+  font-size: var(--text-touch);
   line-height: 1.5;
   white-space: pre-wrap;
   overflow: auto;

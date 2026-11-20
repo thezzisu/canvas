@@ -41,9 +41,9 @@ useTitle(() =>
 const touchTheme = {
   dropdownMenu: { item: 'min-h-[44px] items-center' },
   contextMenu: { item: 'min-h-[44px] items-center' },
-  input: { base: 'text-[16px]' },
-  inputMenu: { base: 'text-[16px]' },
-  inputNumber: { base: 'text-[16px]' },
+  input: { base: 'text-touch' },
+  inputMenu: { base: 'text-touch' },
+  inputNumber: { base: 'text-touch' },
 }
 </script>
 

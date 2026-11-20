@@ -317,8 +317,8 @@ watch(
   width: auto;
   zoom: var(--content-zoom, 1);
   overflow: hidden;
-  background: #14191f;
-  color: #cdd5e1;
+  background: var(--ui-bg-muted);
+  color: var(--ui-text);
 }
 .text-preview-source,
 .text-preview-markdown {
@@ -336,7 +336,7 @@ watch(
 .text-preview-source {
   font-family: var(--content-font-family, monospace);
   font-feature-settings: var(--content-font-features);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.5;
   white-space: pre;
   tab-size: 4;
@@ -356,7 +356,7 @@ watch(
 .text-preview-markdown {
   font-family: var(--content-font-family, monospace);
   font-feature-settings: var(--content-font-features);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.65;
   overflow-wrap: anywhere;
 }
@@ -372,7 +372,7 @@ watch(
   margin-block: 10px;
 }
 .text-preview-markdown :deep(pre) {
-  font-size: 12px;
+  font-size: var(--text-sm);
   max-width: 100%;
   overflow: auto;
 }
@@ -385,7 +385,7 @@ watch(
   overflow-wrap: anywhere;
 }
 .text-preview-markdown :deep(table) {
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .text-preview-markdown :deep(.math.block) {
   overflow-x: auto;

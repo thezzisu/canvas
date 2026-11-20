@@ -237,11 +237,11 @@ onBeforeUnmount(cancel)
   align-items: center;
   justify-content: center;
   gap: 10px;
-  border: 1px solid #d5aa8699;
-  border-radius: 10px;
-  background: #171c2570;
-  color: #e8c5a7;
-  font-size: 13px;
+  border: 1px solid color-mix(in oklab, var(--ui-primary) 60%, transparent);
+  border-radius: calc(var(--ui-radius) * 3);
+  background: var(--scene-tint);
+  color: var(--ui-primary);
+  font-size: var(--text-base);
 }
 .canvas-file-transfer {
   position: absolute;
@@ -253,7 +253,7 @@ onBeforeUnmount(cancel)
 }
 .canvas-file-transfer small {
   display: block;
-  color: #8c99ab;
-  font-size: 10px;
+  color: var(--ui-text-muted);
+  font-size: var(--text-2xs);
 }
 </style>

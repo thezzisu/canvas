@@ -103,7 +103,7 @@ const icons = {
   z-index: 30;
   display: grid;
   place-items: center;
-  background: var(--terminal-transition-background, #1b1f26);
+  background: var(--terminal-transition-background, var(--material));
   border-radius: calc(var(--ui-radius) * 2);
   touch-action: none;
   color: var(--ui-text-muted);
@@ -126,13 +126,13 @@ const icons = {
   line-height: 30px;
   display: block;
   padding: 0 10px;
-  background: #252a32;
-  color: #d3d8e1;
-  font-size: 12px;
+  background: var(--ui-bg-elevated);
+  color: var(--ui-text);
+  font-size: var(--text-sm);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  border-bottom: 1px solid #343a43;
+  border-bottom: 1px solid var(--ui-border-accented);
   pointer-events: none;
 }
 .layout-kind {
@@ -161,7 +161,7 @@ const icons = {
   padding: calc(var(--layout-icon-size) / 3);
   box-sizing: content-box;
   background: var(--ui-primary);
-  color: #17191d;
+  color: var(--ui-text-inverted);
   border-radius: 50%;
   pointer-events: none;
 }

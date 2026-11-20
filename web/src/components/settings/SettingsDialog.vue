@@ -546,7 +546,7 @@ defineExpose({ close })
   justify-content: flex-start;
   gap: 5px;
   padding: 0;
-  font-size: 10px;
+  font-size: var(--text-2xs);
   font-weight: 400;
   white-space: nowrap;
 }

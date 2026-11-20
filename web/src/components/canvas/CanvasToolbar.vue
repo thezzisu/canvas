@@ -149,7 +149,7 @@ const control = (pressed?: boolean) => ({
   border: 1px solid var(--ui-border);
   border-radius: calc(var(--ui-radius) * 2);
   background: var(--ui-bg-elevated);
-  box-shadow: 0 4px 13px #0003;
+  box-shadow: var(--float-shadow);
   /* The graph surface cancels the interface scale; its controls take it back. */
   zoom: var(--ui-zoom);
 }

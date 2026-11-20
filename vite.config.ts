@@ -80,7 +80,6 @@ export default defineConfig({
         },
         toast: {
           slots: {
-            root: '[--ui-error:#f38ba8] [--ui-success:#94e2d5]',
             title: '[overflow-wrap:anywhere]',
             description: 'whitespace-pre-line [overflow-wrap:anywhere]',
             actions: 'flex-wrap',

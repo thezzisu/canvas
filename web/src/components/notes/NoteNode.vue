@@ -265,7 +265,7 @@ function dragNote(event: DragEvent) {
         :ui="{
           base: [
             'px-0 text-xs font-medium selection:bg-primary/30',
-            data.mobile && 'px-1.5 text-[16px]/5',
+            data.mobile && 'px-1.5 text-touch/5',
           ],
         }"
         :aria-label="t('panels.note.title')"

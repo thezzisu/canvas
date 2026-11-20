@@ -110,6 +110,6 @@ function keydown(event: KeyboardEvent) {
 }
 .sidebar-sortable-chosen {
   background: color-mix(in srgb, var(--ui-primary) 4%, transparent);
-  border-radius: 5px;
+  border-radius: calc(var(--ui-radius) * 1.5);
 }
 </style>

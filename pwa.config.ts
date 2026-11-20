@@ -24,8 +24,8 @@ export const pwaOptions: Partial<VitePWAOptions> = {
     scope: './',
     display: 'standalone',
     display_override: ['window-controls-overlay'],
-    theme_color: '#17191d',
-    background_color: '#17191d',
+    theme_color: '#15191d',
+    background_color: '#15191d',
     icons: [
       { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
       { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },

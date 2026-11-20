@@ -231,11 +231,11 @@ defineExpose({ send })
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: #1d2128;
-  border-bottom: 1px solid #3a4250;
-  box-shadow: 0 6px 18px #0007;
-  color: #d7dce5;
-  font-size: 13px;
+  background: var(--ui-bg-elevated);
+  border-bottom: 1px solid var(--ui-border-accented);
+  box-shadow: var(--float-shadow);
+  color: var(--ui-text);
+  font-size: var(--text-base);
   line-height: 1.5;
 }
 .terminal-composer.full {
@@ -257,7 +257,7 @@ defineExpose({ send })
   margin: 0;
   padding: 0 12px 4px;
   color: var(--ui-error);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .terminal-composer-handle:focus-visible {
   outline: 2px solid var(--ui-primary);
@@ -274,8 +274,8 @@ defineExpose({ send })
 .terminal-composer-handle span {
   width: 36px;
   height: 4px;
-  border-radius: 2px;
-  background: #4a5363;
+  border-radius: calc(var(--ui-radius) * 0.5);
+  background: var(--ui-color-neutral-600);
 }
 .mobile .terminal-composer-actions :deep(button) {
   min-width: 44px;

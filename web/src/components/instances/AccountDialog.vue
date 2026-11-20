@@ -219,7 +219,7 @@ async function save() {
   gap: 16px;
 }
 .account-form input {
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .account-actions {
   display: flex;
@@ -235,12 +235,12 @@ async function save() {
   justify-content: center;
 }
 .account-session-hint {
-  font-size: 11px;
-  color: #96a0af;
+  font-size: var(--text-xs);
+  color: var(--ui-text-muted);
   line-height: 1.5;
 }
 .account-error {
-  font-size: 12px;
-  color: #e0aaa5;
+  font-size: var(--text-sm);
+  color: var(--ui-error);
 }
 </style>

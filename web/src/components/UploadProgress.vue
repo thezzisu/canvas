@@ -61,12 +61,12 @@ const percentage = computed(() =>
 <style scoped>
 .file-transfer-progress {
   padding: 4px 7px;
-  border: 1px solid #424a56;
-  border-radius: 4px;
-  background: #242930f2;
-  color: #b6c0ce;
-  box-shadow: 0 2px 8px #0003;
-  font-size: 10px;
+  border: 1px solid var(--ui-border-accented);
+  border-radius: var(--ui-radius);
+  background: var(--ui-bg-elevated);
+  color: var(--ui-text-toned);
+  box-shadow: var(--float-shadow);
+  font-size: var(--text-2xs);
 }
 .file-transfer-row {
   display: flex;
@@ -97,16 +97,16 @@ const percentage = computed(() =>
   max-width: none;
 }
 .file-transfer-row > small {
-  color: #7f8b9b;
-  font-size: 9px;
+  color: var(--ui-text-dimmed);
+  font-size: var(--text-2xs);
 }
 .file-transfer-row > button {
   height: 22px;
   width: 22px;
   min-width: 22px;
   padding: 0;
-  color: #8c98a9;
-  border-radius: 3px;
+  color: var(--ui-text-muted);
+  border-radius: var(--ui-radius);
 }
 .upload-failed .file-transfer-status {
   color: var(--danger);

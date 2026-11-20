@@ -125,7 +125,7 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  background: #111;
+  background: var(--ui-bg);
 }
 .media-preview audio {
   width: min(100%, 560px);

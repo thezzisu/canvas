@@ -437,10 +437,10 @@ const size = computed(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid #3a3d46;
+  border: 1px solid var(--ui-border-accented);
   border-radius: calc(var(--ui-radius) * 2);
-  background: #1b1d23;
-  box-shadow: 0 5px 18px #0003;
+  background: var(--ui-bg-muted);
+  box-shadow: var(--card-shadow);
 }
 .file-header {
   display: flex;
@@ -449,9 +449,9 @@ const size = computed(() => {
   height: 30px;
   flex: 0 0 30px;
   padding: 0 7px 0 10px;
-  color: #a9b0be;
+  color: var(--ui-text-toned);
   cursor: grab;
-  border-bottom: 1px solid #343740;
+  border-bottom: 1px solid var(--ui-border-accented);
 }
 .file-title {
   min-width: 0;
@@ -459,8 +459,8 @@ const size = computed(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
-  color: #e0e3ea;
+  font-size: var(--text-sm);
+  color: var(--ui-text);
 }
 .file-icon {
   display: flex;
@@ -488,7 +488,7 @@ const size = computed(() => {
   border: 0;
   width: 100%;
   height: 100%;
-  background: #fff;
+  background: var(--paper);
   color-scheme: light;
 }
 .file-text-body {
@@ -497,7 +497,7 @@ const size = computed(() => {
   width: 100%;
   min-width: 0;
   min-height: 0;
-  background: #14191f;
+  background: var(--ui-bg-muted);
 }
 .file-text-status {
   display: flex;
@@ -530,7 +530,7 @@ const size = computed(() => {
   gap: 0;
 }
 .mobile-layout .card-focused .file-title {
-  font-size: 13px;
+  font-size: var(--text-base);
   margin-inline: 6px;
 }
 .mobile-layout .card-focused .file-icon {

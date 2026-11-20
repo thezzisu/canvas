@@ -52,10 +52,10 @@ const shortcuts = computed(() => (props.captured ? [] : ['keyboard', 'zoom']))
 .cutout-preview {
   position: relative;
   height: 44px;
-  background: #252a32;
-  border-bottom: 1px solid #414752;
-  color: #d3d8e1;
-  font-size: 13px;
+  background: var(--ui-bg-elevated);
+  border-bottom: 1px solid var(--ui-border-accented);
+  color: var(--ui-text);
+  font-size: var(--text-base);
   font-weight: 500;
 }
 .cutout-preview-control {
@@ -65,7 +65,7 @@ const shortcuts = computed(() => (props.captured ? [] : ['keyboard', 'zoom']))
   width: 44px;
   height: 44px;
   min-width: 44px;
-  color: #8592a3;
+  color: var(--ui-text-muted);
 }
 .cutout-status > i {
   width: 6px;

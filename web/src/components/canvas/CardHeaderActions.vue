@@ -210,7 +210,7 @@ useEventListener(
   margin-left: auto;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.12s;
+  transition: opacity var(--duration);
 }
 :is(.terminal-card, .note-card, .file-card):focus-within .card-header-actions,
 .vue-flow__node.selected .card-header-actions,

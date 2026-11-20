@@ -157,8 +157,8 @@ body,
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #14191f;
-  color: #cdd5e1;
+  background: var(--ui-bg-muted);
+  color: var(--ui-text);
 }
 .document-preview > header {
   flex: none;
@@ -167,7 +167,7 @@ body,
   align-items: center;
   gap: 4px;
   padding: 4px 8px;
-  border-bottom: 1px solid #343740;
+  border-bottom: 1px solid var(--ui-border-accented);
 }
 .document-name {
   flex: 1;
@@ -175,11 +175,11 @@ body,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .document-preview > p {
   padding: 12px;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .document-touch .document-action {
   width: 44px;

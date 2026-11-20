@@ -41,7 +41,7 @@ const title = computed(() =>
   flex-shrink: 0;
 }
 .terminal-live-title {
-  color: var(--window-title-color, #939ba8);
+  color: var(--window-title-color, var(--ui-text-muted));
   font-weight: 400;
 }
 </style>

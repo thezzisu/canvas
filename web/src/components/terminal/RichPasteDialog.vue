@@ -172,20 +172,20 @@ const content = {
   overflow-wrap: anywhere;
   tab-size: 4;
   border: 1px solid var(--ui-border);
-  border-radius: 8px;
+  border-radius: calc(var(--ui-radius) * 2);
   padding: 14px;
-  background: #15171b;
+  background: var(--ui-bg-muted);
   font-family: var(--content-font-family);
   font-feature-settings: var(--content-font-features);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.7;
-  color: #d5d7dd;
+  color: var(--ui-text);
   user-select: text;
 }
 .rich-paste-error {
   margin: 0;
   color: var(--danger);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 </style>

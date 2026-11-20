@@ -547,7 +547,7 @@ defineExpose({
   float: left;
   height: 0;
   pointer-events: none;
-  color: #75808d;
+  color: var(--ui-text-dimmed);
 }
 .note-editor :deep(.is-empty:has(.note-upload-placeholder)::before) {
   content: none;

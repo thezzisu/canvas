@@ -483,9 +483,9 @@ onBeforeUnmount(() => request?.abort())
   max-height: none;
   overflow: auto;
   overscroll-behavior: contain;
-  background: #191d23;
-  border: 1px solid #3b424c;
-  box-shadow: 0 16px 60px #0005;
+  background: var(--ui-bg-muted);
+  border: 1px solid var(--ui-border-accented);
+  box-shadow: var(--dialog-shadow);
 }
 /* Media stays mounted while the transparent loading row waits for intrinsic size. */
 .download-preview-modal.download-preview-preparing {
@@ -512,8 +512,8 @@ onBeforeUnmount(() => request?.abort())
   align-items: center;
   gap: 8px;
   flex: 1;
-  font-size: 13px;
-  color: #d6dce5;
+  font-size: var(--text-base);
+  color: var(--ui-text);
 }
 .download-preview-modal.download-preview-fullscreen {
   box-sizing: border-box;
@@ -548,13 +548,13 @@ onBeforeUnmount(() => request?.abort())
   display: block;
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 500;
   letter-spacing: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #d6dce5;
+  color: var(--ui-text);
 }
 .download-preview-count {
   font-size: var(--text-xs);
@@ -606,7 +606,7 @@ onBeforeUnmount(() => request?.abort())
   width: 100%;
   min-width: 0;
   min-height: 0;
-  background: #11161c;
+  background: var(--ui-bg-muted);
 }
 .download-preview-status {
   display: flex;
@@ -628,7 +628,7 @@ onBeforeUnmount(() => request?.abort())
   width: 100%;
   height: 100%;
   border: 0;
-  background: #fff;
+  background: var(--paper);
   color-scheme: light;
 }
 

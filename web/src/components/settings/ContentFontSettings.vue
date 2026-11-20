@@ -140,7 +140,7 @@ const field = settingsField
   background: var(--ui-bg-muted);
   color: var(--ui-text-highlighted);
   font-family: var(--content-font-family);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.6;
   white-space: pre;
   tab-size: 4;

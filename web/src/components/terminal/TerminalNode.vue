@@ -1197,9 +1197,9 @@ async function resized(event: { params: { width: number; height: number; x: numb
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #171a20bb;
-  color: #a0a9b6;
-  font-size: 12px;
+  background: var(--scrim);
+  color: var(--ui-text-muted);
+  font-size: var(--text-sm);
   pointer-events: none;
 }
 .closed .terminal-host {
@@ -1216,8 +1216,8 @@ async function resized(event: { params: { width: number; height: number; x: numb
 .terminal-composer-enter-active,
 .terminal-composer-leave-active {
   transition:
-    transform 160ms ease-out,
-    opacity 120ms ease-out;
+    transform var(--duration) ease-out,
+    opacity var(--duration) ease-out;
 }
 .terminal-composer-enter-from,
 .terminal-composer-leave-to {
@@ -1250,10 +1250,10 @@ async function resized(event: { params: { width: number; height: number; x: numb
   pointer-events: none;
   visibility: hidden;
   opacity: 0;
-  background: var(--terminal-transition-background, #1b1f26);
+  background: var(--terminal-transition-background, var(--material));
   transition:
-    opacity 160ms ease-out,
-    visibility 0s 160ms;
+    opacity var(--duration) ease-out,
+    visibility 0s var(--duration);
 }
 .terminal-transition .terminal-transition-surface {
   visibility: visible;
@@ -1272,28 +1272,28 @@ async function resized(event: { params: { width: number; height: number; x: numb
   cursor: inherit;
 }
 .terminal-card.input-focused {
-  --frame-rest: color-mix(in srgb, var(--program-color) 60%, #fff);
+  --frame-rest: color-mix(in srgb, var(--program-color) 60%, var(--ui-border-inverted));
 }
 .terminal-card.input-focused.program-unknown {
-  --frame-rest: #aeb9c8;
+  --frame-rest: var(--ui-color-neutral-300);
 }
 .terminal-card.input-focused .terminal-header {
-  background: color-mix(in srgb, var(--program-color) 27%, #22262d);
+  background: color-mix(in srgb, var(--program-color) 27%, var(--ui-bg-elevated));
 }
 .terminal-card.input-focused .terminal-name {
-  color: #f4f6f9;
-  --window-title-color: #c4cbd5;
+  color: var(--ui-text-highlighted);
+  --window-title-color: var(--ui-text-toned);
 }
 .terminal-loading {
   inset: 0;
-  background: #11131799;
-  color: #b0b8c5;
+  background: var(--scrim);
+  color: var(--ui-text-toned);
 }
 /* Without a settled frame a terminal is covered by the same material as during a resize, so the
    two read as one cover. A load that is quick shows no label at all. */
 .terminal-loading-initial {
   z-index: 12;
-  background: var(--terminal-transition-background, #1b1f26);
+  background: var(--terminal-transition-background, var(--material));
 }
 .terminal-loading-label {
   display: inline-flex;
@@ -1310,7 +1310,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
 }
 .terminal-loading-leave-active {
   pointer-events: none;
-  transition: opacity 160ms ease-out;
+  transition: opacity var(--duration) ease-out;
 }
 .terminal-loading-leave-to {
   opacity: 0;
@@ -1337,24 +1337,24 @@ async function resized(event: { params: { width: number; height: number; x: numb
   top: 8px;
   right: 9px;
   padding: 4px 7px;
-  border: 1px solid #424a56;
-  border-radius: 4px;
-  background: #242930f2;
-  color: #b6c0ce;
+  border: 1px solid var(--ui-border-accented);
+  border-radius: var(--ui-radius);
+  background: var(--ui-bg-elevated);
+  color: var(--ui-text-toned);
   font-size: var(--text-xs);
   pointer-events: none;
 }
 .terminal-copy-notice.copy-failed {
-  border-color: #79545470;
-  background: #33262bf2;
-  color: #d6aaaa;
+  border-color: color-mix(in oklab, var(--ui-error) 25%, transparent);
+  background: color-mix(in oklab, var(--ui-error) 10%, var(--ui-bg-elevated));
+  color: var(--ui-error);
 }
 .terminal-note-drop {
   z-index: 5;
 }
 .terminal-note-drop.note-drop-unavailable {
-  color: #9aa4b3;
-  background: #171b21df;
+  color: var(--ui-text-muted);
+  background: var(--scrim);
 }
 .terminal-file-drop {
   position: absolute;
@@ -1363,9 +1363,9 @@ async function resized(event: { params: { width: number; height: number; x: numb
   align-items: center;
   justify-content: center;
   pointer-events: none;
-  background: #12151aca;
+  background: var(--scrim);
   color: var(--ui-primary);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .terminal-upload {
   position: absolute;
@@ -1405,7 +1405,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
 }
 .terminal-mobile.focused .terminal-name {
   height: 44px;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .canvas-fullscreen .terminal-mobile.focused {
   --terminal-header-height: 44px;
@@ -1443,13 +1443,13 @@ async function resized(event: { params: { width: number; height: number; x: numb
   position: absolute;
   inset: 0;
   z-index: 6;
-  background: #1b1f26;
+  background: var(--ui-bg-muted);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 14px;
-  color: #a4afbe;
+  color: var(--ui-text-muted);
 }
 .capture-toolbar {
   container: capture-toolbar / inline-size;
@@ -1458,9 +1458,9 @@ async function resized(event: { params: { width: number; height: number; x: numb
   align-items: center;
   gap: 4px;
   padding: 0 8px;
-  background: #252a33;
-  color: #d5d7dd;
-  font-size: 12px;
+  background: var(--ui-bg-elevated);
+  color: var(--ui-text);
+  font-size: var(--text-sm);
 }
 .capture-title {
   flex: 1;
@@ -1470,7 +1470,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
   white-space: nowrap;
 }
 .capture-error {
-  color: #e4aaaa;
+  color: var(--ui-error);
 }
 .capture-toolbar :deep(.capture-action) {
   flex: none;
@@ -1480,7 +1480,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
   position: absolute;
   z-index: 5;
   inset: 0;
-  background: #fff;
+  background: var(--paper);
 }
 .capture-host,
 .capture-body :deep(.capture-frame) {

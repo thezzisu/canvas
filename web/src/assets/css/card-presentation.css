@@ -1,6 +1,6 @@
 :is(.terminal-card, .note-card, .file-card) {
   /* Nuxt UI semantic color: every primary control inside a card follows the card. */
-  --ui-primary: var(--program-color, var(--note-color, #93a1b4));
+  --ui-primary: var(--program-color, var(--note-color, var(--ui-color-neutral-400)));
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -35,10 +35,10 @@
 }
 
 .vue-flow__node-note:is(.selected, :focus-visible, :focus-within) > .note-card {
-  border-color: color-mix(in srgb, var(--note-color) 78%, #e7edf5);
+  border-color: color-mix(in srgb, var(--note-color) 78%, var(--ui-border-inverted));
 }
 .vue-flow__node-file:is(.selected, :focus-visible, :focus-within) > .file-card {
-  border-color: #8793a3;
+  border-color: var(--ui-color-neutral-400);
 }
 .vue-flow__node-file {
   padding: 0;

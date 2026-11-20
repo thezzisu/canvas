@@ -233,10 +233,10 @@ const content = computed(() => ({
   max-height: calc(var(--mobile-height, var(--ui-viewport-height)) - 32px);
 }
 .pane-dialog p {
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 .pane-action-error {
-  color: #e0aaa5;
+  color: var(--ui-error);
   margin-top: 12px;
 }
 .pane-dialog-actions {
