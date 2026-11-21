@@ -624,6 +624,8 @@ class CoreWindowClient implements WindowTransport {
       )
         return
       if (this.holdForSync()) return
+      // Every way the focused pane changes (layout, split, focus request) ends in a paint.
+      this.paneFocus.set(this.focused)
       const projection = projectTab(this.tab, this.cols, this.rows, this.zoomed)
       if (projection.panes.some((pane) => pane.terminal && !this.attached.has(pane.id))) return
       const composition = composeWindow(

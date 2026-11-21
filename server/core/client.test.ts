@@ -826,6 +826,19 @@ test('clearing a native core title emits an explicit empty title instead of miss
   }
 })
 
+test('a core window tells its subscribers which pane is focused, from the start', async () => {
+  const f = fixture()
+  const client = await open(f)
+  try {
+    const focused: Array<string | undefined> = []
+    client.paneFocus.subscribe((paneId) => focused.push(paneId))
+    await tick()
+    assert.deepEqual(focused, ['pane'], 'a new subscriber learns the pane the window opened on')
+  } finally {
+    client.kill()
+  }
+})
+
 test('a core window publishes its metadata only when it changed', async () => {
   const f = fixture()
   const client = await open(f)
