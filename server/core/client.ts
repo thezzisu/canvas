@@ -77,6 +77,8 @@ export interface CoreClientOptions {
   cols: number
   rows: number
   handshakeTimeoutMs?: number
+  /** How long a synchronized update (DEC 2026) may hold the window's paint. */
+  syncTimeoutMs?: number
 }
 
 /** One Canvas window, composed from independent native core terminal streams. */
@@ -119,6 +121,8 @@ class CoreWindowClient implements WindowTransport {
   readonly exit = new Latest<TransportExit>()
   private metadataScheduled = false
   private renderScheduled = false
+  /** Painting waits while a program updates its screen in one go (DEC 2026), up to a limit. */
+  private sync: { timer?: ReturnType<typeof setTimeout>; expired: boolean } = { expired: false }
   private closed = false
   private initialized = false
 
@@ -147,6 +151,7 @@ class CoreWindowClient implements WindowTransport {
     // Subscribe before reading documents; doc changes are not part of the terminal snapshot.
     const subscription = await this.options.rpc.subscribe({}, (event) => this.event(event))
     this.owned.defer(() => subscription.close())
+    this.owned.defer(() => clearTimeout(this.sync.timer))
     this.eventSeq = subscription.snapshot.seq
     await this.replace(await this.options.layout.snapshot(subscription.snapshot.terminals), true)
     subscription.start()
@@ -618,6 +623,7 @@ class CoreWindowClient implements WindowTransport {
         [...this.attached.values()].some((pane) => !pane.ready)
       )
         return
+      if (this.holdForSync()) return
       const projection = projectTab(this.tab, this.cols, this.rows, this.zoomed)
       if (projection.panes.some((pane) => pane.terminal && !this.attached.has(pane.id))) return
       const composition = composeWindow(
@@ -706,6 +712,29 @@ class CoreWindowClient implements WindowTransport {
       })
       if (painted) this.painted.set(painted)
     })
+  }
+
+  /**
+   * Whether a pane's program is in the middle of a synchronized update. Its engine already holds
+   * the half-drawn screen, so the whole window waits for the update's end, or, for a program that
+   * never ends it, for the time limit.
+   */
+  private holdForSync() {
+    const syncing = [...this.attached.values()].some((pane) => pane.engine.mode(2026))
+    if (!syncing) {
+      clearTimeout(this.sync.timer)
+      this.sync = { expired: false }
+      return false
+    }
+    if (this.sync.expired) return false
+    if (!this.sync.timer) {
+      this.sync.timer = setTimeout(() => {
+        this.sync = { expired: true }
+        this.render()
+      }, this.options.syncTimeoutMs ?? 1000)
+      this.sync.timer.unref()
+    }
+    return true
   }
 
   private send(message: ClientMessage) {

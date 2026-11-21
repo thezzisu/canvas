@@ -1728,6 +1728,44 @@ test('progress reports reach the window metadata and pointer requests reach the 
   }
 })
 
+test('a synchronized update is painted when it ends, or after the limit when it never does', async () => {
+  const f = fixture()
+  const opening = createCoreClient({
+    rpc: f.rpc,
+    layout: f.layout,
+    spaceId: 'space',
+    tabId: 'tab',
+    cols: 20,
+    rows: 6,
+    syncTimeoutMs: 50,
+  })
+  await tick()
+  f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?9001l') })
+  const client = await opening
+  const seen = watch(client)
+  try {
+    await tick()
+    const before = seen.paints
+    f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?2026hHALF') })
+    await tick()
+    await tick()
+    assert.equal(seen.paints, before, 'nothing is painted in the middle of an update')
+    f.stream.receive({ kind: 'data', data: Buffer.from('-DONE\x1b[?2026l') })
+    await tick()
+    await tick()
+    assert.match(seen.text, /HALF-DONE/u)
+    const done = seen.paints
+    f.stream.receive({ kind: 'data', data: Buffer.from('\x1b[?2026h STUCK') })
+    await tick()
+    await tick()
+    assert.equal(seen.paints, done)
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    assert.match(seen.text, /STUCK/u, 'an update that never ends is shown after the limit')
+  } finally {
+    client.kill()
+  }
+})
+
 test('a window shows its error first, then its furthest percentage, then progress without one', () => {
   assert.equal(windowProgress([undefined]), undefined)
   assert.deepEqual(
