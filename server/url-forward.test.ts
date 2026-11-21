@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { WebSocket, WebSocketServer } from 'ws'
 import { UrlForwardService, loopbackHost, webUrl } from './url-forward.ts'
 import { Store, type Source } from './state.ts'
-import type { prepareLoopback } from './runtimes.ts'
+import type { prepareLoopback } from './source-connections.ts'
 
 async function listen(server: Server, host = '127.0.0.1') {
   await new Promise<void>((resolve) => server.listen(0, host, resolve))

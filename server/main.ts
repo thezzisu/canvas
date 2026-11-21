@@ -15,14 +15,14 @@ import { TerminalManager, type TerminalTarget } from './terminals.ts'
 import { allowedOrigin, parseAllowedOrigins, bearerToken } from './auth.ts'
 import { authenticateWebSocket } from './websocket-auth.ts'
 import { serveTerminalChannels, type TerminalChannel } from './terminal-channels.ts'
+import { closeRuntimeConnections } from './source-connections.ts'
 import {
-  closeRuntimeConnections,
   prepareOpenBridge,
   writeRemoteBridgeRegistry,
   installCanvasHelper,
-  listResources,
-  editorAuthority,
-} from './runtimes.ts'
+} from './canvas-helper.ts'
+import { listResources } from './runtimes.ts'
+import { editorAuthority } from './source-command.ts'
 import { OpenDownloadService } from './open-download.ts'
 import { AssetStore } from './assets.ts'
 import { UploadService } from './uploads.ts'

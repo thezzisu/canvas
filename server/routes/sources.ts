@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { bearerToken } from '../auth.ts'
 import { sourceSchema, sourceConnectionKey, type Source } from '../state.ts'
 import * as runtimes from '../runtimes.ts'
+import { validateSource } from '../source-command.ts'
+import { closeRuntimeConnections } from '../source-connections.ts'
 import type { RouteContext } from './context.ts'
 import { sourceProbeSchema } from './schemas.ts'
 
@@ -37,7 +39,7 @@ export function sourceRoutes({ app, store, terminals, options, source }: RouteCo
   app.post('/api/sources', async (c) => {
     const s = sourceSchema.parse(await c.req.json())
     if (s.id) return c.json({ error: 'ID is assigned by the server' }, 400)
-    runtimes.validateSource({ ...s, id: s.id ?? 'new' })
+    validateSource({ ...s, id: s.id ?? 'new' })
     return c.json(store.put('source', s), 201)
   })
   app.patch('/api/sources/:id', async (c) => {
@@ -49,12 +51,12 @@ export function sourceRoutes({ app, store, terminals, options, source }: RouteCo
       ...patch,
       id,
     })
-    runtimes.validateSource({ ...s, id })
+    validateSource({ ...s, id })
     let updated = s
     if (sourceConnectionKey({ ...s, id }) !== sourceConnectionKey(previous)) {
       await terminals.closeSource(id, async () => {
         await options.closeOpenBridge?.(id)
-        await runtimes.closeRuntimeConnections(id)
+        await closeRuntimeConnections(id)
         // A name-only edit may have completed while the old connection closed.
         updated = store.put('source', sourceSchema.parse({ ...source(id), ...patch, id }))
       })
@@ -66,7 +68,7 @@ export function sourceRoutes({ app, store, terminals, options, source }: RouteCo
     source(id)
     await terminals.closeSource(id, async () => {
       await options.closeOpenBridge?.(id)
-      await runtimes.closeRuntimeConnections(id)
+      await closeRuntimeConnections(id)
       store.remove('source', id)
     })
     return c.json({ ok: true })

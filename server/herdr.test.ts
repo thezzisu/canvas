@@ -19,8 +19,8 @@ import {
   closeWindow,
   listResources,
   openTerminal,
-  type Source,
 } from './runtimes.ts'
+import { type Source } from './state.ts'
 
 test('native herdr transport works with an unmodified server: split rendering, keyboard, mouse and viewport resize', async (t) => {
   const serverBinary = process.env.CANVAS_TEST_HERDR_SERVER_BINARY

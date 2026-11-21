@@ -4,8 +4,8 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { closeRuntimeConnections } from './source-connections.ts'
 import {
-  closeRuntimeConnections,
   closeSpace,
   closeWindow,
   createSpace,
@@ -15,8 +15,8 @@ import {
   probeSource,
   renameSpace,
   renameWindow,
-  type Source,
 } from './runtimes.ts'
+import { type Source } from './state.ts'
 import { CoreRpc } from './core/rpc.ts'
 import { CoreLayout } from './core/layout.ts'
 import type { WindowTransport } from './transport.ts'

@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { CaptureLease } from './capture.ts'
 import { CaptureService } from './capture.ts'
 import { normalizeCapturePublicBase } from './capture-address.ts'
-import { sourcePythonCommand } from './runtimes.ts'
+import { sourcePythonCommand } from './source-command.ts'
 import { sourceConnectionKey, type FileOrigin, type Source, type Store } from './state.ts'
 
 export class SourcePreviewError extends Error {

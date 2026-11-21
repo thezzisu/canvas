@@ -7,13 +7,9 @@ import { join } from 'node:path'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import type { MouseArea } from '../../shared/terminal-mouse.ts'
 import type { WindowTransport } from '../transport.ts'
-import {
-  closeRuntimeConnections,
-  createSpace,
-  listResources,
-  openTerminal,
-  type Source,
-} from '../runtimes.ts'
+import { closeRuntimeConnections } from '../source-connections.ts'
+import { createSpace, listResources, openTerminal } from '../runtimes.ts'
+import { type Source } from '../state.ts'
 
 test('an open window shows each title herdr publishes without waiting for a redraw, and where its programs take the mouse', async (t) => {
   const serverBinary = process.env.CANVAS_TEST_HERDR_SERVER_BINARY

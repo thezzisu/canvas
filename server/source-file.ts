@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process'
-import { sourcePythonCommand } from './runtimes.ts'
+import { sourcePythonCommand } from './source-command.ts'
 import { withoutFileLocation } from './content-candidates.ts'
 import type { Source } from './state.ts'
 

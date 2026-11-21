@@ -24,16 +24,16 @@ import {
   listResources,
   probeSource,
   openTerminal,
-  installCanvasHelper,
   nativeSocketForSource,
+} from './runtimes.ts'
+import {
+  installCanvasHelper,
   prepareOpenBridge,
   writeRemoteBridgeRegistry,
-  closeRuntimeConnections,
-  parseSshTarget,
-  shellQuote,
-  sourcePythonCommand,
-  type Source,
-} from './runtimes.ts'
+} from './canvas-helper.ts'
+import { closeRuntimeConnections } from './source-connections.ts'
+import { parseSshTarget, shellQuote, sourcePythonCommand } from './source-command.ts'
+import { type Source } from './state.ts'
 
 test('SSH arguments reject credentials, options and shell metacharacters', () => {
   assert.deepEqual(parseSshTarget('ssh://alice@example.test:2222'), {

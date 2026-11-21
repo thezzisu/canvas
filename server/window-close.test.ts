@@ -11,13 +11,8 @@ import { createApp } from './app.ts'
 import { Store, noteNodeSchema, type Canvas, type Source, type TerminalNode } from './state.ts'
 import type { TerminalChannel } from './terminal-channels.ts'
 import { TerminalManager } from './terminals.ts'
-import {
-  closeRuntimeConnections,
-  closeWindow,
-  createSpace,
-  createWindow,
-  listResources,
-} from './runtimes.ts'
+import { closeRuntimeConnections } from './source-connections.ts'
+import { closeWindow, createSpace, createWindow, listResources } from './runtimes.ts'
 
 /** Ordered writes carry their page and sequence number. */
 let writes = 0

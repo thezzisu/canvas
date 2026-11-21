@@ -43,7 +43,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { hostname, userInfo } from 'node:os';
-import { editorAuthority } from './server/runtimes.ts';
+import { editorAuthority } from './server/source-command.ts';
 const root = process.env.CANVAS_AUTHORITY_TEST_ROOT;
 const source = { id: 'fixture', name: 'Fixture', transport: 'ssh' };
 ${body}

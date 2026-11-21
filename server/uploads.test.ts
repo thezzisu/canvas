@@ -13,7 +13,8 @@ import { createApp } from './app.ts'
 import { PASTE_SETTLE_QUIET_MS, TerminalManager } from './terminals.ts'
 import { gridText } from './test-grid.ts'
 import type { SourceResource } from './runtimes.ts'
-import { closeWindow, createSpace, listResources, shellQuote } from './runtimes.ts'
+import { closeWindow, createSpace, listResources } from './runtimes.ts'
+import { shellQuote } from './source-command.ts'
 import type { writeInboxFile } from './inbox.ts'
 import {
   MAX_PASTE_PARTS,

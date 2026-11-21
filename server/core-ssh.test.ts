@@ -7,23 +7,24 @@ import { dirname, join } from 'node:path'
 import { tmpdir, userInfo } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { CoreRpc } from './core/rpc.ts'
+import { closeRuntimeConnections } from './source-connections.ts'
 import {
-  closeRuntimeConnections,
   closeSpace,
   createSpace,
-  installCanvasHelper,
   listResources,
   nativeSocketForSource,
   openTerminal,
-  prepareOpenBridge,
   probeSource,
   renameSpace,
   renameWindow,
-  shellQuote,
-  sourcePythonCommand,
-  writeRemoteBridgeRegistry,
-  type Source,
 } from './runtimes.ts'
+import {
+  installCanvasHelper,
+  prepareOpenBridge,
+  writeRemoteBridgeRegistry,
+} from './canvas-helper.ts'
+import { shellQuote, sourcePythonCommand } from './source-command.ts'
+import { type Source } from './state.ts'
 import { readSourceFile, regularSourceFiles } from './source-file.ts'
 import { removeInboxFiles, writeInboxFile } from './inbox.ts'
 import type { WindowTransport } from './transport.ts'

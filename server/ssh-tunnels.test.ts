@@ -5,7 +5,8 @@ import { mkdtemp, writeFile, readFile, stat, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { closeSocketTunnels, ensureSocketTunnel } from './ssh-tunnels.ts'
-import { prepareLoopback, type Source } from './runtimes.ts'
+import { prepareLoopback } from './source-connections.ts'
+import { type Source } from './state.ts'
 
 async function waitFor<T>(action: () => Promise<T>, predicate: (value: T) => boolean): Promise<T> {
   const deadline = Date.now() + 5000

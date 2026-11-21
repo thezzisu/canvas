@@ -152,8 +152,8 @@ test('local and SSH discovery agree on a named session without running a CLI', a
 })
 
 test('herdr runtime discovers sockets and performs resource CRUD without executable dispatch', async (t) => {
+  const { closeRuntimeConnections } = await import('../source-connections.ts')
   const {
-    closeRuntimeConnections,
     closeSpace,
     closeWindow,
     createSpace,

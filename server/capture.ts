@@ -6,7 +6,7 @@ import {
   type ServerResponse,
 } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { prepareLoopback } from './runtimes.ts'
+import { prepareLoopback } from './source-connections.ts'
 import { sourceConnectionKey, type Source, type Store } from './state.ts'
 import type { CaptureDescriptor } from '../shared/capture.ts'
 import { captureRequestBase, normalizeCapturePublicBase } from './capture-address.ts'
