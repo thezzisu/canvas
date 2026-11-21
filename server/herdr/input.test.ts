@@ -1,7 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { HerdrInputRouter, VtInputParser, wordBounds, type HerdrSelection } from './input.ts'
-import { cellWidth, popupInnerRect } from './screen.ts'
+import { HerdrInputRouter, wordBounds } from './input.ts'
+import { VtInputParser } from './vt-parser.ts'
+import type { ScreenSelection } from './screen.ts'
+import { cellWidth } from '../ghostty/module.ts'
+import { popupInnerRect } from './screen.ts'
 import {
   encodeClientMessage,
   type ClientMessage,
@@ -104,7 +107,7 @@ function fixture() {
     requests: Array<{ method: string; params: Record<string, unknown> }> = [],
     errors: Error[] = [],
     copied: string[] = [],
-    selections: Array<HerdrSelection | undefined> = []
+    selections: Array<ScreenSelection | undefined> = []
   let handler: (method: string, params: Record<string, unknown>) => Promise<unknown> = async (
     method,
   ) => (method === 'pane.selection.read' ? { text: 'selected', pane_id: 'a' } : {})

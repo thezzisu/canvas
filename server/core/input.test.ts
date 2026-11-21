@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { GhosttyTerminal } from '../ghostty/terminal.ts'
 import { coreInput } from './input.ts'
-import { VtInputParser } from '../herdr/input.ts'
+import { VtInputParser } from '../herdr/vt-parser.ts'
 import { pressedKey } from '../../web/src/utils/terminal/terminal-input.ts'
 import type { ClientKeyCode, ClientPaneInputEvent } from '../herdr/wire.ts'
 

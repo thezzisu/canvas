@@ -5,9 +5,7 @@ import type {
   PaneSurfacePatch,
   SurfaceRect,
 } from './wire.ts'
-import { cellWidth } from '../ghostty/module.ts'
 import type { MouseArea, PointerShape } from '../../shared/terminal-mouse.ts'
-export { cellWidth }
 
 export interface ScreenSelection {
   pane_id: string
