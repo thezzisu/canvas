@@ -227,6 +227,27 @@ export class Store extends EventEmitter {
           .get()?.at,
       ) || 0
   }
+  /** A write transaction: rolled back when its scope ends, unless committed first. */
+  private begin() {
+    this.db.exec('BEGIN IMMEDIATE')
+    let open = true
+    return {
+      commit: () => {
+        this.db.exec('COMMIT')
+        open = false
+      },
+      [Symbol.dispose]: () => {
+        if (open) this.db.exec('ROLLBACK')
+      },
+    }
+  }
+  private upsert(kind: string, id: string, value: unknown) {
+    this.db
+      .prepare(
+        'INSERT INTO documents(kind,id,body) VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body',
+      )
+      .run(kind, id, JSON.stringify(value))
+  }
   list<T>(kind: string): T[] {
     return this.db
       .prepare(
@@ -246,11 +267,7 @@ export class Store extends EventEmitter {
       this.validateFileNodes(canvas)
       result = { ...result, nodes: this.normalizeNodes(canvas.nodes) }
     }
-    this.db
-      .prepare(
-        'INSERT INTO documents(kind,id,body) VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body',
-      )
-      .run(kind, result.id, JSON.stringify(result))
+    this.upsert(kind, result.id, result)
     if (kind === 'source')
       this.cancelRemovals(
         (item) =>
@@ -287,36 +304,31 @@ export class Store extends EventEmitter {
     const closed = new Set(windowIds)
     if (!closed.size) return
     let changed = false
-    this.db.exec('BEGIN IMMEDIATE')
-    try {
-      const update = this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
-      for (const canvas of this.list<Canvas>('canvas')) {
-        const nodes = canvas.nodes.filter(
-          (node) =>
-            !isTerminalNode(node) || node.sourceId !== source.id || !closed.has(node.windowId),
-        )
-        if (nodes.length === canvas.nodes.length) continue
-        update.run(JSON.stringify({ ...canvas, nodes }), canvas.id)
-        changed = true
-      }
-      const removeWindow = this.db.prepare(
-        "DELETE FROM documents WHERE kind IN ('window-size','window-read') AND id=?",
+    using transaction = this.begin()
+    const update = this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
+    for (const canvas of this.list<Canvas>('canvas')) {
+      const nodes = canvas.nodes.filter(
+        (node) =>
+          !isTerminalNode(node) || node.sourceId !== source.id || !closed.has(node.windowId),
       )
-      for (const windowId of closed)
-        changed = !!removeWindow.run(`${source.id}/${windowId}`).changes || changed
-      changed =
-        this.removeComposers(
-          (composer) => composer.sourceId === source.id && closed.has(composer.windowId),
-        ) || changed
-      // Native IDs may be reused later; the guard only outlives in-flight browser writes.
-      const until = Date.now() + 120_000
-      for (const windowId of closed)
-        this.closedWindows.set(composerKey({ sourceId: source.id, windowId }), until)
-      this.db.exec('COMMIT')
-    } catch (error) {
-      this.db.exec('ROLLBACK')
-      throw error
+      if (nodes.length === canvas.nodes.length) continue
+      update.run(JSON.stringify({ ...canvas, nodes }), canvas.id)
+      changed = true
     }
+    const removeWindow = this.db.prepare(
+      "DELETE FROM documents WHERE kind IN ('window-size','window-read') AND id=?",
+    )
+    for (const windowId of closed)
+      changed = !!removeWindow.run(`${source.id}/${windowId}`).changes || changed
+    changed =
+      this.removeComposers(
+        (composer) => composer.sourceId === source.id && closed.has(composer.windowId),
+      ) || changed
+    // Native IDs may be reused later; the guard only outlives in-flight browser writes.
+    const until = Date.now() + 120_000
+    for (const windowId of closed)
+      this.closedWindows.set(composerKey({ sourceId: source.id, windowId }), until)
+    transaction.commit()
     this.cancelRemovals(
       (item) =>
         item.node.type === 'terminal' &&
@@ -496,11 +508,7 @@ export class Store extends EventEmitter {
     const current = this.navigationOrder()
     const next = { ...current, [kind]: orderedIds(current[kind], ids) }
     if (isDeepStrictEqual(current, next)) return current
-    this.db
-      .prepare(
-        "INSERT INTO documents(kind,id,body) VALUES('navigation','order',?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body",
-      )
-      .run(JSON.stringify(next))
+    this.upsert('navigation', 'order', next)
     this.changed()
     return next
   }
@@ -508,11 +516,7 @@ export class Store extends EventEmitter {
     const settings = settingsPatchSchema.parse(value)
     const previous = this.settings()
     if (isDeepStrictEqual(settings, previous)) return settings
-    this.db
-      .prepare(
-        "INSERT INTO documents(kind,id,body) VALUES('settings','global',?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body",
-      )
-      .run(JSON.stringify(settings))
+    this.upsert('settings', 'global', settings)
     this.changed(!isDeepStrictEqual(settings.terminalCell, previous.terminalCell))
     return settings
   }
@@ -539,77 +543,70 @@ export class Store extends EventEmitter {
   }
   /** Compare only edited geometry, then publish one committed layout snapshot. */
   applyLayout(id: string, changes: LayoutUpdate[]): Canvas | undefined {
-    let result: Canvas | undefined
     let normalGeometryChanged = false
-    this.db.exec('BEGIN IMMEDIATE')
-    try {
-      const canvas = this.get<Canvas>('canvas', id)
-      if (!canvas) {
-        this.db.exec('ROLLBACK')
-        return
-      }
-      const byId = new Map(changes.map((change) => [change.id, change]))
-      if (byId.size !== changes.length) throw new Error('Duplicate layout node')
-      const sizes = new Map<string, Partial<WindowSize>>()
-      for (const change of changes) {
-        const node = canvas.nodes.find((node) => node.id === change.id)
-        if (!node) {
-          if (change.expected) throw new LayoutConflict()
-          else continue
-        }
-        const geometry = isTerminalNode(node)
-          ? { ...node, ...this.windowSize(node.sourceId, node.windowId) }
-          : node
-        for (const field of layoutFields) {
-          if (
-            change.expected?.[field] !== undefined &&
-            geometry[field] !== change.expected[field] &&
-            geometry[field] !== change[field]
-          )
-            throw new LayoutConflict()
-        }
-        if (isTerminalNode(node)) {
-          const key = `${node.sourceId}/${node.windowId}`,
-            patch = sizes.get(key) || {}
-          for (const field of ['width', 'height'] as const)
-            if (change[field] !== undefined) {
-              if (patch[field] !== undefined && patch[field] !== change[field])
-                throw new LayoutConflict()
-              patch[field] = change[field]
-            }
-          sizes.set(key, patch)
-        }
-      }
-      const nodes = canvas.nodes.map((node) => {
-        const patch = byId.get(node.id)
-        if (!patch) return node
-        const geometry: Partial<LayoutGeometry> = {}
-        for (const field of layoutFields)
-          if (patch[field] !== undefined) geometry[field] = patch[field]
-        return { ...node, ...geometry }
-      })
-      result = { ...canvasSchema.parse({ ...canvas, nodes }), id }
-      for (const [key, patch] of sizes)
-        if (Object.keys(patch).length) {
-          const node = canvas.nodes.find(
-            (node) => isTerminalNode(node) && `${node.sourceId}/${node.windowId}` === key,
-          )! as TerminalNode
-          const previous = this.windowSize(node.sourceId, node.windowId)
-          if (
-            (patch.width !== undefined && patch.width !== previous.width) ||
-            (patch.height !== undefined && patch.height !== previous.height)
-          )
-            normalGeometryChanged = true
-          this.setWindowSize(node.sourceId, node.windowId, patch)
-        }
-      this.db
-        .prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
-        .run(JSON.stringify(result), id)
-      this.db.exec('COMMIT')
-    } catch (error) {
-      this.db.exec('ROLLBACK')
-      throw error
+    using transaction = this.begin()
+    const canvas = this.get<Canvas>('canvas', id)
+    if (!canvas) {
+      return
     }
+    const byId = new Map(changes.map((change) => [change.id, change]))
+    if (byId.size !== changes.length) throw new Error('Duplicate layout node')
+    const sizes = new Map<string, Partial<WindowSize>>()
+    for (const change of changes) {
+      const node = canvas.nodes.find((node) => node.id === change.id)
+      if (!node) {
+        if (change.expected) throw new LayoutConflict()
+        else continue
+      }
+      const geometry = isTerminalNode(node)
+        ? { ...node, ...this.windowSize(node.sourceId, node.windowId) }
+        : node
+      for (const field of layoutFields) {
+        if (
+          change.expected?.[field] !== undefined &&
+          geometry[field] !== change.expected[field] &&
+          geometry[field] !== change[field]
+        )
+          throw new LayoutConflict()
+      }
+      if (isTerminalNode(node)) {
+        const key = `${node.sourceId}/${node.windowId}`,
+          patch = sizes.get(key) || {}
+        for (const field of ['width', 'height'] as const)
+          if (change[field] !== undefined) {
+            if (patch[field] !== undefined && patch[field] !== change[field])
+              throw new LayoutConflict()
+            patch[field] = change[field]
+          }
+        sizes.set(key, patch)
+      }
+    }
+    const nodes = canvas.nodes.map((node) => {
+      const patch = byId.get(node.id)
+      if (!patch) return node
+      const geometry: Partial<LayoutGeometry> = {}
+      for (const field of layoutFields)
+        if (patch[field] !== undefined) geometry[field] = patch[field]
+      return { ...node, ...geometry }
+    })
+    const result: Canvas = { ...canvasSchema.parse({ ...canvas, nodes }), id }
+    for (const [key, patch] of sizes)
+      if (Object.keys(patch).length) {
+        const node = canvas.nodes.find(
+          (node) => isTerminalNode(node) && `${node.sourceId}/${node.windowId}` === key,
+        )! as TerminalNode
+        const previous = this.windowSize(node.sourceId, node.windowId)
+        if (
+          (patch.width !== undefined && patch.width !== previous.width) ||
+          (patch.height !== undefined && patch.height !== previous.height)
+        )
+          normalGeometryChanged = true
+        this.setWindowSize(node.sourceId, node.windowId, patch)
+      }
+    this.db
+      .prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
+      .run(JSON.stringify(result), id)
+    transaction.commit()
     this.changed(normalGeometryChanged)
     return result
   }
@@ -627,11 +624,7 @@ export class Store extends EventEmitter {
   setWindowSize(sourceId: string, windowId: string, patch: Partial<WindowSize>) {
     const id = `${sourceId}/${windowId}`
     const value = { id, ...this.windowSize(sourceId, windowId), ...patch }
-    this.db
-      .prepare(
-        "INSERT INTO documents(kind,id,body) VALUES('window-size',?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body",
-      )
-      .run(id, JSON.stringify(value))
+    this.upsert('window-size', id, value)
     // The owning canvas write publishes the combined geometry/layout snapshot.
   }
   private normalizeNodes(nodes: Canvas['nodes']): Canvas['nodes'] {
@@ -676,27 +669,21 @@ export class Store extends EventEmitter {
     nodeId: string,
     patch: Partial<Pick<NoteNode, 'title' | 'content' | 'color'>>,
   ): Canvas {
-    this.db.exec('BEGIN IMMEDIATE')
-    let selected: Canvas | undefined
-    try {
-      const canvases = this.list<Canvas>('canvas')
-      selected = canvases.find((canvas) => canvas.id === canvasId)
-      if (!selected?.nodes.some((node) => node.id === nodeId && node.type === 'note'))
-        throw new Error('Note not found')
-      const update = this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
-      for (const canvas of canvases) {
-        const node = canvas.nodes.find(
-          (item): item is NoteNode => item.id === nodeId && item.type === 'note',
-        )
-        if (!node) continue
-        Object.assign(node, patch)
-        update.run(JSON.stringify(canvas), canvas.id)
-      }
-      this.db.exec('COMMIT')
-    } catch (error) {
-      this.db.exec('ROLLBACK')
-      throw error
+    using transaction = this.begin()
+    const canvases = this.list<Canvas>('canvas')
+    const selected: Canvas | undefined = canvases.find((canvas) => canvas.id === canvasId)
+    if (!selected?.nodes.some((node) => node.id === nodeId && node.type === 'note'))
+      throw new Error('Note not found')
+    const update = this.db.prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
+    for (const canvas of canvases) {
+      const node = canvas.nodes.find(
+        (item): item is NoteNode => item.id === nodeId && item.type === 'note',
+      )
+      if (!node) continue
+      Object.assign(node, patch)
+      update.run(JSON.stringify(canvas), canvas.id)
     }
+    transaction.commit()
     for (const item of this.removals.values())
       if (item.node.type === 'note' && item.node.id === nodeId) Object.assign(item.node, patch)
     this.changed()
@@ -712,144 +699,121 @@ export class Store extends EventEmitter {
     if (isSystemCanvas(sourceCanvasId) || isSystemCanvas(targetCanvasId))
       throw new Error('System canvases are read-only')
     const coordinates = nodeLayoutSchema.pick({ x: true, y: true }).parse(position)
-    this.db.exec('BEGIN IMMEDIATE')
-    let canvas: Canvas,
-      added = false
-    try {
-      const source = this.get<Canvas>('canvas', sourceCanvasId),
-        target = this.get<Canvas>('canvas', targetCanvasId)
-      if (!source || !target) throw new Error('Canvas not found')
-      const node = source.nodes.find((item) => item.id === nodeId)
-      if (!node || node.type === 'terminal') throw new Error('Shareable card not found')
-      if (node.type === 'file' && !this.fileAssetForCanvas(node.assetId, sourceCanvasId))
-        throw new Error('File asset not found')
-      canvas = target
-      const existing = target.nodes.some(
-        (item) =>
-          item.id === node.id ||
-          (node.type === 'file' && item.type === 'file' && item.assetId === node.assetId),
-      )
-      if (!existing) {
-        if (target.nodes.length >= 500) throw new Error('Canvas contains too many items')
-        target.nodes.push({ ...node, ...coordinates })
-        this.db
-          .prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
-          .run(JSON.stringify(target), targetCanvasId)
-        added = true
-      }
-      this.db.exec('COMMIT')
-    } catch (error) {
-      this.db.exec('ROLLBACK')
-      throw error
+    using transaction = this.begin()
+    let added = false
+    const source = this.get<Canvas>('canvas', sourceCanvasId),
+      target = this.get<Canvas>('canvas', targetCanvasId)
+    if (!source || !target) throw new Error('Canvas not found')
+    const node = source.nodes.find((item) => item.id === nodeId)
+    if (!node || node.type === 'terminal') throw new Error('Shareable card not found')
+    if (node.type === 'file' && !this.fileAssetForCanvas(node.assetId, sourceCanvasId))
+      throw new Error('File asset not found')
+    const canvas = target
+    const existing = target.nodes.some(
+      (item) =>
+        item.id === node.id ||
+        (node.type === 'file' && item.type === 'file' && item.assetId === node.assetId),
+    )
+    if (!existing) {
+      if (target.nodes.length >= 500) throw new Error('Canvas contains too many items')
+      target.nodes.push({ ...node, ...coordinates })
+      this.db
+        .prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
+        .run(JSON.stringify(target), targetCanvasId)
+      added = true
     }
+    transaction.commit()
     if (added) this.changed()
     return { canvas, added }
   }
 
   commitFileAsset(asset: FileAsset, context: FileAssetContext): boolean {
     if ('composer' in context) {
-      this.db.exec('BEGIN IMMEDIATE')
-      try {
-        if (!this.acceptsWindow(context.composer)) {
-          this.db.exec('ROLLBACK')
-          return false
-        }
-        const composer = this.ensureComposer(context.composer)
-        this.db
-          .prepare(
-            'INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)',
-          )
-          .run(asset.id, '', asset.filename, asset.size, asset.mime, asset.createdAt)
-        this.db
-          .prepare('INSERT INTO note_files(note_id,asset_id) VALUES(?,?)')
-          .run(composer.id, asset.id)
-        this.db.exec('COMMIT')
-      } catch (error) {
-        this.db.exec('ROLLBACK')
-        throw error
+      using transaction = this.begin()
+      if (!this.acceptsWindow(context.composer)) {
+        return false
       }
+      const composer = this.ensureComposer(context.composer)
+      this.db
+        .prepare(
+          'INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)',
+        )
+        .run(asset.id, '', asset.filename, asset.size, asset.mime, asset.createdAt)
+      this.db
+        .prepare('INSERT INTO note_files(note_id,asset_id) VALUES(?,?)')
+        .run(composer.id, asset.id)
+      transaction.commit()
       this.changed()
       return true
     }
     const canvasId = context.canvasId
     if (!canvasId || isSystemCanvas(canvasId)) return false
-    this.db.exec('BEGIN IMMEDIATE')
-    try {
-      const row = this.db
-        .prepare("SELECT body FROM documents WHERE kind='canvas' AND id=?")
-        .get(canvasId)
-      if (!row) {
-        this.db.exec('ROLLBACK')
+    using transaction = this.begin()
+    const row = this.db
+      .prepare("SELECT body FROM documents WHERE kind='canvas' AND id=?")
+      .get(canvasId)
+    if (!row) {
+      return false
+    }
+    const canvas = JSON.parse(String(row.body)) as Canvas
+    if ('noteId' in context) {
+      if (!canvas.nodes.some((node) => node.type === 'note' && node.id === context.noteId)) {
         return false
       }
-      const canvas = JSON.parse(String(row.body)) as Canvas
-      if ('noteId' in context) {
-        if (!canvas.nodes.some((node) => node.type === 'note' && node.id === context.noteId)) {
-          this.db.exec('ROLLBACK')
+      this.db
+        .prepare(
+          'INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)',
+        )
+        .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.createdAt)
+      this.db
+        .prepare('INSERT INTO note_files(note_id,asset_id) VALUES(?,?)')
+        .run(context.noteId, asset.id)
+    } else {
+      let x: number, y: number
+      if ('position' in context) {
+        ;({ x, y } = nodeLayoutSchema.pick({ x: true, y: true }).parse(context.position))
+      } else {
+        const anchor = canvas.nodes.find(
+          (node) =>
+            isTerminalNode(node) &&
+            node.id === context.anchorId &&
+            node.sourceId === context.sourceId &&
+            node.windowId === context.windowId,
+        )
+        if (!anchor) {
           return false
         }
-        this.db
-          .prepare(
-            'INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)',
-          )
-          .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.createdAt)
-        this.db
-          .prepare('INSERT INTO note_files(note_id,asset_id) VALUES(?,?)')
-          .run(context.noteId, asset.id)
-      } else {
-        let x: number, y: number
-        if ('position' in context) {
-          ;({ x, y } = nodeLayoutSchema.pick({ x: true, y: true }).parse(context.position))
-        } else {
-          const anchor = canvas.nodes.find(
-            (node) =>
-              isTerminalNode(node) &&
-              node.id === context.anchorId &&
-              node.sourceId === context.sourceId &&
-              node.windowId === context.windowId,
-          )
-          if (!anchor) {
-            this.db.exec('ROLLBACK')
-            return false
-          }
-          x = Math.min(
-            1e7,
-            anchor.x + this.windowSize(context.sourceId, context.windowId).width + 24,
-          )
-          const occupied = canvas.nodes
-            .filter((node) => node.type === 'file' && Math.abs(node.x - x) < 1)
-            .reduce((bottom, node) => Math.max(bottom, node.y + node.height), anchor.y)
-          y = Math.min(1e7, occupied === anchor.y ? anchor.y : occupied + 16)
-        }
-        if (canvas.nodes.length >= 500) throw new Error('Canvas contains too many items')
-        this.db
-          .prepare(
-            'INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)',
-          )
-          .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.createdAt)
-        const node: FileNode = {
-          id: randomUUID(),
-          type: 'file',
-          assetId: asset.id,
-          x,
-          y,
-          width: 360,
-          height: 280,
-        }
-        canvas.nodes.push(node)
-        this.db
-          .prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
-          .run(JSON.stringify(canvas), canvasId)
+        x = Math.min(1e7, anchor.x + this.windowSize(context.sourceId, context.windowId).width + 24)
+        const occupied = canvas.nodes
+          .filter((node) => node.type === 'file' && Math.abs(node.x - x) < 1)
+          .reduce((bottom, node) => Math.max(bottom, node.y + node.height), anchor.y)
+        y = Math.min(1e7, occupied === anchor.y ? anchor.y : occupied + 16)
       }
-      if (context.origin)
-        this.db
-          .prepare("INSERT INTO documents(kind,id,body) VALUES('file-origin',?,?)")
-          .run(asset.id, JSON.stringify(context.origin))
-      this.db.exec('COMMIT')
-    } catch (error) {
-      this.db.exec('ROLLBACK')
-      throw error
+      if (canvas.nodes.length >= 500) throw new Error('Canvas contains too many items')
+      this.db
+        .prepare(
+          'INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)',
+        )
+        .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.createdAt)
+      const node: FileNode = {
+        id: randomUUID(),
+        type: 'file',
+        assetId: asset.id,
+        x,
+        y,
+        width: 360,
+        height: 280,
+      }
+      canvas.nodes.push(node)
+      this.db
+        .prepare("UPDATE documents SET body=? WHERE kind='canvas' AND id=?")
+        .run(JSON.stringify(canvas), canvasId)
     }
+    if (context.origin)
+      this.db
+        .prepare("INSERT INTO documents(kind,id,body) VALUES('file-origin',?,?)")
+        .run(asset.id, JSON.stringify(context.origin))
+    transaction.commit()
     this.changed()
     return true
   }
@@ -865,27 +829,19 @@ export class Store extends EventEmitter {
     noteId: string,
     assetIds: readonly string[],
   ): FileAsset[] | undefined {
-    this.db.exec('BEGIN IMMEDIATE')
-    let assets: FileAsset[]
+    using transaction = this.begin()
     let changed = false
-    try {
-      if (!this.hasNote(canvasId, noteId)) {
-        this.db.exec('ROLLBACK')
-        return
-      }
-      const existing = [...new Set(assetIds)].map((id) => this.fileAsset(id))
-      if (existing.some((asset) => !asset)) {
-        this.db.exec('ROLLBACK')
-        return
-      }
-      assets = existing as FileAsset[]
-      const link = this.db.prepare('INSERT OR IGNORE INTO note_files(note_id,asset_id) VALUES(?,?)')
-      for (const asset of assets) changed = link.run(noteId, asset.id).changes > 0 || changed
-      this.db.exec('COMMIT')
-    } catch (error) {
-      this.db.exec('ROLLBACK')
-      throw error
+    if (!this.hasNote(canvasId, noteId)) {
+      return
     }
+    const existing = [...new Set(assetIds)].map((id) => this.fileAsset(id))
+    if (existing.some((asset) => !asset)) {
+      return
+    }
+    const assets: FileAsset[] = existing as FileAsset[]
+    const link = this.db.prepare('INSERT OR IGNORE INTO note_files(note_id,asset_id) VALUES(?,?)')
+    for (const asset of assets) changed = link.run(noteId, asset.id).changes > 0 || changed
+    transaction.commit()
     if (changed) this.changed()
     return assets
   }
@@ -908,11 +864,7 @@ export class Store extends EventEmitter {
       return
     const id = `${source.id}/${windowId}`,
       at = (this.lastRead = Math.max(Date.now(), this.lastRead + 1))
-    this.db
-      .prepare(
-        "INSERT INTO documents(kind,id,body) VALUES('window-read',?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body",
-      )
-      .run(id, JSON.stringify({ id, at }))
+    this.upsert('window-read', id, { id, at })
     this.changed()
   }
   composer(target: ComposerTarget): Composer | undefined {
@@ -942,11 +894,7 @@ export class Store extends EventEmitter {
     return composer
   }
   private writeComposer(composer: Composer) {
-    this.db
-      .prepare(
-        "INSERT INTO documents(kind,id,body) VALUES('composer',?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body",
-      )
-      .run(composerKey(composer), JSON.stringify(composer))
+    this.upsert('composer', composerKey(composer), composer)
   }
   /** An empty draft without retained files has nothing left to own. */
   private releaseEmptyComposer(composer: Composer): boolean {
@@ -973,27 +921,21 @@ export class Store extends EventEmitter {
     return removed
   }
   updateComposer(target: ComposerTarget, content: string): ComposerView {
-    this.db.exec('BEGIN IMMEDIATE')
+    using transaction = this.begin()
     let composer: Composer
-    try {
-      if (!this.acceptsWindow(target)) throw new Error('Window not found')
-      const current = this.composer(target)
-      if (current?.content === content || (!current && !content)) {
-        this.db.exec('ROLLBACK')
-        return this.currentComposer(target)
-      }
-      composer = {
-        ...(current ?? { id: randomUUID(), ...target, version: 0 }),
-        content,
-        version: (current?.version ?? 0) + 1,
-      }
-      this.writeComposer(composer)
-      if (this.releaseEmptyComposer(composer)) composer = { ...composer, id: '' }
-      this.db.exec('COMMIT')
-    } catch (error) {
-      this.db.exec('ROLLBACK')
-      throw error
+    if (!this.acceptsWindow(target)) throw new Error('Window not found')
+    const current = this.composer(target)
+    if (current?.content === content || (!current && !content)) {
+      return this.currentComposer(target)
     }
+    composer = {
+      ...(current ?? { id: randomUUID(), ...target, version: 0 }),
+      content,
+      version: (current?.version ?? 0) + 1,
+    }
+    this.writeComposer(composer)
+    if (this.releaseEmptyComposer(composer)) composer = { ...composer, id: '' }
+    transaction.commit()
     this.changed()
     return this.composerView(composer)
   }
@@ -1001,24 +943,17 @@ export class Store extends EventEmitter {
     target: ComposerTarget,
     assetIds: readonly string[],
   ): FileAsset[] | undefined {
-    this.db.exec('BEGIN IMMEDIATE')
-    let assets: FileAsset[]
+    using transaction = this.begin()
     let changed = false
-    try {
-      const existing = [...new Set(assetIds)].map((id) => this.fileAsset(id))
-      if (!this.acceptsWindow(target) || existing.some((asset) => !asset)) {
-        this.db.exec('ROLLBACK')
-        return
-      }
-      assets = existing as FileAsset[]
-      const composer = this.ensureComposer(target)
-      const link = this.db.prepare('INSERT OR IGNORE INTO note_files(note_id,asset_id) VALUES(?,?)')
-      for (const asset of assets) changed = link.run(composer.id, asset.id).changes > 0 || changed
-      this.db.exec('COMMIT')
-    } catch (error) {
-      this.db.exec('ROLLBACK')
-      throw error
+    const existing = [...new Set(assetIds)].map((id) => this.fileAsset(id))
+    if (!this.acceptsWindow(target) || existing.some((asset) => !asset)) {
+      return
     }
+    const assets: FileAsset[] = existing as FileAsset[]
+    const composer = this.ensureComposer(target)
+    const link = this.db.prepare('INSERT OR IGNORE INTO note_files(note_id,asset_id) VALUES(?,?)')
+    for (const asset of assets) changed = link.run(composer.id, asset.id).changes > 0 || changed
+    transaction.commit()
     if (changed) this.changed()
     return assets
   }
@@ -1028,23 +963,17 @@ export class Store extends EventEmitter {
     version: number,
     assetIds: readonly string[],
   ): boolean {
-    this.db.exec('BEGIN IMMEDIATE')
-    try {
-      const current = this.composer(target)
-      if (!current || current.version !== version) {
-        this.db.exec('ROLLBACK')
-        return false
-      }
-      const composer = { ...current, content: '', version: version + 1 }
-      this.writeComposer(composer)
-      const unlink = this.db.prepare('DELETE FROM note_files WHERE note_id=? AND asset_id=?')
-      for (const id of assetIds) unlink.run(composer.id, id)
-      this.releaseEmptyComposer(composer)
-      this.db.exec('COMMIT')
-    } catch (error) {
-      this.db.exec('ROLLBACK')
-      throw error
+    using transaction = this.begin()
+    const current = this.composer(target)
+    if (!current || current.version !== version) {
+      return false
     }
+    const composer = { ...current, content: '', version: version + 1 }
+    this.writeComposer(composer)
+    const unlink = this.db.prepare('DELETE FROM note_files WHERE note_id=? AND asset_id=?')
+    for (const id of assetIds) unlink.run(composer.id, id)
+    this.releaseEmptyComposer(composer)
+    transaction.commit()
     this.changed()
     return true
   }
