@@ -150,6 +150,7 @@ class CoreWindowClient implements HerdrClientTransport {
   private surface?: PaneSurfaceFrame
   private shell?: ClientShellSnapshot
   private metadata?: WindowMetadata
+  private metadataSignature = ''
   private renderedMetadata?: WindowMetadata
   private renderedContent?: {
     surface: PaneSurfaceFrame
@@ -646,8 +647,13 @@ class CoreWindowClient implements HerdrClientTransport {
     if (!this.state) return
     const metadata = coreWindowMetadata(this.state, this.options.tabId, this.focused)
     const progress = windowProgress([...this.attached.values()].map((pane) => pane.progress))
-    this.metadata = metadata && progress ? { ...metadata, progress } : metadata
-    if (this.metadata) for (const listener of this.metadataListeners) listener(this.metadata)
+    const next = metadata && progress ? { ...metadata, progress } : metadata,
+      signature = next ? JSON.stringify(next) : ''
+    // Every Core event reaches every window; most leave this one as it was.
+    if (signature === this.metadataSignature) return
+    this.metadata = next
+    this.metadataSignature = signature
+    if (next) for (const listener of this.metadataListeners) listener(next)
   }
   /** Reports in one write update the metadata once. */
   private scheduleMetadata() {
@@ -1331,7 +1337,13 @@ class CoreWindowClient implements HerdrClientTransport {
     this.metadataListeners.add(listener)
     const metadata = this.metadata
     queueMicrotask(() => {
-      if (!this.closed && metadata && this.metadataListeners.has(listener)) listener(metadata)
+      if (
+        !this.closed &&
+        metadata &&
+        this.metadata === metadata &&
+        this.metadataListeners.has(listener)
+      )
+        listener(metadata)
     })
     return {
       dispose: () => {

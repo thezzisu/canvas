@@ -825,6 +825,40 @@ test('clearing a native core title emits an explicit empty title instead of miss
   }
 })
 
+test('a core window publishes its metadata only when it changed', async () => {
+  const f = fixture()
+  const client = await open(f)
+  try {
+    const titles: string[] = []
+    client.onMetadata((value) => titles.push(value.panes[0]!.terminalTitle!))
+    await f.event('title', { title: 'Task title' })
+    const published = titles.length
+    await f.event('title', { title: 'Task title' })
+    await f.event('keep', { keep: true })
+    assert.equal(titles.length, published, 'events that leave the window as it was tell nobody')
+    await f.event('title', { title: 'Next' })
+    assert.deepEqual(titles.slice(published), ['Next'])
+  } finally {
+    client.kill()
+  }
+})
+
+test('a new metadata subscriber never receives an older value after a newer one', async () => {
+  const f = fixture()
+  const client = await open(f)
+  try {
+    await f.event('title', { title: 'Old' })
+    const titles: string[] = []
+    // The update is queued before the subscription's own delivery of what is current.
+    const updating = f.event('title', { title: 'New' })
+    client.onMetadata((value) => titles.push(value.panes[0]!.terminalTitle!))
+    await updating
+    assert.deepEqual(titles, ['New'])
+  } finally {
+    client.kill()
+  }
+})
+
 test('rapid core resize retires a late pane attachment and can reveal it again', async () => {
   const f = fixture(true)
   const client = await open(f, 'LEFT\x1b[?9001l', 2)
