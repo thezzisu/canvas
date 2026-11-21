@@ -14,6 +14,7 @@ import {
   type ClientMessage,
   type ClientShellSnapshot,
   type FrameData,
+  type HostThemeUpdate,
   type PaneSurfaceFrame,
   type ServerMessage,
 } from './wire.ts'
@@ -25,6 +26,7 @@ import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import type { NativeNotification } from '../../shared/notification.ts'
 import type { PaneAction, PaneContext, PanePoint } from '../../shared/pane-context.ts'
 import { isTerminalHoverInput } from '../../shared/terminal-mouse.ts'
+import { terminalTheme } from '../../shared/terminal-theme.ts'
 
 export interface HerdrClientTransport {
   /**
@@ -226,6 +228,14 @@ class HerdrClient implements HerdrClientTransport {
             }),
           },
         })
+        // Programs asking for their colours are told the ones Canvas paints with.
+        for (const update of [
+          { Appearance: 'Dark' },
+          { DefaultColor: { kind: 'Foreground', color: terminalTheme.foreground } },
+          { DefaultColor: { kind: 'Background', color: terminalTheme.background } },
+          { PaletteColors: terminalTheme.ansi.map((color, index) => [index, color]) },
+        ] as HostThemeUpdate[])
+          this.send({ ClientShellHostTheme: update })
       } catch (error) {
         this.fail(error)
       }

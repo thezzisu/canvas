@@ -75,7 +75,7 @@
   --surface: color-mix(in oklab, var(--ui-bg-muted) 60%, var(--ui-bg-elevated));
   /* Covers inside a card: closed, loading, dropping, unavailable. */
   --scrim: color-mix(in oklab, var(--ui-bg) 80%, transparent);
-  /* The terminal theme's default background (terminal-create.ts) and the transition material
+  /* The terminal theme's default background (shared/terminal-theme.ts) and the transition material
      that covers a terminal without a wallpaper (CanvasStage.vue, wallpaper-material.ts); a test
      keeps the copies equal. */
   --terminal-bg: #111317;

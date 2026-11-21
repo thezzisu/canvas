@@ -1,5 +1,6 @@
 import type { CellData } from '../herdr/wire.ts'
 import { ghostty, type GhosttyModule, type Pointer } from './module.ts'
+import { terminalTheme } from '../../shared/terminal-theme.ts'
 
 /** The modifier bits of a key or mouse event, as libghostty-vt numbers them. */
 export const MODS = { shift: 1, ctrl: 2, alt: 4, super: 8 } as const
@@ -9,6 +10,45 @@ export interface GhosttyEvents {
   clipboard?(text: Uint8Array): void
   /** A program status report (OSC 7501) for the record `id`; the root record has no id. */
   status?(id: string, state: string): void
+  /** The program rang the bell (BEL). */
+  bell?(): void
+  /** The program reported its working directory (OSC 7), as herdr reads it. */
+  pwd?(path: string): void
+  /** The program asked for a desktop notification (OSC 9, 777 or 99). */
+  notification?(title: string, body: string): void
+  /** The program reported progress (OSC 9;4): a percentage, or null when it has none. */
+  progress?(state: ProgressState, value: number | null): void
+}
+export type ProgressState = 'remove' | 'set' | 'error' | 'indeterminate' | 'pause'
+const PROGRESS_STATES: readonly ProgressState[] = [
+  'remove',
+  'set',
+  'error',
+  'indeterminate',
+  'pause',
+]
+
+/**
+ * A working directory a program reported (OSC 7), read as herdr reads it: a `file://` URI on this
+ * host, percent-decoded, or a plain absolute path. Anything else is not a directory here.
+ */
+export function reportedCwd(value: string): string | undefined {
+  let path = value.trim()
+  if (path.startsWith('file://')) {
+    const rest = path.slice(7),
+      slash = rest.indexOf('/')
+    if (slash < 0) return
+    const host = rest.slice(0, slash)
+    if (host && host.toLowerCase() !== 'localhost') return
+    try {
+      path = decodeURIComponent(rest.slice(slash))
+    } catch {
+      return
+    }
+  } else path = path.replace(/^"+|"+$/g, '')
+  return path.startsWith('/') && path.length <= 4096 && !/[\x00-\x1f\x7f]/.test(path)
+    ? path
+    : undefined
 }
 /** One row of the viewport. A row that did not change keeps its cells from one read to the next. */
 export interface ScreenRow {
@@ -94,7 +134,17 @@ interface Kit {
   mouseEncoder: Pointer
   mouseEvent: Pointer
   codepoints: Pointer
-  callbacks: { status: number; clipboard: number }
+  /** Room for the render state's colours and for a 256-entry palette. */
+  colours: Pointer
+  palette: Pointer
+  callbacks: {
+    status: number
+    clipboard: number
+    bell: number
+    pwd: number
+    notification: number
+    progress: number
+  }
   terminals: Map<Pointer, GhosttyTerminal>
 }
 let shared: Kit | undefined
@@ -153,7 +203,29 @@ function kit(): Kit {
     mouseEncoder: g.handle((slot) => x.ghostty_mouse_encoder_new!(0, slot)),
     mouseEvent: g.handle((slot) => x.ghostty_mouse_event_new!(0, slot)),
     codepoints: g.alloc(MAX_CLUSTER * 4),
+    colours: g.alloc(g.size('GhosttyRenderStateColors')),
+    palette: g.alloc(256 * 3),
     callbacks: {
+      bell: g.callback(2, (terminal) => terminals.get(terminal)?.events.bell?.()),
+      pwd: g.callback(2, (terminal) => {
+        const owner = terminals.get(terminal)
+        if (!owner?.events.pwd) return
+        const path = reportedCwd(utf8(g.stringBytes(owner.get('PWD'))))
+        if (path) owner.events.pwd(path)
+      }),
+      notification: g.callback(3, (terminal, _userdata, at) => {
+        const text = (name: string) =>
+          utf8(g.stringBytes(at + g.offset('GhosttyTerminalDesktopNotification', name)))
+        terminals.get(terminal)?.events.notification?.(text('title'), text('body'))
+      }),
+      progress: g.callback(3, (terminal, _userdata, at) => {
+        const state = PROGRESS_STATES[g.view.getInt32(at, true)],
+          value = g.view.getInt8(at + g.offset('GhosttyTerminalProgressReport', 'progress'))
+        if (state)
+          terminals
+            .get(terminal)
+            ?.events.progress?.(state, value >= 0 && value <= 100 ? value : null)
+      }),
       status: g.callback(3, (terminal, _userdata, report) => {
         const state = STATUS_STATES[g.view.getUint32(report, true)]
         if (state)
@@ -204,6 +276,9 @@ function kit(): Kit {
   return (shared = created)
 }
 
+const decoder = new TextDecoder()
+const utf8 = (bytes: Uint8Array) => decoder.decode(bytes)
+
 /** `text/plain`, with or without parameters such as a charset, as herdr reads a MIME type. */
 const isPlainText = (mime: string) => mime.split(';')[0]!.trim().toLowerCase() === 'text/plain'
 
@@ -224,6 +299,16 @@ export class GhosttyTerminal {
   private screen: ScreenRow[] = []
   /** Styles decoded while reading one row, by the row's style id. */
   private readonly styles = new Map<number, { fg: number; bg: number; modifier: number }>()
+  /** The palette before any program changed it, as r, g, b bytes. */
+  private readonly palette: Uint8Array
+  /**
+   * Colours a program changed (OSC 4, 10, 11 and their resets), painted into the cells as RGB the
+   * way herdr sends them; the browser's own theme stays the default for everything else.
+   */
+  private tint: { fg?: number; bg?: number; palette: Map<number, number>; key: string } = {
+    palette: new Map(),
+    key: '',
+  }
 
   constructor(
     cols: number,
@@ -246,9 +331,26 @@ export class GhosttyTerminal {
     this.set('MODE_DEFAULT', g.out)
     g.view.setUint8(g.out, 1)
     this.set('DEFAULT_CURSOR_BLINK', g.out)
+    // Canvas's own colours are the defaults a program changes and resets.
+    for (const [option, colour] of [
+      ['COLOR_FOREGROUND', terminalTheme.foreground],
+      ['COLOR_BACKGROUND', terminalTheme.background],
+      ['COLOR_CURSOR', terminalTheme.cursor],
+    ] as const) {
+      g.bytes.set([(colour >> 16) & 255, (colour >> 8) & 255, colour & 255], g.out)
+      this.set(option, g.out)
+    }
+    this.palette = g.bytes.slice(
+      this.get('COLOR_PALETTE_DEFAULT', this.k.palette),
+      this.k.palette + 768,
+    )
     // No reply callback is installed: the core answers the program's queries itself.
     this.set('PROGRAM_STATUS', callbacks.status)
     this.set('CLIPBOARD_WRITE', callbacks.clipboard)
+    this.set('BELL', callbacks.bell)
+    this.set('PWD_CHANGED', callbacks.pwd)
+    this.set('DESKTOP_NOTIFICATION', callbacks.notification)
+    this.set('PROGRESS_REPORT', callbacks.progress)
   }
   /** Returns the terminal's memory to the module. Nothing else may be called afterwards. */
   free() {
@@ -271,7 +373,14 @@ export class GhosttyTerminal {
     this.set(option, g.out)
   }
   /** Reads one value into scratch and returns where it is. */
-  private get(data: string, out = this.k.g.out): Pointer {
+  /** The pointer shape the program asked for (OSC 22), as a GhosttyMouseShape name in lower case. */
+  get pointerShape(): string {
+    const { g } = this.k,
+      shape = g.view.getUint32(this.get('MOUSE_SHAPE'), true)
+    return (g.name('GhosttyMouseShape', shape) ?? 'DEFAULT').toLowerCase()
+  }
+  /** @internal Reads terminal data into the shared scratch buffer. */
+  get(data: string, out = this.k.g.out): Pointer {
     const { g } = this.k
     g.check(g.x.ghostty_terminal_get!(this.handle, g.value('GhosttyTerminalData', data), out))
     return out
@@ -349,6 +458,10 @@ export class GhosttyTerminal {
     g.check(x.ghostty_render_state_update!(this.renderState, this.handle))
     const DATA = (name: string) => g.value('GhosttyRenderStateData', name),
       ROW = (name: string) => g.value('GhosttyRenderStateRowData', name)
+    const tint = this.readTint()
+    // A colour change repaints rows whose cells did not change.
+    if (tint.key !== this.tint.key) this.screen = []
+    this.tint = tint
     const rows = this.rows
     if (this.screen.length !== rows) {
       // Every row is read again: the cache no longer matches the viewport.
@@ -378,6 +491,53 @@ export class GhosttyTerminal {
     g.check(x.ghostty_render_state_clean!(this.renderState))
     return this.screen
   }
+  private readTint(): GhosttyTerminal['tint'] {
+    const { g, colours } = this.k,
+      at = g.sized(colours, 'GhosttyRenderStateColors'),
+      view = g.view
+    g.check(
+      g.x.ghostty_render_state_get!(
+        this.renderState,
+        g.value('GhosttyRenderStateData', 'COLORS'),
+        at,
+      ),
+    )
+    const rgb = (p: Pointer) =>
+      (view.getUint8(p) << 16) | (view.getUint8(p + 1) << 8) | view.getUint8(p + 2)
+    const fg = rgb(at + g.offset('GhosttyRenderStateColors', 'foreground')),
+      bg = rgb(at + g.offset('GhosttyRenderStateColors', 'background')),
+      base = at + g.offset('GhosttyRenderStateColors', 'palette'),
+      palette = new Map<number, number>()
+    for (let index = 0; index < 256; index++) {
+      const p = base + index * 3,
+        d = index * 3
+      if (
+        view.getUint8(p) !== this.palette[d] ||
+        view.getUint8(p + 1) !== this.palette[d + 1] ||
+        view.getUint8(p + 2) !== this.palette[d + 2]
+      )
+        palette.set(index, rgb(p))
+    }
+    const tint = {
+      ...(fg !== terminalTheme.foreground && { fg }),
+      ...(bg !== terminalTheme.background && { bg }),
+      palette,
+    }
+    return { ...tint, key: `${tint.fg ?? ''}/${tint.bg ?? ''}/${[...palette].join(',')}` }
+  }
+  /** A cell colour with the program's changes applied: herdr's 0, palette or RGB code. */
+  private paint(code: number, background: boolean): number {
+    const tint = this.tint
+    if (code === 0) {
+      const colour = background ? tint.bg : tint.fg
+      return colour === undefined ? 0 : 0x2000000 | colour
+    }
+    if ((code & 0x3000000) === 0x1000000) {
+      const colour = tint.palette.get(code & 255)
+      return colour === undefined ? code : 0x2000000 | colour
+    }
+    return code
+  }
   private wrapped(row: bigint): boolean {
     const { g } = this.k
     g.check(
@@ -398,12 +558,16 @@ export class GhosttyTerminal {
     let links: Map<number, string> | undefined
     let view = g.view
     this.styles.clear()
+    const blank =
+      this.tint.fg === undefined && this.tint.bg === undefined
+        ? BLANK
+        : { ...BLANK, fg: this.paint(0, false), bg: this.paint(0, true) }
     for (let column = 0; column < count; column++) {
       const lo = view.getUint32(base + column * 8, true),
         hi = view.getUint32(base + column * 8 + 4, true)
       // A cell nothing was written to, in the default style.
       if (lo === 0 && hi === 0) {
-        cells.push(BLANK)
+        cells.push(blank)
         continue
       }
       const tag = field(lo, hi, layout.cell.tag),
@@ -448,8 +612,8 @@ export class GhosttyTerminal {
       }
       cells.push({
         symbol,
-        fg: style?.fg ?? 0,
-        bg,
+        fg: this.paint(style?.fg ?? 0, false),
+        bg: this.paint(bg, true),
         modifier: style?.modifier ?? 0,
         skip: wide === layout.wide.tail,
         hyperlink: null,

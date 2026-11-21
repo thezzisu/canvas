@@ -1,5 +1,6 @@
 import { logWindow } from '../../utils/diagnostics/log'
 import { CellMirror } from '../../../../shared/cell-wire'
+import { terminalTheme } from '../../../../shared/terminal-theme'
 import { isCurrentApi, uuid, type ApiContext } from '../../api/api'
 import { t } from '../../plugins/i18n'
 import { TerminalClipboard } from '../../utils/clipboard'
@@ -30,18 +31,7 @@ import { connect, connectionFailed, painted, refreshUploads } from './terminal-s
 import { bindTerminalMouse } from './terminal-mouse'
 import { bindTerminalTouchpad } from './terminal-touchpad'
 
-const theme: CellTheme = {
-  foreground: 0xd5d7dd,
-  background: 0x111317,
-  cursor: 0xe8b183,
-  cursorAccent: 0x000000,
-  selectionBackground: 0x415168,
-  // The normal eight and bright black and white are Canvas's; the rest are xterm.js's defaults.
-  ansi: [
-    0x20242b, 0xf08080, 0x9ecb8f, 0xe5c285, 0x8daed7, 0xc7a0df, 0x8fc5c4, 0xd5d7dd, 0x66707f,
-    0xef2929, 0x8ae234, 0xfce94f, 0x729fcf, 0xad7fa8, 0x34e2e2, 0xf6f6f7,
-  ],
-}
+const theme: CellTheme = terminalTheme
 
 /** Shift selects in this browser instead of reaching the program, except on a Mac. */
 const selects = (event: MouseEvent) => event.shiftKey && !/Mac/.test(navigator.platform)

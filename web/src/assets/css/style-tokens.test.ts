@@ -149,7 +149,7 @@ test('colours that cannot read a token are kept equal to it', () => {
   const token = (name: string) => read(tokens).match(new RegExp(`--${name}: (#[0-9a-f]{6});`))?.[1]
   assert.equal(
     token('terminal-bg'),
-    `#${read('composables/terminal/terminal-create.ts').match(/\bbackground: 0x([0-9a-f]{6})/)?.[1]}`,
+    `#${readFileSync(path.join(project, 'shared/terminal-theme.ts'), 'utf8').match(/\bbackground: 0x([0-9a-f]{6})/)?.[1]}`,
   )
   assert.match(read('utils/workspace/wallpaper-material.ts'), new RegExp(`fillStyle = '${token('material')}'`))
   // The app chrome is the muted surface, neutral 900; the browser and installed app paint it too.

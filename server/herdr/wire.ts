@@ -181,8 +181,14 @@ export type ClientMessage =
   | { ClientShellPaneInput: { pane_id: string; events: ClientPaneInputEvent[] } }
   | { ClientShellPopupInput: { terminal_id: string; events: ClientPaneInputEvent[] } }
   | { ClientShellEndpointRequest: { boot_id: string; request: string } }
+  | { ClientShellHostTheme: HostThemeUpdate }
   | { ClientShellFocus: { focused: boolean } }
   | { ClientShellMouseCapture: { enabled: boolean } }
+/** What the client's own terminal looks like; herdr answers a program's colour queries from it. */
+export type HostThemeUpdate =
+  | { DefaultColor: { kind: 'Foreground' | 'Background'; color: number } }
+  | { PaletteColors: [index: number, color: number][] }
+  | { Appearance: 'Dark' | 'Light' }
 export type ServerMessage =
   | { type: 'control'; kind: string; data: string }
   | { type: 'surface'; surface: PaneSurfaceFrame }
@@ -406,7 +412,24 @@ export function encodeClientMessage(message: ClientMessage): Buffer {
       .uint(15)
       .string(message.ClientShellEndpointRequest.boot_id)
       .string(message.ClientShellEndpointRequest.request)
-  else if ('ClientShellFocus' in message) writer.uint(18).bool(message.ClientShellFocus.focused)
+  else if ('ClientShellHostTheme' in message) {
+    const update = message.ClientShellHostTheme,
+      rgb = (color: number) =>
+        writer
+          .byte((color >> 16) & 255)
+          .byte((color >> 8) & 255)
+          .byte(color & 255)
+    writer.uint(17)
+    if ('DefaultColor' in update) {
+      writer.uint(0).uint(update.DefaultColor.kind === 'Foreground' ? 0 : 1)
+      rgb(update.DefaultColor.color)
+    } else if ('PaletteColors' in update)
+      writer.uint(1).list(update.PaletteColors, ([index, color]) => {
+        writer.byte(index)
+        rgb(color)
+      })
+    else writer.uint(2).uint(update.Appearance === 'Dark' ? 0 : 1)
+  } else if ('ClientShellFocus' in message) writer.uint(18).bool(message.ClientShellFocus.focused)
   else writer.uint(19).bool(message.ClientShellMouseCapture.enabled)
   const payload = writer.finish()
   if (payload.length > 2 * 1024 * 1024) throw new Error('Herdr input frame is too large')

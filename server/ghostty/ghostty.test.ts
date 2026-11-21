@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { cellWidth, ghostty } from './module.ts'
-import { GhosttyTerminal, type GhosttyEvents, type ScreenRow } from './terminal.ts'
+import { GhosttyTerminal, reportedCwd, type GhosttyEvents, type ScreenRow } from './terminal.ts'
 
 const text = (row: ScreenRow | undefined) =>
   row?.cells.map((cell) => (cell.skip ? '' : cell.symbol)).join('')
@@ -186,6 +186,52 @@ test('only standard clipboard writes within herdr limits are taken, as herdr tak
     seen.map((text) => (text.length > 64 ? `${text[0]}×${text.length}` : text)),
     ['standard', `x×${192 * 1024}`],
   )
+})
+
+test('colours a program changes are painted as RGB until it resets them, as herdr paints them', () => {
+  using t = terminal(4, 1)
+  const cell = () => t.read()[0]!.cells[0]!
+  t.write('\x1b[31mA')
+  assert.deepEqual([cell().fg, cell().bg], [0x1000001, 0], 'theme colours stay the browser’s')
+  // OSC 11 sets the default background; OSC 4 changes palette entry 1.
+  t.write('\x1b]11;rgb:10/20/30\x1b\\\x1b]4;1;rgb:aa/bb/cc\x1b\\')
+  assert.deepEqual([cell().fg, cell().bg], [0x2aabbcc, 0x2102030])
+  assert.equal(t.read()[0]!.cells[3]!.bg, 0x2102030, 'cells nothing was written to take it too')
+  t.write('\x1b]111\x1b\\\x1b]104\x1b\\')
+  assert.deepEqual([cell().fg, cell().bg], [0x1000001, 0], 'a reset returns to the browser theme')
+})
+
+test('bell, working directory, notifications, progress and pointer shape are observed', () => {
+  const seen: unknown[] = []
+  using t = terminal(20, 2, {
+    bell: () => seen.push('bell'),
+    pwd: (path) => seen.push(['pwd', path]),
+    notification: (title, body) => seen.push(['notify', title, body]),
+    progress: (state, value) => seen.push(['progress', state, value]),
+  })
+  t.write('\x07')
+  t.write('\x1b]7;file://localhost/srv/a%20b\x07\x1b]7;file://elsewhere/srv\x07')
+  t.write('\x1b]9;Build finished\x07\x1b]777;notify;Tests;3 failed\x07')
+  t.write('\x1b]9;4;1;40\x07\x1b]9;4;3\x07\x1b]9;4;0\x07')
+  t.write('\x1b]22;pointer\x07')
+  assert.deepEqual(seen, [
+    'bell',
+    ['pwd', '/srv/a b'],
+    ['notify', '', 'Build finished'],
+    ['notify', 'Tests', '3 failed'],
+    ['progress', 'set', 40],
+    ['progress', 'indeterminate', null],
+    ['progress', 'remove', null],
+  ])
+  assert.equal(t.pointerShape, 'pointer')
+})
+
+test('reported working directories are read as herdr reads them', () => {
+  assert.equal(reportedCwd('file:///tmp/x'), '/tmp/x')
+  assert.equal(reportedCwd('file://LOCALHOST/tmp/%E4%B8%AD'), '/tmp/中')
+  assert.equal(reportedCwd('"/srv/app"'), '/srv/app')
+  for (const value of ['file://host/tmp', 'relative/path', 'file:///bad%zz', '/a\nb', 'file://x'])
+    assert.equal(reportedCwd(value), undefined, value)
 })
 
 test('freed terminals return their memory to the module', () => {

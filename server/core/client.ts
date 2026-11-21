@@ -31,6 +31,7 @@ import {
   type CoreTerminal,
 } from './layout.ts'
 import { CoreRpc, CoreRpcError, type CoreNotification, type CoreStream } from './rpc.ts'
+import { hexColour, terminalTheme } from '../../shared/terminal-theme.ts'
 
 type Subscription = { dispose(): void }
 /** Lines of history a pane keeps, and asks the core for when it attaches. */
@@ -125,6 +126,8 @@ interface CorePane {
   parsedTurn: number
   parsedState?: string
   rootReport: boolean
+  /** The working directory the program last reported (OSC 7). */
+  reportedCwd?: string
 }
 
 export interface CoreClientOptions {
@@ -351,7 +354,13 @@ class CoreWindowClient implements HerdrClientTransport {
             rows: pane.wanted.rows,
             history: HISTORY,
             resumed: true,
-            display: { cell: [CORE_CELL.width, CORE_CELL.height] },
+            // Programs asking for their colours are told the ones Canvas paints with.
+            display: {
+              fg: hexColour(terminalTheme.foreground),
+              bg: hexColour(terminalTheme.background),
+              cursor: hexColour(terminalTheme.cursor),
+              cell: [CORE_CELL.width, CORE_CELL.height],
+            },
           })
           if (pane.disposed || this.closed) {
             attached.stream.close()
@@ -443,6 +452,9 @@ class CoreWindowClient implements HerdrClientTransport {
     // No reply reaches the program from here: the core answers its queries itself.
     const engine = new GhosttyTerminal(Math.max(1, cols), Math.max(1, rows), HISTORY, {
       clipboard: (text) => this.clipboard(Buffer.from(text).toString('base64')),
+      pwd: (path) => {
+        pane.reportedCwd = path
+      },
       status: (record, state) => {
         if (record) return
         // The attach reply seeds its turn. Its first report is a replay of that
@@ -817,9 +829,12 @@ class CoreWindowClient implements HerdrClientTransport {
           foreground_cwd: this.state!.terminals.find(
             (terminal) => terminal.address === this.attached.get(pane.pane_id)?.address,
           )?.foreground?.cwd,
-          cwd: this.state!.terminals.find(
-            (terminal) => terminal.address === this.attached.get(pane.pane_id)?.address,
-          )?.cwd,
+          // As herdr: the program's reported directory before the one it started in.
+          cwd:
+            this.attached.get(pane.pane_id)?.reportedCwd ??
+            this.state!.terminals.find(
+              (terminal) => terminal.address === this.attached.get(pane.pane_id)?.address,
+            )?.cwd,
         })),
       }
       const surface: PaneSurfaceFrame = {

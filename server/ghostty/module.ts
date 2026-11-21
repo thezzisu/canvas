@@ -101,6 +101,11 @@ export class GhosttyModule {
     return value
   }
 
+  /** The name of an enum value; undefined for a value the manifest does not name. */
+  name(type: string, value: number) {
+    return Object.entries(this.type(type).values).find(([, number]) => number === value)?.[0]
+  }
+
   /** Throws unless the result is success or the one result the caller handles. */
   check(result: number, allowed = 0) {
     if (result !== 0 && result !== allowed) {

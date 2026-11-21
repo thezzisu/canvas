@@ -24,6 +24,21 @@ test('herdr bincode standard encoding matches frozen tags, variable integers and
     encodeClientMessage({ ClientShellFocus: { focused: true } }),
     Buffer.from('020000001201', 'hex'),
   )
+  // herdr's own round-trip value, PaletteColors [(4, rgb 10 20 30)], in bincode's standard layout.
+  assert.deepEqual(
+    encodeClientMessage({ ClientShellHostTheme: { PaletteColors: [[4, 0x0a141e]] } }),
+    Buffer.from('0700000011010104' + '0a141e', 'hex'),
+  )
+  assert.deepEqual(
+    encodeClientMessage({
+      ClientShellHostTheme: { DefaultColor: { kind: 'Background', color: 0x111317 } },
+    }),
+    Buffer.from('060000001100011113' + '17', 'hex'),
+  )
+  assert.deepEqual(
+    encodeClientMessage({ ClientShellHostTheme: { Appearance: 'Dark' } }),
+    Buffer.from('03000000110200', 'hex'),
+  )
   const frame = encodeClientMessage({
     ClientShellPaneInput: {
       pane_id: 'p',
