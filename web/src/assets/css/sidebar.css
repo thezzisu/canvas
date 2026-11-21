@@ -127,6 +127,11 @@
   text-box: trim-both cap alphabetic;
   padding-block: 0.3em;
 }
+/* Chromium puts a baseline on a whole pixel, so the smaller count, centred on its own, landed a
+   pixel above the icon's centre. The same box with its padding shifted down by 0.05em does not. */
+.sidebar .canvas-nav-name > .canvas-nav-count {
+  padding-block: 0.35em 0.25em;
+}
 .canvas-nav-status .program-dot {
   width: 6px;
   height: 6px;
