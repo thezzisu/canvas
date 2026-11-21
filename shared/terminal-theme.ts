@@ -16,4 +16,7 @@ export const terminalTheme = Object.freeze({
 })
 
 /** `#rrggbb` for an 0xRRGGBB colour. */
-export const hexColour = (colour: number) => `#${colour.toString(16).padStart(6, '0')}`
+export const cssColour = (colour: number) => `#${colour.toString(16).padStart(6, '0')}`
+/** The red, green and blue bytes of an 0xRRGGBB colour. */
+export const rgbBytes = (colour: number) =>
+  [(colour >> 16) & 255, (colour >> 8) & 255, colour & 255] as const

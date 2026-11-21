@@ -1627,32 +1627,31 @@ test('Core typing and paste repaint the bottom immediately without waiting for p
   }
 })
 
-test('a pane without agent status rings once per write and notifies; an agent pane keeps to its state', async () => {
+test('a pane rings and notifies through its window, with the text a program asked to show', async () => {
   const f = fixture()
-  ;(f.terminal as { status: unknown }).status = null
   const client = await open(f)
-  const bells: number[] = [],
+  const bells: (string | undefined)[] = [],
     notices: NativeNotification[] = []
-  client.onBell(() => bells.push(1))
-  client.onProgramNotification!((notice) => notices.push(notice))
+  client.onBell((paneId) => bells.push(paneId))
+  client.onNotification((notice) => notices.push(notice))
   try {
     f.stream.receive({
       kind: 'data',
-      data: Buffer.from('\x07\x07\x1b]777;notify;Build;done\u202e\tok\x07'),
+      data: Buffer.from('\x07\x1b]777;notify;Build;done\u202e\tok\x07'),
     })
     await tick()
     await tick()
-    assert.equal(bells.length, 1, 'bells written together ring once')
+    assert.deepEqual(bells, ['pane'])
     assert.deepEqual(
-      notices.map((notice) => [notice.kind, notice.title, notice.body, notice.paneId]),
-      [['custom', 'Tab', 'Build — done ok', 'pane']],
+      notices.map((notice) => [
+        notice.kind,
+        notice.origin,
+        notice.title,
+        notice.body,
+        notice.paneId,
+      ]),
+      [['custom', 'program', 'Tab', 'Build — done ok', 'pane']],
     )
-    f.terminal.status = { state: 'working' }
-    await f.event('status', { status: { state: 'working' }, records: {}, reported: true })
-    f.stream.receive({ kind: 'data', data: Buffer.from('\x07\x1b]9;again\x07') })
-    await tick()
-    await tick()
-    assert.deepEqual([bells.length, notices.length], [1, 1], 'an agent says it through its state')
   } finally {
     client.kill()
   }
@@ -1673,6 +1672,14 @@ test('progress reports reach the window metadata and pointer requests reach the 
     assert.deepEqual(
       mouse.map((area) => area.pointer),
       ['pointer'],
+    )
+    f.stream.receive({ kind: 'data', data: Buffer.from('\x1b]22;default\x07z') })
+    await tick()
+    await tick()
+    assert.deepEqual(
+      mouse.map((area) => area.pointer),
+      ['default'],
+      'the arrow a program asks for is not the terminal’s own text pointer',
     )
     f.stream.receive({ kind: 'data', data: Buffer.from('\x1b]9;4;0\x07\x1b]22;\x07y') })
     await tick()

@@ -1695,7 +1695,8 @@ function fakeWindow(cols = 8, rows = 2) {
   const screens = new Set<(screen: FrameData, mouse: readonly MouseArea[]) => void>(),
     frames = new Set<Listener<WindowMetadata>>(),
     metadatas = new Set<Listener<WindowMetadata>>(),
-    clipboards = new Set<Listener<string>>()
+    clipboards = new Set<Listener<string>>(),
+    bells = new Set<Listener<string | undefined>>()
   const on =
     <T>(listeners: Set<T>) =>
     (listener: T) => {
@@ -1712,7 +1713,7 @@ function fakeWindow(cols = 8, rows = 2) {
     onSnapshot: none,
     onMetadata: on(metadatas),
     onNotification: none,
-    onBell: none,
+    onBell: on(bells),
     onExit: none,
     completionSnapshot: () => undefined,
     completionFence: async () => undefined,
@@ -1771,6 +1772,9 @@ function fakeWindow(cols = 8, rows = 2) {
     },
     copy: (data: string) => {
       for (const listener of clipboards) listener(data)
+    },
+    ring: (paneId?: string) => {
+      for (const listener of bells) listener(paneId)
     },
     describe: (terminalTitle: string) => {
       const value: WindowMetadata = {
@@ -2013,5 +2017,36 @@ test('a new size drops the old grid and every browser waits for a frame of the n
     assert(!kinds(viewer).some((kind) => kind === 'resize' || kind === 'reset'))
   }
   assert.deepEqual(kinds(late).slice(-2), ['FRAME', 'presentation'])
+  await f.terminal.close()
+})
+
+test('a bell rings once, only in the browser at the keyboard, and not where an agent reports its state', async () => {
+  const f = fakeWindow(),
+    owner = new Client(),
+    peer = new Client()
+  f.show('x')
+  f.terminal.join(owner.socket)
+  f.terminal.join(peer.socket)
+  owner.command({ type: 'focus' })
+  await tick()
+  let mark = [owner.received.length, peer.received.length]
+  f.ring('pane')
+  f.ring('pane')
+  f.ring()
+  await tick()
+  assert.deepEqual(kinds(owner, mark[0]), ['bell'], 'bells written together ring once')
+  assert.deepEqual(kinds(peer, mark[1]), [], 'only the browser at the keyboard rings')
+  // The pane now reports its state, as an agent does.
+  f.describe('agent')
+  await tick()
+  mark = [owner.received.length]
+  f.ring('pane')
+  f.ring()
+  await tick()
+  assert.deepEqual(
+    kinds(owner, mark[0]).filter((kind) => kind === 'bell'),
+    [],
+    'an agent pane, or a bell herdr names no pane for in a window with one, stays quiet',
+  )
   await f.terminal.close()
 })

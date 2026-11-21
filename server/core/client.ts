@@ -32,7 +32,7 @@ import {
   type CoreTerminal,
 } from './layout.ts'
 import { CoreRpc, CoreRpcError, type CoreNotification, type CoreStream } from './rpc.ts'
-import { hexColour, terminalTheme } from '../../shared/terminal-theme.ts'
+import { cssColour, terminalTheme } from '../../shared/terminal-theme.ts'
 
 type Subscription = { dispose(): void }
 /** Lines of history a pane keeps, and asks the core for when it attaches. */
@@ -183,11 +183,8 @@ class CoreWindowClient implements HerdrClientTransport {
   private readonly frameListeners = new Set<(metadata: WindowMetadata) => void>()
   private readonly snapshotListeners = new Set<() => void>()
   private readonly notificationListeners = new Set<(notification: NativeNotification) => void>()
-  private readonly programNotificationListeners = new Set<
-    (notification: NativeNotification) => void
-  >()
-  private readonly bellListeners = new Set<() => void>()
-  private bellQueued = false
+  private readonly bellListeners = new Set<(paneId: string) => void>()
+  private metadataScheduled = false
   private readonly exitListeners = new Set<(exit: HerdrClientExit) => void>()
   private readonly subscriptions: Subscription[] = []
   private subscription?: { close(): void }
@@ -364,9 +361,9 @@ class CoreWindowClient implements HerdrClientTransport {
             resumed: true,
             // Programs asking for their colours are told the ones Canvas paints with.
             display: {
-              fg: hexColour(terminalTheme.foreground),
-              bg: hexColour(terminalTheme.background),
-              cursor: hexColour(terminalTheme.cursor),
+              fg: cssColour(terminalTheme.foreground),
+              bg: cssColour(terminalTheme.background),
+              cursor: cssColour(terminalTheme.cursor),
               cell: [CORE_CELL.width, CORE_CELL.height],
             },
           })
@@ -463,20 +460,15 @@ class CoreWindowClient implements HerdrClientTransport {
       pwd: (path) => {
         pane.reportedCwd = path
       },
-      // An agent reporting its state says when it needs you; its bell and notifications would
-      // only say it again.
       bell: () => {
-        if (!this.reportsState(pane)) this.ringBell()
+        if (!this.closed) for (const listener of this.bellListeners) listener(pane.id)
       },
-      notification: (title, body) => {
-        if (!this.reportsState(pane)) this.programNotification(pane, title, body)
-      },
-      progress: (state, value) => {
-        pane.progress =
-          state === 'remove'
-            ? undefined
-            : { state: state === 'set' ? 'normal' : state === 'pause' ? 'paused' : state, value }
-        this.updateMetadata()
+      notification: (title, body) => this.programNotification(pane, title, body),
+      progress: (progress) => {
+        if (progress?.state === pane.progress?.state && progress?.value === pane.progress?.value)
+          return
+        pane.progress = progress
+        this.scheduleMetadata()
       },
       status: (record, state) => {
         if (record) return
@@ -657,18 +649,13 @@ class CoreWindowClient implements HerdrClientTransport {
     this.metadata = metadata && progress ? { ...metadata, progress } : metadata
     if (this.metadata) for (const listener of this.metadataListeners) listener(this.metadata)
   }
-  /** Whether the pane's program reports its state (OSC 7501), as agents do. */
-  private reportsState(pane: CorePane) {
-    return !!this.state?.terminals.find((terminal) => terminal.address === pane.address)?.status
-      ?.state
-  }
-  /** Bells written together ring once. */
-  private ringBell() {
-    if (this.bellQueued || this.closed) return
-    this.bellQueued = true
+  /** Reports in one write update the metadata once. */
+  private scheduleMetadata() {
+    if (this.metadataScheduled) return
+    this.metadataScheduled = true
     queueMicrotask(() => {
-      this.bellQueued = false
-      if (!this.closed) for (const listener of this.bellListeners) listener()
+      this.metadataScheduled = false
+      if (!this.closed) this.updateMetadata()
     })
   }
   private programNotification(pane: CorePane, title: string, body: string) {
@@ -677,13 +664,14 @@ class CoreWindowClient implements HerdrClientTransport {
     if (!text) return
     const notification: NativeNotification = {
       kind: 'custom',
+      origin: 'program',
       title: (this.metadata?.name || pane.address).slice(0, 120),
       body: text,
       spaceId: this.options.spaceId,
       windowId: this.options.tabId,
       paneId: pane.id,
     }
-    for (const listener of this.programNotificationListeners) listener(notification)
+    for (const listener of this.notificationListeners) listener(notification)
   }
 
   private render() {
@@ -808,7 +796,6 @@ class CoreWindowClient implements HerdrClientTransport {
           scroll,
           focused,
           mouse_reporting: engine.mouseReporting,
-          pointer_shape: engine.pointerShape,
           sgr_pixel_mouse: engine.mode(1016),
           alternate_screen_active: alternate,
           pixel_width: inner.width * CORE_CELL.width,
@@ -880,15 +867,12 @@ class CoreWindowClient implements HerdrClientTransport {
           focused: pane.focused,
           right_click_passthrough: false,
           label: this.metadata?.panes.find((item) => item.id === pane.pane_id)?.name || '',
-          foreground_cwd: this.state!.terminals.find(
-            (terminal) => terminal.address === this.attached.get(pane.pane_id)?.address,
-          )?.foreground?.cwd,
-          // As herdr: the program's reported directory before the one it started in.
-          cwd:
-            this.attached.get(pane.pane_id)?.reportedCwd ??
+          ...cwds(
+            this.attached.get(pane.pane_id),
             this.state!.terminals.find(
               (terminal) => terminal.address === this.attached.get(pane.pane_id)?.address,
-            )?.cwd,
+            ),
+          ),
         })),
       }
       const surface: PaneSurfaceFrame = {
@@ -945,7 +929,10 @@ class CoreWindowClient implements HerdrClientTransport {
         display = { ...surface, frame: { ...frame, cells } }
       }
       const screen = (this.screen = display.frame),
-        mouse = (this.mouse = mouseAreas(surface)),
+        mouse = (this.mouse = mouseAreas(
+          surface,
+          new Map([...this.attached].map(([id, pane]) => [id, pane.engine.pointer])),
+        )),
         painted = (this.painted = this.renderedMetadata)
       for (const listener of this.screenListeners) listener(screen, mouse)
       if (painted) for (const listener of this.frameListeners) listener(painted)
@@ -1385,19 +1372,11 @@ class CoreWindowClient implements HerdrClientTransport {
       },
     }
   }
-  onBell(listener: () => void) {
+  onBell(listener: (paneId: string) => void) {
     this.bellListeners.add(listener)
     return {
       dispose: () => {
         this.bellListeners.delete(listener)
-      },
-    }
-  }
-  onProgramNotification(listener: (notification: NativeNotification) => void) {
-    this.programNotificationListeners.add(listener)
-    return {
-      dispose: () => {
-        this.programNotificationListeners.delete(listener)
       },
     }
   }
@@ -1446,3 +1425,12 @@ export function windowProgress(
       : best
   }, undefined)
 }
+
+/** As herdr: the foreground program's directory, then the one it reported, then where it started. */
+const cwds = (
+  pane: CorePane | undefined,
+  terminal: { foreground?: { cwd?: string } | null; cwd?: string } | undefined,
+) => ({
+  foreground_cwd: terminal?.foreground?.cwd,
+  cwd: pane?.reportedCwd ?? terminal?.cwd,
+})

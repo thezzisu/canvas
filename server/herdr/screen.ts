@@ -6,7 +6,7 @@ import type {
   SurfaceRect,
 } from './wire.ts'
 import { cellWidth } from '../ghostty/module.ts'
-import { isPointerShape, type MouseArea } from '../../shared/terminal-mouse.ts'
+import type { MouseArea, PointerShape } from '../../shared/terminal-mouse.ts'
 export { cellWidth }
 
 export interface ScreenSelection {
@@ -115,17 +115,15 @@ export function popupInnerRect(surface: PaneSurfaceFrame): SurfaceRect | undefin
 }
 
 /** Where the surface's programs take the mouse: the panes that report it, then any popup over them. */
-export function mouseAreas(surface: PaneSurfaceFrame): MouseArea[] {
+/** Where the window's programs take the mouse or ask for a pointer (OSC 22, core panes only). */
+export function mouseAreas(
+  surface: PaneSurfaceFrame,
+  pointers?: ReadonlyMap<string, PointerShape | undefined>,
+): MouseArea[] {
   const areas: MouseArea[] = surface.panes.flatMap((pane) => {
-    const pointer = pane.pointer_shape?.replaceAll('_', '-')
-    return pane.mouse_reporting || isPointerShape(pointer)
-      ? [
-          {
-            ...area(pane.inner_rect),
-            reports: pane.mouse_reporting,
-            ...(isPointerShape(pointer) ? { pointer } : {}),
-          },
-        ]
+    const pointer = pointers?.get(pane.pane_id)
+    return pane.mouse_reporting || pointer
+      ? [{ ...area(pane.inner_rect), reports: pane.mouse_reporting, ...(pointer && { pointer }) }]
       : []
   })
   const popup = surface.popup,

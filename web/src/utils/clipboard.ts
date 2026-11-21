@@ -313,8 +313,7 @@ export class TerminalClipboard {
       const text = new TextDecoder('utf-8', { fatal: true }).decode(
         Uint8Array.from(raw, (character) => character.charCodeAt(0)),
       )
-      if (gesture) void this.copy(text)
-      else void this.copyForProgram(text)
+      void this.copyForProgram(text)
     } catch {
       /* Invalid or oversized clipboard writes are ignored. */
     }

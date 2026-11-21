@@ -5,14 +5,9 @@ import { installNotices } from '../composables/notify'
 import type { ProgramCopyMode } from '../composables/terminal/terminal-settings'
 
 // Copy feedback is a notice; the last one shown is what the user sees.
-const shown: Array<'copied' | 'failed'> = []
-const notices: Array<{ title?: string; actions?: Array<{ onClick?: (event?: unknown) => void }> }> =
-  []
-installNotices((notice) => {
-  shown.push(notice.color === 'error' ? 'failed' : 'copied')
-  notices.push(notice as (typeof notices)[number])
-})
-const feedback = () => shown.at(-1)
+const notices: Array<{ color?: string; actions?: unknown[] }> = []
+installNotices((notice) => notices.push({ color: String(notice.color), actions: notice.actions }))
+const feedback = () => (notices.at(-1)?.color === 'error' ? 'failed' : 'copied')
 
 function clipboardEnvironment(
   t: TestContext,
@@ -55,9 +50,9 @@ test('legacy HTTP copy reports its completed write', async (t) => {
 test('secure fallback waits for clipboard completion before reporting success', async (t) => {
   const pending = Promise.withResolvers<void>()
   clipboardEnvironment(t, () => pending.promise)
-  const previous = shown.length
+  const previous = notices.length
   const copying = copyText('selection')
-  assert.equal(shown.length, previous)
+  assert.equal(notices.length, previous)
   pending.resolve()
   assert.equal(await copying, true)
   assert.equal(feedback(), 'copied')
@@ -76,10 +71,10 @@ test('an older failed write cannot replace feedback from a newer successful copy
   clipboardEnvironment(t, (text) => (text === 'older' ? pending.promise : Promise.resolve()))
   const older = copyText('older')
   assert.equal(await copyText('newer'), true)
-  const latest = shown.length
+  const latest = notices.length
   pending.reject(new Error('Late rejection'))
   assert.equal(await older, false)
-  assert.equal(shown.length, latest)
+  assert.equal(notices.length, latest)
 })
 
 test('empty and oversized content never attempt a clipboard write', async (t) => {
@@ -253,5 +248,5 @@ test('a program copy the browser refuses waits in a notice whose Copy button wri
   const offered = notices.slice(before).find((notice) => notice.actions?.length)
   assert(offered, 'a refused copy is offered with an action')
   assert.deepEqual(f.writes, [])
-  assert(!notices.slice(before).some((notice) => (notice as { color?: string }).color === 'error'))
+  assert(!notices.slice(before).some((notice) => notice.color === 'error'))
 })

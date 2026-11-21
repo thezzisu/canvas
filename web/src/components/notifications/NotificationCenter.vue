@@ -180,7 +180,8 @@ function show(event: CanvasNotification, focus?: PaneFocus) {
   }
   if (previous) toast.remove(`${toastPrefix}${previous.event.id}`)
   const notice: Notice = { event, focus }
-  if (important) active.set(key, notice)
+  // A pane's next notice replaces its last, a program's as an agent's.
+  if (important || event.origin === 'program') active.set(key, notice)
   const target = notificationTarget(event, props.resources)
   const heading = title(event),
     body = description(event)

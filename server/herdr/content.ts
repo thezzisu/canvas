@@ -1,6 +1,7 @@
 import type { ClientShellSnapshot, FrameData, PaneSurfaceFrame, SurfaceRect } from './wire.ts'
 import { popupInnerRect } from './screen.ts'
 import { cellWidth } from '../ghostty/module.ts'
+import { validCwd } from '../../shared/window-content.ts'
 
 export interface NativeContentPane {
   id: string
@@ -14,11 +15,6 @@ export interface NativeContentPane {
 }
 
 const clean = (value: string) => value.replace(/[\x00-\x1f\x7f-\x9f]/gu, ' ')
-const validCwd = (value: unknown): value is string =>
-  typeof value === 'string' &&
-  value.startsWith('/') &&
-  value.length <= 8192 &&
-  !/[\x00-\x1f\x7f-\x9f]/u.test(value)
 
 function readPane(
   frame: FrameData,

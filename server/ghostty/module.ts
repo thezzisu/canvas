@@ -101,6 +101,10 @@ export class GhosttyModule {
     return value
   }
 
+  /** An enum's values by name. */
+  values(type: string): Readonly<Record<string, number>> {
+    return this.type(type).values
+  }
   /** The name of an enum value; undefined for a value the manifest does not name. */
   name(type: string, value: number) {
     return Object.entries(this.type(type).values).find(([, number]) => number === value)?.[0]
@@ -109,10 +113,7 @@ export class GhosttyModule {
   /** Throws unless the result is success or the one result the caller handles. */
   check(result: number, allowed = 0) {
     if (result !== 0 && result !== allowed) {
-      const name = Object.entries(this.type('GhosttyResult').values).find(
-        ([, value]) => value === result,
-      )?.[0]
-      throw new Error(`libghostty-vt: ${name ?? result}`)
+      throw new Error(`libghostty-vt: ${this.name('GhosttyResult', result) ?? result}`)
     }
     return result
   }

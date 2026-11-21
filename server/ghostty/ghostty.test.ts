@@ -207,7 +207,7 @@ test('bell, working directory, notifications, progress and pointer shape are obs
     bell: () => seen.push('bell'),
     pwd: (path) => seen.push(['pwd', path]),
     notification: (title, body) => seen.push(['notify', title, body]),
-    progress: (state, value) => seen.push(['progress', state, value]),
+    progress: (progress) => seen.push(['progress', progress]),
   })
   t.write('\x07')
   t.write('\x1b]7;file://localhost/srv/a%20b\x07\x1b]7;file://elsewhere/srv\x07')
@@ -219,11 +219,11 @@ test('bell, working directory, notifications, progress and pointer shape are obs
     ['pwd', '/srv/a b'],
     ['notify', '', 'Build finished'],
     ['notify', 'Tests', '3 failed'],
-    ['progress', 'set', 40],
-    ['progress', 'indeterminate', null],
-    ['progress', 'remove', null],
+    ['progress', { state: 'normal', value: 40 }],
+    ['progress', { state: 'indeterminate', value: null }],
+    ['progress', undefined],
   ])
-  assert.equal(t.pointerShape, 'pointer')
+  assert.equal(t.pointer, 'pointer')
 })
 
 test('reported working directories are read as herdr reads them', () => {

@@ -48,7 +48,8 @@ export function cellPalette(theme: CellTheme): readonly number[] {
     : xtermPalette
 }
 
-export const cssColour = (rgb: number) => `#${rgb.toString(16).padStart(6, '0')}`
+import { cssColour } from '../../../../shared/terminal-theme'
+export { cssColour }
 
 export const FOREGROUND = 'var(--tg-fg)'
 export const BACKGROUND = 'var(--tg-bg)'

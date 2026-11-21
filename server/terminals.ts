@@ -113,6 +113,7 @@ export class LiveTerminal {
   private presentationRevision = 0
   private focusedPaneId?: string
   private metadata?: WindowMetadata
+  private bellQueued = false
   private rawMetadata?: WindowMetadata
   private frame?: WindowMetadata
   private sentFrames = new WeakMap<TerminalChannel, WindowMetadata>()
@@ -205,12 +206,26 @@ export class LiveTerminal {
     this.proc.onClipboard((data) => {
       for (const ws of this.clients) if (this.canRender(ws)) json(ws, { type: 'clipboard', data })
     })
-    // One bell in one place: the browser at the keyboard, as herdr rings only its foreground client.
-    this.proc.onBell(() => {
-      const ws = this.controller
-      if (ws && this.clients.has(ws) && this.canRender(ws)) json(ws, { type: 'bell' })
+    // An agent that reports its state says when it needs you; its bell would say it again. herdr
+    // names no pane, so there any agent in the window counts. Bells written together ring once, in
+    // one place: the browser at the keyboard, as herdr rings only its foreground client.
+    this.proc.onBell((paneId) => {
+      if (this.bellQueued || this.agentReports(paneId)) return
+      this.bellQueued = true
+      queueMicrotask(() => {
+        this.bellQueued = false
+        const ws = this.controller
+        if (!this.closed && ws && this.clients.has(ws) && this.canRender(ws))
+          json(ws, { type: 'bell' })
+      })
     })
     this.proc.onExit((event) => void this.close(event.reason))
+  }
+  /** Whether an agent reports its state in the pane, or in any pane when none is named. */
+  agentReports(paneId?: string) {
+    return !!this.metadata?.panes.some(
+      (pane) => (paneId === undefined || pane.id === paneId) && pane.status !== 'unknown',
+    )
   }
   private publishMetadata() {
     if (this.closed || !this.rawMetadata) return
@@ -799,18 +814,15 @@ export class TerminalManager {
             )
             if (owner === terminal) this.observeCompletionSource(source)
           })
-          // A program's own notification belongs to the one window showing it; each pane's next
-          // notice replaces its last.
-          transport.onProgramNotification?.((notification) => {
-            if (this.stopped || this.closingSources.has(source.id) || terminal.closed) return
-            this.publishNotification({
-              ...notification,
-              id: `program:${source.id}:${notification.paneId}`,
-              sourceId: source.id,
-            })
-          })
           transport.onNotification((notification) => {
             if (this.stopped || this.closingSources.has(source.id) || terminal.closed) return
+            // A program's own notification belongs to the one window showing it, unless its pane's
+            // agent reports its state and so says it already.
+            if (notification.origin === 'program') {
+              if (!terminal.agentReports(notification.paneId))
+                this.publishNotification({ ...notification, id: randomUUID(), sourceId: source.id })
+              return
+            }
             // Herdr broadcasts to every native shell. One existing endpoint owns
             // this connection's live intake; closing it naturally promotes the next.
             const owner = [...this.live].find(

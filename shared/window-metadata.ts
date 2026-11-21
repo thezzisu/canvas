@@ -13,8 +13,9 @@ export interface PaneMetadata {
   completion?: CompletionToken
 }
 /** A program's progress report (OSC 9;4): a percentage, or none while it cannot tell. */
+export const PROGRESS_STATES = ['normal', 'error', 'indeterminate', 'paused'] as const
 export interface WindowProgress {
-  state: 'normal' | 'error' | 'indeterminate' | 'paused'
+  state: (typeof PROGRESS_STATES)[number]
   value: number | null
 }
 export interface WindowMetadata {
@@ -28,13 +29,12 @@ export interface WindowMetadata {
   panes: PaneMetadata[]
 }
 
-const progressStates = ['normal', 'error', 'indeterminate', 'paused']
 export function isWindowProgress(value: unknown): value is WindowProgress {
   const progress = value as WindowProgress
   return (
     !!progress &&
     typeof progress === 'object' &&
-    progressStates.includes(progress.state) &&
+    PROGRESS_STATES.includes(progress.state) &&
     (progress.value === null ||
       (Number.isInteger(progress.value) && progress.value >= 0 && progress.value <= 100))
   )

@@ -844,7 +844,7 @@ html {
 .minimap-progress-error {
   fill: var(--ui-error);
 }
-:is(.minimap-progress-paused, .minimap-progress-indeterminate) {
+.minimap-progress-paused {
   fill: var(--ui-text-muted);
 }
 .vue-flow__minimap-node.minimap-card {

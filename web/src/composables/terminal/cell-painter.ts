@@ -1,8 +1,4 @@
-import {
-  programPointer,
-  programTakesMouse,
-  type MouseArea,
-} from '../../../../shared/terminal-mouse'
+import { areaAt, programTakesMouse, type MouseArea } from '../../../../shared/terminal-mouse'
 import {
   UNDERLINE_MASK,
   type CellMirror,
@@ -613,7 +609,7 @@ export class CellPainter {
     // The pointer a program asked for (OSC 22), unless a link under it shows its own.
     const shape =
       pointer && !link && !this.virtual
-        ? (programPointer(this.mouseAreas, pointer.column, pointer.row) ?? '')
+        ? (areaAt(this.mouseAreas, pointer.column, pointer.row)?.pointer ?? '')
         : ''
     if (this.element.style.cursor !== shape) this.element.style.cursor = shape
     const key = link?.key ?? ''

@@ -46,8 +46,6 @@ export interface PaneSurfacePane {
   } | null
   focused: boolean
   mouse_reporting: boolean
-  /** Core panes only: the pointer the program asked for (OSC 22), as a libghostty shape name. */
-  pointer_shape?: string
   sgr_pixel_mouse: boolean
   alternate_screen_active: boolean
   pixel_width: number

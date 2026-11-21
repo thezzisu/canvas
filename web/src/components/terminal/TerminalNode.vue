@@ -68,6 +68,11 @@ import type { TerminalData } from '../../api/types'
 const loadComposer = () => import('./TerminalComposer.vue')
 const TerminalComposer = defineAsyncComponent(loadComposer)
 const { t } = useI18n()
+/** A program's progress colour by its state; normal and indeterminate take the card's. */
+const progressColour: Partial<Record<string, 'error' | 'neutral'>> = {
+  error: 'error',
+  paused: 'neutral',
+}
 const props = defineProps<
   Pick<NodeProps<TerminalData>, 'id' | 'data'> &
     Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>
@@ -805,13 +810,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
         class="terminal-progress"
         size="2xs"
         :model-value="data.progress.value"
-        :color="
-          data.progress.state === 'error'
-            ? 'error'
-            : data.progress.state === 'paused'
-              ? 'neutral'
-              : 'primary'
-        "
+        :color="progressColour[data.progress.state] ?? 'primary'"
         :aria-label="t('terminal.progress')"
       />
       <PaneIndicators

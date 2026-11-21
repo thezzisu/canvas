@@ -19,6 +19,7 @@ export interface MouseArea {
 }
 /** The pointer shapes a program may ask for (OSC 22), as CSS cursor values. */
 export const POINTER_SHAPES = [
+  'default',
   'context-menu',
   'help',
   'pointer',
@@ -74,9 +75,9 @@ export function isMouseAreas(value: unknown): value is MouseArea[] {
   )
 }
 
-/** The pointer a program asked for at a cell (OSC 22); undefined for the browser's own. */
-export function programPointer(areas: readonly MouseArea[], column: number, row: number) {
-  let pointer: PointerShape | undefined
+/** The area at a cell; a later area (a popup) covers an earlier one. */
+export function areaAt(areas: readonly MouseArea[], column: number, row: number) {
+  let found: MouseArea | undefined
   for (const area of areas)
     if (
       column >= area.x &&
@@ -84,20 +85,10 @@ export function programPointer(areas: readonly MouseArea[], column: number, row:
       row >= area.y &&
       row < area.y + area.height
     )
-      pointer = area.pointer
-  return pointer
+      found = area
+  return found
 }
 
 /** Whether the program takes the mouse at a cell. */
-export function programTakesMouse(areas: readonly MouseArea[], column: number, row: number) {
-  let reports = false
-  for (const area of areas)
-    if (
-      column >= area.x &&
-      column < area.x + area.width &&
-      row >= area.y &&
-      row < area.y + area.height
-    )
-      reports = area.reports
-  return reports
-}
+export const programTakesMouse = (areas: readonly MouseArea[], column: number, row: number) =>
+  areaAt(areas, column, row)?.reports ?? false

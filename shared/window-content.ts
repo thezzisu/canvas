@@ -25,3 +25,10 @@ export interface WindowContentOpen {
   temporary: boolean
   sourcePreview?: boolean
 }
+
+/** An absolute directory path without control characters, as a window's working directory. */
+export const validCwd = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  value.startsWith('/') &&
+  value.length <= 8192 &&
+  !/[\x00-\x1f\x7f-\x9f]/u.test(value)
