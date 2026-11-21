@@ -4,11 +4,10 @@ import type { PaneAction, PaneContext, PanePoint } from '../../shared/pane-conte
 import type { NativeNotification } from '../../shared/notification.ts'
 import type { WindowProgress } from '../../shared/window-metadata.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
-import { cellWidth } from '../ghostty/module.ts'
 import { GhosttyTerminal } from '../ghostty/terminal.ts'
-import { HerdrInputRouter, thumb } from '../herdr/input.ts'
-import { SELECTED, mouseAreas, paneAt, type ScreenSelection } from '../herdr/screen.ts'
-import { windowContent, type NativeContentPane } from '../herdr/content.ts'
+import { HerdrInputRouter } from '../herdr/input.ts'
+import { mouseAreas, paneAt, type ScreenSelection } from '../herdr/screen.ts'
+import { type NativeContentPane } from '../herdr/content.ts'
 import { Events, Latest } from '../channels.ts'
 import {
   isClipboardPayload,
@@ -18,16 +17,16 @@ import {
   type TransportExit,
   type WindowTransport,
 } from '../transport.ts'
-import type {
-  CellData,
-  ClientMessage,
-  ClientShellSnapshot,
-  FrameData,
-  PaneSurfaceFrame,
-  PaneSurfacePane,
-  PaneSurfaceSplit,
-} from '../herdr/wire.ts'
+import type { ClientMessage, ClientShellSnapshot, PaneSurfaceFrame } from '../herdr/wire.ts'
 import { CORE_CELL, coreInput, Win32InputMode } from './input.ts'
+import {
+  composeWindow,
+  composedContent,
+  markSelection,
+  paneColumns,
+  selectionText,
+  type Composition,
+} from './compose.ts'
 import {
   CoreLayout,
   coreWindowMetadata,
@@ -43,64 +42,6 @@ import { cssColour, terminalTheme } from '../../shared/terminal-theme.ts'
 
 /** Lines of history a pane keeps, and asks the core for when it attaches. */
 const HISTORY = 2000
-const cell = (symbol: string): CellData => ({
-  symbol,
-  fg: 0,
-  bg: 0,
-  modifier: 0,
-  skip: false,
-  hyperlink: null,
-})
-const BLANK = Object.freeze(cell(' '))
-/**
- * A pane's scrollbar is herdr's: the pane keeps its last column for it, except in a narrow pane or
- * on the alternate screen, and it is drawn there while there is history to scroll.
- */
-const paneColumns = (width: number, alternate: boolean) =>
-  width > 4 && !alternate ? width - 1 : width
-const SCROLLBAR = {
-  focused: { track: 0x2000000 | 0x6c7086, thumb: 0x2000000 | 0x7f849c, symbol: '▐' },
-  unfocused: { track: 0x2000000 | 0x1e1e2e, thumb: 0x2000000 | 0x6c7086, symbol: '▕' },
-}
-/** OSC 8 permits Unicode and spaces; emit a valid URI without losing the target. */
-export function coreHyperlink(value: unknown): string | undefined {
-  if (typeof value !== 'string' || value.length > 8192 || /[\x00-\x1f\x7f-\x9f]/u.test(value))
-    return
-  try {
-    const uri = new URL(value).href
-    return uri.length <= 24576 ? uri : undefined
-  } catch {
-    return
-  }
-}
-/** Dividers keep their original resize axis, but only exposed cells accept hits. */
-function visibleSplits(
-  split: PaneSurfaceSplit,
-  owners: Int32Array,
-  cols: number,
-): PaneSurfaceSplit[] {
-  const rect = split.hit_rect,
-    vertical = rect.width === 1,
-    length = vertical ? rect.height : rect.width
-  const result: PaneSurfaceSplit[] = []
-  let start = -1
-  for (let offset = 0; offset <= length; offset++) {
-    const visible =
-      offset < length &&
-      owners[(rect.y + (vertical ? offset : 0)) * cols + rect.x + (vertical ? 0 : offset)] === 0
-    if (visible && start < 0) start = offset
-    if (!visible && start >= 0) {
-      result.push({
-        ...split,
-        hit_rect: vertical
-          ? { ...rect, y: rect.y + start, height: offset - start }
-          : { ...rect, x: rect.x + start, width: offset - start },
-      })
-      start = -1
-    }
-  }
-  return result
-}
 interface CorePane {
   id: string
   address: string
@@ -148,8 +89,7 @@ class CoreWindowClient implements WindowTransport {
   private renderedContent?: {
     surface: PaneSurfaceFrame
     shell: ClientShellSnapshot
-    owners: Int32Array
-    layers: string[]
+    composition: Composition
   }
   private layoutToken = { signature: '', token: '' }
   private readonly attached = new Map<string, CorePane>()
@@ -680,162 +620,16 @@ class CoreWindowClient implements WindowTransport {
         return
       const projection = projectTab(this.tab, this.cols, this.rows, this.zoomed)
       if (projection.panes.some((pane) => pane.terminal && !this.attached.has(pane.id))) return
-      const frame: FrameData = {
-        cells: new Array<CellData>(this.cols * this.rows).fill(BLANK),
-        width: this.cols,
-        height: this.rows,
-        cursor: null,
-        hyperlinks: [],
-        graphics: Buffer.alloc(0),
-      }
-      const surfacePanes: PaneSurfacePane[] = [],
-        owners = new Int32Array(frame.cells.length),
-        layers = projection.panes.map((pane) => pane.id)
-      for (const split of projection.splits) {
-        const area = split.hit_rect
-        for (let y = area.y; y < area.y + area.height; y++)
-          for (let x = area.x; x < area.x + area.width; x++)
-            frame.cells[y * this.cols + x] = cell(split.direction === 'Horizontal' ? '│' : '─')
-      }
-      for (const [index, projected] of projection.panes.entries()) {
-        const rect = projected.rect,
-          pane = this.attached.get(projected.id),
-          terminal = this.state.terminals.find(
-            (terminal) => terminal.address === projected.terminal,
-          )
-        for (let y = rect.y; y < rect.y + rect.height; y++)
-          for (let x = rect.x; x < rect.x + rect.width; x++) owners[y * this.cols + x] = index + 1
-        if (!pane) {
-          const message = projected.unsupported
-            ? `[${projected.unsupported}]`
-            : '[Terminal unavailable]'
-          for (let y = rect.y; y < rect.y + rect.height; y++)
-            for (let x = rect.x; x < rect.x + rect.width; x++)
-              frame.cells[y * this.cols + x] = BLANK
-          for (let x = 0; x < Math.min(rect.width, message.length); x++)
-            frame.cells[rect.y * this.cols + rect.x + x] = cell(message[x]!)
-          surfacePanes.push({
-            pane_id: projected.id,
-            content_revision: 0,
-            rect,
-            inner_rect: rect,
-            scrollbar_rect: null,
-            scroll: null,
-            focused: false,
-            mouse_reporting: false,
-            sgr_pixel_mouse: false,
-            alternate_screen_active: false,
-            pixel_width: 0,
-            pixel_height: 0,
-          })
-          continue
-        }
-        const engine = pane.engine,
-          rows = engine.read(),
-          cursor = engine.cursor(),
-          alternate = engine.alternateScreen,
-          focused = projected.id === this.focused
-        // A terminal that kept a wider grid than it was asked for shows it whole, without the bar.
-        const inner = {
-          ...rect,
-          width: Math.min(rect.width, Math.max(paneColumns(rect.width, alternate), engine.cols)),
-        }
-        const scroll = alternate
-          ? null
-          : {
-              offset_from_bottom: engine.scroll.max - engine.scroll.top,
-              max_offset_from_bottom: engine.scroll.max,
-              viewport_rows: engine.rows,
-            }
-        const track =
-          scroll?.max_offset_from_bottom && inner.width < rect.width
-            ? { ...rect, x: rect.x + inner.width, width: 1 }
-            : null
-        const linkIndexes = new Map<string, number>()
-        for (let y = 0; y < inner.height; y++) {
-          const row = rows[y]
-          for (let x = 0; x < inner.width; x++) {
-            let rendered = row?.cells[x] ?? BLANK
-            const uri = coreHyperlink(row?.links?.get(x))
-            if (uri) {
-              let index = linkIndexes.get(uri)
-              if (index === undefined) {
-                index = frame.hyperlinks.push(uri) - 1
-                linkIndexes.set(uri, index)
-              }
-              rendered = { ...rendered, hyperlink: index }
-            }
-            frame.cells[(rect.y + y) * this.cols + rect.x + x] = rendered
-          }
-        }
-        const bar = thumb({ scrollbar_rect: track, scroll })
-        if (track && bar) {
-          const look = focused ? SCROLLBAR.focused : SCROLLBAR.unfocused
-          for (let y = track.y; y < track.y + track.height; y++) {
-            const held = y >= bar.top && y < bar.top + bar.length
-            frame.cells[y * this.cols + track.x] = {
-              ...cell(held ? look.symbol : '▕'),
-              fg: held ? look.thumb : look.track,
-            }
-          }
-        }
-        surfacePanes.push({
-          pane_id: projected.id,
-          content_revision: pane.revision,
-          rect,
-          inner_rect: inner,
-          scrollbar_rect: track,
-          scroll,
-          focused,
-          mouse_reporting: engine.mouseReporting,
-          sgr_pixel_mouse: engine.mode(1016),
-          alternate_screen_active: alternate,
-          pixel_width: inner.width * CORE_CELL.width,
-          pixel_height: inner.height * CORE_CELL.height,
-        })
-        // The engine has no cursor to show while its viewport is scrolled away from it.
-        if (focused && cursor && cursor.x < inner.width && cursor.y < inner.height)
-          frame.cursor = {
-            x: rect.x + cursor.x,
-            y: rect.y + cursor.y,
-            visible: cursor.visible && terminal?.state === 'live',
-            shape: cursor.shape,
-          }
-      }
-      // A wide glyph is indivisible. Do not let a covered lead/continuation
-      // make the renderer skip a different pane's first visible cell.
-      for (let y = 0; y < this.rows; y++) {
-        let continuation = 0,
-          owner = 0
-        for (let x = 0; x < this.cols; x++) {
-          const index = y * this.cols + x,
-            cell = frame.cells[index]!
-          if (cell.skip) {
-            if (continuation && owners[index] === owner) continuation--
-            else {
-              frame.cells[index] = BLANK
-              continuation = 0
-            }
-            continue
-          }
-          const width = cellWidth(cell.symbol)
-          owner = owners[index]!
-          continuation = Math.max(0, width - 1)
-          if (x + width > this.cols || (width > 1 && owners[index + width - 1] !== owner)) {
-            frame.cells[index] = BLANK
-            continuation = 0
-          }
-        }
-      }
-      const visible = new Set(owners)
-      if (
-        frame.cursor &&
-        owners[frame.cursor.y * this.cols + frame.cursor.x] !==
-          layers.indexOf(this.focused || '') + 1
+      const composition = composeWindow(
+        projection,
+        this.attached,
+        this.state.terminals,
+        this.focused,
+        this.cols,
+        this.rows,
       )
-        frame.cursor = null
-      surfacePanes.reverse() // Native input/context hit tests visit the topmost pane first.
-      const splits = projection.splits.flatMap((split) => visibleSplits(split, owners, this.cols))
+      const { frame, panes: surfacePanes, splits, owners, layers } = composition
+      const visible = new Set(owners)
       const signature = JSON.stringify([
         this.state.coreId,
         this.options.tabId,
@@ -879,7 +673,7 @@ class CoreWindowClient implements WindowTransport {
       this.shell = shell
       this.surface = surface
       this.input.refresh()
-      this.renderedContent = { surface, shell, owners, layers }
+      this.renderedContent = { surface, shell, composition }
       const current = this.metadata.current
       this.renderedMetadata = current
         ? {
@@ -901,30 +695,10 @@ class CoreWindowClient implements WindowTransport {
             }),
           }
         : undefined
-      let display = surface
-      const selection = this.selection,
-        selected = selection && surfacePanes.find((pane) => pane.pane_id === selection.pane_id)
-      if (selection && selected) {
-        const rect = selected.inner_rect,
-          owner = layers.indexOf(selected.pane_id) + 1,
-          cells = frame.cells.slice()
-        const at = (point: { row: number; col: number }) =>
-          Math.max(0, Math.min(rect.height - 1, point.row)) * rect.width +
-          Math.max(0, Math.min(rect.width - 1, point.col))
-        const start = Math.min(at(selection.anchor), at(selection.cursor)),
-          end = Math.max(at(selection.anchor), at(selection.cursor))
-        for (let offset = start; offset <= end; offset++) {
-          const index =
-            (rect.y + Math.floor(offset / rect.width)) * this.cols + rect.x + (offset % rect.width)
-          if (owners[index] === owner)
-            cells[index] = { ...cells[index]!, modifier: cells[index]!.modifier | SELECTED }
-        }
-        display = { ...surface, frame: { ...frame, cells } }
-      }
       const painted = this.renderedMetadata
       if (!painted) this.painted.clear()
       this.screen.set({
-        grid: display.frame,
+        grid: this.selection ? markSelection(composition, this.selection) : frame,
         mouse: mouseAreas(
           surface,
           new Map([...this.attached].map(([id, pane]) => [id, pane.engine.pointer])),
@@ -983,7 +757,16 @@ class CoreWindowClient implements WindowTransport {
     if (method === 'pane.selection.read') {
       if (!pane || params.content_revision !== pane.revision)
         throw new Error('Pane output changed during selection')
-      return { pane_id: paneId, text: this.selectionText(pane, params.anchor, params.cursor) }
+      return {
+        pane_id: paneId,
+        text: selectionText(
+          pane.engine,
+          pane.id,
+          params.anchor,
+          params.cursor,
+          this.renderedContent?.composition,
+        ),
+      }
     }
     if (method === 'layout.set_split_ratio') {
       const state = await this.options.layout.setSplitRatio(
@@ -1000,107 +783,17 @@ class CoreWindowClient implements WindowTransport {
     throw new Error(`Unsupported core view operation: ${method}`)
   }
 
-  private selectionText(pane: CorePane, anchor: unknown, cursor: unknown): string {
-    const engine = pane.engine,
-      cols = engine.cols,
-      scroll = engine.scroll
-    const point = (value: unknown) => {
-      if (
-        !value ||
-        typeof value !== 'object' ||
-        !('row' in value) ||
-        !('col' in value) ||
-        !Number.isSafeInteger(value.row) ||
-        !Number.isSafeInteger(value.col)
-      )
-        throw new Error('Invalid selection coordinates')
-      return {
-        row: Math.max(0, Math.min(scroll.max + engine.rows - 1, Number(value.row))),
-        col: Math.max(0, Math.min(cols - 1, Number(value.col))),
-      }
-    }
-    let start = point(anchor),
-      end = point(cursor)
-    if (start.row > end.row || (start.row === end.row && start.col > end.col))
-      [start, end] = [end, start]
-    if ((end.row - start.row + 1) * cols > 1_000_000) throw new Error('Selection is too large')
-    const rendered = this.renderedContent,
-      rect = rendered?.surface.panes.find((item) => item.pane_id === pane.id)?.inner_rect
-    const top = scroll.top,
-      owner = (rendered?.layers.indexOf(pane.id) ?? -1) + 1
-    const lines: string[] = []
-    for (let row = start.row; row <= end.row; row++) {
-      const line = engine.line(row)
-      let part = ''
-      for (
-        let col = row === start.row ? start.col : 0;
-        col <= (row === end.row ? end.col : cols - 1);
-        col++
-      ) {
-        const cell = line?.cells[col],
-          width = cell?.width ?? 1
-        if (width === 0) continue
-        let covered = false
-        if (rendered && rect && row >= top && row < top + rect.height)
-          for (let offset = 0; offset < width; offset++) {
-            if (
-              col + offset >= rect.width ||
-              rendered.owners[
-                (rect.y + row - top) * rendered.surface.frame.width + rect.x + col + offset
-              ] !== owner
-            ) {
-              covered = true
-              break
-            }
-          }
-        part += covered || cell?.invisible ? ' '.repeat(width) : (cell?.text ?? ' ')
-      }
-      if (row === start.row || !line?.wrapped) lines.push(part)
-      else lines[lines.length - 1] += part
-    }
-    return lines.map((line) => line.replace(/ +$/u, '')).join('\n')
-  }
-
   async content(): Promise<NativeContentPane[] | undefined> {
     await this.parseQueue
     const rendered = this.renderedContent
     if (this.closed || !rendered || !this.state) return
-    const { surface, shell, owners, layers } = rendered
-    return surface.panes.toReversed().flatMap((pane) => {
-      const owner = layers.indexOf(pane.pane_id) + 1,
-        rect = pane.inner_rect
-      const native = this.attached.get(pane.pane_id)
-      if (!native || !owners.includes(owner)) return []
-      const cells = Array.from({ length: rect.width * rect.height }, (_, index) => {
-        const at =
-          (rect.y + Math.floor(index / rect.width)) * surface.frame.width +
-          rect.x +
-          (index % rect.width)
-        return owners[at] === owner ? surface.frame.cells[at]! : BLANK
-      })
-      const local = { x: 0, y: 0, width: rect.width, height: rect.height }
-      const rows = native.engine.read()
-      const visible = Array.from({ length: rect.height }, (_, row) => {
-        for (let col = 0; col < rect.width; col++)
-          if (owners[(rect.y + row) * surface.frame.width + rect.x + col] !== owner) return false
-        return true
-      })
-      return windowContent(
-        {
-          ...surface,
-          frame: { ...surface.frame, width: rect.width, height: rect.height, cells, cursor: null },
-          panes: [{ ...pane, rect: local, inner_rect: local }],
-          splits: [],
-        },
-        shell,
-        this.options.tabId,
-        (_id, row) =>
-          native.engine.cols === rect.width &&
-          visible[row - 1] &&
-          visible[row] &&
-          !!rows[row]?.wrapped,
-      )
-    })
+    return composedContent(
+      rendered.composition,
+      rendered.surface,
+      rendered.shell,
+      this.options.tabId,
+      (paneId) => this.attached.get(paneId)?.engine,
+    )
   }
   paneContext(point: PanePoint): PaneContext | undefined {
     if (

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createCoreClient, coreHyperlink, windowProgress } from './client.ts'
+import { createCoreClient, windowProgress } from './client.ts'
+import { coreHyperlink } from './compose.ts'
 import { CoreLayout, type CoreDocument } from './layout.ts'
 import { CoreRpc, CoreRpcError, CoreStream, type CoreNotification } from './rpc.ts'
 import { SELECTED } from '../herdr/screen.ts'
