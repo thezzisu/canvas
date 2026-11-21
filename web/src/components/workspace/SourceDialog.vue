@@ -26,7 +26,8 @@ const formId = useId()
 const draft = reactive<Source>({
   id: '',
   name: '',
-  runtime: 'tui',
+  // herdr-core is the first-tier runtime; a saved connection keeps the runtime it has.
+  runtime: 'core',
   transport: 'local',
   target: '',
   herdrSession: '',
@@ -108,8 +109,8 @@ async function submit() {
   emit('close', true)
 }
 const runtimes = [
-  { label: 'Herdr TUI', value: 'tui' },
   { label: 'Herdr Core / App', value: 'core' },
+  { label: 'Herdr TUI', value: 'tui' },
 ]
 const transports = computed(() => [
   { label: t('app.local'), value: 'local', icon: 'i-lucide-server', disabled: busy.value },
