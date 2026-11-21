@@ -52,6 +52,11 @@ interface CorePane {
   revision: number
   ready: boolean
   paintComplete: boolean
+  /**
+   * Whether the bytes being parsed are the program's live output. Until its first paint ends,
+   * they replay the screen it had, and a bell, copy or notice among them is not new.
+   */
+  live: boolean
   firstPaint: Promise<void>
   painted(): void
   disposed: boolean
@@ -357,6 +362,7 @@ class CoreWindowClient implements WindowTransport {
               this.enqueue(() => {
                 if (pane.disposed) return
                 // The core ends its first paint by saying whether the program wants win32 keys.
+                pane.live = pane.paintComplete
                 if (pane.win32.scan(data)) pane.paintComplete = true
                 const alternate = pane.engine.alternateScreen
                 pane.engine.write(data)
@@ -394,12 +400,18 @@ class CoreWindowClient implements WindowTransport {
     })
     // No reply reaches the program from here: the core answers its queries itself.
     const engine = new GhosttyTerminal(Math.max(1, cols), Math.max(1, rows), HISTORY, {
-      clipboard: (text) => this.clipboard(Buffer.from(text).toString('base64')),
+      clipboard: (text) => {
+        if (pane.live) this.clipboard(Buffer.from(text).toString('base64'))
+      },
       pwd: (path) => {
         pane.reportedCwd = path
       },
-      bell: () => this.bells.emit(pane.id),
-      notification: (title, body) => this.programNotification(pane, title, body),
+      bell: () => {
+        if (pane.live) this.bells.emit(pane.id)
+      },
+      notification: (title, body) => {
+        if (pane.live) this.programNotification(pane, title, body)
+      },
       progress: (progress) => {
         if (progress?.state === pane.progress?.state && progress?.value === pane.progress?.value)
           return
@@ -424,6 +436,7 @@ class CoreWindowClient implements WindowTransport {
       revision: 0,
       ready: false,
       paintComplete: false,
+      live: false,
       firstPaint,
       painted,
       disposed: false,
@@ -719,10 +732,12 @@ class CoreWindowClient implements WindowTransport {
   /**
    * Whether a pane's program is in the middle of a synchronized update. Its engine already holds
    * the half-drawn screen, so the whole window waits for the update's end, or, for a program that
-   * never ends it, for the time limit.
+   * never ends it, for the time limit. A pane whose stream ended can no longer end one.
    */
   private holdForSync() {
-    const syncing = [...this.attached.values()].some((pane) => pane.engine.mode(2026))
+    const syncing = [...this.attached.values()].some(
+      (pane) => pane.stream && pane.engine.mode(2026),
+    )
     if (!syncing) {
       clearTimeout(this.sync.timer)
       this.sync = { expired: false }

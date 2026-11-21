@@ -1779,6 +1779,71 @@ test('a synchronized update is painted when it ends, or after the limit when it 
   }
 })
 
+test('a pane whose stream ended mid-update does not stop the hold for the others', async () => {
+  const f = fixture(true)
+  const opening = createCoreClient({
+    rpc: f.rpc,
+    layout: f.layout,
+    spaceId: 'space',
+    tabId: 'tab',
+    cols: 40,
+    rows: 6,
+    syncTimeoutMs: 50,
+  })
+  await tick()
+  for (const [index, stream] of f.streams.entries())
+    stream.receive({ kind: 'data', data: Buffer.from(`PANE${index}\x1b[?9001l`) })
+  const client = await opening
+  const seen = watch(client)
+  try {
+    // The second pane's program stops in the middle of an update and its stream ends.
+    f.streams[1]!.receive({ kind: 'data', data: Buffer.from('\x1b[?2026hSTUCK') })
+    f.streams[1]!.receive({ kind: 'close', reason: { reason: 'disconnected' } })
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    const before = seen.paints
+    f.streams[0]!.receive({ kind: 'data', data: Buffer.from('\x1b[?2026hHALF') })
+    await tick()
+    await tick()
+    assert.equal(seen.paints, before, 'a live pane in the middle of an update is still held')
+    f.streams[0]!.receive({ kind: 'data', data: Buffer.from('-DONE\x1b[?2026l') })
+    await tick()
+    await tick()
+    assert.match(seen.text, /HALF-DONE/u)
+  } finally {
+    client.kill()
+  }
+})
+
+test('a pane attached after the window opened replays its first paint without ringing or copying', async () => {
+  const f = fixture()
+  const client = await open(f)
+  const bells: string[] = [],
+    notices: NativeNotification[] = [],
+    copies: string[] = []
+  client.bells.subscribe((paneId) => bells.push(paneId!))
+  client.notifications.subscribe((notice) => notices.push(notice))
+  client.copies.subscribe((data) => copies.push(data))
+  try {
+    await f.event('restarted', { ...f.terminal, pid: 999, reason: null })
+    await tick()
+    const replay = '\x07\x1b]52;c;UkVQTEFZ\x07\x1b]9;replayed\x07'
+    f.streams[1]!.receive({ kind: 'data', data: Buffer.from(`${replay}SCREEN\x1b[?9001l`) })
+    await tick()
+    await tick()
+    assert.deepEqual([bells, copies, notices.filter((n) => n.origin === 'program')], [[], [], []])
+    f.streams[1]!.receive({ kind: 'data', data: Buffer.from('\x07\x1b]52;c;TElWRQ==\x07') })
+    await tick()
+    await tick()
+    assert.deepEqual(
+      [bells, copies],
+      [['pane'], ['TElWRQ==']],
+      'live output after the first paint acts',
+    )
+  } finally {
+    client.kill()
+  }
+})
+
 test('a window shows its error first, then its furthest percentage, then progress without one', () => {
   assert.equal(windowProgress([undefined]), undefined)
   assert.deepEqual(
