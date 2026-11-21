@@ -46,6 +46,14 @@ const rows = computed(() =>
         { value: 'false', label: t('terminal.settings.hoverOff') },
       ],
     },
+    {
+      key: 'programCopy' as const,
+      label: t('terminal.settings.programCopy'),
+      items: [
+        { value: 'allow', label: t('terminal.settings.allow') },
+        { value: 'gesture', label: t('terminal.settings.afterGesture') },
+      ],
+    },
   ].map((row) => ({
     ...row,
     // "Default" has no value of its own: the option it stands for is marked faintly.
@@ -57,7 +65,7 @@ const rows = computed(() =>
       : row.items,
   })),
 )
-function update(key: 'rightClick' | 'shiftPaste' | 'mouseHover', value: string) {
+function update(key: 'rightClick' | 'shiftPaste' | 'mouseHover' | 'programCopy', value: string) {
   const next = { ...props.modelValue }
   if (value === '__default') delete next[key]
   else Object.assign(next, { [key]: key === 'mouseHover' ? value === 'true' : value })

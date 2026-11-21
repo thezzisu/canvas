@@ -65,12 +65,14 @@ test('terminal defaults remain reactive while each explicit field overrides inde
     rightClick: 'terminal',
     shiftPaste: 'terminal',
     mouseHover: false,
+    programCopy: 'gesture',
     maximizedZoom: 125,
   }
   assert.deepEqual(terminal.effective.value, {
     rightClick: 'menu',
     shiftPaste: 'terminal',
     mouseHover: false,
+    programCopy: 'gesture',
     maximizedZoom: 125,
   })
   terminal.zoom.value = 100
@@ -163,7 +165,7 @@ test('invalid overrides inherit rather than overwrite explicit valid defaults', 
     undefined,
     true,
     'bad',
-    { rightClick: 'bad', mouseHover: 'false', maximizedZoom: 201 },
+    { rightClick: 'bad', mouseHover: 'false', programCopy: 'always', maximizedZoom: 201 },
   ])
     assert.deepEqual(normalizeTerminalOverrides(value), {})
   assert.deepEqual(
@@ -171,8 +173,15 @@ test('invalid overrides inherit rather than overwrite explicit valid defaults', 
       rightClick: 'menu',
       shiftPaste: 'terminal',
       mouseHover: false,
+      programCopy: 'gesture',
       maximizedZoom: 100,
     }),
-    { rightClick: 'menu', shiftPaste: 'terminal', mouseHover: false, maximizedZoom: 100 },
+    {
+      rightClick: 'menu',
+      shiftPaste: 'terminal',
+      mouseHover: false,
+      programCopy: 'gesture',
+      maximizedZoom: 100,
+    },
   )
 })

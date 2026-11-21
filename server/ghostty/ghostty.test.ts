@@ -171,6 +171,23 @@ test('modes, clipboard writes and status reports are observed, queries are not a
   assert.deepEqual(seen, ['hello 🦊', ['', 'working'], ['job', 'done']])
 })
 
+test('only standard clipboard writes within herdr limits are taken, as herdr takes them', () => {
+  const seen: string[] = []
+  using t = terminal(20, 2, { clipboard: (data) => seen.push(Buffer.from(data).toString()) })
+  const b64 = (text: string) => Buffer.from(text).toString('base64')
+  // Primary and selection buffers, an empty write and a clear are not the clipboard.
+  t.write(`\x1b]52;p;${b64('primary')}\x07\x1b]52;s;${b64('selection')}\x07\x1b]52;c;\x07`)
+  // An empty target means the standard clipboard; 192 KiB passes, one byte more does not.
+  t.write(`\x1b]52;;${b64('standard')}\x07`)
+  t.write(
+    `\x1b]52;c;${b64('x'.repeat(192 * 1024))}\x07\x1b]52;c;${b64('y'.repeat(192 * 1024 + 1))}\x07`,
+  )
+  assert.deepEqual(
+    seen.map((text) => (text.length > 64 ? `${text[0]}×${text.length}` : text)),
+    ['standard', `x×${192 * 1024}`],
+  )
+})
+
 test('freed terminals return their memory to the module', () => {
   const make = () => {
     const terminals = Array.from({ length: 20 }, () => new GhosttyTerminal(120, 40, 2000))

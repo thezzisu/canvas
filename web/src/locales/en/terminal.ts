@@ -37,6 +37,9 @@ export default {
     sendToTerminal: 'Send to terminal',
     shiftPaste: 'Ctrl+Shift+V',
     paste: 'Paste',
+    programCopy: 'Program copy',
+    allow: 'Allow',
+    afterGesture: 'After a copy',
   },
   paneMenu: {
     rename: 'Rename pane',
@@ -133,7 +136,14 @@ export default {
     nextCanvas: 'Next canvas',
     canvasNamed: '{action}: {name}',
   },
-  clipboard: { failed: 'Copy failed', copied: 'Copied', cut: 'Cut', macPaste: 'Use ⌘V to paste' },
+  clipboard: {
+    failed: 'Copy failed',
+    copied: 'Copied',
+    cut: 'Cut',
+    macPaste: 'Use ⌘V to paste',
+    programCopied: 'A program copied text',
+    copy: 'Copy',
+  },
   keyboard: {
     input: 'Terminal input',
     arrowLeft: 'Left arrow',

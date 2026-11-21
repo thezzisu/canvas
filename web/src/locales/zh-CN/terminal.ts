@@ -37,6 +37,9 @@ export default {
     sendToTerminal: '发送给终端',
     shiftPaste: 'Ctrl+Shift+V',
     paste: '粘贴',
+    programCopy: '程序复制',
+    allow: '允许',
+    afterGesture: '复制操作后',
   },
   paneMenu: {
     rename: '重命名窗格',
@@ -133,7 +136,14 @@ export default {
     nextCanvas: '下一个画布',
     canvasNamed: '{action}：{name}',
   },
-  clipboard: { failed: '复制失败', copied: '已复制', cut: '已剪切', macPaste: '使用 ⌘V 粘贴' },
+  clipboard: {
+    failed: '复制失败',
+    copied: '已复制',
+    cut: '已剪切',
+    macPaste: '使用 ⌘V 粘贴',
+    programCopied: '程序复制了文本',
+    copy: '复制',
+  },
   keyboard: {
     input: '终端输入',
     arrowLeft: '向左',

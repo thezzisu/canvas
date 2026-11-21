@@ -2,10 +2,16 @@ import assert from 'node:assert/strict'
 import { test, type TestContext } from 'node:test'
 import { copyText, TerminalClipboard } from './clipboard'
 import { installNotices } from '../composables/notify'
+import type { ProgramCopyMode } from '../composables/terminal/terminal-settings'
 
 // Copy feedback is a notice; the last one shown is what the user sees.
 const shown: Array<'copied' | 'failed'> = []
-installNotices((notice) => shown.push(notice.color === 'error' ? 'failed' : 'copied'))
+const notices: Array<{ title?: string; actions?: Array<{ onClick?: (event?: unknown) => void }> }> =
+  []
+installNotices((notice) => {
+  shown.push(notice.color === 'error' ? 'failed' : 'copied')
+  notices.push(notice as (typeof notices)[number])
+})
 const feedback = () => shown.at(-1)
 
 function clipboardEnvironment(
@@ -87,11 +93,17 @@ test('empty and oversized content never attempt a clipboard write', async (t) =>
   assert.equal(feedback(), 'failed')
 })
 
-function terminalClipboard(t: TestContext, controlsInput = true) {
+function terminalClipboard(
+  t: TestContext,
+  controlsInput = true,
+  programCopy: ProgramCopyMode = 'gesture',
+  refuse = false,
+) {
   const writes: string[] = []
   let clipboard: TerminalClipboard
   t.after(() => clipboard?.dispose())
   clipboardEnvironment(t, async (text) => {
+    if (refuse) throw new Error('Document is not focused')
     writes.push(text)
   })
   const surface = { addEventListener() {}, removeEventListener() {} }
@@ -109,6 +121,7 @@ function terminalClipboard(t: TestContext, controlsInput = true) {
     focused: () => true,
     selection: () => selected,
     selects: (event) => event.shiftKey,
+    programCopy: () => programCopy,
   })
   return {
     clipboard,
@@ -215,4 +228,30 @@ test('passive viewers cannot write a shared client clipboard response', async (t
   f.osc('from another viewer')
   await Promise.resolve()
   assert.deepEqual(f.writes, [])
+})
+
+test('by default a program copy reaches the clipboard of the browser controlling input, without a gesture', async (t) => {
+  const f = terminalClipboard(t, true, 'allow')
+  f.osc('yanked')
+  await new Promise((resolve) => setTimeout(resolve))
+  assert.deepEqual(f.writes, ['yanked'])
+})
+
+test('without a gesture, passive viewers and unreadable program output still never write', async (t) => {
+  const passive = terminalClipboard(t, false, 'allow')
+  passive.osc('from another viewer')
+  passive.clipboard.programCopy('not base64!')
+  await new Promise((resolve) => setTimeout(resolve))
+  assert.deepEqual(passive.writes, [])
+})
+
+test('a program copy the browser refuses waits in a notice whose Copy button writes it', async (t) => {
+  const f = terminalClipboard(t, true, 'allow', true)
+  const before = notices.length
+  f.osc('build finished')
+  await new Promise((resolve) => setTimeout(resolve))
+  const offered = notices.slice(before).find((notice) => notice.actions?.length)
+  assert(offered, 'a refused copy is offered with an action')
+  assert.deepEqual(f.writes, [])
+  assert(!notices.slice(before).some((notice) => (notice as { color?: string }).color === 'error'))
 })

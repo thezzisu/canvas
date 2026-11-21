@@ -155,6 +155,7 @@ export function createSession(
       focused: () => document.activeElement === inputElement(session),
       selection: () => selection.text,
       selects,
+      programCopy: () => session.settings.programCopy,
       copyError: (clipboardError) => setState(session, { ...session.state, clipboardError }),
     }),
     reconnect: new TerminalReconnect({

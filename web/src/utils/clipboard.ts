@@ -1,5 +1,8 @@
 import { isPasteShortcut } from './clipboard-shortcuts'
 import { beginCopyFeedback } from './copy-feedback'
+import { notify, noticeDuration, toastAction } from '../composables/notify'
+import { t } from '../plugins/i18n'
+import type { ProgramCopyMode } from '../composables/terminal/terminal-settings'
 
 const MAX_COPY_BYTES = 1024 * 1024
 const COPY_GESTURE_MS = 3000
@@ -7,12 +10,19 @@ let borrowingFocus = false
 /** A copy is passing focus through its own field and back: nothing lost or gained it. */
 export const clipboardBorrowingFocus = () => borrowingFocus
 
-/** A user copy works on HTTP as well as secure origins. Never read the clipboard. */
+/**
+ * A user copy works on HTTP as well as secure origins. Never read the clipboard. With `quiet`, a
+ * refused copy is left to the caller to report.
+ */
 export async function copyText(
   text: string,
   formats: Record<string, string> = {},
+  { quiet = false }: { quiet?: boolean } = {},
 ): Promise<boolean> {
-  const feedback = beginCopyFeedback()
+  const report = beginCopyFeedback()
+  const feedback = (kind: 'copied' | 'failed') => {
+    if (kind === 'copied' || !quiet) report(kind)
+  }
   if (!text || new TextEncoder().encode(text).length > MAX_COPY_BYTES) {
     feedback('failed')
     return false
@@ -124,10 +134,17 @@ interface ClipboardOptions {
   selection(): string
   /** A press that selects in this browser instead of reaching the program. */
   selects(event: MouseEvent): boolean
+  /** Whether a program's copy needs a recent copy gesture here. */
+  programCopy(): ProgramCopyMode
   copyError?(value: ClipboardNotice | undefined): void
 }
 
-/** Copy is authorized only by a real gesture in this terminal, never by replay. */
+/**
+ * What this browser copies. Its own selection needs a real gesture here; text a program copies
+ * reaches the clipboard of the browser controlling the window's input, or only after a recent
+ * copy gesture when the terminal setting asks for that. A copy the browser refuses (no recent
+ * interaction, page in the background) waits in a notice for a click.
+ */
 export class TerminalClipboard {
   private gesture?: { x: number; y: number; moved: boolean; multiple: boolean; local: boolean }
   private lastCopiedSelection = ''
@@ -169,6 +186,18 @@ export class TerminalClipboard {
     clearTimeout(this.noticeTimer)
     this.options.copyError?.(undefined)
     return copyText(text)
+  }
+  private async copyForProgram(text: string) {
+    if (this.ready() && (await copyText(text, {}, { quiet: true }))) return
+    if (this.disposed) return
+    notify.info(t('terminal.clipboard.programCopied'), {
+      id: 'copy',
+      description: text.length > 80 ? `${text.slice(0, 80)}…` : text,
+      duration: noticeDuration.warning,
+      actions: [
+        { ...toastAction, label: t('terminal.clipboard.copy'), onClick: () => void copyText(text) },
+      ],
+    })
   }
   copyText(text: string): Promise<boolean> {
     return this.ready() ? this.copy(text) : Promise.resolve(false)
@@ -265,15 +294,12 @@ export class TerminalClipboard {
       this.reset()
   }
 
-  /** Text a program in the window copied, as base64. Only a recent copy gesture here allows it. */
+  /** Text a program in the window copied, as base64. */
   programCopy(payload: string) {
-    if (
-      !this.ready() ||
-      !this.options.focused() ||
-      !this.options.controlsInput() ||
-      performance.now() > this.copyUntil
-    )
+    const gesture = this.options.programCopy() === 'gesture'
+    if (gesture && (!this.ready() || !this.options.focused() || performance.now() > this.copyUntil))
       return
+    if (!this.options.controlsInput()) return
     this.copyUntil = 0
     if (
       !payload ||
@@ -287,7 +313,8 @@ export class TerminalClipboard {
       const text = new TextDecoder('utf-8', { fatal: true }).decode(
         Uint8Array.from(raw, (character) => character.charCodeAt(0)),
       )
-      void this.copy(text)
+      if (gesture) void this.copy(text)
+      else void this.copyForProgram(text)
     } catch {
       /* Invalid or oversized clipboard writes are ignored. */
     }

@@ -5,7 +5,7 @@ import { ghostty, type GhosttyModule, type Pointer } from './module.ts'
 export const MODS = { shift: 1, ctrl: 2, alt: 4, super: 8 } as const
 
 export interface GhosttyEvents {
-  /** A program set the clipboard (OSC 52 or OSC 5522) to this text. */
+  /** A program set the clipboard (OSC 52 or OSC 5522) to this text, as herdr accepts it. */
   clipboard?(text: Uint8Array): void
   /** A program status report (OSC 7501) for the record `id`; the root record has no id. */
   status?(id: string, state: string): void
@@ -68,8 +68,8 @@ const BLANK: CellData = Object.freeze({
 const STATUS_STATES = ['idle', 'working', 'done', 'blocked', 'error', 'clear']
 const MAX_CLUSTER = 32
 const MAX_LINK = 8192
-/** A program may set at most this much clipboard text at once. */
-const MAX_CLIPBOARD = 1024 * 1024
+/** A program may set at most this much clipboard text at once: herdr's limit. */
+const MAX_CLIPBOARD = 192 * 1024
 /** The representations of one clipboard write that are looked at for its text. */
 const MAX_CLIPBOARD_KINDS = 16
 /** No key or mouse report is longer. */
@@ -171,11 +171,20 @@ function kit(): Kit {
           count = view.getUint32(field('contents_len'), true),
           size = g.size('GhosttyClipboardContent')
         let text: Uint8Array | undefined
-        for (let index = 0; index < Math.min(count, MAX_CLIPBOARD_KINDS) && !text; index++) {
+        // As herdr: the standard clipboard only, never the primary or selection buffer.
+        const standard =
+          view.getInt32(field('location'), true) === g.value('GhosttyClipboardLocation', 'STANDARD')
+        for (
+          let index = 0;
+          standard && index < Math.min(count, MAX_CLIPBOARD_KINDS) && !text;
+          index++
+        ) {
           const content = contents + index * size
-          if (g.string(content + g.offset('GhosttyClipboardContent', 'mime')) === 'text/plain')
+          if (isPlainText(g.string(content + g.offset('GhosttyClipboardContent', 'mime'))))
             text = g.stringBytes(content + g.offset('GhosttyClipboardContent', 'data'))
         }
+        // The library's own byte limit does not cover decoded OSC 52 text; herdr checks it here too.
+        if (text && (!text.length || text.length > MAX_CLIPBOARD)) text = undefined
         // The request is answered before the callback returns; the reply is the library's own
         // function, reached through the table.
         const reply = g.sized(g.out, 'GhosttyClipboardWriteReply')
@@ -194,6 +203,9 @@ function kit(): Kit {
   }
   return (shared = created)
 }
+
+/** `text/plain`, with or without parameters such as a charset, as herdr reads a MIME type. */
+const isPlainText = (mime: string) => mime.split(';')[0]!.trim().toLowerCase() === 'text/plain'
 
 /** A bit field of a packed 64-bit value given as two halves. */
 const field = (lo: number, hi: number, { lsb, width }: { lsb: number; width: number }) =>

@@ -4,10 +4,13 @@ import { contentZoomLimits } from '../canvas/content-zoom'
 
 export type RightClickMode = 'menu' | 'terminal'
 export type ShiftPasteMode = 'paste' | 'terminal'
+/** When text a program copies (OSC 52) reaches this browser's clipboard. */
+export type ProgramCopyMode = 'allow' | 'gesture'
 export interface TerminalSettings {
   rightClick: RightClickMode
   shiftPaste: ShiftPasteMode
   mouseHover: boolean
+  programCopy: ProgramCopyMode
   maximizedZoom: number
 }
 export type TerminalOverrides = Partial<TerminalSettings>
@@ -15,6 +18,7 @@ export const defaultTerminalSettings: TerminalSettings = Object.freeze({
   rightClick: 'menu',
   shiftPaste: 'paste',
   mouseHover: true,
+  programCopy: 'allow',
   maximizedZoom: 100,
 })
 export const terminalSettingsKey = (identity: string) => 'canvas:terminal-settings:' + identity
@@ -30,6 +34,8 @@ export function normalizeTerminalOverrides(value: unknown): TerminalOverrides {
   if (input.shiftPaste === 'paste' || input.shiftPaste === 'terminal')
     result.shiftPaste = input.shiftPaste
   if (typeof input.mouseHover === 'boolean') result.mouseHover = input.mouseHover
+  if (input.programCopy === 'allow' || input.programCopy === 'gesture')
+    result.programCopy = input.programCopy
   if (
     typeof input.maximizedZoom === 'number' &&
     Number.isFinite(input.maximizedZoom) &&
