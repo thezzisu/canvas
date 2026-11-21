@@ -61,11 +61,11 @@ import { sourceConnectionKey, type Source } from './state.ts'
 import { openTerminal } from './runtimes.ts'
 import { GeometryController, type Size } from './geometry.ts'
 import type { WindowTransport } from './transport.ts'
-import { Events } from './channels.ts'
+import type { Subscribable } from './channels.ts'
+import { NotificationIntake } from './notification-intake.ts'
 import type { FrameData } from './herdr/wire.ts'
 import { GridEncoder } from './cell-grid.ts'
 import type { WindowMetadata } from '../shared/window-metadata.ts'
-import { randomUUID } from 'node:crypto'
 import type { CanvasNotification } from '../shared/notification.ts'
 import { bracketedPaste, type PasteSegment } from '../shared/paste.ts'
 import type { CaptureDescriptor, CaptureState } from '../shared/capture.ts'
@@ -703,16 +703,9 @@ export class LiveTerminal {
 export class TerminalManager {
   entries = new Map<string, Promise<LiveTerminal>>()
   private readonly live = new Set<LiveTerminal>()
-  /** Native and program notifications to show, each once. */
-  readonly notifications = new Events<CanvasNotification>()
   private stopped = false
   private closingSources = new Set<string>()
-  private pendingCompletions = new Map<
-    string,
-    { source: Source; notification: CanvasNotification; timer: ReturnType<typeof setTimeout> }
-  >()
-  private deliveredCompletions = new Map<string, CompletionToken>()
-  private completionBoots = new Map<string, string>()
+  private readonly intake: NotificationIntake
   constructor(
     private readonly reads?: CompletionReads,
     private readonly onFocusedWindowRemoved?: (source: Source, windowId: string) => void,
@@ -723,54 +716,31 @@ export class TerminalManager {
       windowId: string,
     ) => CaptureDescriptor | null = () => null,
     private readonly onWindowRead?: (source: Source, windowId: string) => void,
-  ) {}
+  ) {
+    this.intake = new NotificationIntake(
+      reads,
+      (source) => this.owner(source),
+      (sourceId) => !this.stopped && !this.closingSources.has(sourceId),
+    )
+  }
+  /** Native and program notifications to show, each once. */
+  get notifications(): Subscribable<CanvasNotification> {
+    return this.intake.notifications
+  }
+  /** The source's open window that takes in its notices and completion state. */
+  private owner(source: Source) {
+    const connection = sourceConnectionKey(source)
+    return [...this.live].find(
+      (terminal) =>
+        !terminal.closed &&
+        terminal.sourceId === source.id &&
+        terminal.connectionKey === connection,
+    )
+  }
   refreshNormalSizes() {
     if (this.stopped) return
     for (const terminal of this.live)
       terminal.setNormalSize(this.normalSize(terminal.sourceId, terminal.windowId))
-  }
-  private observeCompletionSource(source: Source) {
-    const owner = [...this.live].find(
-      (terminal) =>
-        !terminal.closed &&
-        terminal.sourceId === source.id &&
-        terminal.connectionKey === sourceConnectionKey(source),
-    )
-    const snapshot = owner?.proc.completionSnapshot()
-    if (owner && snapshot) {
-      this.reads?.observeSnapshot(source, snapshot.windows, snapshot.state, owner)
-      if (this.completionBoots.get(source.id) !== snapshot.state.bootId) {
-        this.completionBoots.set(source.id, snapshot.state.bootId)
-        for (const window of snapshot.windows)
-          for (const pane of window.panes) {
-            const token = this.reads?.completion(source, pane.id)?.completion || pane.completion
-            if (token) this.deliveredCompletions.set(`${source.id}/${pane.id}`, token)
-          }
-      }
-      this.flushCompletions(source.id)
-    } else if (!owner) {
-      this.reads?.disconnected(source.id)
-      this.completionBoots.delete(source.id)
-    }
-  }
-  private flushCompletions(sourceId: string) {
-    if (!this.reads || this.stopped || this.closingSources.has(sourceId)) return
-    for (const [key, pending] of this.pendingCompletions) {
-      if (pending.source.id !== sourceId) continue
-      const completion = this.reads.completion(pending.source, pending.notification.paneId!)
-      if (!completion) continue
-      if (sameCompletion(this.deliveredCompletions.get(key), completion.completion)) continue
-      clearTimeout(pending.timer)
-      this.pendingCompletions.delete(key)
-      this.deliveredCompletions.set(key, completion.completion)
-      if (this.deliveredCompletions.size > 1000)
-        this.deliveredCompletions.delete(this.deliveredCompletions.keys().next().value!)
-      this.notifications.emit({
-        ...pending.notification,
-        windowId: completion.windowId,
-        completion: completion.completion,
-      })
-    }
   }
   async connect(source: Source, target: TerminalTarget, ws: TerminalChannel) {
     if (this.stopped || this.closingSources.has(source.id))
@@ -799,7 +769,7 @@ export class TerminalManager {
             () => {
               this.entries.delete(key)
               this.live.delete(terminal)
-              this.observeCompletionSource(source)
+              this.intake.observe(source)
             },
             transport,
             source,
@@ -812,49 +782,11 @@ export class TerminalManager {
           // A card/font edit may have committed while the native socket opened.
           terminal.setNormalSize(this.normalSize(source.id, target.windowId))
           transport.snapshots.subscribe(() => {
-            const owner = [...this.live].find(
-              (candidate) =>
-                !candidate.closed &&
-                candidate.sourceId === source.id &&
-                candidate.connectionKey === terminal.connectionKey,
-            )
-            if (owner === terminal) this.observeCompletionSource(source)
+            if (this.owner(source) === terminal) this.intake.observe(source)
           })
-          transport.notifications.subscribe((notification) => {
-            if (this.stopped || this.closingSources.has(source.id) || terminal.closed) return
-            // A program's own notification belongs to the one window showing it, unless its pane's
-            // agent reports its state and so says it already.
-            if (notification.origin === 'program') {
-              if (!terminal.agentReports(notification.paneId))
-                this.notifications.emit({ ...notification, id: randomUUID(), sourceId: source.id })
-              return
-            }
-            // Herdr broadcasts to every native shell. One existing endpoint owns
-            // this connection's live intake; closing it naturally promotes the next.
-            const owner = [...this.live].find(
-              (candidate) =>
-                !candidate.closed &&
-                candidate.sourceId === source.id &&
-                candidate.connectionKey === terminal.connectionKey,
-            )
-            if (owner !== terminal) return
-            const event: CanvasNotification = {
-              ...notification,
-              id: randomUUID(),
-              sourceId: source.id,
-            }
-            if (notification.kind !== 'done' || !this.reads) {
-              this.notifications.emit(event)
-              return
-            }
-            if (!notification.paneId) return
-            const key = `${source.id}/${notification.paneId}`
-            clearTimeout(this.pendingCompletions.get(key)?.timer)
-            const timer = setTimeout(() => this.pendingCompletions.delete(key), 1000)
-            timer.unref()
-            this.pendingCompletions.set(key, { source, notification: event, timer })
-            queueMicrotask(() => this.flushCompletions(source.id))
-          })
+          transport.notifications.subscribe((notification) =>
+            this.intake.receive(source, terminal, notification),
+          )
           return terminal
         } catch (error) {
           transport?.kill()
@@ -877,27 +809,29 @@ export class TerminalManager {
       terminal.idle.unref()
     }
   }
+  /** The window's live terminal, once it has opened; undefined if it is not open or failed. */
+  private async entry(sourceId: string, windowId: string) {
+    return this.entries.get(`${sourceId}/${windowId}`)?.catch(() => undefined)
+  }
   async downloadRecipient(
     sourceId: string,
     windowId: string,
   ): Promise<{ socket: TerminalChannel; isCurrent(): boolean } | undefined> {
-    const pending = this.entries.get(`${sourceId}/${windowId}`)
-    if (!pending) return
-    const terminal = await pending.catch(() => undefined)
+    const terminal = await this.entry(sourceId, windowId)
     const socket = terminal?.downloadRecipient()
     if (!terminal || !socket) return
     return { socket, isCurrent: () => terminal.downloadRecipient() === socket }
   }
   /** Captures follow the native window to all its viewers, including later ones. */
   async captureChanged(sourceId: string, windowId: string) {
-    const terminal = await this.entries.get(`${sourceId}/${windowId}`)?.catch(() => undefined)
+    const terminal = await this.entry(sourceId, windowId)
     if (terminal) {
       terminal.setNormalSize(this.normalSize(sourceId, windowId))
       terminal.publishCapture()
     }
   }
   async content(source: Source, spaceId: string, windowId: string) {
-    const terminal = await this.entries.get(`${source.id}/${windowId}`)?.catch(() => undefined)
+    const terminal = await this.entry(source.id, windowId)
     return terminal &&
       !terminal.closed &&
       terminal.clients.size &&
@@ -907,7 +841,7 @@ export class TerminalManager {
       : undefined
   }
   private async paneClient(source: Source, spaceId: string, windowId: string) {
-    const terminal = await this.entries.get(`${source.id}/${windowId}`)?.catch(() => undefined)
+    const terminal = await this.entry(source.id, windowId)
     if (
       !terminal ||
       terminal.closed ||
@@ -936,22 +870,13 @@ export class TerminalManager {
     )
   }
   async captureFilePaste(sourceId: string, windowId: string, ws: TerminalChannel) {
-    const pending = this.entries.get(`${sourceId}/${windowId}`)
-    const terminal = await pending?.catch(() => undefined)
-    return terminal?.captureFilePaste(ws)
+    return (await this.entry(sourceId, windowId))?.captureFilePaste(ws)
   }
   /** Keep new viewers out until the caller has retired bridges and committed the source. */
   async closeSource(sourceId: string, afterClose?: () => void | Promise<void>) {
     if (this.closingSources.has(sourceId)) throw new Error('Connection is already changing')
     this.closingSources.add(sourceId)
-    this.completionBoots.delete(sourceId)
-    for (const [key, pending] of this.pendingCompletions)
-      if (pending.source.id === sourceId) {
-        clearTimeout(pending.timer)
-        this.pendingCompletions.delete(key)
-      }
-    for (const key of this.deliveredCompletions.keys())
-      if (key.startsWith(`${sourceId}/`)) this.deliveredCompletions.delete(key)
+    this.intake.forget(sourceId)
     try {
       await Promise.all(
         [...this.entries.values()].map(async (p) => {
@@ -966,11 +891,7 @@ export class TerminalManager {
   }
   async closeAll() {
     this.stopped = true
-    this.notifications[Symbol.dispose]()
-    for (const pending of this.pendingCompletions.values()) clearTimeout(pending.timer)
-    this.pendingCompletions.clear()
-    this.deliveredCompletions.clear()
-    this.completionBoots.clear()
+    this.intake[Symbol.dispose]()
     await Promise.all(
       [...this.entries.values()].map(async (p) => (await p.catch(() => undefined))?.close()),
     )
