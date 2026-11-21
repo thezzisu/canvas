@@ -26,8 +26,8 @@ const formId = useId()
 const draft = reactive<Source>({
   id: '',
   name: '',
-  // herdr-core is the first-tier runtime; a saved connection keeps the runtime it has.
-  runtime: 'core',
+  // A new connection starts on herdr-core; one saved without a runtime is herdr.
+  runtime: props.source ? 'tui' : 'core',
   transport: 'local',
   target: '',
   herdrSession: '',
