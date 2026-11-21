@@ -5,7 +5,8 @@ import { hostname, userInfo } from 'node:os'
 import { isLoopbackHost } from './loopback.ts'
 import { join } from 'node:path'
 import type { Source } from './state.ts'
-import { createHerdrClient, type HerdrClientTransport } from './herdr/client.ts'
+import { createHerdrClient } from './herdr/client.ts'
+import type { WindowTransport } from './transport.ts'
 import {
   PaneTitles,
   paneTitle,
@@ -59,7 +60,7 @@ export interface SourceResource {
   spaces: SpaceResource[]
 }
 export interface TerminalHandle {
-  connect(cols: number, rows: number): Promise<HerdrClientTransport>
+  connect(cols: number, rows: number): Promise<WindowTransport>
   cleanup(): Promise<void>
 }
 

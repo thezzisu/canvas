@@ -60,7 +60,8 @@ import type { TerminalChannel } from './terminal-channels.ts'
 import { sourceConnectionKey, type Source } from './state.ts'
 import { openTerminal } from './runtimes.ts'
 import { GeometryController, type Size } from './geometry.ts'
-import type { HerdrClientTransport } from './herdr/client.ts'
+import type { WindowTransport } from './transport.ts'
+import { Events } from './channels.ts'
 import type { FrameData } from './herdr/wire.ts'
 import { GridEncoder } from './cell-grid.ts'
 import type { WindowMetadata } from '../shared/window-metadata.ts'
@@ -122,7 +123,8 @@ export class LiveTerminal {
   private mouseAreas = '[]'
   private readGenerations = new WeakMap<TerminalChannel, number>()
   private pendingFences = new WeakMap<TerminalChannel, number>()
-  private readSubscription?: { dispose(): unknown }
+  /** The window's subscriptions, disposed when it closes. */
+  private readonly owned = new DisposableStack()
   private outputWaiters = new Set<() => void>()
   // Keyboard input typed during a paced paste follows the complete paste.
   private pasting?: Promise<void>
@@ -145,7 +147,7 @@ export class LiveTerminal {
     cols: number,
     rows: number,
     readonly onClose: () => void,
-    readonly proc: HerdrClientTransport,
+    readonly proc: WindowTransport,
     readonly source: Source,
     readonly reads?: CompletionReads,
     readonly onFocusedRemove?: () => void,
@@ -169,57 +171,71 @@ export class LiveTerminal {
         void this.close()
       },
     )
-    this.proc.onPaneFocus((paneId) => {
-      if (this.closed || this.focusedPaneId === paneId) return
-      this.focusedPaneId = paneId
-      for (const ws of this.clients) json(ws, { type: 'pane-focus', paneId })
-    })
-    this.readSubscription = reads?.onRead((sourceId) => {
-      if (sourceId === this.sourceId) this.publishMetadata()
-    })
-    this.proc.onMetadata((metadata) => {
-      if (this.closed) return
-      this.rawMetadata = metadata
-      this.publishMetadata()
-    })
-    this.proc.onScreen((grid, mouse) => {
-      if (this.closed) return
-      const areas = JSON.stringify(mouse)
-      if (areas !== this.mouseAreas) {
-        this.mouseAreas = areas
-        for (const ws of this.clients) this.sendMouseAreas(ws)
-      }
-      for (const waiter of this.outputWaiters) waiter()
-      this.grid = grid
-      this.revision++
-      for (const ws of this.clients) this.pump(ws)
-    })
-    this.proc.onFrame((frame) => {
-      if (this.closed) return
-      this.frame = frame
-      for (const ws of this.clients)
-        if (!this.pendingFences.has(ws) && this.canRender(ws)) {
-          this.views.get(ws)!.frameDue = true
-          this.pump(ws)
+    // Closing disposes these, so none of them runs for a closed window.
+    const { owned } = this
+    owned.use(
+      proc.paneFocus.subscribe((paneId) => {
+        if (this.focusedPaneId === paneId) return
+        this.focusedPaneId = paneId
+        for (const ws of this.clients) json(ws, { type: 'pane-focus', paneId })
+      }),
+    )
+    if (reads)
+      owned.use(
+        reads.changes.subscribe((sourceId) => {
+          if (sourceId === this.sourceId) this.publishMetadata()
+        }),
+      )
+    owned.use(
+      proc.metadata.subscribe((metadata) => {
+        this.rawMetadata = metadata
+        this.publishMetadata()
+      }),
+    )
+    owned.use(
+      proc.screen.subscribe(({ grid, mouse }) => {
+        const areas = JSON.stringify(mouse)
+        if (areas !== this.mouseAreas) {
+          this.mouseAreas = areas
+          for (const ws of this.clients) this.sendMouseAreas(ws)
         }
-    })
-    this.proc.onClipboard((data) => {
-      for (const ws of this.clients) if (this.canRender(ws)) json(ws, { type: 'clipboard', data })
-    })
+        for (const waiter of this.outputWaiters) waiter()
+        this.grid = grid
+        this.revision++
+        for (const ws of this.clients) this.pump(ws)
+      }),
+    )
+    owned.use(
+      proc.painted.subscribe((frame) => {
+        this.frame = frame
+        for (const ws of this.clients)
+          if (!this.pendingFences.has(ws) && this.canRender(ws)) {
+            this.views.get(ws)!.frameDue = true
+            this.pump(ws)
+          }
+      }),
+    )
+    owned.use(
+      proc.copies.subscribe((data) => {
+        for (const ws of this.clients) if (this.canRender(ws)) json(ws, { type: 'clipboard', data })
+      }),
+    )
     // An agent that reports its state says when it needs you; its bell would say it again. herdr
     // names no pane, so there any agent in the window counts. Bells written together ring once, in
     // one place: the browser at the keyboard, as herdr rings only its foreground client.
-    this.proc.onBell((paneId) => {
-      if (this.bellQueued || this.agentReports(paneId)) return
-      this.bellQueued = true
-      queueMicrotask(() => {
-        this.bellQueued = false
-        const ws = this.controller
-        if (!this.closed && ws && this.clients.has(ws) && this.canRender(ws))
-          json(ws, { type: 'bell' })
-      })
-    })
-    this.proc.onExit((event) => void this.close(event.reason))
+    owned.use(
+      proc.bells.subscribe((paneId) => {
+        if (this.bellQueued || this.agentReports(paneId)) return
+        this.bellQueued = true
+        queueMicrotask(() => {
+          this.bellQueued = false
+          const ws = this.controller
+          if (!this.closed && ws && this.clients.has(ws) && this.canRender(ws))
+            json(ws, { type: 'bell' })
+        })
+      }),
+    )
+    owned.use(proc.exit.subscribe((event) => void this.close(event.reason)))
   }
   /** Whether an agent reports its state in the pane, or in any pane when none is named. */
   agentReports(paneId?: string) {
@@ -651,7 +667,7 @@ export class LiveTerminal {
       )
     this.closed = true
     for (const waiter of this.outputWaiters) waiter()
-    this.readSubscription?.dispose()
+    this.owned.dispose()
     if (reason === 'removed')
       this.reads?.removeWindow(this.source, this.key.slice(this.sourceId.length + 1))
     if (focused) this.onFocusedRemove?.()
@@ -687,7 +703,8 @@ export class LiveTerminal {
 export class TerminalManager {
   entries = new Map<string, Promise<LiveTerminal>>()
   private readonly live = new Set<LiveTerminal>()
-  private readonly notificationListeners = new Set<(notification: CanvasNotification) => void>()
+  /** Native and program notifications to show, each once. */
+  readonly notifications = new Events<CanvasNotification>()
   private stopped = false
   private closingSources = new Set<string>()
   private pendingCompletions = new Map<
@@ -711,14 +728,6 @@ export class TerminalManager {
     if (this.stopped) return
     for (const terminal of this.live)
       terminal.setNormalSize(this.normalSize(terminal.sourceId, terminal.windowId))
-  }
-  onNotification(listener: (notification: CanvasNotification) => void) {
-    this.notificationListeners.add(listener)
-    return {
-      dispose: () => {
-        this.notificationListeners.delete(listener)
-      },
-    }
   }
   private observeCompletionSource(source: Source) {
     const owner = [...this.live].find(
@@ -744,9 +753,6 @@ export class TerminalManager {
       this.completionBoots.delete(source.id)
     }
   }
-  private publishNotification(notification: CanvasNotification) {
-    for (const listener of this.notificationListeners) listener(notification)
-  }
   private flushCompletions(sourceId: string) {
     if (!this.reads || this.stopped || this.closingSources.has(sourceId)) return
     for (const [key, pending] of this.pendingCompletions) {
@@ -759,7 +765,7 @@ export class TerminalManager {
       this.deliveredCompletions.set(key, completion.completion)
       if (this.deliveredCompletions.size > 1000)
         this.deliveredCompletions.delete(this.deliveredCompletions.keys().next().value!)
-      this.publishNotification({
+      this.notifications.emit({
         ...pending.notification,
         windowId: completion.windowId,
         completion: completion.completion,
@@ -775,7 +781,7 @@ export class TerminalManager {
         throw new Error('At most 100 active terminal windows are supported')
       const creating = (async () => {
         const handle = await openTerminal(source, target.spaceId, target.windowId)
-        let transport: HerdrClientTransport | undefined
+        let transport: WindowTransport | undefined
         try {
           const { cols, rows } = this.normalSize(source.id, target.windowId)
           transport = await handle.connect(cols, rows)
@@ -805,7 +811,7 @@ export class TerminalManager {
           this.live.add(terminal)
           // A card/font edit may have committed while the native socket opened.
           terminal.setNormalSize(this.normalSize(source.id, target.windowId))
-          transport.onSnapshot(() => {
+          transport.snapshots.subscribe(() => {
             const owner = [...this.live].find(
               (candidate) =>
                 !candidate.closed &&
@@ -814,13 +820,13 @@ export class TerminalManager {
             )
             if (owner === terminal) this.observeCompletionSource(source)
           })
-          transport.onNotification((notification) => {
+          transport.notifications.subscribe((notification) => {
             if (this.stopped || this.closingSources.has(source.id) || terminal.closed) return
             // A program's own notification belongs to the one window showing it, unless its pane's
             // agent reports its state and so says it already.
             if (notification.origin === 'program') {
               if (!terminal.agentReports(notification.paneId))
-                this.publishNotification({ ...notification, id: randomUUID(), sourceId: source.id })
+                this.notifications.emit({ ...notification, id: randomUUID(), sourceId: source.id })
               return
             }
             // Herdr broadcasts to every native shell. One existing endpoint owns
@@ -838,7 +844,7 @@ export class TerminalManager {
               sourceId: source.id,
             }
             if (notification.kind !== 'done' || !this.reads) {
-              this.publishNotification(event)
+              this.notifications.emit(event)
               return
             }
             if (!notification.paneId) return
@@ -960,7 +966,7 @@ export class TerminalManager {
   }
   async closeAll() {
     this.stopped = true
-    this.notificationListeners.clear()
+    this.notifications[Symbol.dispose]()
     for (const pending of this.pendingCompletions.values()) clearTimeout(pending.timer)
     this.pendingCompletions.clear()
     this.deliveredCompletions.clear()

@@ -254,7 +254,7 @@ function parsed(data: string) {
   )
   parser.write(data)
   parser.flushEscape()
-  parser.dispose()
+  parser[Symbol.dispose]()
   return events
 }
 const pressed = (code: unknown, modifiers = 0) => ({

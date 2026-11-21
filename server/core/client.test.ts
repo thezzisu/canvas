@@ -115,7 +115,7 @@ function fixture(split = false, subscriptionSeq = 0) {
       }
     },
     onClose() {
-      return { dispose() {} }
+      return { [Symbol.dispose]() {} }
     },
     send(channel: number, kind: number, data: Buffer) {
       sent.push({ channel, kind, data })
@@ -178,7 +178,7 @@ test('subscription sequence waterline rejects stale Core events after the initia
   const client = await open(f)
   try {
     const notifications: unknown[] = []
-    client.onNotification((value) => notifications.push(value))
+    client.notifications.subscribe((value) => notifications.push(value))
     await f.event('status', { status: { state: 'idle' } }, 101)
     await f.event('turn', { turn: 1 }, 102)
     assert.equal(
@@ -213,7 +213,7 @@ test('an initial completed snapshot is state, not a new completion notification'
   const client = await open(f, report('idle') + '\x1b[?9001l')
   try {
     const notifications: unknown[] = []
-    client.onNotification((value) => notifications.push(value))
+    client.notifications.subscribe((value) => notifications.push(value))
     await f.event('turn', { turn: 3 }, 20)
     assert.equal(client.completionSnapshot()?.windows[0]?.status, 'done')
     assert.equal(notifications.length, 0)
@@ -227,7 +227,7 @@ test('heartbeat sequence rejects earlier events without changing native state', 
   const client = await open(f)
   try {
     const notifications: unknown[] = []
-    client.onNotification((value) => notifications.push(value))
+    client.notifications.subscribe((value) => notifications.push(value))
     await f.notification('heartbeat', {}, 30)
     await f.event('status', { status: { state: 'idle' } }, 29)
     await f.event('turn', { turn: 1 }, 30)
@@ -246,7 +246,7 @@ test('missed-event recovery uses its own snapshot and does not replay old comple
   const client = await open(f)
   try {
     const notifications: unknown[] = []
-    client.onNotification((value) => notifications.push(value))
+    client.notifications.subscribe((value) => notifications.push(value))
     const snapshot = { ...structuredClone(f.terminal), turn: 5 }
     f.terminal.status.state = 'idle'
     f.terminal.turn = 8
@@ -331,7 +331,7 @@ test('native lifecycle events preserve unrelated terminals, replace restarted st
   const client = await opening
   try {
     const exits: unknown[] = []
-    client.onExit((value) => exits.push(value))
+    client.exit.subscribe((value) => exits.push(value))
     f.terminal.turn = 5
     const other = { ...structuredClone(f.terminal), address: 't2', turn: 7 }
     await f.notification('event', { terminal: 't2', type: 'created', data: other }, 21)
@@ -384,7 +384,7 @@ test('confirmed Core EOF closes an explicit tab once and preserves the retained 
   const f = fixture()
   const client = await open(f, 'FINAL\x1b[?9001l')
   const exits: unknown[] = []
-  client.onExit((exit) => exits.push(exit))
+  client.exit.subscribe((exit) => exits.push(exit))
   try {
     await f.event('finished', { reason: 'exited', exit_code: 0, finished_ms: 100 })
     f.stream.receive({ kind: 'close', reason: { reason: 'exited', exit_code: 0 } })
@@ -420,7 +420,7 @@ test('a split pane finishing leaves its live sibling connected and the last exit
     stream.receive({ kind: 'data', data: Buffer.from(`PANE${index}\x1b[?9001l`) })
   const client = await opening
   const exits: unknown[] = []
-  client.onExit((exit) => exits.push(exit))
+  client.exit.subscribe((exit) => exits.push(exit))
   try {
     // The terminal channel can finish before the subscription channel catches up.
     f.streams[0]!.receive({ kind: 'close', reason: { reason: 'exited', exit_code: 0 } })
@@ -461,7 +461,7 @@ test('recoverable lost terminals and transport-only stream endings do not remove
     before = structuredClone(f.document)
   const client = await open(f, 'READY\x1b[?9001l')
   const exits: unknown[] = []
-  client.onExit((exit) => exits.push(exit))
+  client.exit.subscribe((exit) => exits.push(exit))
   try {
     f.stream.receive({ kind: 'close', reason: { reason: 'signaled', signal: 9 } })
     await f.event('lost', { reason: 'signaled', pid: null, signal: 9 })
@@ -504,8 +504,8 @@ test('initial and missed snapshots reconcile already finished panes without atta
   const client = await open(f, 'READY\x1b[?9001l'),
     notices: unknown[] = [],
     exits: unknown[] = []
-  client.onNotification((event) => notices.push(event))
-  client.onExit((exit) => exits.push(exit))
+  client.notifications.subscribe((event) => notices.push(event))
+  client.exit.subscribe((exit) => exits.push(exit))
   try {
     await f.notification(
       'missed',
@@ -572,7 +572,7 @@ test('missed snapshots recover ended streams and initial waiting panes without a
       f.stream.receive({ kind: 'data', data: Buffer.from('BEFORE\x1b[?9001l') })
     const client = await opening,
       notices: unknown[] = []
-    client.onNotification((notice) => notices.push(notice))
+    client.notifications.subscribe((notice) => notices.push(notice))
     try {
       if (!initiallyWaiting) {
         f.stream.receive({ kind: 'close', reason: { reason: 'signaled', signal: 9 } })
@@ -783,7 +783,7 @@ test('widening a narrow core view attaches newly exposed panes before publishing
   try {
     const frames: WindowMetadata[] = []
     const seen = watch(client)
-    client.onFrame((frame) => frames.push(frame))
+    client.painted.subscribe((frame) => frames.push(frame))
     await tick()
     assert.deepEqual(f.attached, ['t1'])
     const before = frames.length
@@ -815,7 +815,7 @@ test('clearing a native core title emits an explicit empty title instead of miss
   const client = await open(f)
   try {
     const metadata: WindowMetadata[] = []
-    client.onMetadata((value) => metadata.push(value))
+    client.metadata.subscribe((value) => metadata.push(value))
     await f.event('title', { title: 'Task title' })
     assert.equal(metadata.at(-1)?.panes[0]?.terminalTitle, 'Task title')
     await f.event('title', { title: '' })
@@ -830,7 +830,7 @@ test('a core window publishes its metadata only when it changed', async () => {
   const client = await open(f)
   try {
     const titles: string[] = []
-    client.onMetadata((value) => titles.push(value.panes[0]!.terminalTitle!))
+    client.metadata.subscribe((value) => titles.push(value.panes[0]!.terminalTitle!))
     await f.event('title', { title: 'Task title' })
     const published = titles.length
     await f.event('title', { title: 'Task title' })
@@ -851,7 +851,7 @@ test('a new metadata subscriber never receives an older value after a newer one'
     const titles: string[] = []
     // The update is queued before the subscription's own delivery of what is current.
     const updating = f.event('title', { title: 'New' })
-    client.onMetadata((value) => titles.push(value.panes[0]!.terminalTitle!))
+    client.metadata.subscribe((value) => titles.push(value.panes[0]!.terminalTitle!))
     await updating
     assert.deepEqual(titles, ['New'])
   } finally {
@@ -895,7 +895,9 @@ test('rapid core resize retires a late pane attachment and can reveal it again',
 test('failed resize attachments close the view without an unhandled asynchronous rejection', async () => {
   const f = fixture(true)
   const client = await open(f, 'LEFT\x1b[?9001l', 2)
-  const closed = new Promise<number>((resolve) => client.onExit((exit) => resolve(exit.exitCode)))
+  const closed = new Promise<number>((resolve) =>
+    client.exit.subscribe((exit) => resolve(exit.exitCode)),
+  )
   f.controls.failAttach = true
   client.resize(40, 6)
   assert.equal(await closed, 1)
@@ -1146,7 +1148,7 @@ test('a delayed older document cannot remove a window already restored by a newe
   const client = await open(f, 'READY\x1b[?9001l')
   try {
     const exits: unknown[] = []
-    client.onExit((value) => exits.push(value))
+    client.exit.subscribe((value) => exits.push(value))
     const snapshot = f.layout.snapshot.bind(f.layout)
     let release!: () => void, observed!: () => void
     const gate = new Promise<void>((resolve) => {
@@ -1318,7 +1320,7 @@ test('completion events cannot acknowledge result bytes which have not reached t
   const client = await opening
   try {
     const frames: WindowMetadata[] = []
-    client.onFrame((frame) => frames.push(frame))
+    client.painted.subscribe((frame) => frames.push(frame))
     await tick()
     f.terminal.status.state = 'idle'
     f.terminal.turn = 1
@@ -1666,8 +1668,8 @@ test('a pane rings and notifies through its window, with the text a program aske
   const client = await open(f)
   const bells: (string | undefined)[] = [],
     notices: NativeNotification[] = []
-  client.onBell((paneId) => bells.push(paneId))
-  client.onNotification((notice) => notices.push(notice))
+  client.bells.subscribe((paneId) => bells.push(paneId))
+  client.notifications.subscribe((notice) => notices.push(notice))
   try {
     f.stream.receive({
       kind: 'data',
@@ -1696,8 +1698,8 @@ test('progress reports reach the window metadata and pointer requests reach the 
   const client = await open(f)
   let metadata: WindowMetadata | undefined,
     mouse: readonly MouseArea[] = []
-  client.onMetadata((value) => (metadata = value))
-  client.onScreen((_screen, areas) => (mouse = areas))
+  client.metadata.subscribe((value) => (metadata = value))
+  client.screen.subscribe(({ mouse: areas }) => (mouse = areas))
   try {
     f.stream.receive({ kind: 'data', data: Buffer.from('\x1b]9;4;1;40\x07\x1b]22;pointer\x07x') })
     await tick()

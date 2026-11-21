@@ -7,10 +7,17 @@ import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import { cellWidth } from '../ghostty/module.ts'
 import { GhosttyTerminal } from '../ghostty/terminal.ts'
 import { HerdrInputRouter, thumb } from '../herdr/input.ts'
-import { SELECTED, mouseAreas, type ScreenSelection } from '../herdr/screen.ts'
-import type { MouseArea } from '../../shared/terminal-mouse.ts'
+import { SELECTED, mouseAreas, paneAt, type ScreenSelection } from '../herdr/screen.ts'
 import { windowContent, type NativeContentPane } from '../herdr/content.ts'
-import type { HerdrClientExit, HerdrClientTransport } from '../herdr/client.ts'
+import { Events, Latest } from '../channels.ts'
+import {
+  isClipboardPayload,
+  nextPaint,
+  validateViewport,
+  type Screen,
+  type TransportExit,
+  type WindowTransport,
+} from '../transport.ts'
 import type {
   CellData,
   ClientMessage,
@@ -34,7 +41,6 @@ import {
 import { CoreRpc, CoreRpcError, type CoreNotification, type CoreStream } from './rpc.ts'
 import { cssColour, terminalTheme } from '../../shared/terminal-theme.ts'
 
-type Subscription = { dispose(): void }
 /** Lines of history a pane keeps, and asks the core for when it attaches. */
 const HISTORY = 2000
 const cell = (symbol: string): CellData => ({
@@ -66,18 +72,6 @@ export function coreHyperlink(value: unknown): string | undefined {
   } catch {
     return
   }
-}
-function dimensions(cols: number, rows: number) {
-  if (
-    !Number.isInteger(cols) ||
-    !Number.isInteger(rows) ||
-    cols < 1 ||
-    rows < 1 ||
-    cols > 4096 ||
-    rows > 4096 ||
-    cols * rows > 1_000_000
-  )
-    throw new Error('Invalid core viewport size')
 }
 /** Dividers keep their original resize axis, but only exposed cells accept hits. */
 function visibleSplits(
@@ -120,7 +114,8 @@ interface CorePane {
   firstPaint: Promise<void>
   painted(): void
   disposed: boolean
-  subscriptions: Subscription[]
+  /** Its stream, the stream's subscriptions and its engine, released together. */
+  resources: DisposableStack
   /** The pane's place in the window, and the grid last asked of its terminal for it. */
   place: { width: number; height: number }
   wanted: { cols: number; rows: number }
@@ -144,13 +139,11 @@ export interface CoreClientOptions {
 }
 
 /** One Canvas window, composed from independent native core terminal streams. */
-class CoreWindowClient implements HerdrClientTransport {
+class CoreWindowClient implements WindowTransport {
   private state?: CoreSnapshot
   private tab?: CoreTab
   private surface?: PaneSurfaceFrame
   private shell?: ClientShellSnapshot
-  private metadata?: WindowMetadata
-  private metadataSignature = ''
   private renderedMetadata?: WindowMetadata
   private renderedContent?: {
     surface: PaneSurfaceFrame
@@ -159,9 +152,6 @@ class CoreWindowClient implements HerdrClientTransport {
     layers: string[]
   }
   private layoutToken = { signature: '', token: '' }
-  private screen?: FrameData
-  /** Metadata of the current screen. */
-  private painted?: WindowMetadata
   private readonly attached = new Map<string, CorePane>()
   private focused?: string
   private zoomed?: string
@@ -174,49 +164,49 @@ class CoreWindowClient implements HerdrClientTransport {
   private parseQueue: Promise<void> = Promise.resolve()
   private refreshQueue: Promise<void> = Promise.resolve()
   private readonly input: HerdrInputRouter
-  private readonly screenListeners = new Set<
-    (screen: FrameData, mouse: readonly MouseArea[]) => void
-  >()
-  private mouse: readonly MouseArea[] = []
-  private readonly clipboardListeners = new Set<(data: string) => void>()
-  private readonly paneFocusListeners = new Set<(id: string | undefined) => void>()
-  private readonly metadataListeners = new Set<(metadata: WindowMetadata) => void>()
-  private readonly frameListeners = new Set<(metadata: WindowMetadata) => void>()
-  private readonly snapshotListeners = new Set<() => void>()
-  private readonly notificationListeners = new Set<(notification: NativeNotification) => void>()
-  private readonly bellListeners = new Set<(paneId: string) => void>()
+  /** What the window holds; closing disposes it, which ends every subscription. */
+  private readonly owned = new DisposableStack()
+  readonly screen = this.owned.use(new Latest<Screen>())
+  /** Metadata of the current screen. */
+  readonly painted = this.owned.use(new Latest<WindowMetadata>())
+  // Every Core event reaches every window; most leave this one as it was.
+  readonly metadata = this.owned.use(new Latest<WindowMetadata>((value) => JSON.stringify(value)))
+  readonly paneFocus = this.owned.use(new Latest<string | undefined>((paneId) => paneId))
+  readonly snapshots = this.owned.use(new Latest<void>())
+  readonly copies = this.owned.use(new Events<string>())
+  readonly bells = this.owned.use(new Events<string>())
+  readonly notifications = this.owned.use(new Events<NativeNotification>())
+  readonly exit = new Latest<TransportExit>()
   private metadataScheduled = false
-  private readonly exitListeners = new Set<(exit: HerdrClientExit) => void>()
-  private readonly subscriptions: Subscription[] = []
-  private subscription?: { close(): void }
   private renderScheduled = false
   private closed = false
   private initialized = false
-  private exit?: HerdrClientExit
 
   constructor(private readonly options: CoreClientOptions) {
-    dimensions(options.cols, options.rows)
+    validateViewport(options.cols, options.rows, 'core')
     this.cols = options.cols
     this.rows = options.rows
-    this.input = new HerdrInputRouter({
-      tabId: options.tabId,
-      getSurface: () => this.surface,
-      getSnapshot: () => this.shell,
-      send: (message) => this.send(message),
-      request: (method, params) => this.request(method, params),
-      onSelection: (selection) => {
-        this.selection = selection
-        this.render()
-      },
-      onCopy: (text) => this.clipboard(Buffer.from(text).toString('base64')),
-    })
+    this.input = this.owned.use(
+      new HerdrInputRouter({
+        tabId: options.tabId,
+        getSurface: () => this.surface,
+        getSnapshot: () => this.shell,
+        send: (message) => this.send(message),
+        request: (method, params) => this.request(method, params),
+        onSelection: (selection) => {
+          this.selection = selection
+          this.render()
+        },
+        onCopy: (text) => this.clipboard(Buffer.from(text).toString('base64')),
+      }),
+    )
   }
 
-  async initialize(): Promise<HerdrClientTransport> {
-    this.subscriptions.push(this.options.rpc.onClose(() => this.finish({ exitCode: 1 })))
+  async initialize(): Promise<WindowTransport> {
+    this.owned.use(this.options.rpc.onClose(() => this.finish({ exitCode: 1 })))
     // Subscribe before reading documents; doc changes are not part of the terminal snapshot.
     const subscription = await this.options.rpc.subscribe({}, (event) => this.event(event))
-    this.subscription = subscription
+    this.owned.defer(() => subscription.close())
     this.eventSeq = subscription.snapshot.seq
     await this.replace(await this.options.layout.snapshot(subscription.snapshot.terminals), true)
     subscription.start()
@@ -225,12 +215,13 @@ class CoreWindowClient implements HerdrClientTransport {
       this.options.handshakeTimeoutMs ?? 15_000,
     )
     timeout.unref()
+    using subscriptions = new DisposableStack()
     try {
       await Promise.race([
         Promise.all([...this.attached.values()].map((pane) => pane.firstPaint)),
         new Promise<never>((_, reject) =>
-          this.subscriptions.push(
-            this.onExit(() => reject(new Error('Core terminal first paint failed'))),
+          subscriptions.use(
+            this.exit.subscribe(() => reject(new Error('Core terminal first paint failed'))),
           ),
         ),
       ])
@@ -373,9 +364,10 @@ class CoreWindowClient implements HerdrClientTransport {
             return
           }
           pane.stream = attached.stream
+          pane.resources.defer(() => attached.stream.close())
           const nativeCols = Number(attached.terminal.cols),
             nativeRows = Number(attached.terminal.rows)
-          dimensions(nativeCols, nativeRows)
+          validateViewport(nativeCols, nativeRows, 'core')
           pane.engine.resize(nativeCols, nativeRows)
           pane.parsedTurn = Number.isSafeInteger(attached.terminal.turn)
             ? Number(attached.terminal.turn)
@@ -384,7 +376,7 @@ class CoreWindowClient implements HerdrClientTransport {
           pane.parsedState =
             typeof initialStatus?.state === 'string' ? initialStatus.state : undefined
           // Install all handlers before enabling queued DATA delivery.
-          pane.subscriptions.push(
+          pane.resources.use(
             attached.stream.onResize((size) =>
               this.enqueue(() => {
                 if (!pane.disposed) {
@@ -395,7 +387,7 @@ class CoreWindowClient implements HerdrClientTransport {
               }),
             ),
           )
-          pane.subscriptions.push(
+          pane.resources.use(
             attached.stream.onClose((reason) => {
               pane.stream = undefined
               pane.ready = true
@@ -415,7 +407,7 @@ class CoreWindowClient implements HerdrClientTransport {
                 })
             }),
           )
-          pane.subscriptions.push(
+          pane.resources.use(
             attached.stream.onData((data) =>
               this.enqueue(() => {
                 if (pane.disposed) return
@@ -444,7 +436,7 @@ class CoreWindowClient implements HerdrClientTransport {
     this.resizeStreams()
     this.revision++
     this.updateMetadata()
-    for (const listener of this.snapshotListeners) listener()
+    this.snapshots.set()
     this.render()
   }
 
@@ -461,9 +453,7 @@ class CoreWindowClient implements HerdrClientTransport {
       pwd: (path) => {
         pane.reportedCwd = path
       },
-      bell: () => {
-        if (!this.closed) for (const listener of this.bellListeners) listener(pane.id)
-      },
+      bell: () => this.bells.emit(pane.id),
       notification: (title, body) => this.programNotification(pane, title, body),
       progress: (progress) => {
         if (progress?.state === pane.progress?.state && progress?.value === pane.progress?.value)
@@ -492,12 +482,13 @@ class CoreWindowClient implements HerdrClientTransport {
       firstPaint,
       painted,
       disposed: false,
-      subscriptions: [],
+      resources: new DisposableStack(),
       place: { width, height: rows },
       wanted: { cols, rows },
       parsedTurn: 0,
       rootReport: false,
     }
+    pane.resources.defer(() => engine.free())
     return pane
   }
 
@@ -590,7 +581,7 @@ class CoreWindowClient implements HerdrClientTransport {
       this.revision++
       this.updateMetadata()
       this.render()
-      for (const listener of this.snapshotListeners) listener()
+      this.snapshots.set()
       if (
         this.initialized &&
         type === 'status' &&
@@ -625,7 +616,7 @@ class CoreWindowClient implements HerdrClientTransport {
       windowId: target.tab.id,
       paneId: target.pane.id,
     }
-    for (const listener of this.notificationListeners) listener(notification)
+    this.notifications.emit(notification)
   }
 
   private refresh(
@@ -647,13 +638,8 @@ class CoreWindowClient implements HerdrClientTransport {
     if (!this.state) return
     const metadata = coreWindowMetadata(this.state, this.options.tabId, this.focused)
     const progress = windowProgress([...this.attached.values()].map((pane) => pane.progress))
-    const next = metadata && progress ? { ...metadata, progress } : metadata,
-      signature = next ? JSON.stringify(next) : ''
-    // Every Core event reaches every window; most leave this one as it was.
-    if (signature === this.metadataSignature) return
-    this.metadata = next
-    this.metadataSignature = signature
-    if (next) for (const listener of this.metadataListeners) listener(next)
+    if (metadata) this.metadata.set(progress ? { ...metadata, progress } : metadata)
+    else this.metadata.clear()
   }
   /** Reports in one write update the metadata once. */
   private scheduleMetadata() {
@@ -671,13 +657,13 @@ class CoreWindowClient implements HerdrClientTransport {
     const notification: NativeNotification = {
       kind: 'custom',
       origin: 'program',
-      title: (this.metadata?.name || pane.address).slice(0, 120),
+      title: (this.metadata.current?.name || pane.address).slice(0, 120),
       body: text,
       spaceId: this.options.spaceId,
       windowId: this.options.tabId,
       paneId: pane.id,
     }
-    for (const listener of this.notificationListeners) listener(notification)
+    this.notifications.emit(notification)
   }
 
   private render() {
@@ -872,7 +858,7 @@ class CoreWindowClient implements HerdrClientTransport {
           workspace_id: this.options.spaceId,
           focused: pane.focused,
           right_click_passthrough: false,
-          label: this.metadata?.panes.find((item) => item.id === pane.pane_id)?.name || '',
+          label: this.metadata.current?.panes.find((item) => item.id === pane.pane_id)?.name || '',
           ...cwds(
             this.attached.get(pane.pane_id),
             this.state!.terminals.find(
@@ -894,11 +880,12 @@ class CoreWindowClient implements HerdrClientTransport {
       this.surface = surface
       this.input.refresh()
       this.renderedContent = { surface, shell, owners, layers }
-      this.renderedMetadata = this.metadata
+      const current = this.metadata.current
+      this.renderedMetadata = current
         ? {
-            ...this.metadata,
+            ...current,
             layout: this.layoutToken.token,
-            panes: this.metadata.panes.map((metadata) => {
+            panes: current.panes.map((metadata) => {
               const pane = this.attached.get(metadata.id),
                 owner = layers.indexOf(metadata.id) + 1
               if (
@@ -934,14 +921,16 @@ class CoreWindowClient implements HerdrClientTransport {
         }
         display = { ...surface, frame: { ...frame, cells } }
       }
-      const screen = (this.screen = display.frame),
-        mouse = (this.mouse = mouseAreas(
+      const painted = this.renderedMetadata
+      if (!painted) this.painted.clear()
+      this.screen.set({
+        grid: display.frame,
+        mouse: mouseAreas(
           surface,
           new Map([...this.attached].map(([id, pane]) => [id, pane.engine.pointer])),
-        )),
-        painted = (this.painted = this.renderedMetadata)
-      for (const listener of this.screenListeners) listener(screen, mouse)
-      if (painted) for (const listener of this.frameListeners) listener(painted)
+        ),
+      })
+      if (painted) this.painted.set(painted)
     })
   }
 
@@ -980,7 +969,7 @@ class CoreWindowClient implements HerdrClientTransport {
       pane.stream?.focus(true)
       this.revision++
       this.updateMetadata()
-      for (const listener of this.paneFocusListeners) listener(paneId)
+      this.paneFocus.set(paneId)
       this.render()
       return {}
     }
@@ -1122,18 +1111,12 @@ class CoreWindowClient implements HerdrClientTransport {
       point.rows !== this.rows
     )
       return
-    const pane = this.surface.panes.find(
-      (pane) =>
-        point.column >= pane.inner_rect.x &&
-        point.column < pane.inner_rect.x + pane.inner_rect.width &&
-        point.row >= pane.inner_rect.y &&
-        point.row < pane.inner_rect.y + pane.inner_rect.height,
-    )
+    const pane = paneAt(this.surface, point.column, point.row)
     return pane
       ? {
           bootId: this.state!.coreId,
           paneId: pane.pane_id,
-          name: this.metadata?.panes.find((item) => item.id === pane.pane_id)?.name || '',
+          name: this.metadata.current?.panes.find((item) => item.id === pane.pane_id)?.name || '',
         }
       : undefined
   }
@@ -1224,19 +1207,9 @@ class CoreWindowClient implements HerdrClientTransport {
     if (this.closed) return
     // Core events and terminal bytes are independent channels. This fences the
     // bytes already received and parsed, not unseen future remote output.
-    return new Promise((resolve) => {
-      const frame = this.laterFrames((metadata) => {
-        frame.dispose()
-        exit.dispose()
-        resolve(metadata)
-      })
-      const exit = this.onExit(() => {
-        frame.dispose()
-        exit.dispose()
-        resolve(undefined)
-      })
-      this.render()
-    })
+    const paint = nextPaint(this.painted, this.exit)
+    this.render()
+    return paint
   }
   write(data: string | Buffer) {
     if (!this.closed && this.initialized) this.input.write(data)
@@ -1266,7 +1239,7 @@ class CoreWindowClient implements HerdrClientTransport {
     this.render()
   }
   resize(cols: number, rows: number) {
-    dimensions(cols, rows)
+    validateViewport(cols, rows, 'core')
     if (this.closed || (this.cols === cols && this.rows === rows)) return
     this.cols = cols
     this.rows = rows
@@ -1282,132 +1255,22 @@ class CoreWindowClient implements HerdrClientTransport {
     if (pane.disposed) return
     pane.disposed = true
     pane.painted()
-    pane.stream?.close()
-    for (const subscription of pane.subscriptions) subscription.dispose()
-    pane.engine.free()
+    pane.resources.dispose()
   }
-  private finish(exit: HerdrClientExit) {
+  private finish(exit: TransportExit) {
     if (this.closed) return
     this.closed = true
-    this.exit = exit
-    this.input.dispose()
-    this.subscription?.close()
-    for (const subscription of this.subscriptions) subscription.dispose()
+    this.owned.dispose()
     for (const pane of this.attached.values()) this.disposePane(pane)
     this.attached.clear()
-    for (const listener of this.exitListeners) listener(exit)
+    this.exit.set(exit)
   }
   private clipboard(data: string) {
-    if (!this.initialized || data.length > 2 * 1024 * 1024 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(data))
-      return
-    for (const listener of this.clipboardListeners) listener(data)
-  }
-  onScreen(listener: (screen: FrameData, mouse: readonly MouseArea[]) => void) {
-    this.screenListeners.add(listener)
-    queueMicrotask(() => {
-      if (!this.closed && this.screen && this.screenListeners.has(listener))
-        listener(this.screen, this.mouse)
-    })
-    return {
-      dispose: () => {
-        this.screenListeners.delete(listener)
-      },
-    }
-  }
-  onClipboard(listener: (data: string) => void) {
-    this.clipboardListeners.add(listener)
-    return {
-      dispose: () => {
-        this.clipboardListeners.delete(listener)
-      },
-    }
-  }
-  onPaneFocus(listener: (id: string | undefined) => void) {
-    this.paneFocusListeners.add(listener)
-    queueMicrotask(() => {
-      if (!this.closed && this.paneFocusListeners.has(listener)) listener(this.focused)
-    })
-    return {
-      dispose: () => {
-        this.paneFocusListeners.delete(listener)
-      },
-    }
-  }
-  onMetadata(listener: (metadata: WindowMetadata) => void) {
-    this.metadataListeners.add(listener)
-    const metadata = this.metadata
-    queueMicrotask(() => {
-      if (
-        !this.closed &&
-        metadata &&
-        this.metadata === metadata &&
-        this.metadataListeners.has(listener)
-      )
-        listener(metadata)
-    })
-    return {
-      dispose: () => {
-        this.metadataListeners.delete(listener)
-      },
-    }
-  }
-  onFrame(listener: (metadata: WindowMetadata) => void) {
-    queueMicrotask(() => {
-      if (!this.closed && this.painted && this.frameListeners.has(listener)) listener(this.painted)
-    })
-    return this.laterFrames(listener)
-  }
-  private laterFrames(listener: (metadata: WindowMetadata) => void) {
-    this.frameListeners.add(listener)
-    return {
-      dispose: () => {
-        this.frameListeners.delete(listener)
-      },
-    }
-  }
-  onSnapshot(listener: () => void) {
-    this.snapshotListeners.add(listener)
-    queueMicrotask(() => {
-      if (!this.closed && this.state && this.snapshotListeners.has(listener)) listener()
-    })
-    return {
-      dispose: () => {
-        this.snapshotListeners.delete(listener)
-      },
-    }
-  }
-  onNotification(listener: (notification: NativeNotification) => void) {
-    this.notificationListeners.add(listener)
-    return {
-      dispose: () => {
-        this.notificationListeners.delete(listener)
-      },
-    }
-  }
-  onBell(listener: (paneId: string) => void) {
-    this.bellListeners.add(listener)
-    return {
-      dispose: () => {
-        this.bellListeners.delete(listener)
-      },
-    }
-  }
-  onExit(listener: (exit: HerdrClientExit) => void) {
-    this.exitListeners.add(listener)
-    const exit = this.exit
-    if (exit)
-      queueMicrotask(() => {
-        if (this.exitListeners.has(listener)) listener(exit)
-      })
-    return {
-      dispose: () => {
-        this.exitListeners.delete(listener)
-      },
-    }
+    if (this.initialized && isClipboardPayload(data)) this.copies.emit(data)
   }
 }
 
-export async function createCoreClient(options: CoreClientOptions): Promise<HerdrClientTransport> {
+export async function createCoreClient(options: CoreClientOptions): Promise<WindowTransport> {
   const client = new CoreWindowClient(options)
   try {
     return await client.initialize()

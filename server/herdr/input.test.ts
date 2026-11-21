@@ -25,7 +25,7 @@ function parse(...chunks: Array<string | Buffer>) {
   )
   for (const chunk of chunks) parser.write(chunk)
   parser.flushEscape()
-  parser.dispose()
+  parser[Symbol.dispose]()
   assert.deepEqual(errors, [])
   return events
 }
@@ -441,7 +441,7 @@ test('hover preserves selection and focus while reaching only the hovered mouse-
   f.router.write(mouse(35, 3, 3))
   await f.router.drain()
   assert.equal(f.messages.length, count, 'ordinary shell panes do not receive hover input')
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('standalone escape is emitted after its delay and disposal cancels pending escape', async () => {
@@ -457,7 +457,7 @@ test('standalone escape is emitted after its delay and disposal cancels pending 
   await new Promise((resolve) => setTimeout(resolve, 15))
   assert.deepEqual(events(values).map(keyShape), [{ code: 'Esc', modifiers: 0 }])
   parser.write('\x1b')
-  parser.dispose()
+  parser[Symbol.dispose]()
   await new Promise((resolve) => setTimeout(resolve, 15))
   assert.equal(values.length, 1)
 })
@@ -486,7 +486,7 @@ test('input batches plain typing while retaining endpoint and focus ordering', a
     ],
   )
   assert.deepEqual(f.errors, [])
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('click then type is bound immediately but held until native focus succeeds', async () => {
@@ -509,7 +509,7 @@ test('click then type is bound immediately but held until native focus succeeds'
   f.router.write('!')
   await f.router.drain()
   assert.equal(f.inputs().at(-1)!.pane_id, 'b')
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('failed focus drops already queued input without misrouting it to the old pane', async () => {
@@ -525,7 +525,7 @@ test('failed focus drops already queued input without misrouting it to the old p
   f.router.write('old')
   await f.router.drain()
   assert.equal(f.inputs()[0]!.pane_id, 'a')
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('pending input cannot cross tab, boot, removed-pane or popup boundaries', async () => {
@@ -558,7 +558,7 @@ test('pending input cannot cross tab, boot, removed-pane or popup boundaries', a
     focus.resolve({})
     await f.router.drain()
     assert.equal(f.inputs().length, 0, change)
-    f.router.dispose()
+    f.router[Symbol.dispose]()
   }
 })
 
@@ -582,7 +582,7 @@ test('application mouse coordinates are pane-local and captured through cross-pa
       [{ Up: 'Left' }, { Cell: { column: 0, row: 9 } }],
     ],
   )
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('explicit right input is pane-local and independent of herdr client menu preferences', async () => {
@@ -609,7 +609,7 @@ test('explicit right input is pane-local and independent of herdr client menu pr
         [{ Up: 'Right' }, 7, { Cell: { column: 0, row: 9 } }],
       ],
     )
-    f.router.dispose()
+    f.router[Symbol.dispose]()
   }
 })
 
@@ -632,7 +632,7 @@ test('losing focus releases held native mouse before focus notification', async 
   f.router.write(mouse(32, 4, 4) + mouse(0, 4, 4, true))
   await f.router.drain()
   assert.equal(f.messages.length, 2)
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('native history wheel coalesces offsets; application and alternate-screen wheel stay native', async () => {
@@ -657,7 +657,7 @@ test('native history wheel coalesces offsets; application and alternate-screen w
       }),
     ['ScrollDown', 'ScrollUp'],
   )
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('history scrolling respects typing barriers and fresh external offsets', async () => {
@@ -678,7 +678,7 @@ test('history scrolling respects typing barriers and fresh external offsets', as
   f.router.write(mouse(65, 3, 3))
   await f.router.drain()
   assert.equal(f.requests.at(-1)!.params.offset_from_bottom, 37)
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('scrollbar track clicks and thumb dragging use native history with clamping', async () => {
@@ -692,7 +692,7 @@ test('scrollbar track clicks and thumb dragging use native history with clamping
   await f.router.drain()
   assert.equal(f.requests.at(-1)!.params.offset_from_bottom, 100)
   assert.equal(f.inputs().length, 0)
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('split dragging sends final bounded ratio and drops requests for changed topology', async () => {
@@ -707,7 +707,7 @@ test('split dragging sends final bounded ratio and drops requests for changed to
   f.router.refresh()
   await f.router.drain()
   assert.equal(f.requests.length, 1)
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('ordinary shell drag selection highlights viewport cells and copies absolute native history rows', async () => {
@@ -732,7 +732,7 @@ test('ordinary shell drag selection highlights viewport cells and copies absolut
   ])
   assert.deepEqual(f.copied, ['selected'])
   assert.equal(f.inputs().length, 0)
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('selection refresh and newer input invalidate late copy replies', async () => {
@@ -748,13 +748,13 @@ test('selection refresh and newer input invalidate late copy replies', async () 
       f.panes[0] = { ...f.panes[0]!, scroll: { ...f.panes[0]!.scroll!, offset_from_bottom: 50 } }
     if (change === 'geometry')
       f.panes[0] = { ...f.panes[0]!, inner_rect: { ...f.panes[0]!.inner_rect, width: 16 } }
-    if (change === 'dispose') f.router.dispose()
+    if (change === 'dispose') f.router[Symbol.dispose]()
     else f.router.refresh()
     read.resolve({ text: 'stale' })
     await f.router.drain()
     assert.deepEqual(f.copied, [], change)
     assert.equal(f.selections.at(-1), undefined, change)
-    f.router.dispose()
+    f.router[Symbol.dispose]()
   }
 })
 
@@ -778,7 +778,7 @@ test('double click selects complete words and drag expands by words before copyi
   assert.deepEqual(f.requests[0]!.params.anchor, { row: 91, col: 4 })
   assert.deepEqual(f.requests[0]!.params.cursor, { row: 91, col: 12 })
   assert.deepEqual(f.copied, ['selected'])
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('word boundaries preserve URL punctuation, quoted paths and wide graphemes', () => {
@@ -802,7 +802,7 @@ test('copy shortcut reuses retained selection; application copy keys pass throug
   f.router.write('x\x1b[99;6u')
   await f.router.drain()
   assert.equal(f.inputs().flatMap((input) => input.events).length, 2)
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('after copy-on-select, Ctrl+C still reaches the program like the native client default', async () => {
@@ -821,7 +821,7 @@ test('after copy-on-select, Ctrl+C still reaches the program like the native cli
   )
   assert.equal(f.selections.at(-1), undefined)
   assert.deepEqual(f.copied, ['selected'])
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('popup input is isolated from underlying panes and captured mouse stays popup-local', async () => {
@@ -864,7 +864,7 @@ test('popup input is isolated from underlying panes and captured mouse stays pop
       [{ Up: 'Left' }, { Cell: { column: 9, row: 3 } }],
     ],
   )
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('oversized paste is rejected through its end marker without leaking text into shell input', () => {
@@ -882,7 +882,7 @@ test('oversized paste is rejected through its end marker without leaking text in
   assert.equal(errors.length, 1)
   assert.match(errors[0]!.message, /Pasted text exceeds/)
   assert.deepEqual(events(values).map(keyShape), [{ code: { Char: 'z' }, modifiers: 0 }])
-  parser.dispose()
+  parser[Symbol.dispose]()
   const exact = parse('\x1b[200~', 'x'.repeat(1024 * 1024), '\x1b[201~')
   assert.equal(events(exact).length, 1)
   assert.ok('Paste' in events(exact)[0]!)
@@ -903,7 +903,7 @@ test('oversized terminal replies remain ignored across fragmented terminators', 
   parser.write('\\z')
   assert.equal(errors.length, 1)
   assert.deepEqual(events(values).map(keyShape), [{ code: { Char: 'z' }, modifiers: 0 }])
-  parser.dispose()
+  parser[Symbol.dispose]()
 })
 
 test('extended control keys retain explicit semantics instead of reinterpreting legacy bytes', () => {
@@ -936,7 +936,7 @@ test('external resize clamps queued mouse and focus-loss release to the current 
       }),
     [{ Cell: { column: 4, row: 3 } }, { Cell: { column: 4, row: 3 } }],
   )
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('split dragging follows externally resized container geometry', async () => {
@@ -951,7 +951,7 @@ test('split dragging follows externally resized container geometry', async () =>
   f.router.write(mouse(32, 39, 3) + mouse(0, 39, 3, true))
   await f.router.drain()
   assert.equal(f.requests[0]!.params.ratio, 39 / 80)
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('unrelated button release does not end an active application drag', async () => {
@@ -969,7 +969,7 @@ test('unrelated button release does not end an active application drag', async (
       }),
     [{ Down: 'Left' }, { Drag: 'Left' }, { Up: 'Left' }],
   )
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('a slow selection read never blocks typing and cannot copy after newer input', async () => {
@@ -984,7 +984,7 @@ test('a slow selection read never blocks typing and cannot copy after newer inpu
   read.resolve({ text: 'stale' })
   await f.router.drain()
   assert.deepEqual(f.copied, [])
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('dragging beyond pane edge scrolls native history and keeps absolute selection endpoints', async () => {
@@ -1008,7 +1008,7 @@ test('dragging beyond pane edge scrolls native history and keeps absolute select
   assert.deepEqual(read.params.anchor, { row: 94, col: 3 })
   assert.deepEqual(read.params.cursor, { row: 87, col: 3 })
   assert.deepEqual(f.copied, ['selected'])
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })
 
 test('selection autoscroll ticks while held and stops on release, blur, disposal or returning inside', async () => {
@@ -1021,7 +1021,7 @@ test('selection autoscroll ticks while held and stops on release, blur, disposal
     assert.ok(f.requests.filter((request) => request.method === 'pane.scroll').length >= 2, stop)
     if (stop === 'release') f.router.write(mouse(0, 4, 0, true))
     if (stop === 'blur') f.router.write('\x1b[O')
-    if (stop === 'dispose') f.router.dispose()
+    if (stop === 'dispose') f.router[Symbol.dispose]()
     if (stop === 'inside') f.router.write(mouse(32, 4, 4))
     await f.router.drain()
     const count = f.requests.filter((request) => request.method === 'pane.scroll').length
@@ -1032,7 +1032,7 @@ test('selection autoscroll ticks while held and stops on release, blur, disposal
       count,
       stop,
     )
-    f.router.dispose()
+    f.router[Symbol.dispose]()
   }
 })
 
@@ -1049,7 +1049,7 @@ test('selection autoscroll stops at scroll bounds and never runs in alternate sc
       f.requests.map((request) => request.params.offset_from_bottom),
       alternate ? [] : [100],
     )
-    f.router.dispose()
+    f.router[Symbol.dispose]()
   }
 })
 
@@ -1066,5 +1066,5 @@ test('blur cancels unsent selection scroll requests behind an in-flight focus op
     f.requests.map((request) => request.method),
     ['pane.focus'],
   )
-  f.router.dispose()
+  f.router[Symbol.dispose]()
 })

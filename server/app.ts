@@ -690,7 +690,7 @@ export function createApp(
     let pending: string | undefined
     const notificationQueue: string[] = []
     let heartbeat: ReturnType<typeof setInterval> | undefined
-    let notifications: { dispose(): void } | undefined
+    let notifications: Disposable | undefined
     let closed = false
     const flush = () => {
       if (!closed && (controller.desiredSize ?? 0) > 0) {
@@ -705,7 +705,7 @@ export function createApp(
       if (closed) return
       closed = true
       clearInterval(heartbeat)
-      notifications?.dispose()
+      notifications?.[Symbol.dispose]()
       notificationQueue.length = 0
       store.off('change', publish)
       store.off('sessions', checkSession)
@@ -753,7 +753,7 @@ export function createApp(
     const stream = new ReadableStream<Uint8Array>({
       start(value) {
         controller = value
-        notifications = terminals.onNotification(publishNotification)
+        notifications = terminals.notifications.subscribe(publishNotification)
         store.on('change', publish)
         store.on('sessions', checkSession)
         store.on('close', stopped)

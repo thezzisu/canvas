@@ -4,7 +4,7 @@ import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { HerdrClientTransport } from './herdr/client.ts'
+import type { WindowTransport } from './transport.ts'
 import { herdrApiRequest } from './herdr/api.ts'
 import { contentCandidates } from './content-candidates.ts'
 import type { WindowMetadata } from '../shared/window-metadata.ts'
@@ -74,8 +74,8 @@ test('native herdr transport works with an unmodified server: split rendering, k
     env,
     stdio: 'ignore',
   })
-  let terminal: HerdrClientTransport | undefined
-  let secondTerminal: HerdrClientTransport | undefined
+  let terminal: WindowTransport | undefined
+  let secondTerminal: WindowTransport | undefined
   let command: Awaited<ReturnType<typeof openTerminal>> | undefined
   let secondCommand: Awaited<ReturnType<typeof openTerminal>> | undefined
   let frame: WindowMetadata | undefined
@@ -199,10 +199,10 @@ test('native herdr transport works with an unmodified server: split rendering, k
     cli('tab', 'focus', other.id)
     command = await openTerminal(source, space.id, window.id)
     terminal = await command.connect(90, 25)
-    terminal.onFrame((value) => {
+    terminal.painted.subscribe((value) => {
       frame = value
     })
-    terminal.onScreen((value) => {
+    terminal.screen.subscribe(({ grid: value }) => {
       screen = value
     })
     await waitFor(
@@ -383,7 +383,7 @@ test('native herdr transport works with an unmodified server: split rendering, k
     await assertSplitGeometry(112, 32)
     secondCommand = await openTerminal(source, space.id, other.id)
     secondTerminal = await secondCommand.connect(90, 25)
-    secondTerminal.onScreen((value) => (secondScreen = value))
+    secondTerminal.screen.subscribe(({ grid: value }) => (secondScreen = value))
     await waitFor(() => secondText().includes(prompt), 'second native tab produced no shell frame')
     secondTerminal.write("printf 'SECOND_TAB_%s\\n' ONLY\r")
     await waitFor(

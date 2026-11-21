@@ -15,12 +15,13 @@ import { Store, sourceConnectionKey, type Canvas, type TerminalNode } from './st
 import { CompletionReads } from './completion-reads.ts'
 import { CaptureService } from './capture.ts'
 import { LiveTerminal, PASTE_SETTLE_QUIET_MS, TerminalManager } from './terminals.ts'
-import type { HerdrClientTransport } from './herdr/client.ts'
+import type { Screen, TransportExit, WindowTransport } from './transport.ts'
+import { Events, Latest } from './channels.ts'
 import type { FrameData } from './herdr/wire.ts'
 import type { WindowMetadata } from '../shared/window-metadata.ts'
 import type { MouseArea } from '../shared/terminal-mouse.ts'
 import { createSpace, createWindow, listResources, shellQuote, type Source } from './runtimes.ts'
-import type { CanvasNotification } from '../shared/notification.ts'
+import type { CanvasNotification, NativeNotification } from '../shared/notification.ts'
 import { herdrApiRequest } from './herdr/api.ts'
 
 /** One cell message, as the browser's mirror stood after applying it. */
@@ -408,7 +409,7 @@ test('one existing native endpoint per source delivers live notifications across
     duplicateView = new Client(),
     siblingView = new Client()
   const events: CanvasNotification[] = []
-  const subscription = f.manager.onNotification((value) => events.push(value))
+  const subscription = f.manager.notifications.subscribe((value) => events.push(value))
   await f.manager.connect(f.source, f.target, first.socket)
   await f.manager.connect(f.source, f.target, duplicateView.socket)
   const sibling = await createWindow(f.source, f.target.spaceId, 'Sibling')
@@ -451,7 +452,7 @@ test('one existing native endpoint per source delivers live notifications across
   assert.equal((await f.notify('Reconnected event')).shown, true)
   await waitFor(() => events.length === 3, 'reconnected source did not deliver its next live event')
   assert.equal(events[2]!.title, 'Reconnected event')
-  subscription.dispose()
+  subscription[Symbol.dispose]()
   assert.equal((await f.notify('Disposed event')).shown, true)
   await new Promise((resolve) => setTimeout(resolve, 80))
   assert.equal(events.length, 3)
@@ -461,7 +462,7 @@ test('native agent metadata reaches both viewers and late joiners without resour
   const f = await fixture(t, false, false, true)
   if (!f) return
   const notifications: CanvasNotification[] = []
-  f.manager.onNotification((value) => notifications.push(value))
+  f.manager.notifications.subscribe((value) => notifications.push(value))
   const first = new Client(),
     second = new Client(),
     late = new Client()
@@ -1663,7 +1664,7 @@ test('initial completed panes remain unread without replaying notifications, the
   f.reportAgent(paneId, 'working')
   f.reportAgent(paneId, 'idle')
   const events: CanvasNotification[] = []
-  f.manager.onNotification((event) => events.push(event))
+  f.manager.notifications.subscribe((event) => events.push(event))
   const client = new Client()
   await f.manager.connect(f.source, f.target, client.socket)
   await f.ready()
@@ -1691,30 +1692,20 @@ test('initial completed panes remain unread without replaying notifications, the
 
 /** A herdr client stand-in that shows whatever grid a test gives it. */
 function fakeWindow(cols = 8, rows = 2) {
-  type Listener<T> = (value: T) => void
-  const screens = new Set<(screen: FrameData, mouse: readonly MouseArea[]) => void>(),
-    frames = new Set<Listener<WindowMetadata>>(),
-    metadatas = new Set<Listener<WindowMetadata>>(),
-    clipboards = new Set<Listener<string>>(),
-    bells = new Set<Listener<string | undefined>>()
-  const on =
-    <T>(listeners: Set<T>) =>
-    (listener: T) => {
-      listeners.add(listener)
-      return { dispose: () => void listeners.delete(listener) }
-    }
-  const none = () => ({ dispose() {} })
+  const channels = {
+    screen: new Latest<Screen>(),
+    painted: new Latest<WindowMetadata>(),
+    metadata: new Latest<WindowMetadata>(),
+    paneFocus: new Latest<string | undefined>(),
+    snapshots: new Latest<void>(),
+    copies: new Events<string>(),
+    bells: new Events<string | undefined>(),
+    notifications: new Events<NativeNotification>(),
+    exit: new Latest<TransportExit>(),
+  }
   const sizes: { cols: number; rows: number }[] = []
-  const proc: HerdrClientTransport = {
-    onScreen: on(screens),
-    onFrame: on(frames),
-    onClipboard: on(clipboards),
-    onPaneFocus: none,
-    onSnapshot: none,
-    onMetadata: on(metadatas),
-    onNotification: none,
-    onBell: on(bells),
-    onExit: none,
+  const proc: WindowTransport = {
+    ...channels,
     completionSnapshot: () => undefined,
     completionFence: async () => undefined,
     content: async () => undefined,
@@ -1764,24 +1755,23 @@ function fakeWindow(cols = 8, rows = 2) {
     terminal,
     sizes,
     show(text: string, width?: number, height?: number, mouse: readonly MouseArea[] = []) {
-      const value = grid(text, width, height)
-      for (const listener of screens) listener(value, mouse)
+      channels.screen.set({ grid: grid(text, width, height), mouse })
     },
     paint: (layout: string) => {
-      for (const listener of frames) listener(metadata(layout))
+      channels.painted.set(metadata(layout))
     },
     copy: (data: string) => {
-      for (const listener of clipboards) listener(data)
+      channels.copies.emit(data)
     },
     ring: (paneId?: string) => {
-      for (const listener of bells) listener(paneId)
+      channels.bells.emit(paneId)
     },
     describe: (terminalTitle: string) => {
       const value: WindowMetadata = {
         ...metadata('layout'),
         panes: [{ id: 'pane', name: '1', active: true, status: 'working', terminalTitle }],
       }
-      for (const listener of metadatas) listener(value)
+      channels.metadata.set(value)
     },
   }
 }

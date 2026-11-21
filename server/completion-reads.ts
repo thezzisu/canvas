@@ -1,6 +1,7 @@
 import { aggregateStatus } from '../shared/status.ts'
 import { isCompletionToken, sameCompletion, type CompletionToken } from '../shared/completion.ts'
 import type { WindowMetadata } from '../shared/window-metadata.ts'
+import { Events } from './channels.ts'
 import { sourceConnectionKey, type Source, type Store } from './state.ts'
 import type { SourceResource } from './runtimes.ts'
 
@@ -21,12 +22,13 @@ export class CompletionReads {
   >()
   private connections = new Map<string, string>()
   private windows = new Map<string, Map<string, WindowMetadata>>()
-  private listeners = new Set<(sourceId: string) => void>()
+  /** The sources whose reads changed. */
+  readonly changes = new Events<string>()
   constructor(private readonly store: Store) {
     store.on('change', this.pruneSources)
     store.once('close', () => {
       store.off('change', this.pruneSources)
-      this.listeners.clear()
+      this.changes[Symbol.dispose]()
       this.windows.clear()
       this.connections.clear()
       this.snapshots.clear()
@@ -60,10 +62,6 @@ export class CompletionReads {
     }
     for (const sourceId of this.windows.keys())
       if (!this.store.get('source', sourceId)) this.windows.delete(sourceId)
-  }
-  onRead(listener: (sourceId: string) => void) {
-    this.listeners.add(listener)
-    return { dispose: () => this.listeners.delete(listener) }
   }
   observeSnapshot(
     source: Source,
@@ -206,7 +204,7 @@ export class CompletionReads {
     }
     record.read[paneId] = token.sequence
     this.store.put(kind, record)
-    for (const listener of this.listeners) listener(source.id)
+    this.changes.emit(source.id)
     return true
   }
   removeWindow(source: Source, windowId: string) {

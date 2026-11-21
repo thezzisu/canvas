@@ -44,7 +44,7 @@ async function fixture(t: TestContext, idleTtlMs?: number) {
     store,
     { username: 'fixture', passwordHash: 'unused' },
     {
-      onNotification: () => ({ dispose() {} }),
+      notifications: { subscribe: () => ({ [Symbol.dispose]() {} }) },
     } as unknown as TerminalManager,
     {
       assets,

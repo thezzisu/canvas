@@ -26,7 +26,7 @@ import {
 } from './runtimes.ts'
 import { readSourceFile, regularSourceFiles } from './source-file.ts'
 import { removeInboxFiles, writeInboxFile } from './inbox.ts'
-import type { HerdrClientTransport } from './herdr/client.ts'
+import type { WindowTransport } from './transport.ts'
 import type { FrameData } from './herdr/wire.ts'
 import { gridText } from './test-grid.ts'
 
@@ -99,7 +99,7 @@ test(
     })
     let sshd: ChildProcess | undefined,
       rpc: CoreRpc | undefined,
-      client: HerdrClientTransport | undefined
+      client: WindowTransport | undefined
     let bridge: Awaited<ReturnType<typeof prepareOpenBridge>> | undefined,
       removeRegistry: (() => Promise<void>) | undefined
     const handles: Awaited<ReturnType<typeof openTerminal>>[] = [],
@@ -234,7 +234,7 @@ test(
     const first = await openTerminal(source, created.spaceId, created.windowId)
     handles.push(first)
     client = await first.connect(80, 24)
-    client.onScreen((value) => (screen = value))
+    client.screen.subscribe(({ grid: value }) => (screen = value))
     await until(() => text().includes('CORE_SSH_FIXTURE'), 'native output did not cross SSH')
     const forwards = async (): Promise<string[][]> =>
       (await readFile(forwarding, 'utf8'))

@@ -26,7 +26,6 @@ export type CoreFrame =
   | { kind: 'resize'; cols: number; rows: number }
   | { kind: 'close'; reason?: Record<string, unknown> }
 type Listener<T> = (value: T) => void | Promise<void>
-type Subscription = { dispose(): void }
 const object = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 function json(bytes: Buffer): Record<string, unknown> {
@@ -78,29 +77,29 @@ export class CoreStream {
     readonly channel: number,
     private readonly rpc: CoreRpc,
   ) {}
-  onFrame(listener: Listener<CoreFrame>): Subscription {
+  onFrame(listener: Listener<CoreFrame>): Disposable {
     this.listeners.add(listener)
     this.started = true
     this.schedule()
-    return { dispose: () => this.listeners.delete(listener) }
+    return { [Symbol.dispose]: () => void this.listeners.delete(listener) }
   }
-  onData(listener: Listener<Buffer>): Subscription {
+  onData(listener: Listener<Buffer>): Disposable {
     this.dataListeners.add(listener)
     this.started = true
     this.schedule()
-    return { dispose: () => this.dataListeners.delete(listener) }
+    return { [Symbol.dispose]: () => void this.dataListeners.delete(listener) }
   }
-  onResize(listener: Listener<{ cols: number; rows: number }>): Subscription {
+  onResize(listener: Listener<{ cols: number; rows: number }>): Disposable {
     this.resizeListeners.add(listener)
-    return { dispose: () => this.resizeListeners.delete(listener) }
+    return { [Symbol.dispose]: () => void this.resizeListeners.delete(listener) }
   }
-  onClose(listener: (reason?: Record<string, unknown>) => void): Subscription {
+  onClose(listener: (reason?: Record<string, unknown>) => void): Disposable {
     this.closeListeners.add(listener)
     if (this.ended)
       queueMicrotask(() => {
         if (this.closeListeners.has(listener)) listener(this.closeReason)
       })
-    return { dispose: () => this.closeListeners.delete(listener) }
+    return { [Symbol.dispose]: () => void this.closeListeners.delete(listener) }
   }
   /** Internal routing is installed before resolving the attach/subscribe reply. */
   receive(value: CoreFrame): void {
@@ -270,13 +269,13 @@ export class CoreRpc {
       return Promise.reject(new DOMException('Core connection cancelled', 'AbortError'))
     return new CoreRpc(socketPath, options).ready
   }
-  onClose(listener: (error: Error) => void): Subscription {
+  onClose(listener: (error: Error) => void): Disposable {
     this.closeListeners.add(listener)
     if (this.failure)
       queueMicrotask(() => {
         if (this.closeListeners.has(listener)) listener(this.failure!)
       })
-    return { dispose: () => this.closeListeners.delete(listener) }
+    return { [Symbol.dispose]: () => void this.closeListeners.delete(listener) }
   }
   call<T = Record<string, unknown>>(
     method: string,

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createConnection } from 'node:net'
+import { Events, type Subscribable } from '../channels.ts'
 
 // The pane titles of one herdr server, as its API publishes them: `session.snapshot` and
 // `pane.updated` events both carry a pane's `terminal_title_stripped` with its `revision`, and
@@ -25,20 +26,16 @@ export interface PaneRecord {
 export interface PaneTitleSource {
   /** Undefined until the server has said anything of the pane. */
   title(paneId: string): string | undefined
-  /** Runs with the panes whose title changed. */
-  onChange(listener: (paneIds: ReadonlySet<string>) => void): { dispose(): void }
+  /** The panes whose title changed. */
+  readonly changes: Subscribable<ReadonlySet<string>>
 }
 
 export class PaneTitles implements PaneTitleSource {
   private readonly panes = new Map<string, { revision: number; title: string }>()
-  private readonly listeners = new Set<(paneIds: ReadonlySet<string>) => void>()
+  readonly changes = new Events<ReadonlySet<string>>()
 
   title(paneId: string) {
     return this.panes.get(paneId)?.title
-  }
-  onChange(listener: (paneIds: ReadonlySet<string>) => void) {
-    this.listeners.add(listener)
-    return { dispose: () => void this.listeners.delete(listener) }
   }
   /** One pane's newer record. */
   update(record: PaneRecord) {
@@ -77,7 +74,7 @@ export class PaneTitles implements PaneTitleSource {
     return true
   }
   private notify(changed: ReadonlySet<string>) {
-    if (changed.size) for (const listener of this.listeners) listener(changed)
+    if (changed.size) this.changes.emit(changed)
   }
 }
 

@@ -15,7 +15,7 @@ function fixture(t: TestContext) {
   const app = createApp(store, { username: 'fixture', passwordHash: 'unused' }, {
     closeAll: async () => {},
     closeSource: async () => {},
-    onNotification: () => ({ dispose() {} }),
+    notifications: { subscribe: () => ({ [Symbol.dispose]() {} }) },
   } as unknown as TerminalManager)
   store.addSession('test')
   t.after(() => {

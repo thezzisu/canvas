@@ -1,7 +1,7 @@
 // Test helpers: what a browser shows of a grid, read back through the cell wire.
 import { CellMirror } from '../shared/cell-wire.ts'
 import { GridEncoder } from './cell-grid.ts'
-import type { HerdrClientTransport } from './herdr/client.ts'
+import type { WindowTransport } from './transport.ts'
 import type { FrameData } from './herdr/wire.ts'
 import type { MouseArea } from '../shared/terminal-mouse.ts'
 
@@ -30,7 +30,7 @@ export function gridColumns(grid: FrameData, from = 0, to = grid.width): string[
   )
 }
 /** What a herdr client shows and signals to the window layer. */
-export function watch(client: HerdrClientTransport) {
+export function watch(client: WindowTransport) {
   const seen = {
     paints: 0,
     grid: undefined as FrameData | undefined,
@@ -38,12 +38,12 @@ export function watch(client: HerdrClientTransport) {
     clipboard: [] as string[],
     mouse: [] as readonly MouseArea[],
   }
-  client.onScreen((grid, mouse) => {
+  client.screen.subscribe(({ grid, mouse }) => {
     seen.paints++
     seen.grid = grid
     seen.mouse = mouse
     seen.text = gridText(grid).join('\n')
   })
-  client.onClipboard((data) => seen.clipboard.push(data))
+  client.copies.subscribe((data) => seen.clipboard.push(data))
   return seen
 }

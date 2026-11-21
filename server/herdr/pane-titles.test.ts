@@ -16,7 +16,7 @@ test('titles are shown as published: only control characters go, at most 1024 ch
 test('the newer pane revision wins, whichever source it came from', () => {
   const titles = new PaneTitles(),
     changes: string[][] = []
-  titles.onChange((paneIds) => changes.push([...paneIds]))
+  titles.changes.subscribe((paneIds) => changes.push([...paneIds]))
   titles.update({ pane_id: 'a', revision: 5, terminal_title_stripped: 'event' })
   // A snapshot read before that event arrives after it.
   titles.replace([

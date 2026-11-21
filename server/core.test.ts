@@ -19,7 +19,7 @@ import {
 } from './runtimes.ts'
 import { CoreRpc } from './core/rpc.ts'
 import { CoreLayout } from './core/layout.ts'
-import type { HerdrClientTransport } from './herdr/client.ts'
+import type { WindowTransport } from './transport.ts'
 import type { FrameData } from './herdr/wire.ts'
 import { gridText } from './test-grid.ts'
 import type { WindowMetadata } from '../shared/window-metadata.ts'
@@ -82,7 +82,7 @@ test(
     })
     let rpc: CoreRpc | undefined
     const handles: Awaited<ReturnType<typeof openTerminal>>[] = [],
-      clients: HerdrClientTransport[] = []
+      clients: WindowTransport[] = []
     const source: Source = {
       id: 'core-native',
       name: 'Core native fixture',
@@ -184,8 +184,8 @@ test(
     const client = await handle.connect(90, 25)
     clients.push(client)
     let frame: WindowMetadata | undefined
-    client.onScreen((value) => (screen = value))
-    client.onFrame((metadata) => {
+    client.screen.subscribe(({ grid: value }) => (screen = value))
+    client.painted.subscribe((metadata) => {
       frame = metadata
     })
     await until(
@@ -423,7 +423,7 @@ test(
     clients.push(cloneClient)
     let cloneScreen: FrameData | undefined
     const cloneText = () => (cloneScreen ? gridText(cloneScreen).join('\n') : '')
-    cloneClient.onScreen((value) => (cloneScreen = value))
+    cloneClient.screen.subscribe(({ grid: value }) => (cloneScreen = value))
     await until(
       async () => (await cloneClient.content())?.length === 1,
       'the narrow initial view should expose one pane',
@@ -448,7 +448,7 @@ test(
       'reattach preserves native programs',
     )
     let cloneExit = false
-    cloneClient.onExit(() => {
+    cloneClient.exit.subscribe(() => {
       cloneExit = true
     })
     const owned = (await layout.snapshot()).terminals.find((item) => item.address === terminalId)!

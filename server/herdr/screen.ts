@@ -88,6 +88,17 @@ export function applySurfacePatch(
   return next
 }
 
+/** The pane whose inner area holds a cell of the window. */
+export function paneAt(surface: PaneSurfaceFrame, column: number, row: number) {
+  return surface.panes.find(
+    ({ inner_rect: rect }) =>
+      column >= rect.x &&
+      row >= rect.y &&
+      column < rect.x + rect.width &&
+      row < rect.y + rect.height,
+  )
+}
+
 export function popupInnerRect(surface: PaneSurfaceFrame): SurfaceRect | undefined {
   const popup = surface.popup
   if (!popup) return

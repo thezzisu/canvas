@@ -205,7 +205,7 @@ function pressed(key: string, modifiers: Parameters<typeof pressedKey>[1], modes
   )
   parser.write(pressedKey(key, modifiers))
   parser.flushEscape()
-  parser.dispose()
+  parser[Symbol.dispose]()
   return events.map((event) => sent(event, modes)).join('')
 }
 

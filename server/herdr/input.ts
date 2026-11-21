@@ -111,7 +111,7 @@ function mouse(buttons: number, column: number, row: number, released: boolean):
 }
 
 /** Outer xterm bytes are decoded once; herdr encodes semantic keys for each child. */
-export class VtInputParser {
+export class VtInputParser implements Disposable {
   private pending = Buffer.alloc(0)
   private paste: Buffer[] | undefined
   private pasteBytes = 0
@@ -394,7 +394,7 @@ export class VtInputParser {
     this.discardPaste = false
     this.discardControl = undefined
   }
-  dispose() {
+  [Symbol.dispose]() {
     this.disposed = true
     this.reset()
   }
@@ -599,7 +599,7 @@ interface SelectionState extends HerdrSelection {
 }
 
 /** Per connection/tab ownership; async endpoint replies cannot retarget queued input. */
-export class HerdrInputRouter {
+export class HerdrInputRouter implements Disposable {
   private readonly parser: VtInputParser
   private queue = Promise.resolve()
   private reads = new Set<Promise<void>>()
@@ -1341,9 +1341,9 @@ export class HerdrInputRouter {
       if (bounds) this.highlight(this.selection)
     }
   }
-  dispose() {
+  [Symbol.dispose]() {
     this.disposed = true
-    this.parser.dispose()
+    this.parser[Symbol.dispose]()
     this.mouseGesture = undefined
     this.splitGesture = undefined
     this.scrollbarGesture = undefined

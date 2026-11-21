@@ -21,13 +21,11 @@ function fixture(t: TestContext) {
       terminalShutdowns++
     },
     closeSource: async () => {},
-    onNotification: (listener: (notification: CanvasNotification) => void) => {
-      notifications.add(listener)
-      return {
-        dispose: () => {
-          notifications.delete(listener)
-        },
-      }
+    notifications: {
+      subscribe: (listener: (notification: CanvasNotification) => void) => {
+        notifications.add(listener)
+        return { [Symbol.dispose]: () => void notifications.delete(listener) }
+      },
     },
   } as unknown as TerminalManager)
   store.addSession('first')

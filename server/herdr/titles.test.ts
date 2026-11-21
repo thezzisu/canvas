@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import type { MouseArea } from '../../shared/terminal-mouse.ts'
-import type { HerdrClientTransport } from './client.ts'
+import type { WindowTransport } from '../transport.ts'
 import {
   closeRuntimeConnections,
   createSpace,
@@ -56,7 +56,7 @@ test('an open window shows each title herdr publishes without waiting for a redr
     herdrSession: session,
   }
   const server = spawn(serverBinary, ['--session', session, 'server'], { env, stdio: 'ignore' })
-  let terminal: HerdrClientTransport | undefined
+  let terminal: WindowTransport | undefined
   let command: Awaited<ReturnType<typeof openTerminal>> | undefined
   const waitFor = async (check: () => boolean | Promise<boolean>, message: string, ms = 4500) => {
     for (const end = Date.now() + ms; Date.now() < end;) {
@@ -93,8 +93,8 @@ test('an open window shows each title herdr publishes without waiting for a redr
     terminal = await command.connect(120, 30)
     let metadata: WindowMetadata | undefined,
       mouse = [] as readonly MouseArea[]
-    terminal.onMetadata((value) => (metadata = value))
-    terminal.onScreen((_, areas) => (mouse = areas))
+    terminal.metadata.subscribe((value) => (metadata = value))
+    terminal.screen.subscribe(({ mouse: areas }) => (mouse = areas))
     const title = (paneId: string) =>
       metadata?.panes.find((pane) => pane.id === paneId)?.terminalTitle
     await waitFor(() => title(agent) !== undefined, 'the window has no titles from the API')

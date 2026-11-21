@@ -35,7 +35,7 @@ async function fixture(t: TestContext, options: { temporaryTtlMs?: number } = {}
     {
       closeAll: async () => {},
       closeSource: async () => {},
-      onNotification: () => ({ dispose() {} }),
+      notifications: { subscribe: () => ({ [Symbol.dispose]() {} }) },
     } as unknown as TerminalManager,
     { assets },
   )

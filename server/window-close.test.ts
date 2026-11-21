@@ -107,7 +107,7 @@ async function fixture(t: TestContext) {
   const app = createApp(store, { username: 'fixture', passwordHash: 'unused' }, {
     closeAll: async () => {},
     closeSource: async () => {},
-    onNotification: () => ({ dispose() {} }),
+    notifications: { subscribe: () => ({ [Symbol.dispose]() {} }) },
     async paneAction(
       _source: Source,
       _spaceId: string,
