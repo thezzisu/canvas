@@ -1,7 +1,12 @@
 import { randomBytes } from 'node:crypto'
 import { Readable } from 'node:stream'
-import type { DownloadResponse } from './app.ts'
 
+export interface DownloadResponse {
+  body: Readable
+  headers: Record<string, string>
+  previewHeaders?: Record<string, string>
+  readRange?(start: number, end: number): Promise<Readable | undefined>
+}
 interface MediaTicket {
   path: string
   download: boolean
