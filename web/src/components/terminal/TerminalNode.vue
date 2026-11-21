@@ -13,6 +13,7 @@ import {
 } from 'vue'
 import type { NodeProps } from '@vue-flow/core'
 import UButton from '@nuxt/ui/components/Button.vue'
+import UProgress from '@nuxt/ui/components/Progress.vue'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import { NodeResizer } from '@vue-flow/node-resizer'
 import { log, logWindow } from '../../utils/diagnostics/log'
@@ -798,6 +799,21 @@ async function resized(event: { params: { width: number; height: number; x: numb
         mobileFocus ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` } : undefined
       "
     >
+      <!-- A program's progress report (OSC 9;4) along the header's lower edge. -->
+      <UProgress
+        v-if="data.progress"
+        class="terminal-progress"
+        size="2xs"
+        :model-value="data.progress.value"
+        :color="
+          data.progress.state === 'error'
+            ? 'error'
+            : data.progress.state === 'paused'
+              ? 'neutral'
+              : 'primary'
+        "
+        :aria-label="t('terminal.progress')"
+      />
       <PaneIndicators
         :panes="data.panes"
         :status="data.status"

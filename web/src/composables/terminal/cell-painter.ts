@@ -1,4 +1,8 @@
-import { programTakesMouse, type MouseArea } from '../../../../shared/terminal-mouse'
+import {
+  programPointer,
+  programTakesMouse,
+  type MouseArea,
+} from '../../../../shared/terminal-mouse'
 import {
   UNDERLINE_MASK,
   type CellMirror,
@@ -606,6 +610,12 @@ export class CellPainter {
   private showHover(repainted = false) {
     const { pointer, font } = this
     const link = pointer && this.linkForPointer(pointer.column, pointer.row)
+    // The pointer a program asked for (OSC 22), unless a link under it shows its own.
+    const shape =
+      pointer && !link && !this.virtual
+        ? (programPointer(this.mouseAreas, pointer.column, pointer.row) ?? '')
+        : ''
+    if (this.element.style.cursor !== shape) this.element.style.cursor = shape
     const key = link?.key ?? ''
     // The same link is redrawn only when the rows under it may have changed.
     if (key === this.hoverKey && !(repainted && key)) return

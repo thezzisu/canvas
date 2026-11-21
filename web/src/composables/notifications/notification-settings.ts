@@ -73,6 +73,21 @@ export function playNotificationSound(kind: 'attention' | 'done'): void {
   }
 }
 
+let ringing = false
+/** A terminal bell: the attention sound, never over a bell still sounding, so a burst rings once. */
+export function playBellSound(): void {
+  if (!canPlayNotificationSound() || ringing) return
+  try {
+    ringing = true
+    playTone(audio!, 'attention', () => {
+      ringing = false
+    })
+  } catch {
+    ringing = false
+    /* Optional audio never interrupts the workspace. */
+  }
+}
+
 function playTone(context: AudioContext, kind: 'attention' | 'done', ended?: () => void) {
   const start = context.currentTime
   const tone = context.createOscillator(),

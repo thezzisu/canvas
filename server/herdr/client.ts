@@ -47,6 +47,12 @@ export interface HerdrClientTransport {
   onFrame(listener: (metadata: WindowMetadata) => void): { dispose(): void }
   onMetadata(listener: (metadata: WindowMetadata) => void): { dispose(): void }
   onNotification(listener: (notification: NativeNotification) => void): { dispose(): void }
+  /** The window rang its bell (BEL), except where an agent reports its state. */
+  onBell(listener: () => void): { dispose(): void }
+  /** A program in one of this window's panes asked for a desktop notification (OSC 9/777/99). */
+  onProgramNotification?(listener: (notification: NativeNotification) => void): {
+    dispose(): void
+  }
   completionFence(): Promise<WindowMetadata | undefined>
   acknowledgeCompletion?(
     paneId: string,
@@ -137,6 +143,7 @@ class HerdrClient implements HerdrClientTransport {
   private working = new Set<string>()
   private readonly metadataListeners = new Set<(metadata: WindowMetadata) => void>()
   private readonly notificationListeners = new Set<(notification: NativeNotification) => void>()
+  private readonly bellListeners = new Set<() => void>()
   private metadata?: WindowMetadata
   private metadataSignature = ''
   private readonly titleSubscription?: { dispose(): void }
@@ -503,7 +510,12 @@ class HerdrClient implements HerdrClientTransport {
         request.reject(error instanceof Error ? error : new Error('Invalid herdr response'))
       }
     } else if (message.type === 'clipboard') this.clipboard(message.data)
-    else if (message.type === 'notification') {
+    // herdr names no pane for a bell and sends it to the client last used; an agent reporting its
+    // state anywhere in this window is taken to be the one that rang.
+    else if (message.type === 'bell') {
+      if (!this.metadata?.panes.some((pane) => pane.status !== 'unknown'))
+        for (const listener of this.bellListeners) listener()
+    } else if (message.type === 'notification') {
       if (this.initialized)
         for (const listener of this.notificationListeners) listener(message.notification)
     } else if (message.type === 'shutdown') this.finish({ exitCode: 0 })
@@ -733,6 +745,14 @@ class HerdrClient implements HerdrClientTransport {
     return {
       dispose: () => {
         this.notificationListeners.delete(listener)
+      },
+    }
+  }
+  onBell(listener: () => void) {
+    this.bellListeners.add(listener)
+    return {
+      dispose: () => {
+        this.bellListeners.delete(listener)
       },
     }
   }

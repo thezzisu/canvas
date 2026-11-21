@@ -301,6 +301,8 @@ export class GhosttyTerminal {
   private readonly styles = new Map<number, { fg: number; bg: number; modifier: number }>()
   /** The palette before any program changed it, as r, g, b bytes. */
   private readonly palette: Uint8Array
+  /** The pointer shape before any program asked for one. */
+  private readonly initialPointer: number
   /**
    * Colours a program changed (OSC 4, 10, 11 and their resets), painted into the cells as RGB the
    * way herdr sends them; the browser's own theme stays the default for everything else.
@@ -340,6 +342,7 @@ export class GhosttyTerminal {
       g.bytes.set([(colour >> 16) & 255, (colour >> 8) & 255, colour & 255], g.out)
       this.set(option, g.out)
     }
+    this.initialPointer = g.view.getUint32(this.get('MOUSE_SHAPE'), true)
     this.palette = g.bytes.slice(
       this.get('COLOR_PALETTE_DEFAULT', this.k.palette),
       this.k.palette + 768,
@@ -373,11 +376,16 @@ export class GhosttyTerminal {
     this.set(option, g.out)
   }
   /** Reads one value into scratch and returns where it is. */
-  /** The pointer shape the program asked for (OSC 22), as a GhosttyMouseShape name in lower case. */
+  /**
+   * The pointer shape the program asked for (OSC 22), as a GhosttyMouseShape name in lower case;
+   * 'default' while it asked for none (the engine starts at its own text shape).
+   */
   get pointerShape(): string {
     const { g } = this.k,
       shape = g.view.getUint32(this.get('MOUSE_SHAPE'), true)
-    return (g.name('GhosttyMouseShape', shape) ?? 'DEFAULT').toLowerCase()
+    return shape === this.initialPointer
+      ? 'default'
+      : (g.name('GhosttyMouseShape', shape) ?? 'DEFAULT').toLowerCase()
   }
   /** @internal Reads terminal data into the shared scratch buffer. */
   get(data: string, out = this.k.g.out): Pointer {

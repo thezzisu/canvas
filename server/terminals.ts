@@ -38,6 +38,7 @@
 //                     that painted it
 //   capture           { capture }
 //   clipboard         { data }, base64 text copied by a pane or a selection
+//   bell              the window rang; sent only to the browser controlling its input
 //   pong              { id }
 //
 // JSON, browser to server:
@@ -203,6 +204,11 @@ export class LiveTerminal {
     })
     this.proc.onClipboard((data) => {
       for (const ws of this.clients) if (this.canRender(ws)) json(ws, { type: 'clipboard', data })
+    })
+    // One bell in one place: the browser at the keyboard, as herdr rings only its foreground client.
+    this.proc.onBell(() => {
+      const ws = this.controller
+      if (ws && this.clients.has(ws) && this.canRender(ws)) json(ws, { type: 'bell' })
     })
     this.proc.onExit((event) => void this.close(event.reason))
   }
@@ -792,6 +798,16 @@ export class TerminalManager {
                 candidate.connectionKey === terminal.connectionKey,
             )
             if (owner === terminal) this.observeCompletionSource(source)
+          })
+          // A program's own notification belongs to the one window showing it; each pane's next
+          // notice replaces its last.
+          transport.onProgramNotification?.((notification) => {
+            if (this.stopped || this.closingSources.has(source.id) || terminal.closed) return
+            this.publishNotification({
+              ...notification,
+              id: `program:${source.id}:${notification.paneId}`,
+              sourceId: source.id,
+            })
           })
           transport.onNotification((notification) => {
             if (this.stopped || this.closingSources.has(source.id) || terminal.closed) return

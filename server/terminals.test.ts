@@ -1712,6 +1712,7 @@ function fakeWindow(cols = 8, rows = 2) {
     onSnapshot: none,
     onMetadata: on(metadatas),
     onNotification: none,
+    onBell: none,
     onExit: none,
     completionSnapshot: () => undefined,
     completionFence: async () => undefined,

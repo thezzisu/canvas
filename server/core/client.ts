@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { sameCompletion, type CompletionToken } from '../../shared/completion.ts'
 import type { PaneAction, PaneContext, PanePoint } from '../../shared/pane-context.ts'
 import type { NativeNotification } from '../../shared/notification.ts'
+import type { WindowProgress } from '../../shared/window-metadata.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
 import { cellWidth } from '../ghostty/module.ts'
 import { GhosttyTerminal } from '../ghostty/terminal.ts'
@@ -128,6 +129,8 @@ interface CorePane {
   rootReport: boolean
   /** The working directory the program last reported (OSC 7). */
   reportedCwd?: string
+  /** The program's last progress report (OSC 9;4), until it removes it. */
+  progress?: WindowProgress
 }
 
 export interface CoreClientOptions {
@@ -180,6 +183,11 @@ class CoreWindowClient implements HerdrClientTransport {
   private readonly frameListeners = new Set<(metadata: WindowMetadata) => void>()
   private readonly snapshotListeners = new Set<() => void>()
   private readonly notificationListeners = new Set<(notification: NativeNotification) => void>()
+  private readonly programNotificationListeners = new Set<
+    (notification: NativeNotification) => void
+  >()
+  private readonly bellListeners = new Set<() => void>()
+  private bellQueued = false
   private readonly exitListeners = new Set<(exit: HerdrClientExit) => void>()
   private readonly subscriptions: Subscription[] = []
   private subscription?: { close(): void }
@@ -455,6 +463,21 @@ class CoreWindowClient implements HerdrClientTransport {
       pwd: (path) => {
         pane.reportedCwd = path
       },
+      // An agent reporting its state says when it needs you; its bell and notifications would
+      // only say it again.
+      bell: () => {
+        if (!this.reportsState(pane)) this.ringBell()
+      },
+      notification: (title, body) => {
+        if (!this.reportsState(pane)) this.programNotification(pane, title, body)
+      },
+      progress: (state, value) => {
+        pane.progress =
+          state === 'remove'
+            ? undefined
+            : { state: state === 'set' ? 'normal' : state === 'pause' ? 'paused' : state, value }
+        this.updateMetadata()
+      },
       status: (record, state) => {
         if (record) return
         // The attach reply seeds its turn. Its first report is a replay of that
@@ -629,8 +652,38 @@ class CoreWindowClient implements HerdrClientTransport {
 
   private updateMetadata() {
     if (!this.state) return
-    this.metadata = coreWindowMetadata(this.state, this.options.tabId, this.focused)
+    const metadata = coreWindowMetadata(this.state, this.options.tabId, this.focused)
+    const progress = windowProgress([...this.attached.values()].map((pane) => pane.progress))
+    this.metadata = metadata && progress ? { ...metadata, progress } : metadata
     if (this.metadata) for (const listener of this.metadataListeners) listener(this.metadata)
+  }
+  /** Whether the pane's program reports its state (OSC 7501), as agents do. */
+  private reportsState(pane: CorePane) {
+    return !!this.state?.terminals.find((terminal) => terminal.address === pane.address)?.status
+      ?.state
+  }
+  /** Bells written together ring once. */
+  private ringBell() {
+    if (this.bellQueued || this.closed) return
+    this.bellQueued = true
+    queueMicrotask(() => {
+      this.bellQueued = false
+      if (!this.closed) for (const listener of this.bellListeners) listener()
+    })
+  }
+  private programNotification(pane: CorePane, title: string, body: string) {
+    if (this.closed || !this.initialized) return
+    const text = [plain(title), plain(body)].filter(Boolean).join(' — ').slice(0, 500)
+    if (!text) return
+    const notification: NativeNotification = {
+      kind: 'custom',
+      title: (this.metadata?.name || pane.address).slice(0, 120),
+      body: text,
+      spaceId: this.options.spaceId,
+      windowId: this.options.tabId,
+      paneId: pane.id,
+    }
+    for (const listener of this.programNotificationListeners) listener(notification)
   }
 
   private render() {
@@ -755,6 +808,7 @@ class CoreWindowClient implements HerdrClientTransport {
           scroll,
           focused,
           mouse_reporting: engine.mouseReporting,
+          pointer_shape: engine.pointerShape,
           sgr_pixel_mouse: engine.mode(1016),
           alternate_screen_active: alternate,
           pixel_width: inner.width * CORE_CELL.width,
@@ -1331,6 +1385,22 @@ class CoreWindowClient implements HerdrClientTransport {
       },
     }
   }
+  onBell(listener: () => void) {
+    this.bellListeners.add(listener)
+    return {
+      dispose: () => {
+        this.bellListeners.delete(listener)
+      },
+    }
+  }
+  onProgramNotification(listener: (notification: NativeNotification) => void) {
+    this.programNotificationListeners.add(listener)
+    return {
+      dispose: () => {
+        this.programNotificationListeners.delete(listener)
+      },
+    }
+  }
   onExit(listener: (exit: HerdrClientExit) => void) {
     this.exitListeners.add(listener)
     const exit = this.exit
@@ -1354,4 +1424,25 @@ export async function createCoreClient(options: CoreClientOptions): Promise<Herd
     client.kill()
     throw error
   }
+}
+
+/** Text a program asked to show, without control or direction-override characters. */
+const plain = (text: string) =>
+  text
+    .replace(/[\p{Cc}\u202a-\u202e\u2066-\u2069]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+
+/** The window's progress: an error first, then the furthest percentage, then any without one. */
+export function windowProgress(
+  reports: readonly (WindowProgress | undefined)[],
+): WindowProgress | undefined {
+  const rank = { error: 3, normal: 2, indeterminate: 1, paused: 0 } as const
+  return reports.reduce<WindowProgress | undefined>((best, report) => {
+    if (!report) return best
+    if (!best || rank[report.state] > rank[best.state]) return report
+    return rank[report.state] === rank[best.state] && (report.value ?? -1) > (best.value ?? -1)
+      ? report
+      : best
+  }, undefined)
 }

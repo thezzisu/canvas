@@ -1001,3 +1001,16 @@ test('native popup paint fences hide underlying panes without losing their compl
   f.surface(2, 3, 'RESTORE')
   await until(() => frames.at(-1)?.panes[0]?.completion?.sequence === 7)
 })
+
+test('a herdr bell rings the window that received it unless an agent there reports its state', async (t) => {
+  const f = await fixture(t),
+    client = await f.connect()
+  t.after(() => client.kill())
+  const seen = watch(client)
+  await until(() => seen.text.includes('R'))
+  let bells = 0
+  client.onBell(() => bells++)
+  f.send(new Writer().uint(9).uint(2))
+  await until(() => bells === 1)
+  assert.equal(bells, 1)
+})

@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createCoreClient, coreHyperlink } from './client.ts'
+import { createCoreClient, coreHyperlink, windowProgress } from './client.ts'
 import { CoreLayout, type CoreDocument } from './layout.ts'
 import { CoreRpc, CoreRpcError, CoreStream, type CoreNotification } from './rpc.ts'
 import { SELECTED } from '../herdr/screen.ts'
 import { gridColumns, watch } from '../test-grid.ts'
 import type { WindowMetadata } from '../../shared/window-metadata.ts'
+import type { NativeNotification } from '../../shared/notification.ts'
+import type { MouseArea } from '../../shared/terminal-mouse.ts'
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 const report = (state: string) => `\x1b]7501;state=${state}:app=fixture\x1b\\`
@@ -1623,4 +1625,80 @@ test('Core typing and paste repaint the bottom immediately without waiting for p
       client.kill()
     }
   }
+})
+
+test('a pane without agent status rings once per write and notifies; an agent pane keeps to its state', async () => {
+  const f = fixture()
+  ;(f.terminal as { status: unknown }).status = null
+  const client = await open(f)
+  const bells: number[] = [],
+    notices: NativeNotification[] = []
+  client.onBell(() => bells.push(1))
+  client.onProgramNotification!((notice) => notices.push(notice))
+  try {
+    f.stream.receive({
+      kind: 'data',
+      data: Buffer.from('\x07\x07\x1b]777;notify;Build;done\u202e\tok\x07'),
+    })
+    await tick()
+    await tick()
+    assert.equal(bells.length, 1, 'bells written together ring once')
+    assert.deepEqual(
+      notices.map((notice) => [notice.kind, notice.title, notice.body, notice.paneId]),
+      [['custom', 'Tab', 'Build — done ok', 'pane']],
+    )
+    f.terminal.status = { state: 'working' }
+    await f.event('status', { status: { state: 'working' }, records: {}, reported: true })
+    f.stream.receive({ kind: 'data', data: Buffer.from('\x07\x1b]9;again\x07') })
+    await tick()
+    await tick()
+    assert.deepEqual([bells.length, notices.length], [1, 1], 'an agent says it through its state')
+  } finally {
+    client.kill()
+  }
+})
+
+test('progress reports reach the window metadata and pointer requests reach the mouse areas', async () => {
+  const f = fixture()
+  const client = await open(f)
+  let metadata: WindowMetadata | undefined,
+    mouse: readonly MouseArea[] = []
+  client.onMetadata((value) => (metadata = value))
+  client.onScreen((_screen, areas) => (mouse = areas))
+  try {
+    f.stream.receive({ kind: 'data', data: Buffer.from('\x1b]9;4;1;40\x07\x1b]22;pointer\x07x') })
+    await tick()
+    await tick()
+    assert.deepEqual(metadata?.progress, { state: 'normal', value: 40 })
+    assert.deepEqual(
+      mouse.map((area) => area.pointer),
+      ['pointer'],
+    )
+    f.stream.receive({ kind: 'data', data: Buffer.from('\x1b]9;4;0\x07\x1b]22;\x07y') })
+    await tick()
+    await tick()
+    assert.equal(metadata?.progress, undefined)
+    assert.deepEqual(mouse, [], 'a reset pointer and no mouse tracking leave no area')
+  } finally {
+    client.kill()
+  }
+})
+
+test('a window shows its error first, then its furthest percentage, then progress without one', () => {
+  assert.equal(windowProgress([undefined]), undefined)
+  assert.deepEqual(
+    windowProgress([
+      { state: 'indeterminate', value: null },
+      { state: 'normal', value: 30 },
+      { state: 'normal', value: 70 },
+    ]),
+    { state: 'normal', value: 70 },
+  )
+  assert.deepEqual(
+    windowProgress([
+      { state: 'normal', value: 90 },
+      { state: 'error', value: 10 },
+    ]),
+    { state: 'error', value: 10 },
+  )
 })

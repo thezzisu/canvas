@@ -1,6 +1,7 @@
 import type { GlobalSettings } from '../../../shared/settings'
 import type { NavigationOrder } from '../../../shared/navigation-order'
 import type { ProgramStatus } from '../../../shared/status'
+import type { WindowProgress } from '../../../shared/window-metadata'
 import type { CompletionToken } from '../../../shared/completion'
 import type { CanvasDirection, CanvasEntry } from '../utils/canvas/canvas-jump'
 export type { ProgramStatus } from '../../../shared/status'
@@ -30,6 +31,8 @@ export interface WindowResource {
   id: string
   name: string
   status?: ProgramStatus
+  /** A program's progress report (OSC 9;4), while the window is open in a browser. */
+  progress?: WindowProgress
   panes?: PaneResource[]
 }
 export interface SpaceResource {
@@ -130,6 +133,7 @@ export interface TerminalData {
   sourceOffline?: boolean
   status: ProgramStatus
   statusFresh: boolean
+  progress?: WindowProgress
   panes: PaneResource[]
   overview: boolean
   focus: boolean

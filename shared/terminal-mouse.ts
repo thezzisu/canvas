@@ -14,7 +14,48 @@ export interface MouseArea {
   width: number
   height: number
   reports: boolean
+  /** The pointer the program asked for (OSC 22), as a CSS cursor; the browser's own without one. */
+  pointer?: PointerShape
 }
+/** The pointer shapes a program may ask for (OSC 22), as CSS cursor values. */
+export const POINTER_SHAPES = [
+  'context-menu',
+  'help',
+  'pointer',
+  'progress',
+  'wait',
+  'cell',
+  'crosshair',
+  'text',
+  'vertical-text',
+  'alias',
+  'copy',
+  'move',
+  'no-drop',
+  'not-allowed',
+  'grab',
+  'grabbing',
+  'all-scroll',
+  'col-resize',
+  'row-resize',
+  'n-resize',
+  'e-resize',
+  's-resize',
+  'w-resize',
+  'ne-resize',
+  'nw-resize',
+  'se-resize',
+  'sw-resize',
+  'ew-resize',
+  'ns-resize',
+  'nesw-resize',
+  'nwse-resize',
+  'zoom-in',
+  'zoom-out',
+] as const
+export type PointerShape = (typeof POINTER_SHAPES)[number]
+export const isPointerShape = (value: unknown): value is PointerShape =>
+  (POINTER_SHAPES as readonly unknown[]).includes(value)
 
 export function isMouseAreas(value: unknown): value is MouseArea[] {
   return (
@@ -27,9 +68,24 @@ export function isMouseAreas(value: unknown): value is MouseArea[] {
         ['x', 'y', 'width', 'height'].every(
           (key) => Number.isInteger(area[key]) && area[key] >= 0 && area[key] <= 4096,
         ) &&
-        typeof area.reports === 'boolean',
+        typeof area.reports === 'boolean' &&
+        (area.pointer === undefined || isPointerShape(area.pointer)),
     )
   )
+}
+
+/** The pointer a program asked for at a cell (OSC 22); undefined for the browser's own. */
+export function programPointer(areas: readonly MouseArea[], column: number, row: number) {
+  let pointer: PointerShape | undefined
+  for (const area of areas)
+    if (
+      column >= area.x &&
+      column < area.x + area.width &&
+      row >= area.y &&
+      row < area.y + area.height
+    )
+      pointer = area.pointer
+  return pointer
 }
 
 /** Whether the program takes the mouse at a cell. */

@@ -130,6 +130,7 @@ export function useCanvasGraph(scene: CanvasScene) {
       },
       status: visual.status,
       statusFresh: visual.fresh,
+      ...(visual.fresh && found.window?.progress ? { progress: found.window.progress } : {}),
       name:
         found.window?.name ||
         cachedTerminalView(node.sourceId, node.windowId)?.name ||

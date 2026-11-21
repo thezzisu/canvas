@@ -22,6 +22,7 @@ export default {
     draft: '编辑输入 · 有草稿',
     resize: '调整编辑输入高度',
   },
+  progress: '进度',
   settings: {
     title: '终端设置',
     defaults: '默认终端设置',

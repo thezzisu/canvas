@@ -32,6 +32,7 @@ import {
   type Session,
 } from './terminal-session'
 import { receiveUrl } from './urls'
+import { playBellSound } from '../notifications/notification-settings'
 
 // A session's stream: the connection, what arrives on it, and when the screen shows it.
 
@@ -320,7 +321,8 @@ function receive(
     })
   else if (message.type === 'clipboard') {
     if (typeof message.data === 'string') session.clipboard.programCopy(message.data)
-  } else if (message.type === 'presentation') {
+  } else if (message.type === 'bell') playBellSound()
+  else if (message.type === 'presentation') {
     // The server answers every request in turn. Ownership of one this view has already ended
     // is followed by its release, which would read as another view taking the window.
     if (message.owned === true && message.token !== session.focusResize?.token) return

@@ -291,6 +291,7 @@ html {
   transition: border-color var(--duration);
 }
 .terminal-header {
+  position: relative;
   height: 30px;
   min-height: 30px;
   display: flex;
@@ -301,6 +302,11 @@ html {
   border-bottom: 1px solid var(--ui-border-accented);
   user-select: none;
   cursor: grab;
+}
+.terminal-progress {
+  position: absolute;
+  inset: auto 0 0;
+  pointer-events: none;
 }
 .terminal-header:active {
   cursor: grabbing;
@@ -831,6 +837,15 @@ html {
 }
 .minimap-card-backing {
   fill: var(--surface);
+}
+.minimap-progress {
+  fill: var(--ui-primary);
+}
+.minimap-progress-error {
+  fill: var(--ui-error);
+}
+:is(.minimap-progress-paused, .minimap-progress-indeterminate) {
+  fill: var(--ui-text-muted);
 }
 .vue-flow__minimap-node.minimap-card {
   cursor: pointer;

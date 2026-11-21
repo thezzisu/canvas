@@ -22,6 +22,7 @@ export default {
     draft: 'Compose · draft',
     resize: 'Resize composer',
   },
+  progress: 'Progress',
   settings: {
     title: 'Terminal settings',
     defaults: 'Default terminal settings',

@@ -57,6 +57,17 @@ function clicked(event: MouseEvent, node: GraphNode) {
             :shape-rendering="slot.shapeRendering"
             @click="clicked($event, node)"
           />
+          <!-- A program's progress report (OSC 9;4), as the card header shows it. -->
+          <rect
+            v-if="node.data?.progress"
+            class="minimap-progress"
+            :class="`minimap-progress-${node.data.progress.state}`"
+            :x="node.computedPosition.x"
+            :y="node.computedPosition.y + node.dimensions.height * 0.88"
+            :width="node.dimensions.width * ((node.data.progress.value ?? 100) / 100)"
+            :height="node.dimensions.height * 0.12"
+            pointer-events="none"
+          />
         </g>
       </g>
     </template>
