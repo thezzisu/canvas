@@ -9,6 +9,7 @@ import {
   notificationPresent,
   notificationStands,
   notificationTarget,
+  notificationToastId,
 } from './notification-model.ts'
 import { mergeLiveResources } from '../workspace/live-resources.ts'
 import type { CanvasNotification } from '../../../../shared/notification.ts'
@@ -184,4 +185,26 @@ test("a program's notice stands while its window does; an agent's attention whil
   const attention = { ...program, kind: 'attention' as const, origin: undefined }
   assert.equal(notificationStands(attention, resources), true)
   assert.equal(notificationStands({ ...attention, paneId: 'pane2' }, resources), false)
+})
+
+test('a notice that says the same again is the same toast; anything new is its own', () => {
+  const program: CanvasNotification = {
+    id: 'first',
+    sourceId: 'source',
+    kind: 'custom',
+    origin: 'program',
+    title: 'Window',
+    windowId: 'window',
+    paneId: 'pane1',
+  }
+  const id = (event: CanvasNotification, body: string) =>
+    notificationToastId('notification:1:b:', event, 'Window', body)
+  assert.equal(id(program, 'Build finished'), id({ ...program, id: 'again' }, 'Build finished'))
+  assert.notEqual(id(program, 'Build finished'), id(program, 'Tests failed'))
+  assert.notEqual(
+    id(program, 'Build finished'),
+    id({ ...program, paneId: 'pane2' }, 'Build finished'),
+  )
+  assert.notEqual(id(program, 'x'), id({ ...program, kind: 'attention' }, 'x'))
+  assert(id(program, 'x').startsWith('notification:1:b:'), 'the session prefix still scopes it')
 })

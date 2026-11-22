@@ -56,6 +56,8 @@ const touchTheme = {
         portal: notificationPortal || false,
         position: 'bottom-right',
         max: 4 + shell.pinnedToasts,
+        // One stack that opens on hover, which also pauses every toast's countdown.
+        expand: false,
         ui: { viewport: 'canvas-notifications' },
       }"
     >

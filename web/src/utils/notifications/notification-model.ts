@@ -111,6 +111,19 @@ export function faviconStatus(resources: readonly SourceResource[]): ProgramStat
   return statuses.length ? aggregateStatus(statuses) : undefined
 }
 
+/**
+ * The toast a notice shows in. A notice that says again exactly what its pane's toast says is the
+ * same toast, which then pulses instead of stacking a copy; anything new is a toast of its own.
+ */
+export function notificationToastId(
+  prefix: string,
+  event: CanvasNotification,
+  heading: string,
+  body: string,
+) {
+  return `${prefix}${notificationKey(event)}:${event.kind}:${heading}\n${body}`
+}
+
 export function notificationKey(event: CanvasNotification) {
   return event.paneId
     ? `${event.sourceId}/pane/${event.paneId}`

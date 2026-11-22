@@ -16,6 +16,7 @@ import {
   notificationTarget,
   notificationCurrent,
   notificationStands,
+  notificationToastId,
 } from '../../utils/notifications/notification-model'
 import {
   deliverNotificationEffects,
@@ -57,6 +58,8 @@ interface Notice {
   event: CanvasNotification
   focus?: PaneFocus
   dismissed?: boolean
+  /** The toast showing it, if one was shown. */
+  toast?: string
 }
 const seen = new Set<string>(),
   active = new Map<string, Notice>()
@@ -123,7 +126,7 @@ function toastValid(notice: Notice) {
     : current() && !notice.dismissed && notificationStands(notice.event, props.resources)
 }
 function acceptsToast(id: string | number) {
-  const notice = [...active.values()].find((notice) => `${toastPrefix}${notice.event.id}` === id)
+  const notice = [...active.values()].find((notice) => notice.toast === id)
   return !!notice && toastValid(notice)
 }
 function actionAvailable(event: CanvasNotification) {
@@ -167,7 +170,7 @@ function show(event: CanvasNotification, focus?: PaneFocus) {
   )
     return
   if (event.kind === 'attention' && interacting(event)) {
-    if (previous) toast.remove(`${toastPrefix}${previous.event.id}`)
+    if (previous?.toast) toast.remove(previous.toast)
     active.set(key, { event, focus, dismissed: true })
     void deliverNotificationEffects(props.backendId, event, {
       title: '',
@@ -178,17 +181,19 @@ function show(event: CanvasNotification, focus?: PaneFocus) {
     })
     return
   }
-  if (previous) toast.remove(`${toastPrefix}${previous.event.id}`)
-  const notice: Notice = { event, focus }
-  // A pane's next notice replaces its last, a program's as an agent's.
-  if (important || event.origin === 'program') active.set(key, notice)
   const target = notificationTarget(event, props.resources)
   const heading = title(event),
-    body = description(event)
+    body = description(event),
+    id = notificationToastId(toastPrefix, event, heading, focus ? '' : body)
+  // A pane's next notice replaces its last, a program's as an agent's; the same one again is the
+  // same toast, which pulses.
+  if (previous?.toast && previous.toast !== id) toast.remove(previous.toast)
+  const notice: Notice = { event, focus, toast: id }
+  if (important || event.origin === 'program') active.set(key, notice)
   const duration = focus ? 3000 : event.kind === 'attention' ? Infinity : important ? 15000 : 3500
   if (document.hasFocus() && !document.hidden)
     toast.add({
-      id: `${toastPrefix}${event.id}`,
+      id,
       title: heading,
       description: focus ? undefined : body,
       color: event.kind === 'attention' ? 'error' : event.kind === 'done' ? 'success' : 'neutral',
@@ -239,11 +244,11 @@ function reconcile() {
   clearTimeout(timer)
   for (const [key, notice] of active) {
     if (!notificationStands(notice.event, props.resources)) {
-      toast.remove(`${toastPrefix}${notice.event.id}`)
+      if (notice.toast) toast.remove(notice.toast)
       active.delete(key)
     } else if (!toastValid(notice)) {
       notice.dismissed = true
-      toast.remove(`${toastPrefix}${notice.event.id}`)
+      if (notice.toast) toast.remove(notice.toast)
     }
   }
   const now = Date.now()

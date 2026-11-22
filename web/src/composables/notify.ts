@@ -49,7 +49,10 @@ export function errorMessage(reason: unknown) {
 }
 
 function notice(kind: NoticeKind, title: string, options?: Notice) {
+  const description = typeof options?.description === 'string' ? options.description : ''
   const entry: Notice = {
+    // The same notice again is the same toast, which pulses instead of stacking a copy.
+    id: `notice:${kind}:${title}\n${description}`,
     title,
     color: noticeColor[kind],
     duration: noticeDuration[kind],
@@ -60,7 +63,10 @@ function notice(kind: NoticeKind, title: string, options?: Notice) {
   else waiting.push(entry)
 }
 
-/** Usable from any module; a notice with an `id` replaces the one already showing under it. */
+/**
+ * Usable from any module. A notice is its own toast unless the same one is showing, which then
+ * pulses; one with an `id` updates the toast already showing under it.
+ */
 export const notify = {
   brief: (title: string, options?: Notice) => notice('brief', title, options),
   success: (title: string, options?: Notice) => notice('success', title, options),
