@@ -43,7 +43,7 @@ export function hasLiveTerminal(sourceId: string, windowId: string): boolean {
 export function hasTerminalFrame(resource: Session['resource']): boolean {
   return !!sessions.get(sessionKey(resource))?.state.screenReady
 }
-/** What a terminal that has been shown remembers of a window the poll no longer lists. */
+/** What a terminal that has been shown remembers of a window its source no longer lists. */
 export function cachedTerminalView(sourceId: string, windowId: string) {
   const [session] = windowSessions(sourceId, windowId)
   return session ? { name: session.lastName } : undefined

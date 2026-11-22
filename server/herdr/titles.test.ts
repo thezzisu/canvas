@@ -103,7 +103,7 @@ test('an open window shows each title herdr publishes without waiting for a redr
       cli('pane', 'run', paneId, `printf '\\033]2;%s\\007' '${text}'`)
       const started = Date.now()
       await waitFor(() => title(paneId) === text, `${text} did not reach the open window`)
-      // herdr batches its events about every 100 ms; the 2 s poll is not involved.
+      // herdr batches its events about every 100 ms, and the title reaches the window directly.
       assert.ok(Date.now() - started < 1500, `${text} took ${Date.now() - started} ms`)
     }
     assert.equal(mouse.length, 0, 'shells do not take the mouse')
