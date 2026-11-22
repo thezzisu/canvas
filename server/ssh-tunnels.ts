@@ -2,6 +2,7 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, lstat, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { isLoopbackHost } from './loopback.ts'
 import { log, warn } from './log.ts'
 import { logIdentifier } from '../shared/log-line.ts'
@@ -116,227 +117,266 @@ async function remoteSocketState(
   })
 }
 
-async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
-  request.signal?.throwIfAborted()
-  const remote = await request.discover()
-  request.signal?.throwIfAborted()
-  const entries = Object.entries(remote)
-  const reverse = Object.entries(request.reverse || {})
-  const tcp = Object.entries(request.tcp || {})
-  if (!entries.length && !reverse.length && !tcp.length)
+const NAME = /^[a-z][a-z0-9-]*\.sock$/u
+/** How long an SSH process has to bring up every forward. */
+const OPEN_MS = 12_000
+const FIRST_RETRY_MS = 250
+const LAST_RETRY_MS = 5000
+const closedError = () => new Error('SSH socket forwarding closed')
+
+/** Refuses anything but owner-named sockets, absolute socket paths and loopback ports. */
+function checkForwarding(request: TunnelRequest, remote: Record<string, string>) {
+  const reverse = Object.entries(request.reverse || {}),
+    tcp = Object.entries(request.tcp || {})
+  if (!Object.keys(remote).length && !reverse.length && !tcp.length)
     throw new Error('No Unix socket forwarding was requested')
-  for (const [name, path] of entries) {
-    if (!/^[a-z][a-z0-9-]*\.sock$/u.test(name)) throw new Error('Invalid forwarded socket name')
+  for (const [name, path] of Object.entries(remote)) {
+    if (!NAME.test(name)) throw new Error('Invalid forwarded socket name')
     checkSocketPath(path)
   }
   for (const [name, endpoint] of reverse) {
-    if (!/^[a-z][a-z0-9-]*\.sock$/u.test(name)) throw new Error('Invalid reverse socket name')
+    if (!NAME.test(name)) throw new Error('Invalid reverse socket name')
     checkSocketPath(endpoint.remotePath)
     checkSocketPath(endpoint.localPath)
   }
-  for (const [name, endpoint] of tcp) {
+  for (const [name, { host, port }] of tcp)
     if (
-      !/^[a-z][a-z0-9-]*\.sock$/u.test(name) ||
-      !isLoopbackHost(endpoint.host) ||
-      !Number.isInteger(endpoint.port) ||
-      endpoint.port < 1 ||
-      endpoint.port > 65535
+      !NAME.test(name) ||
+      !isLoopbackHost(host) ||
+      !Number.isInteger(port) ||
+      port < 1 ||
+      port > 65535
     )
       throw new Error('Invalid loopback forwarding endpoint')
+}
+const isSocket = async (path: string) => {
+  try {
+    return (await lstat(path)).isSocket()
+  } catch {
+    return false
   }
-  // Unix socket names are short on both Linux and macOS. mkdtemp creates an
-  // owner-only directory; no global SSH configuration or existing socket changes.
-  const directory = await mkdtemp(join(tmpdir().length < 50 ? tmpdir() : '/tmp', 'canvas-s-'))
-  const sockets = Object.fromEntries(
-    [...entries, ...tcp].map(([name]) => [name, join(directory, name)]),
-  )
-  const forwards = entries.flatMap(([name, remotePath]) => ['-L', `${sockets[name]}:${remotePath}`])
-  forwards.push(
-    ...tcp.flatMap(([name, endpoint]) => [
-      '-L',
-      `${sockets[name]}:${endpoint.host === '::1' ? '[::1]' : endpoint.host}:${endpoint.port}`,
-    ]),
-  )
-  const reverseForwards = reverse.flatMap(([, endpoint]) => [
-    '-R',
-    `${endpoint.remotePath}:${endpoint.localPath}`,
-  ])
-  const remoteSockets = Object.fromEntries(
-    reverse.map(([name, endpoint]) => [name, endpoint.remotePath]),
-  )
-  const reverseIdentities: Record<string, string | null> = Object.fromEntries(
-    reverse.map(([, endpoint]) => [endpoint.remotePath, null]),
-  )
-  const args = [
-    '-N',
-    '-T',
-    '-o',
-    'ControlMaster=no',
-    '-o',
-    'ControlPath=none',
-    '-o',
-    'ExitOnForwardFailure=yes',
-    '-o',
-    'StreamLocalBindUnlink=no',
-    ...forwards,
-    ...reverseForwards,
-    ...request.sshArgs,
-  ]
-  let stopped = false
-  let child: ChildProcess | undefined
-  let currentDone: Promise<void> = Promise.resolve()
-  let closing: Promise<void> | undefined
-  let retry: ReturnType<typeof setTimeout> | undefined
-  let wakeRetry: (() => void) | undefined
-  let reconnecting: Promise<void> | undefined
-  async function terminate(): Promise<void> {
-    child?.kill('SIGTERM')
-    const escalation = setTimeout(() => child?.kill('SIGKILL'), 1000)
-    escalation.unref()
-    await currentDone
-    clearTimeout(escalation)
+}
+async function requireLocalSocket(path: string) {
+  let found
+  try {
+    found = await lstat(path)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+      throw new Error('Local reverse forwarding endpoint is unavailable')
+    throw error
   }
-  async function connect(): Promise<void> {
-    await Promise.all(Object.values(sockets).map((path) => rm(path, { force: true })))
-    await Promise.all(
-      Object.values(request.reverse || {}).map(async ({ localPath }) => {
-        try {
-          if (!(await lstat(localPath)).isSocket())
-            throw new Error('Local reverse forwarding endpoint is not a socket')
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT')
-            throw new Error('Local reverse forwarding endpoint is unavailable')
-          throw error
-        }
-      }),
+  if (!found.isSocket()) throw new Error('Local reverse forwarding endpoint is not a socket')
+}
+/** Tries `attempt` until it succeeds or `ms` have passed, then fails as it did. */
+async function retrying<T>(attempt: () => Promise<T>, ms: number): Promise<T> {
+  const deadline = Date.now() + ms
+  while (true) {
+    try {
+      return await attempt()
+    } catch (error) {
+      if (Date.now() >= deadline) throw error
+      await sleep(50)
+    }
+  }
+}
+
+/**
+ * One SSH process forwarding a source's sockets, started again whenever it ends until the
+ * tunnel is closed. Its local socket paths stay the same across restarts, so clients reconnect
+ * to the endpoint they know.
+ */
+class Tunnel implements ManagedTunnel {
+  readonly sockets: Record<string, string>
+  readonly remoteSockets: Record<string, string>
+  private readonly args: string[]
+  private readonly reverse: boolean
+  /** The remote reverse sockets as seen when ready, so only those are removed after. */
+  private readonly reverseIdentities: Record<string, string | null>
+  private readonly stopping = new AbortController()
+  private child?: ChildProcess
+  /** Resolves when the current SSH process has exited. */
+  private exited: Promise<void> = Promise.resolve()
+  /** The loop that starts SSH again after a break. */
+  private kept?: Promise<void>
+  private closing?: Promise<void>
+  constructor(
+    private readonly request: TunnelRequest,
+    remote: Record<string, string>,
+    readonly directory: string,
+    /** Runs as the tunnel starts to close, before it has. */
+    private readonly onClose: () => void,
+  ) {
+    const reverse = Object.values(request.reverse || {}),
+      tcp = Object.entries(request.tcp || {})
+    this.sockets = Object.fromEntries(
+      [...Object.keys(remote), ...tcp.map(([name]) => name)].map((name) => [
+        name,
+        join(directory, name),
+      ]),
     )
-    if (reverse.length) await remoteSocketState(request, 'prepare', reverseIdentities)
-    if (stopped) throw new Error('SSH socket forwarding closed')
-    const proc = (child = spawn('ssh', args, {
+    this.remoteSockets = Object.fromEntries(
+      Object.entries(request.reverse || {}).map(([name, endpoint]) => [name, endpoint.remotePath]),
+    )
+    this.reverse = reverse.length > 0
+    this.reverseIdentities = Object.fromEntries(reverse.map(({ remotePath }) => [remotePath, null]))
+    this.args = [
+      '-N',
+      '-T',
+      '-o',
+      'ControlMaster=no',
+      '-o',
+      'ControlPath=none',
+      '-o',
+      'ExitOnForwardFailure=yes',
+      '-o',
+      'StreamLocalBindUnlink=no',
+      ...Object.entries(remote).flatMap(([name, path]) => ['-L', `${this.sockets[name]}:${path}`]),
+      ...tcp.flatMap(([name, { host, port }]) => [
+        '-L',
+        `${this.sockets[name]}:${host === '::1' ? '[::1]' : host}:${port}`,
+      ]),
+      ...reverse.flatMap(({ remotePath, localPath }) => ['-R', `${remotePath}:${localPath}`]),
+      ...request.sshArgs,
+    ]
+  }
+  private get stopped() {
+    return this.stopping.signal.aborted
+  }
+  alive() {
+    return !this.stopped
+  }
+  /** Connects once. The request's signal cancels only this: once open, the tunnel is shared. */
+  async open() {
+    const { signal } = this.request
+    const aborted = () => this.stop()
+    signal?.addEventListener('abort', aborted, { once: true })
+    if (signal?.aborted) aborted()
+    try {
+      await this.connect()
+    } catch (error) {
+      await this.close()
+      throw error
+    } finally {
+      signal?.removeEventListener('abort', aborted)
+    }
+    const tunnel = logIdentifier(this.request.sourceId)
+    log('source', 'tunnel', { tunnel, state: 'open' })
+    this.kept = this.keep(tunnel)
+  }
+  /** Starts SSH again after each break, sooner after one that lasted. */
+  private async keep(tunnel: ReturnType<typeof logIdentifier>) {
+    const { signal } = this.stopping
+    let delay = FIRST_RETRY_MS,
+      broken = false
+    while (!signal.aborted) {
+      await this.exited
+      if (signal.aborted) return
+      // One warning for each break, however many attempts it takes to mend.
+      if (!broken) warn('CANVAS_TUNNEL', 'tunnel', { tunnel, state: 'close' })
+      broken = true
+      await sleep(delay, undefined, { signal, ref: false }).catch(() => {})
+      if (signal.aborted) return
+      try {
+        await this.connect()
+        delay = FIRST_RETRY_MS
+        broken = false
+        log('source', 'tunnel', { tunnel, state: 'open' })
+      } catch {
+        delay = Math.min(delay * 2, LAST_RETRY_MS)
+      }
+    }
+  }
+  /** Starts SSH and resolves once every forward is listening. */
+  private async connect() {
+    const { request } = this
+    await Promise.all(Object.values(this.sockets).map((path) => rm(path, { force: true })))
+    await Promise.all(
+      Object.values(request.reverse || {}).map((r) => requireLocalSocket(r.localPath)),
+    )
+    if (this.reverse) await remoteSocketState(request, 'prepare', this.reverseIdentities)
+    if (this.stopped) throw closedError()
+    const child = (this.child = spawn('ssh', this.args, {
       env: request.env,
       stdio: ['ignore', 'ignore', 'pipe'],
     }))
-    let failure: string | undefined
-    let exited = false
-    currentDone = new Promise<void>((resolve) => {
-      proc.once('error', (error) => {
-        failure = error.message
-      })
-      proc.once('close', () => {
+    let failure: string | undefined,
+      exited = false
+    this.exited = new Promise<void>((resolve) => {
+      child.once('error', (error) => (failure = error.message))
+      child.once('close', () => {
         exited = true
         resolve()
       })
     })
-    proc.stderr?.on('data', (data: Buffer) => {
+    child.stderr?.on('data', (data: Buffer) => {
       failure = `${failure ?? ''}${data.toString('utf8')}`.slice(-1200)
     })
-    const deadline = Date.now() + 12_000
+    const deadline = Date.now() + OPEN_MS
     try {
       while (true) {
         if (exited) throw new Error(failure?.trim() || 'SSH forwarding stopped')
-        if (stopped) throw new Error('SSH socket forwarding closed')
-        const ready = await Promise.all(
-          Object.values(sockets).map(async (path) => {
-            try {
-              return (await lstat(path)).isSocket()
-            } catch {
-              return false
-            }
-          }),
-        )
-        let reverseReady = !reverse.length
-        if (reverse.length) {
-          try {
-            Object.assign(
-              reverseIdentities,
-              await remoteSocketState(request, 'ready', reverseIdentities),
-            )
-            reverseReady = true
-          } catch {
-            // Remote bind follows SSH authentication and may not exist yet.
-          }
-        }
-        if (ready.every(Boolean) && reverseReady && !exited && !stopped) return
-        if (Date.now() >= deadline) {
-          await terminate()
-          throw new Error('SSH socket forwarding timed out')
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25))
+        if (this.stopped) throw closedError()
+        if ((await this.listening()) && !exited && !this.stopped) return
+        if (Date.now() >= deadline) throw new Error('SSH socket forwarding timed out')
+        await sleep(25)
       }
     } catch (error) {
-      await terminate()
+      await this.terminate()
       throw error
     }
   }
-  const close = () =>
-    (closing ??= (async () => {
-      stopped = true
-      request.signal?.removeEventListener('abort', aborted)
-      if (retry) clearTimeout(retry)
-      wakeRetry?.()
-      await terminate()
-      await reconnecting
-      await rm(directory, { recursive: true, force: true })
-      if (reverse.length) {
-        const deadline = Date.now() + 3000
-        while (true) {
-          try {
-            await remoteSocketState(request, 'clean', reverseIdentities)
-            break
-          } catch (error) {
-            if (Date.now() >= deadline) throw error
-            await new Promise((resolve) => setTimeout(resolve, 50))
-          }
-        }
-      }
-      await request.cleanupRemote?.()
-    })())
-  const aborted = () => {
-    stopped = true
+  /** Whether every forward listens, local and remote. */
+  private async listening() {
+    if (!(await Promise.all(Object.values(this.sockets).map(isSocket))).every(Boolean)) return false
+    if (!this.reverse) return true
+    try {
+      Object.assign(
+        this.reverseIdentities,
+        await remoteSocketState(this.request, 'ready', this.reverseIdentities),
+      )
+      return true
+    } catch {
+      // The remote bind follows SSH authentication and may not exist yet.
+      return false
+    }
+  }
+  private stop() {
+    this.stopping.abort()
+    this.child?.kill('SIGTERM')
+  }
+  private async terminate() {
+    const child = this.child
     child?.kill('SIGTERM')
-    wakeRetry?.()
+    const escalation = setTimeout(() => child?.kill('SIGKILL'), 1000)
+    escalation.unref()
+    await this.exited
+    clearTimeout(escalation)
   }
-  request.signal?.addEventListener('abort', aborted, { once: true })
-  if (request.signal?.aborted) aborted()
-  try {
-    await connect()
-    // The signal cancels only the opening: once open, the tunnel is shared until it is closed.
-    request.signal?.removeEventListener('abort', aborted)
-    const tunnel = logIdentifier(request.sourceId)
-    log('source', 'tunnel', { tunnel, state: 'open' })
-    reconnecting = (async () => {
-      let delay = 250,
-        broken = false
-      while (!stopped) {
-        await currentDone
-        if (stopped) break
-        // One warning for each break, however many attempts it takes to mend.
-        if (!broken) warn('CANVAS_TUNNEL', 'tunnel', { tunnel, state: 'close' })
-        broken = true
-        await new Promise<void>((resolve) => {
-          wakeRetry = resolve
-          retry = setTimeout(resolve, delay)
-          retry.unref()
-        })
-        wakeRetry = undefined
-        if (stopped) break
-        try {
-          await connect()
-          delay = 250
-          broken = false
-          log('source', 'tunnel', { tunnel, state: 'open' })
-        } catch {
-          delay = Math.min(delay * 2, 5000)
-        }
-      }
-    })()
-    // Reuse the same local socket paths across SSH reconnection so existing
-    // native clients can reconnect without changing their endpoint identity.
-    return { sockets, remoteSockets, directory, alive: () => !stopped, close }
-  } catch (error) {
-    await close()
-    throw error
+  close() {
+    return (this.closing ??= (async () => {
+      this.onClose()
+      this.stop()
+      await this.terminate()
+      await this.kept
+      await rm(this.directory, { recursive: true, force: true })
+      if (this.reverse)
+        await retrying(() => remoteSocketState(this.request, 'clean', this.reverseIdentities), 3000)
+      await this.request.cleanupRemote?.()
+    })())
   }
+}
+
+async function startTunnel(request: TunnelRequest, onClose: () => void): Promise<ManagedTunnel> {
+  request.signal?.throwIfAborted()
+  const remote = await request.discover()
+  request.signal?.throwIfAborted()
+  checkForwarding(request, remote)
+  // Unix socket names are short on both Linux and macOS. mkdtemp creates an
+  // owner-only directory; no global SSH configuration or existing socket changes.
+  const directory = await mkdtemp(join(tmpdir().length < 50 ? tmpdir() : '/tmp', 'canvas-s-'))
+  const tunnel = new Tunnel(request, remote, directory, onClose)
+  await tunnel.open()
+  return tunnel
 }
 
 /** One SSH process per source configuration, shared by metadata and all tabs. */
@@ -344,22 +384,12 @@ export async function ensureSocketTunnel(request: TunnelRequest): Promise<Socket
   while (true) {
     let entry = tunnels.get(request.key)
     if (!entry) {
-      const created: TunnelEntry = {
-        sourceId: request.sourceId,
-        closing: false,
-        promise: Promise.resolve(undefined as never),
-      }
-      created.promise = startTunnel(request).then((tunnel) => {
-        const close = tunnel.close
-        tunnel.close = async () => {
-          if (tunnels.get(request.key) === created) tunnels.delete(request.key)
-          created.closing = true
-          await close()
-        }
-        return tunnel
+      const created = { sourceId: request.sourceId, closing: false } as TunnelEntry
+      created.promise = startTunnel(request, () => {
+        if (tunnels.get(request.key) === created) tunnels.delete(request.key)
+        created.closing = true
       })
-      entry = created
-      tunnels.set(request.key, entry)
+      tunnels.set(request.key, (entry = created))
     }
     let tunnel: ManagedTunnel
     try {
