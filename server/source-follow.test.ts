@@ -63,32 +63,20 @@ test('a broken watch is told of at once and opened again', async (t) => {
   assert.deepEqual(seen, ['broken', 2], 'what the old watch says no longer counts')
 })
 
-test('a refresh does not wait for the retry', async (t) => {
-  const f = fixture(t)
-  f.state.refuse = true
-  const { seen } = f.follow()
-  await sleep(1)
-  assert.deepEqual(seen, ['refused'])
-  f.state.refuse = false
-  refreshSource(f.source)
-  await sleep(1)
-  assert.equal(f.watches.length, 1)
-})
-
-test('while a source keeps failing, refreshes do not open it faster than its retries', async (t) => {
+test('while a source keeps failing, refreshes wait for its retries', async (t) => {
   const f = fixture(t)
   f.state.refuse = true
   f.follow()
   await sleep(1)
   assert.equal(f.state.starts, 1)
-  for (let i = 0; i < 5; i++) {
-    refreshSource(f.source)
-    await sleep(1)
-  }
-  assert.equal(f.state.starts, 2, 'one refresh is tried at once, the rest wait')
+  for (let i = 0; i < 5; i++) refreshSource(f.source)
+  await sleep(100)
+  assert.equal(f.state.starts, 1, 'each attempt may cost an SSH login')
   await sleep(700)
-  const retried = f.state.starts
-  assert(retried >= 3 && retried <= 4, `retries go on at their own pace: ${retried}`)
+  assert.equal(f.state.starts, 3, 'retried after 250 ms, then 500 ms')
+  f.state.refuse = false
+  await sleep(1100)
+  assert.equal(f.watches.length, 1)
 })
 
 test("releasing a source's connections closes its watch for good", async (t) => {
