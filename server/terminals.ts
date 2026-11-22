@@ -597,133 +597,10 @@ export class LiveTerminal {
     this.snapshot(ws)
     this.status()
     json(ws, this.geometry.state(record))
-    ws.on('message', (msg) => {
+    ws.on('message', (message) => {
       if (this.closed || ws.readyState !== 1 || !this.clients.has(ws)) return
       try {
-        if (msg.type === 'ping') {
-          if (typeof msg.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(msg.id))
-            json(ws, { type: 'pong', id: msg.id })
-          return
-        }
-        if (msg.type === 'view-visible' && typeof msg.visible === 'boolean') {
-          // A browser reports focused exactly while this window holds its read focus.
-          if (msg.visible && msg.focused === true && !view.focused) {
-            view.focused = true
-            this.options.onReadFocus?.()
-          } else if (!msg.visible || msg.focused === false) view.focused = false
-          if (msg.visible === !view.hidden) return
-          view.hidden = !msg.visible
-          if (msg.visible) this.resume()
-          else this.pause(ws)
-          return
-        }
-        if (msg.type === 'completion-fence') {
-          const generation = msg.generation
-          if (
-            typeof generation !== 'number' ||
-            !Number.isSafeInteger(generation) ||
-            generation <= view.readGeneration
-          )
-            return
-          view.readGeneration = view.pendingFence = generation
-          view.sentFrame = undefined
-          void this.proc
-            .completionFence()
-            .then((frame) => {
-              if (
-                !frame ||
-                this.closed ||
-                !this.clients.has(ws) ||
-                view.pendingFence !== generation
-              )
-                return
-              view.pendingFence = undefined
-              this.frame = frame
-              if (this.canRender(ws)) {
-                view.frameDue = true
-                this.pump(ws)
-              }
-            })
-            .catch(() => {})
-          return
-        }
-        if (msg.type === 'completion-read') {
-          const frame = view.sentFrame
-          const pane = frame?.panes.find((pane) => pane.id === msg.paneId && pane.active)
-          const completion = { bootId: msg.bootId, sequence: msg.sequence } as CompletionToken
-          if (
-            Number.isSafeInteger(msg.generation) &&
-            msg.generation === view.readGeneration &&
-            view.pendingFence === undefined &&
-            this.canRender(ws) &&
-            pane &&
-            pane.id === this.focusedPaneId &&
-            pane.completion &&
-            sameCompletion(pane.completion, completion)
-          ) {
-            if (this.proc.acknowledgeCompletion)
-              void this.proc.acknowledgeCompletion(pane.id, completion).catch(() => {})
-            else this.reads?.acknowledge(this.source, frame!.id, pane.id, completion)
-          }
-          return
-        }
-        if (msg.type === 'focus') {
-          if (this.maximized && this.maximized.owner !== ws) return
-          this.controller = ws
-          this.downloadController = ws
-          this.status()
-          return
-        }
-        const size = {
-          // A wide character needs two columns; one row is valid.
-          cols: clamp(msg.cols, 2, 500, this.cols),
-          rows: clamp(msg.rows, 1, 200, this.rows),
-        }
-        if (
-          msg.type === 'focus-resize-begin' &&
-          typeof msg.token === 'string' &&
-          msg.token.length <= 100
-        ) {
-          const handed = this.maximized
-          if (handed?.handedOver && handed.owner === ws && !handed.releasing) {
-            // The lease passed to this channel: the browser names it anew, and nothing else changes.
-            handed.handedOver = false
-            handed.token = msg.token
-            if (this.clients.get(ws)!.shown) this.presentation(ws)
-          } else this.maximize(ws, msg.token)
-          this.geometry.begin(record, msg.token, size)
-          return
-        }
-        if (msg.type === 'focus-resize-update' && typeof msg.token === 'string') {
-          if (this.maximized?.owner !== ws || this.maximized.token !== msg.token) return
-          this.geometry.update(record, msg.token, size)
-          return
-        }
-        if (msg.type === 'focus-resize-end' && typeof msg.token === 'string') {
-          void this.releaseMaximized(ws, msg.token)
-          return
-        }
-        if (msg.type === 'presentation-cancel' && Number.isSafeInteger(msg.lease)) {
-          const current = this.maximized
-          if (current && current.lease === msg.lease)
-            void this.releaseMaximized(current.owner, current.token)
-          else this.presentation(ws)
-          return
-        }
-        if (this.controller !== ws) return
-        if (this.maximized && this.maximized.owner !== ws) return
-        if (msg.type === 'input' && typeof msg.data === 'string' && msg.data.length <= 64 * 1024) {
-          // Outer window focus reports cannot change the native pane or pixels.
-          if (msg.data !== '\x1b[I' && msg.data !== '\x1b[O' && !isTerminalHoverInput(msg.data))
-            view.sentFrame = undefined
-          if (this.pasting)
-            this.holdInput(
-              this.pasting.then(() => {
-                if (!this.closed) this.proc.write(msg.data as string)
-              }),
-            )
-          else this.proc.write(msg.data)
-        }
+        this.receive(ws, view, message)
       } catch {
         /* Malformed messages cannot become terminal commands. */
       }
@@ -739,6 +616,135 @@ export class LiveTerminal {
       this.status()
       this.closeWhenUnwatched()
     })
+  }
+  /** A message from a browser on the window. */
+  private receive(ws: TerminalChannel, view: View, msg: Record<string, unknown>) {
+    switch (msg.type) {
+      case 'ping':
+        if (typeof msg.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(msg.id))
+          json(ws, { type: 'pong', id: msg.id })
+        return
+      case 'view-visible':
+        if (typeof msg.visible === 'boolean') this.viewVisible(ws, view, msg.visible, msg.focused)
+        return
+      case 'completion-fence':
+        if (typeof msg.generation === 'number' && Number.isSafeInteger(msg.generation))
+          this.completionFence(ws, view, msg.generation)
+        return
+      case 'completion-read':
+        this.completionRead(ws, view, msg)
+        return
+      case 'focus':
+        if (this.maximized && this.maximized.owner !== ws) return
+        this.controller = ws
+        this.downloadController = ws
+        this.status()
+        return
+      case 'focus-resize-begin':
+        if (typeof msg.token === 'string' && msg.token.length <= 100)
+          this.focusResizeBegin(ws, view, msg.token, this.requestedSize(msg))
+        return
+      case 'focus-resize-update':
+        if (this.maximized?.owner === ws && this.maximized.token === msg.token)
+          this.geometry.update(view.record, msg.token, this.requestedSize(msg))
+        return
+      case 'focus-resize-end':
+        if (typeof msg.token === 'string') void this.releaseMaximized(ws, msg.token)
+        return
+      case 'presentation-cancel': {
+        if (!Number.isSafeInteger(msg.lease)) return
+        const current = this.maximized
+        if (current && current.lease === msg.lease)
+          void this.releaseMaximized(current.owner, current.token)
+        else this.presentation(ws)
+        return
+      }
+      case 'input':
+        if (typeof msg.data === 'string' && msg.data.length <= 64 * 1024)
+          this.input(ws, view, msg.data)
+        return
+    }
+  }
+  /** The grid a browser asks for, within what a terminal can be. */
+  private requestedSize(msg: Record<string, unknown>): Size {
+    return {
+      // A wide character needs two columns; one row is valid.
+      cols: clamp(msg.cols, 2, 500, this.cols),
+      rows: clamp(msg.rows, 1, 200, this.rows),
+    }
+  }
+  private viewVisible(ws: TerminalChannel, view: View, visible: boolean, focused: unknown) {
+    // A browser reports focused exactly while this window holds its read focus.
+    if (visible && focused === true && !view.focused) {
+      view.focused = true
+      this.options.onReadFocus?.()
+    } else if (!visible || focused === false) view.focused = false
+    if (visible === !view.hidden) return
+    view.hidden = !visible
+    if (visible) this.resume()
+    else this.pause(ws)
+  }
+  /** The browser asks for a completion frame newer than everything it was sent. */
+  private completionFence(ws: TerminalChannel, view: View, generation: number) {
+    if (generation <= view.readGeneration) return
+    view.readGeneration = view.pendingFence = generation
+    view.sentFrame = undefined
+    void this.proc
+      .completionFence()
+      .then((frame) => {
+        if (!frame || this.closed || !this.clients.has(ws) || view.pendingFence !== generation)
+          return
+        view.pendingFence = undefined
+        this.frame = frame
+        if (this.canRender(ws)) {
+          view.frameDue = true
+          this.pump(ws)
+        }
+      })
+      .catch(() => {})
+  }
+  /** The browser showed a completion in the focused pane, in the frame it was last sent. */
+  private completionRead(ws: TerminalChannel, view: View, msg: Record<string, unknown>) {
+    const frame = view.sentFrame
+    const pane = frame?.panes.find((pane) => pane.id === msg.paneId && pane.active)
+    const completion = { bootId: msg.bootId, sequence: msg.sequence } as CompletionToken
+    if (
+      !frame ||
+      !pane?.completion ||
+      msg.generation !== view.readGeneration ||
+      view.pendingFence !== undefined ||
+      !this.canRender(ws) ||
+      pane.id !== this.focusedPaneId ||
+      !sameCompletion(pane.completion, completion)
+    )
+      return
+    if (this.proc.acknowledgeCompletion)
+      void this.proc.acknowledgeCompletion(pane.id, completion).catch(() => {})
+    else this.reads?.acknowledge(this.source, frame.id, pane.id, completion)
+  }
+  private focusResizeBegin(ws: TerminalChannel, view: View, token: string, size: Size) {
+    const handed = this.maximized
+    if (handed?.handedOver && handed.owner === ws && !handed.releasing) {
+      // The lease passed to this channel: the browser names it anew, and nothing else changes.
+      handed.handedOver = false
+      handed.token = token
+      if (view.shown) this.presentation(ws)
+    } else this.maximize(ws, token)
+    this.geometry.begin(view.record, token, size)
+  }
+  /** Keys, pastes and pointer input, only from the browser that controls the window. */
+  private input(ws: TerminalChannel, view: View, data: string) {
+    if (this.controller !== ws || (this.maximized && this.maximized.owner !== ws)) return
+    // Outer window focus reports cannot change the native pane or pixels.
+    if (data !== '\x1b[I' && data !== '\x1b[O' && !isTerminalHoverInput(data))
+      view.sentFrame = undefined
+    if (this.pasting)
+      this.holdInput(
+        this.pasting.then(() => {
+          if (!this.closed) this.proc.write(data)
+        }),
+      )
+    else this.proc.write(data)
   }
   /** A window no browser shows closes after a while, unless one comes back. */
   closeWhenUnwatched() {
