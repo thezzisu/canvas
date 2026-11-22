@@ -1,6 +1,12 @@
-import { computed, ref, shallowRef, watch } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import { defineStore } from 'pinia'
-import { createEventHook, useDocumentVisibility, useIntervalFn, useNow } from '@vueuse/core'
+import {
+  createEventHook,
+  useDocumentVisibility,
+  useEventListener,
+  useIntervalFn,
+  useNow,
+} from '@vueuse/core'
 import { api, apiContext, apiRevision, isCurrentApi, requireCurrentApi } from '../api/api'
 import { subscribeState } from '../api/state-events'
 import { t } from '../plugins/i18n'
@@ -12,6 +18,7 @@ import {
   type FocusedStatus,
 } from '../utils/workspace/completion-focus'
 import { mergeLiveResources, newerListings } from '../utils/workspace/live-resources'
+import { RetryDelay } from '../utils/workspace/retry-delay'
 import { orderedItems, useSidebarOrder } from '../composables/workspace/sidebar-order'
 import { workingSet } from '../utils/workspace/working-set'
 import { retainBackgrounds } from '../composables/workspace/backgrounds'
@@ -198,6 +205,22 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const notified = createEventHook<unknown>()
   let stateEvents: ReturnType<typeof subscribeState> | undefined
   let resourceRequest: Promise<void> | undefined
+  // A full read that failed is tried again, later each time, until one succeeds. Nothing else
+  // asks: changes are pushed, and a source with no listing has nothing to push.
+  let listingRetry: ReturnType<typeof setTimeout> | undefined
+  const listingDelay = new RetryDelay(2000, 30_000)
+  function retryListing() {
+    clearTimeout(listingRetry)
+    listingRetry = setTimeout(() => {
+      listingRetry = undefined
+      void refresh(true)
+    }, listingDelay.take())
+  }
+  function settleListing() {
+    clearTimeout(listingRetry)
+    listingRetry = undefined
+    listingDelay.reset()
+  }
 
   function apply(snapshot: SharedState) {
     if (state.value?.instanceId === snapshot.instanceId && snapshot.revision < state.value.revision)
@@ -323,10 +346,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         if (configuration !== JSON.stringify(sources.value)) return
         resourcesLoaded.value = true
         loadFailure.value = undefined
+        settleListing()
         list(body.sources)
       } catch (reason) {
         if (isCurrentApi(context)) {
           resourcesFresh.value = false
+          retryListing()
           if (!resourcesLoaded.value || undiscoveredSources.value.length) loadFailure.value = reason
           else if (!silent) notify.error(reason)
         }
@@ -377,8 +402,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       if (isCurrentApi(context)) loadFailure.value = reason
     }
   }
-  watch(pageVisible, (visible) => {
-    if (visible) void refresh(true)
+  // A page coming back reads once: its event stream may not have noticed the absence yet.
+  useEventListener(document, 'visibilitychange', () => {
+    if (document.visibilityState === 'visible') void refresh(true)
   })
 
   /** Forget the instance: its snapshot, windows, terminals and this browser's pending work. */
@@ -402,6 +428,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     refreshing.value = false
     refreshedAt.value = 0
     resourceRequest = undefined
+    settleListing()
   }
 
   return {
