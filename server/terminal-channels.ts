@@ -1,7 +1,8 @@
 // The terminal socket: one per browser tab, carrying a channel for each window it shows.
 //
 // The first message authenticates the socket (websocket-auth.ts). After that:
-//   browser to server   { type: 'open', channel, view, attempt, sourceId, spaceId, windowId }
+//   browser to server   { type: 'open', channel, view, attempt, maximized, sourceId, spaceId,
+//                         windowId }
 //                       { type: 'close', channel }
 //                       { channel, seq, ...message }, a window message (terminals.ts)
 //   server to browser   { channel, ack, ...message }
@@ -62,6 +63,8 @@ export class TerminalChannel extends EventEmitter<{
     /** The page's view this channel carries, and which of its channels this is. */
     readonly view: string,
     readonly attempt: number,
+    /** The view is maximized: it keeps the window's size from the channel before. */
+    readonly maximized: boolean,
   ) {
     super()
   }
@@ -149,7 +152,7 @@ export function serveTerminalChannels(
         socket.send(JSON.stringify({ type: 'close', channel: id, ack: 0 }))
         return
       }
-      const opened = new TerminalChannel(socket, id, view, attempt)
+      const opened = new TerminalChannel(socket, id, view, attempt, message.maximized === true)
       channels.set(id, opened)
       opened.once('close', () => channels.delete(id))
       open(opened, { sourceId, spaceId, windowId })

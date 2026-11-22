@@ -332,7 +332,13 @@ function receive(
   else if (message.type === 'presentation') {
     // The server answers every request in turn. Ownership of one this view has already ended
     // is followed by its release, which would read as another view taking the window.
-    if (message.owned === true && message.token !== session.focusResize?.token) return
+    if (message.owned === true && message.token !== session.focusResize?.token) {
+      // The size this view had on its channel before passed to this one. A view no longer
+      // maximized gives it back; a maximized one asks again and the window keeps its size.
+      if (!session.magnified && typeof message.token === 'string')
+        connection.send({ type: 'focus-resize-end', token: message.token })
+      return
+    }
     const revision = (session.presentationRevision = (session.presentationRevision || 0) + 1)
     const presentation = {
       maximized: message.maximized === true,

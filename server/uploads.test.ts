@@ -794,6 +794,10 @@ test('real native terminal receives no upload paths until the whole batch succee
       const space = (await listResources(source)).spaces.find((space) => space.name === 'Upload')!,
         windowId = space.windows[0]!.id
       class Client extends EventEmitter {
+        view = 'view-upload'
+        attempt = 1
+        maximized = false
+        taken = 0
         readyState = 1
         bufferedAmount = 0
         messages: Record<string, unknown>[] = []

@@ -8,7 +8,11 @@ export class TerminalView {
   /** The server has taken every message up to this one. */
   taken = 0
   /** `id` is random, so no other page's view has it. */
-  constructor(readonly id: string) {}
+  constructor(
+    readonly id: string,
+    /** Whether the view is maximized now, which a new channel tells the server. */
+    readonly maximized: () => boolean = () => false,
+  ) {}
   /** Another channel for this view: a later one is never mistaken for an earlier one. */
   attempt() {
     return ++this.attempts

@@ -84,7 +84,7 @@ export function createSession(
   const session: Session = {
     resource: { ...resource },
     logId: logWindow(resource),
-    view: new TerminalView(uuid()),
+    view: new TerminalView(uuid(), () => session.magnified),
     state: { status: 'connecting' },
     listeners: new Set(),
     changed: () => {

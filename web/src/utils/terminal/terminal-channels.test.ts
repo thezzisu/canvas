@@ -58,8 +58,8 @@ test('the socket authenticates once, then opens the channels asked for before an
   const b = f.channels.open(node('b'), view('view-000b'), listener().events)
   assert.deepEqual(f.socket.sent, [
     { type: 'auth', token: 'token' },
-    { type: 'open', channel: 0, view: 'view-000a', attempt: 1, ...window('a') },
-    { type: 'open', channel: 1, view: 'view-000b', attempt: 1, ...window('b') },
+    { type: 'open', channel: 0, view: 'view-000a', attempt: 1, maximized: false, ...window('a') },
+    { type: 'open', channel: 1, view: 'view-000b', attempt: 1, maximized: false, ...window('b') },
   ])
   assert.equal(a.send({ type: 'focus' }) && b.open, true)
   assert.deepEqual(f.socket.sent.at(-1), { type: 'focus', channel: 0, seq: 1 })
@@ -102,7 +102,7 @@ test('a channel ends alone and a new one opens beside the others; the last one c
   const second = f.channels.open(window('a'), same, again.events)
   assert.deepEqual(f.socket.sent.slice(3), [
     { type: 'close', channel: 0 },
-    { type: 'open', channel: 2, view: 'view-0001', attempt: 2, ...window('a') },
+    { type: 'open', channel: 2, view: 'view-0001', attempt: 2, maximized: false, ...window('a') },
   ])
   f.socket.json({ type: 'status', channel: 0 })
   f.socket.cells(0, 0, 1)

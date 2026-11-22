@@ -33,7 +33,12 @@ interface Cells {
   rows: number
   text: string
 }
+let lastView = 0
 class Client extends EventEmitter {
+  view = `view-${String(++lastView).padStart(5, '0')}`
+  attempt = 1
+  maximized = false
+  taken = 0
   readyState = 1
   bufferedAmount = 0
   received: (string | Cells)[] = []
@@ -1795,6 +1800,7 @@ test('a browser starts from a frame, then takes patches at the revisions the win
   f.show('one')
   f.terminal.join(client.socket)
   assert.deepEqual(kinds(client), [
+    'resume',
     'capture',
     'pane-focus',
     'FRAME',
@@ -1809,7 +1815,7 @@ test('a browser starts from a frame, then takes patches at the revisions the win
   assert.equal(client.mirror.revision, 1, 'an unchanged grid sends nothing')
   f.show('two')
   await tick()
-  assert.deepEqual(kinds(client, 6), ['PATCH'])
+  assert.deepEqual(kinds(client, 7), ['PATCH'])
   assert.deepEqual([client.mirror.revision, mirrorText(client.mirror)[0]], [3, 'two'])
   await f.terminal.close()
 })
@@ -2008,7 +2014,7 @@ test('a new size drops the old grid and every browser waits for a frame of the n
   assert.deepEqual(f.sizes, [{ cols: 10, rows: 3 }])
   f.terminal.join(late.socket)
   assert.deepEqual(cells(late.received), [])
-  assert.deepEqual(kinds(late), ['capture', 'pane-focus', 'status', 'focus-resize'])
+  assert.deepEqual(kinds(late), ['resume', 'capture', 'pane-focus', 'status', 'focus-resize'])
   f.show('new', 10, 3)
   await tick()
   for (const viewer of [client, late]) {
@@ -2064,5 +2070,118 @@ test('a live terminal knows the progress its window last reported', async () => 
   f.report()
   await tick()
   assert.equal(f.terminal.progress, undefined, 'a cleared report is gone')
+  await f.terminal.close()
+})
+
+/** A later channel of the same view. */
+function successor(of: Client, maximized = false) {
+  const next = new Client()
+  next.view = of.view
+  next.attempt = of.attempt + 1
+  next.maximized = maximized
+  return next
+}
+
+test('a later channel of a view replaces the one before, which can do nothing more', async () => {
+  const f = fakeWindow(),
+    written: string[] = []
+  f.terminal.proc.write = (data) => void written.push(String(data))
+  f.show('screen')
+  const old = new Client(),
+    peer = new Client()
+  f.terminal.join(old.socket)
+  f.terminal.join(peer.socket)
+  assert.deepEqual(messages(old)[0], { type: 'resume', taken: null }, 'a view nobody knows')
+  old.taken = 7
+  const next = successor(old)
+  f.terminal.join(next.socket)
+  assert.deepEqual(messages(next)[0], { type: 'resume', taken: 7 }, 'it is the first message')
+  assert.equal(next.taken, 7)
+  assert.equal(old.readyState, 3)
+  assert.equal(f.terminal.controller, next.socket, 'input control goes with the view')
+  old.command({ type: 'focus' })
+  old.command({ type: 'input', data: 'late' })
+  next.command({ type: 'input', data: 'now' })
+  assert.deepEqual(written, ['now'])
+  assert.deepEqual([...f.terminal.clients], [peer.socket, next.socket])
+  await f.terminal.close()
+})
+
+test('an open that arrives after the channel that replaced it changes nothing', async () => {
+  const f = fakeWindow()
+  f.show('screen')
+  const late = new Client(),
+    current = successor(late)
+  f.terminal.join(current.socket)
+  f.terminal.join(late.socket)
+  assert.equal(late.readyState, 3)
+  assert.deepEqual(late.received, [])
+  assert.equal(current.readyState, 1)
+  assert.equal(f.terminal.controller, current.socket)
+  await f.terminal.close()
+})
+
+test('a view that lost its channel is still known, and one that shares the window is not it', async () => {
+  const f = fakeWindow()
+  f.show('screen')
+  const old = new Client()
+  f.terminal.join(old.socket)
+  old.taken = 3
+  old.close()
+  const next = successor(old),
+    other = new Client()
+  f.terminal.join(next.socket)
+  f.terminal.join(other.socket)
+  assert.deepEqual(messages(next)[0], { type: 'resume', taken: 3 })
+  assert.deepEqual(messages(other)[0], { type: 'resume', taken: null })
+  await f.terminal.close()
+})
+
+test('a maximized view keeps the window at its size over a new channel, without a resize', async () => {
+  for (const settled of [true, false]) {
+    const f = fakeWindow()
+    f.show('screen')
+    const old = new Client(),
+      peer = new Client()
+    f.terminal.join(old.socket)
+    f.terminal.join(peer.socket)
+    old.command({ type: 'focus-resize-begin', token: 'first', cols: 30, rows: 9 })
+    // The channel can be replaced before the size it asked for has been applied.
+    if (settled) await f.terminal.geometry.drain()
+    const next = successor(old, true)
+    f.terminal.join(next.socket)
+    await f.terminal.geometry.drain()
+    assert.deepEqual(f.sizes, [{ cols: 30, rows: 9 }], 'neither released nor taken again')
+    // Presentation follows the frame of the size in force.
+    f.show('screen', 30, 9)
+    assert.equal(presentation(next)?.owned, true)
+    assert.equal(presentation(peer)?.maximized, true)
+    // The browser asks again under a token of its own.
+    next.command({ type: 'focus-resize-begin', token: 'second', cols: 30, rows: 9 })
+    await f.terminal.geometry.drain()
+    assert.deepEqual(f.sizes, [{ cols: 30, rows: 9 }])
+    next.command({ type: 'focus-resize-end', token: 'second' })
+    await f.terminal.geometry.drain()
+    assert.equal(f.sizes.length, 2, 'the end restores the shared size')
+    assert.notDeepEqual(f.sizes[1], { cols: 30, rows: 9 })
+    await f.terminal.close()
+  }
+})
+
+test('a view no longer maximized gives the size back when its new channel joins', async () => {
+  const f = fakeWindow()
+  f.show('screen')
+  const old = new Client()
+  f.terminal.join(old.socket)
+  old.command({ type: 'focus-resize-begin', token: 'first', cols: 30, rows: 9 })
+  await f.terminal.geometry.drain()
+  const next = successor(old, false)
+  f.terminal.join(next.socket)
+  await f.terminal.geometry.drain()
+  assert.equal(f.sizes.length, 2)
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  const shared = f.sizes[1]!
+  f.show('screen', shared.cols, shared.rows)
+  assert.equal(presentation(next)?.maximized, false)
   await f.terminal.close()
 })

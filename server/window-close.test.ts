@@ -595,6 +595,7 @@ test('official herdr window and final-pane closes remove references while nonfin
     close(): void
   }
   client.readyState = 1
+  Object.assign(client, { view: 'view-close', attempt: 1, maximized: false, taken: 0 })
   client.bufferedAmount = 0
   client.send = () => {}
   client.close = () => {

@@ -24,7 +24,16 @@
 // - A browser that cannot apply a cell message has lost the stream: it closes the channel and
 //   opens another.
 //
+// Views:
+// - A page's view of the window outlives its channels. A later channel of the view replaces
+//   the one before, which closes: what still arrives on that one is dropped. Input control
+//   goes to the new channel, and so does the maximized size if the view is still maximized.
+// - `resume` is the first message of a channel that joined: how far the view's messages were
+//   taken, or null when the window does not know the view. A browser sends again only what
+//   came after that, and nothing if it is null: lost, never done twice.
+//
 // JSON, server to browser:
+//   resume            { taken }
 //   status            { status: 'connecting' } | { status: 'connected', readOnly } |
 //                     { status: 'error', error } | { status: 'removed' | 'closed' }; the server
 //                     closes the channel after the last three
@@ -91,8 +100,15 @@ const clamp = (n: unknown, min: number, max: number, fallback: number) =>
 function json(ws: TerminalChannel, data: object) {
   ws.send(data)
 }
+/** A page's view of the window, whichever channel carries it now. */
+interface ViewRecord {
+  channel: TerminalChannel
+}
+/** Views remembered beyond those connected; a forgotten one resumes as unknown. */
+const MAX_KNOWN_VIEWS = 256
 /** What one browser has been sent of the window's grid. */
 interface View {
+  record: ViewRecord
   encoder: GridEncoder
   /** The browser paints this window; otherwise it is owed a FRAME when it next does. */
   shown: boolean
@@ -111,7 +127,14 @@ export class LiveTerminal {
   private revision = 0
   private hidden = new Set<TerminalChannel>()
   private focused = new Set<TerminalChannel>()
-  private maximized?: { owner: TerminalChannel; token: string; lease: number; releasing?: boolean }
+  private readonly known = new Map<string, ViewRecord>()
+  private maximized?: {
+    owner: TerminalChannel
+    view: ViewRecord
+    token: string
+    lease: number
+    releasing?: boolean
+  }
   private presentationRevision = 0
   private focusedPaneId?: string
   private metadata?: WindowMetadata
@@ -133,7 +156,8 @@ export class LiveTerminal {
   controller?: TerminalChannel
   private downloadController?: TerminalChannel
   idle?: ReturnType<typeof setTimeout>
-  geometry: GeometryController<TerminalChannel>
+  /** A view keeps its size over its channels, so the owner is the view. */
+  geometry: GeometryController<ViewRecord>
   closing?: Promise<void>
   closed = false
   cols: number
@@ -165,7 +189,7 @@ export class LiveTerminal {
       (reason) => {
         for (const ws of this.clients)
           json(ws, {
-            ...this.geometry.state(ws),
+            ...this.geometry.state(this.views.get(ws)!.record),
             ...(reason ? { reason } : {}),
           })
       },
@@ -438,7 +462,12 @@ export class LiveTerminal {
   }
   private maximize(ws: TerminalChannel, token: string) {
     this.presentationRevision++
-    this.maximized = { owner: ws, token, lease: this.presentationRevision }
+    this.maximized = {
+      owner: ws,
+      view: this.views.get(ws)!.record,
+      token,
+      lease: this.presentationRevision,
+    }
     this.controller = ws
     this.downloadController = ws
     for (const client of this.clients) {
@@ -465,31 +494,65 @@ export class LiveTerminal {
     // A new owner can take over while it is queued; snapshots
     // re-check the current owner and never release a newer request.
     for (const client of this.clients) this.pause(client)
-    await this.geometry.end(ws, current.token)
+    await this.geometry.end(current.view, current.token)
     if (this.maximized !== current) return
     this.maximized = undefined
     this.resume()
     this.status()
   }
+  /** The view's channel before this one ends, and what it held passes to this one. */
+  private supersede(previous: TerminalChannel, ws: TerminalChannel) {
+    if (!this.clients.has(previous)) return
+    if (this.controller === previous) this.controller = ws
+    if (this.downloadController === previous) this.downloadController = ws
+    if (this.maximized?.owner === previous && ws.maximized) this.maximized.owner = ws
+    previous.close()
+  }
+  private remember(view: string, record: ViewRecord) {
+    this.known.delete(view)
+    this.known.set(view, record)
+    if (this.known.size <= MAX_KNOWN_VIEWS) return
+    for (const [id, old] of this.known)
+      if (!this.clients.has(old.channel) && old !== record) {
+        this.known.delete(id)
+        return
+      }
+  }
   join(ws: TerminalChannel) {
-    clearTimeout(this.idle)
-    if (!this.closed && ws.readyState === 1) {
-      this.clients.add(ws)
-      this.views.set(ws, {
-        encoder: new GridEncoder(),
-        shown: false,
-        sending: false,
-        frameDue: false,
-        presentationDue: false,
-      })
-      if (!this.controller) this.controller = ws
-      this.sendMetadata(ws)
-      if (this.mouseAreas !== '[]') this.sendMouseAreas(ws)
-      json(ws, { type: 'capture', capture: this.capture() } satisfies CaptureState)
-      this.snapshot(ws)
-      this.status()
-      json(ws, this.geometry.state(ws))
+    if (this.closed || ws.readyState !== 1) return
+    const known = this.known.get(ws.view),
+      previous = known?.channel
+    // An open can be held up on a stuck socket and arrive after the channel that replaced it.
+    if (previous && previous.attempt >= ws.attempt) {
+      ws.close()
+      return
     }
+    const record = known ?? { channel: ws }
+    record.channel = ws
+    this.remember(ws.view, record)
+    // Nothing more is taken on the old channel once it is read how far that one got.
+    if (previous) {
+      ws.taken = Math.max(ws.taken, previous.taken)
+      this.supersede(previous, ws)
+    }
+    clearTimeout(this.idle)
+    json(ws, { type: 'resume', taken: previous?.taken ?? null })
+    this.clients.add(ws)
+    this.views.set(ws, {
+      record,
+      encoder: new GridEncoder(),
+      shown: false,
+      sending: false,
+      frameDue: false,
+      presentationDue: false,
+    })
+    if (!this.controller) this.controller = ws
+    this.sendMetadata(ws)
+    if (this.mouseAreas !== '[]') this.sendMouseAreas(ws)
+    json(ws, { type: 'capture', capture: this.capture() } satisfies CaptureState)
+    this.snapshot(ws)
+    this.status()
+    json(ws, this.geometry.state(record))
     ws.on('message', (msg) => {
       if (this.closed || ws.readyState !== 1 || !this.clients.has(ws)) return
       try {
@@ -583,12 +646,12 @@ export class LiveTerminal {
           msg.token.length <= 100
         ) {
           this.maximize(ws, msg.token)
-          this.geometry.begin(ws, msg.token, size)
+          this.geometry.begin(record, msg.token, size)
           return
         }
         if (msg.type === 'focus-resize-update' && typeof msg.token === 'string') {
           if (this.maximized?.owner !== ws || this.maximized.token !== msg.token) return
-          this.geometry.update(ws, msg.token, size)
+          this.geometry.update(record, msg.token, size)
           return
         }
         if (msg.type === 'focus-resize-end' && typeof msg.token === 'string') {
@@ -632,7 +695,8 @@ export class LiveTerminal {
       if (this.downloadController === ws) this.downloadController = undefined
       if (this.closed) return
       if (this.maximized?.owner === ws) void this.releaseMaximized(ws)
-      else void this.geometry.end(ws)
+      // A superseded channel's view goes on, with its size.
+      else if (record.channel === ws) void this.geometry.end(record)
       if (this.controller === ws) this.controller = this.clients.values().next().value
       this.status()
       if (!this.clients.size) {

@@ -84,6 +84,7 @@ export class TerminalChannels {
       channel,
       view: view.id,
       attempt: view.attempt(),
+      maximized: view.maximized(),
       sourceId,
       spaceId,
       windowId,
