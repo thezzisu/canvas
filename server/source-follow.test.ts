@@ -14,8 +14,9 @@ function fixture(t: TestContext) {
     refreshed: number
     closed: boolean
   }[] = []
-  const state = { refuse: false }
+  const state = { refuse: false, starts: 0 }
   const start: StartWatch<number> = async (_source, handlers) => {
+    state.starts++
     if (state.refuse) throw new Error('refused')
     const watch = { ...handlers, refreshed: 0, closed: false }
     watches.push(watch)
@@ -72,6 +73,22 @@ test('a refresh does not wait for the retry', async (t) => {
   refreshSource(f.source)
   await sleep(1)
   assert.equal(f.watches.length, 1)
+})
+
+test('while a source keeps failing, refreshes do not open it faster than its retries', async (t) => {
+  const f = fixture(t)
+  f.state.refuse = true
+  f.follow()
+  await sleep(1)
+  assert.equal(f.state.starts, 1)
+  for (let i = 0; i < 5; i++) {
+    refreshSource(f.source)
+    await sleep(1)
+  }
+  assert.equal(f.state.starts, 2, 'one refresh is tried at once, the rest wait')
+  await sleep(700)
+  const retried = f.state.starts
+  assert(retried >= 3 && retried <= 4, `retries go on at their own pace: ${retried}`)
 })
 
 test("releasing a source's connections closes its watch for good", async (t) => {

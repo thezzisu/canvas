@@ -31,6 +31,8 @@ class Follower<T> {
   private watch?: { refresh(): void; close(): void }
   private retry?: ReturnType<typeof setTimeout>
   private delay = FIRST_RETRY_MS
+  /** A refresh opened the watch ahead of its retry, which has yet to come. */
+  private hurried = false
   private attempt = 0
   private failure?: Error
   constructor(
@@ -51,6 +53,7 @@ class Follower<T> {
             if (!current()) return
             this.failure = undefined
             this.delay = FIRST_RETRY_MS
+            this.hurried = false
             for (const listener of this.listeners) listener.snapshot(value, readAt)
           },
           ended: (error) => {
@@ -82,6 +85,7 @@ class Follower<T> {
     for (const listener of this.listeners) listener.failed(error)
     this.retry = setTimeout(() => {
       this.retry = undefined
+      this.hurried = false
       void this.open()
     }, this.delay)
     this.retry.unref()
@@ -95,6 +99,10 @@ class Follower<T> {
   }
   refresh() {
     if (this.retry) {
+      // One refresh tries at once. While that fails too, the retries keep their own pace: each
+      // attempt may cost an SSH login.
+      if (this.hurried) return
+      this.hurried = true
       clearTimeout(this.retry)
       this.retry = undefined
       void this.open()
