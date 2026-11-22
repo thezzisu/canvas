@@ -7,7 +7,7 @@
 //                       { channel, seq, ...message }, a window message (terminals.ts)
 //   server to browser   { type: 'hello', socket, version, revision }, once after signing in
 //                       { channel, ack, ...message }
-//                       { type: 'ack', channel, ack, at }, when nothing else carried it in time
+//                       { type: 'ack', channel, ack }, when nothing else carried it in time
 //                       { type: 'close', channel, ack }, the server ended the channel
 //                       binary: the channel and the ack as unsigned LEB128 integers, then a
 //                       cell message
@@ -32,9 +32,8 @@
 //   or goes alone after ACK_DELAY_MS. An ack is never acknowledged. `at` is the server's clock.
 import { EventEmitter } from 'node:events'
 import type { WebSocket } from 'ws'
-import { serverTime } from './server-time.ts'
 import { log, logging } from './log.ts'
-import { inputKind, logIdentifier, logType, logWindow } from '../shared/log-line.ts'
+import { inputKind, logIdentifier, logType, logWindow, type LogWord } from '../shared/log-line.ts'
 import type { TerminalTarget } from './terminals.ts'
 
 /** No tab shows more windows at once than the server keeps open. */
@@ -65,6 +64,8 @@ export class TerminalChannel extends EventEmitter<{
   private owedAck?: ReturnType<typeof setTimeout>
   /** When it last took a message, on the wall clock. */
   takenAt = 0
+  /** Who ended it, for the log. */
+  endedBy?: Extract<LogWord, 'browser' | 'server' | 'superseded' | 'socket'>
   private acked = 0
   constructor(
     private readonly socket: WebSocket,
@@ -84,10 +85,7 @@ export class TerminalChannel extends EventEmitter<{
   /** Takes a numbered message; false for one that was taken before or has no number. */
   take(seq: unknown): boolean {
     if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 1) return false
-    this.owedAck ??= setTimeout(
-      () => this.send({ type: 'ack', at: serverTime() }),
-      ACK_DELAY_MS,
-    ).unref()
+    this.owedAck ??= setTimeout(() => this.send({ type: 'ack' }), ACK_DELAY_MS).unref()
     if (seq <= this.taken) return false
     this.taken = seq
     this.takenAt = Date.now()
@@ -127,15 +125,17 @@ export class TerminalChannel extends EventEmitter<{
     clearTimeout(this.owedAck)
     this.owedAck = undefined
   }
-  close() {
+  /** The server ends it, or a later channel of its view replaces it. */
+  close(reason: 'server' | 'superseded' = 'server') {
     if (this.readyState !== 1) return
     if (this.socket.readyState === 1)
       this.socket.send(JSON.stringify({ type: 'close', channel: this.id, ack: this.taken }))
-    this.ended()
+    this.ended(reason)
   }
   /** The browser, or the socket, ended it. */
-  ended() {
+  ended(by: NonNullable<TerminalChannel['endedBy']>) {
     if (this.readyState !== 1) return
+    this.endedBy = by
     this.readyState = 3
     this.settleAck()
     this.emit('close')
@@ -160,7 +160,7 @@ export function serveTerminalChannels(
     const id = message?.channel
     if (typeof id !== 'number' || !Number.isInteger(id) || id < 0 || id > MAX_CHANNEL) return
     const channel = channels.get(id)
-    if (message.type === 'close') channel?.ended()
+    if (message.type === 'close') channel?.ended('browser')
     else if (message.type !== 'open') {
       if (!channel) return
       const started = performance.now()
@@ -205,12 +205,17 @@ export function serveTerminalChannels(
       log('link', 'channel', { ...line, state: 'open' })
       opened.once('close', () => {
         channels.delete(id)
-        log('link', 'channel', { ...line, state: 'close', seq: opened.taken })
+        log('link', 'channel', {
+          ...line,
+          state: 'close',
+          reason: opened.endedBy,
+          seq: opened.taken,
+        })
       })
       open(opened, { sourceId, spaceId, windowId })
     }
   })
   socket.once('close', () => {
-    for (const channel of [...channels.values()]) channel.ended()
+    for (const channel of [...channels.values()]) channel.ended('socket')
   })
 }

@@ -54,6 +54,7 @@ class Follower<T> {
             this.failure = undefined
             this.delay = FIRST_RETRY_MS
             this.hurried = false
+            log('source', 'watch', { source: logIdentifier(this.source.id), state: 'read' })
             for (const listener of this.listeners) listener.snapshot(value, readAt)
           },
           ended: (error) => {

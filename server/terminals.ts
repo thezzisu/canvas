@@ -521,7 +521,7 @@ export class LiveTerminal {
       this.maximized.owner = ws
       this.maximized.handedOver = true
     }
-    previous.close()
+    previous.close('superseded')
   }
   private remember(view: string, record: ViewRecord) {
     this.known.delete(view)

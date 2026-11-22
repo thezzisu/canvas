@@ -208,6 +208,22 @@ test('an open names its view and which of its channels this is', () => {
   assert.equal(f.opened.length, 0)
 })
 
+test('a channel says who ended it', () => {
+  const f = fixture()
+  for (const channel of [0, 1, 2, 3]) f.socket.say({ type: 'open', channel, ...target('a') })
+  const [browser, server, superseded, socket] = f.opened.map(({ channel }) => channel)
+  f.socket.say({ type: 'close', channel: 0 })
+  server!.close()
+  superseded!.close('superseded')
+  superseded!.close()
+  f.socket.readyState = 3
+  f.socket.emit('close')
+  assert.deepEqual(
+    [browser, server, superseded, socket].map((channel) => channel!.endedBy),
+    ['browser', 'server', 'superseded', 'socket'],
+  )
+})
+
 test('an ack rides on the next message, and goes alone only when none comes in time', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = fixture()
@@ -223,7 +239,7 @@ test('an ack rides on the next message, and goes alone only when none comes in t
   assert.deepEqual(f.socket.sent, [])
   t.mock.timers.tick(1)
   const [alone] = f.socket.sent.splice(0) as Record<string, unknown>[]
-  assert.deepEqual([alone!.type, alone!.ack, typeof alone!.at], ['ack', 202, 'number'])
+  assert.deepEqual(alone, { type: 'ack', channel: 0, ack: 202 }, 'it carries nothing else')
   t.mock.timers.tick(ACK_DELAY_MS * 2)
   assert.deepEqual(f.socket.sent, [], 'an ack is not repeated')
   f.socket.say({ type: 'input', channel: 0, seq: 202 })

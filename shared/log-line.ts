@@ -48,11 +48,18 @@ export type LogWord =
   | 'expired'
   | 'failed'
   | 'stalled'
+  // who ended a channel
+  | 'browser'
+  | 'server'
+  | 'superseded'
+  | 'socket'
   // a window's status
   | 'connecting'
   | 'connected'
   | 'disconnected'
   | 'closed'
+  // a source's watch
+  | 'read'
   // cell messages
   | 'frame'
   | 'patch'
