@@ -418,6 +418,10 @@ export class GhosttyTerminal {
   get mouseReporting() {
     return this.k.g.view.getUint8(this.get('MOUSE_TRACKING')) !== 0
   }
+  /** The default background the program set (OSC 11), as RGB, as of the last read. */
+  get background(): number | undefined {
+    return this.tint.bg
+  }
   /** The kitty keyboard protocol flags the program asked for; 0 for none. */
   get kittyKeyboard() {
     return this.k.g.view.getUint8(this.get('KITTY_KEYBOARD_FLAGS'))

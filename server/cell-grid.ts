@@ -110,6 +110,8 @@ export class GridEncoder {
       !sent ||
       sent.grid.width !== grid.width ||
       sent.grid.height !== grid.height ||
+      // Only a FRAME carries the window's default background.
+      sent.grid.background !== grid.background ||
       this.tables.styles.length > TABLE_LIMIT ||
       this.tables.links.length > TABLE_LIMIT
     if (frame) this.tables.clear()
@@ -130,7 +132,12 @@ export class GridEncoder {
       lines,
     }
     const message = frame
-      ? encodeFrame({ ...update, cols: grid.width, rows: grid.height })
+      ? encodeFrame({
+          ...update,
+          cols: grid.width,
+          rows: grid.height,
+          ...(grid.background === undefined ? {} : { background: grid.background }),
+        })
       : encodePatch({ ...update, base: sent.revision })
     this.sent = { grid, cursor: next, revision }
     return message

@@ -111,6 +111,7 @@ export function composeWindow(
   const panes: PaneSurfacePane[] = [],
     owners = new Int32Array(frame.cells.length),
     layers = projection.panes.map((pane) => pane.id)
+  const backgrounds = new Set<number | undefined>()
   for (const split of projection.splits) {
     const area = split.hit_rect
     for (let y = area.y; y < area.y + area.height; y++)
@@ -152,6 +153,12 @@ export function composeWindow(
       cursor = engine.cursor(),
       alternate = engine.alternateScreen,
       focused = projected.id === focusedId
+    // Where the program wrote nothing, the pane shows the background it set.
+    const background = engine.background,
+      empty = background === undefined ? BLANK : { ...BLANK, bg: 0x2000000 | background }
+    backgrounds.add(background)
+    for (let y = rect.y; y < rect.y + rect.height; y++)
+      for (let x = rect.x; x < rect.x + rect.width; x++) frame.cells[y * cols + x] = empty
     // A terminal that kept a wider grid than it was asked for shows it whole, without the bar.
     const inner = {
       ...rect,
@@ -172,7 +179,7 @@ export function composeWindow(
     for (let y = 0; y < inner.height; y++) {
       const line = lines[y]
       for (let x = 0; x < inner.width; x++) {
-        let rendered = line?.cells[x] ?? BLANK
+        let rendered = line?.cells[x] ?? empty
         const uri = coreHyperlink(line?.links?.get(x))
         if (uri) {
           let link = linkIndexes.get(uri)
@@ -193,6 +200,7 @@ export function composeWindow(
         frame.cells[y * cols + track.x] = {
           ...cell(held ? look.symbol : '▕'),
           fg: held ? look.thumb : look.track,
+          bg: empty.bg,
         }
       }
     }
@@ -249,6 +257,9 @@ export function composeWindow(
     owners[frame.cursor.y * cols + frame.cursor.x] !== layers.indexOf(focusedId || '') + 1
   )
     frame.cursor = null
+  // The margins around the grid take the background every pane agrees on.
+  const [background] = backgrounds
+  if (backgrounds.size === 1 && background !== undefined) frame.background = background
   panes.reverse()
   const splits = projection.splits.flatMap((split) => visibleSplits(split, owners, cols))
   return { frame, panes, splits, owners, layers }

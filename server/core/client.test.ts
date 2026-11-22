@@ -1844,6 +1844,29 @@ test('a pane attached after the window opened replays its first paint without ri
   }
 })
 
+test('a background a program sets fills its pane and the window around the grid', async () => {
+  const f = fixture()
+  const client = await open(f)
+  const seen = watch(client)
+  try {
+    f.stream.receive({ kind: 'data', data: Buffer.from('\x1b]11;#1e2a44\x07x') })
+    await tick()
+    await tick()
+    const grid = seen.grid!
+    assert.equal(grid.background, 0x1e2a44, 'the margins around the grid follow')
+    // The pane keeps its last column for the scrollbar; with no history it is empty.
+    assert.equal(grid.cells[grid.width - 1]!.bg, 0x2000000 | 0x1e2a44)
+    assert.equal(grid.cells[(grid.height - 1) * grid.width + 3]!.bg, 0x2000000 | 0x1e2a44)
+    f.stream.receive({ kind: 'data', data: Buffer.from('\x1b]111\x07y') })
+    await tick()
+    await tick()
+    assert.equal(seen.grid!.background, undefined)
+    assert.equal(seen.grid!.cells[seen.grid!.width - 1]!.bg, 0)
+  } finally {
+    client.kill()
+  }
+})
+
 test('a window shows its error first, then its furthest percentage, then progress without one', () => {
   assert.equal(windowProgress([undefined]), undefined)
   assert.deepEqual(

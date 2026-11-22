@@ -32,6 +32,11 @@ export interface FrameData {
   cursor: CursorState | null
   hyperlinks: string[]
   graphics: Buffer
+  /**
+   * The window's default background as RGB, when its program set one (OSC 11). The browser fills
+   * the margins around the grid with it; without it, they take the browser's theme.
+   */
+  background?: number
 }
 export interface PaneSurfacePane {
   pane_id: string

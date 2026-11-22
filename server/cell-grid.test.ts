@@ -289,3 +289,16 @@ test('a composed selection and popup reach the browser as attributes and cells',
   ])
   assert.deepEqual([covered.cursor.x, covered.cursor.y], [6, 2])
 })
+
+test('a default background the program set travels in a FRAME, and so does its reset', () => {
+  const encoder = new GridEncoder(),
+    mirror = new CellMirror(),
+    plain = grid(4, 1, ['ab'])
+  assert.equal(mirror.apply(encoder.encode(plain, 1)!).frame, true)
+  assert.equal(mirror.background, undefined)
+  const set = mirror.apply(encoder.encode({ ...plain, background: 0x1e2a44 }, 2)!)
+  assert.equal(set.frame, true, 'only a FRAME carries defaults')
+  assert.equal(mirror.background, 0x1e2a44)
+  assert.equal(mirror.apply(encoder.encode(plain, 3)!).frame, true)
+  assert.equal(mirror.background, undefined, 'the reset returns the page theme')
+})
