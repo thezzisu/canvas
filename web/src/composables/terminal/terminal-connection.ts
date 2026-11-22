@@ -11,6 +11,17 @@ import { log } from '../../utils/diagnostics/log'
 /** One socket per signed-in instance. It lives from its first channel to its last. */
 const sockets = new Map<string, TerminalChannels>()
 const socketKey = (context: ApiContext) => `${context.base}\n${context.token}`
+/** The probe before a reconnect, which a stuck link must not hold past the handshake's limit. */
+const ACCESS_TIMEOUT_MS = 8000
+let following = false
+/** Sockets judge nothing while the page is hidden, and again once it shows. */
+function followPage() {
+  if (following) return
+  following = true
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) for (const channels of sockets.values()) channels.shown()
+  })
+}
 
 /** Opens a window's channel on the instance's socket, opening the socket for the first one. */
 export function openTerminalConnection(
@@ -19,6 +30,7 @@ export function openTerminalConnection(
   view: TerminalView,
   events: ConnectionEvents,
 ): TerminalConnection {
+  followPage()
   const key = socketKey(context)
   let channels = sockets.get(key)
   if (!channels) {
@@ -51,7 +63,12 @@ export function terminalAccess(context: ApiContext): Promise<ReadonlySet<string>
   let probe = probes.get(key)
   if (!probe) {
     probe = (async () => {
-      const response = await apiFetch('/api/state', undefined, context)
+      const response = await apiFetch(
+        '/api/state',
+        // Windows that lost the socket together share this: hung, it would hang every retry.
+        { signal: AbortSignal.timeout(ACCESS_TIMEOUT_MS) },
+        context,
+      )
       if (response.status === 401) return 'expired' as const
       if (!response.ok) throw new Error('State unavailable')
       const state = (await response.json()) as { sources: Array<{ id: string }> }

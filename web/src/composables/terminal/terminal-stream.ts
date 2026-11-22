@@ -435,10 +435,21 @@ export async function connect(session: Session, probe: boolean) {
       },
       // The server ends a channel when the connection changed, and the socket when the session
       // expired. The reconnect probe verifies the session before signing out.
-      closed: (failed) => {
-        log('channel', { w: session.logId, state: failed ? 'error' : 'closed' })
-        connectionFailed(session, failed ? t('terminal.connection.failed') : undefined)
+      closed: (end) => {
+        log('channel', { w: session.logId, state: end === 'failed' ? 'error' : end })
+        connectionFailed(
+          session,
+          end === 'failed'
+            ? t('terminal.connection.failed')
+            : end === 'stalled'
+              ? t('terminal.connection.timeout')
+              : undefined,
+        )
       },
+      // A working agent's screen keeps changing, so there silence can mean a stuck socket.
+      watching: () =>
+        !!session.reportedVisible &&
+        !!session.metadata?.panes.some((pane) => pane.status === 'working'),
     },
   )
   session.connection = connection
@@ -450,6 +461,8 @@ export function terminalVisibilityChanged(session: Session) {
   syncViewVisibility(session)
   if (document.hidden) {
     doubtUploads(session)
+    // Typed just before leaving, it would land in whatever the screen shows on return.
+    session.view.forgetInput()
     session.reconnect.pause()
     // Keep healthy connections alive. Pending authentication and handshakes are
     // restarted in the foreground instead of timing out behind the user.

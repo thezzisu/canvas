@@ -39,6 +39,7 @@ export type LogWord =
   | 'ok'
   | 'expired'
   | 'failed'
+  | 'stalled'
   // a window's status
   | 'connecting'
   | 'connected'

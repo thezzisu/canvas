@@ -1,7 +1,12 @@
-import test from 'node:test'
+import test, { afterEach, beforeEach, mock } from 'node:test'
 import assert from 'node:assert/strict'
-import { TerminalChannels, type ConnectionEvents } from './terminal-channels.ts'
+import { RETIRE_MS, TerminalChannels, type ConnectionEvents } from './terminal-channels.ts'
+import { STALL_MS } from './link-watch.ts'
 import { TerminalView } from './terminal-view.ts'
+
+// The fixture's clock stands still, so no test here may run on real timers.
+beforeEach(() => mock.timers.enable({ apis: ['setTimeout'] }))
+afterEach(() => mock.timers.reset())
 
 class FakeSocket {
   readonly OPEN = 1
@@ -38,15 +43,19 @@ function listener() {
   const events: ConnectionEvents = {
     message: (message) => log.push(message.type),
     cells: (bytes) => log.push([...bytes]),
-    closed: (failed) => log.push(failed ? 'failed' : 'closed'),
+    closed: (end) => log.push(end),
   }
   return { log, events }
 }
 function fixture() {
   const socket = new FakeSocket()
   let idle = 0
-  const channels = new TerminalChannels(socket as unknown as WebSocket, 'token', () => idle++)
-  return { socket, channels, idle: () => idle }
+  const page = { time: 0, shown: true }
+  const channels = new TerminalChannels(socket as unknown as WebSocket, 'token', () => idle++, {
+    now: () => page.time,
+    visible: () => page.shown,
+  })
+  return { socket, channels, page, idle: () => idle }
 }
 
 test('the socket authenticates once, then opens the channels asked for before and after', () => {
@@ -61,6 +70,7 @@ test('the socket authenticates once, then opens the channels asked for before an
     { type: 'open', channel: 0, view: 'view-000a', attempt: 1, maximized: false, ...window('a') },
     { type: 'open', channel: 1, view: 'view-000b', attempt: 1, maximized: false, ...window('b') },
   ])
+  f.socket.json({ type: 'resume', channel: 0, taken: null })
   assert.equal(a.send({ type: 'focus' }) && b.open, true)
   assert.deepEqual(f.socket.sent.at(-1), { type: 'focus', channel: 0, seq: 1 })
   assert.equal(f.socket.binaryType, 'arraybuffer')
@@ -148,10 +158,12 @@ test("a view's numbers go on over its channels, and every kind of message acknow
   f.channels.open(window('keep'), view(), listener().events)
   f.socket.accept()
   const first = f.channels.open(window('a'), same, a.events)
+  f.socket.json({ type: 'resume', channel: 1, taken: null })
   first.send({ type: 'focus' })
   first.send({ type: 'input', data: 'x' })
   first.close()
   const second = f.channels.open(window('a'), same, a.events)
+  f.socket.json({ type: 'resume', channel: 2, taken: null })
   second.send({ type: 'input', data: 'y' })
   assert.equal(f.socket.sent.at(-1)!.seq, 3)
   f.socket.cells(2, 1, 7)
@@ -164,4 +176,143 @@ test("a view's numbers go on over its channels, and every kind of message acknow
   f.socket.json({ type: 'ack', channel: 2, ack: 9 })
   assert.equal(same.taken, 3, 'an ack is cumulative and never of what was not sent')
   assert.deepEqual(a.log, [[7], 'status'], "an ack is not the session's to hear")
+})
+
+/** A window's channel that the server has joined, and a clock that moves the timers with it. */
+function linked(watching = false) {
+  const f = fixture(),
+    a = listener(),
+    same = view()
+  const connection = f.channels.open(window('a'), same, { ...a.events, watching: () => watching })
+  f.socket.accept()
+  f.socket.json({ type: 'resume', channel: 0, taken: null, ack: 0 })
+  f.socket.sent = []
+  const pass = (ms: number) => {
+    for (let passed = 0; passed < ms; passed += 10) {
+      f.page.time += 10
+      mock.timers.tick(10)
+    }
+  }
+  return { ...f, a, view: same, connection, pass }
+}
+
+test('input nobody acknowledged for two seconds gives the socket up, and only then', () => {
+  const f = linked()
+  f.connection.send({ type: 'input', data: 'x' })
+  // The way down still works, which says nothing of the way up.
+  f.pass(1000)
+  f.socket.cells(0, 0, 9)
+  f.pass(STALL_MS - 1010)
+  assert.deepEqual(f.a.log, [[9]])
+  f.pass(20)
+  assert.deepEqual(f.a.log, [[9], 'stalled'])
+  assert.equal(f.idle(), 1, 'the next connection gets a socket of its own')
+  assert.equal(f.connection.send({ type: 'input', data: 'y' }), false, 'nothing more goes into it')
+  f.socket.cells(0, 1, 8)
+  assert.equal(f.a.log.length, 2, 'what arrives on it late is dropped')
+  assert.equal(f.socket.readyState, 1, 'closing it now would release the maximized window')
+  f.pass(RETIRE_MS)
+  assert.equal(f.socket.readyState, 3)
+})
+
+test('an ack in time is no stall, and progress restarts the wait', () => {
+  const f = linked()
+  for (const data of ['1', '2', '3']) f.connection.send({ type: 'input', data })
+  f.pass(1900)
+  f.socket.cells(0, 1, 7)
+  f.pass(1900)
+  f.socket.json({ type: 'ack', channel: 0, ack: 2 })
+  f.pass(1900)
+  f.socket.json({ type: 'status', channel: 0, ack: 3 })
+  f.pass(10_000)
+  assert.deepEqual(f.a.log, [[7], 'status'])
+})
+
+test('a page that was busy reads what arrived before it calls a stall', () => {
+  const f = linked()
+  f.connection.send({ type: 'input', data: 'x' })
+  f.page.time += 6000
+  mock.timers.tick(STALL_MS)
+  assert.deepEqual(f.a.log, [])
+  f.socket.json({ type: 'ack', channel: 0, ack: 1 })
+  f.pass(5000)
+  assert.deepEqual(f.a.log, [])
+})
+
+test('a hidden page judges nothing until it shows', () => {
+  const f = linked()
+  f.connection.send({ type: 'view-visible', visible: false })
+  f.page.shown = false
+  f.pass(30_000)
+  assert.deepEqual(f.a.log, [])
+  f.page.shown = true
+  f.channels.shown()
+  f.pass(300)
+  assert.deepEqual(f.a.log, ['stalled'])
+})
+
+test('silence is questioned only under a working agent', () => {
+  const f = linked()
+  f.pass(30_000)
+  assert.deepEqual(f.socket.sent, [])
+  assert.deepEqual(f.a.log, [])
+})
+
+test('a silent socket under a working agent is probed, and a probe without an answer is a stall', () => {
+  const f = linked(true)
+  f.pass(2010)
+  assert.deepEqual(f.socket.sent, [{ type: 'ping', id: 'link', channel: 0, seq: 1 }])
+  f.socket.json({ type: 'pong', id: 'link', channel: 0, ack: 1 })
+  f.pass(2010)
+  assert.equal(f.socket.sent.length, 2)
+  f.pass(2010)
+  assert.deepEqual(f.a.log, ['pong', 'stalled'])
+})
+
+test('a new channel first sends again the input that was not taken, and nothing else', () => {
+  const f = linked()
+  f.connection.send({ type: 'input', data: 'a' })
+  f.connection.send({ type: 'focus' })
+  f.connection.send({ type: 'input', data: 'b' })
+  f.connection.send({ type: 'input', data: 'c' })
+  f.pass(STALL_MS + 10)
+  const next = fixture(),
+    b = listener()
+  next.channels.open(window('a'), f.view, b.events)
+  next.socket.accept()
+  next.socket.sent = []
+  next.socket.json({ type: 'resume', channel: 0, taken: 1, ack: 1 })
+  assert.deepEqual(next.socket.sent, [
+    { type: 'input', data: 'b', channel: 0, seq: 3 },
+    { type: 'input', data: 'c', channel: 0, seq: 4 },
+  ])
+  assert.deepEqual(b.log, [], "the handshake is not the session's to hear")
+})
+
+test('input is not sent again to a window that forgot the view, or after the user left', () => {
+  for (const forget of [false, true]) {
+    const f = fixture(),
+      same = view()
+    same.number({ type: 'input', data: 'synthetic' }, 0)
+    if (forget) same.forgetInput()
+    f.channels.open(window('a'), same, listener().events)
+    f.socket.accept()
+    f.socket.sent = []
+    f.socket.json({ type: 'resume', channel: 0, taken: forget ? 0 : null, ack: 0 })
+    assert.deepEqual(f.socket.sent, [])
+    assert.equal(same.waitingSince, undefined)
+  }
+})
+
+test('nothing new is numbered on a channel before the input to send again', () => {
+  const f = fixture(),
+    same = view()
+  same.number({ type: 'input', data: 'typed' }, 0)
+  const connection = f.channels.open(window('a'), same, listener().events)
+  f.socket.accept()
+  f.socket.sent = []
+  assert.equal(connection.send({ type: 'upload-cancel', id: 'batch' }), false)
+  f.socket.json({ type: 'resume', channel: 0, taken: 0, ack: 0 })
+  assert.deepEqual(f.socket.sent, [{ type: 'input', data: 'typed', channel: 0, seq: 1 }])
+  assert.equal(connection.send({ type: 'focus' }), true)
 })

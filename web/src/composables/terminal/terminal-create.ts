@@ -160,13 +160,15 @@ export function createSession(
           error: undefined,
           retryAttempt: attempt || undefined,
         }),
-      failed: () =>
+      failed: () => {
+        session.view.forgetInput()
         setState(session, {
           ...session.state,
           status: 'disconnected',
           error: session.connectionError,
           retryAttempt: undefined,
-        }),
+        })
+      },
       timeout: () => connectionFailed(session, t('terminal.connection.timeout')),
     }),
     uploads: new TerminalUploads({
