@@ -131,7 +131,12 @@ test('slow readers receive the latest state without an unbounded mutation queue'
 test('live notifications reach authenticated subscribers, bound bursts and retire with their sessions', async (t) => {
   const f = fixture(t),
     sourceId = randomUUID()
-  f.store.put('source', { id: sourceId, name: 'Synthetic source', transport: 'local' })
+  f.store.put('source', {
+    id: sourceId,
+    name: 'Synthetic source',
+    runtime: 'herdr',
+    transport: 'local',
+  })
   const first = await f.subscribe(),
     second = await f.subscribe('second')
   await first.next()

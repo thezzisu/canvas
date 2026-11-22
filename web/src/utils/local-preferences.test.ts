@@ -26,7 +26,7 @@ function storage(): Storage {
 }
 test('instance retirement clears every owned view without touching auth, browser settings or other instances', () => {
   const saved = storage(),
-    source = { id: 'source', name: 'Same', transport: 'local' as const }
+    source = { id: 'source', name: 'Same', runtime: 'herdr' as const, transport: 'local' as const }
   const retired = [
     'canvas:last-canvas:a',
     'canvas:view:a:one',
@@ -91,7 +91,7 @@ test('blocked storage does not prevent instance or canvas retirement', () => {
 })
 test('unregistered preference namespaces are retired without touching sessions or unrelated browser data', () => {
   const saved = storage(),
-    source = { id: 's', name: 'Source', transport: 'local' as const }
+    source = { id: 's', name: 'Source', runtime: 'herdr' as const, transport: 'local' as const }
   const keep = [
     'canvas:view:minimap',
     'canvas:view:navigation',

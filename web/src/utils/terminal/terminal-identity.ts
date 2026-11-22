@@ -5,7 +5,7 @@ export function terminalIdentityKey(instance: string, source: Source, windowId: 
   return JSON.stringify([
     instance,
     source.id,
-    source.runtime === 'core' ? `core:${source.transport}` : source.transport,
+    `${source.runtime}:${source.transport}`,
     source.transport === 'ssh' ? source.target?.trim() || '' : '',
     source.herdrSession?.trim() || '',
     source.herdrSocket?.trim() || '',

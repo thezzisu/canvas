@@ -59,7 +59,7 @@ async function fixture(t: test.TestContext) {
     store.close()
     await rm(root, { recursive: true, force: true })
   })
-  const draft = { transport: 'local' as const, herdrSocket: socketPath }
+  const draft = { runtime: 'herdr' as const, transport: 'local' as const, herdrSocket: socketPath }
   const call = (body: unknown, authenticated = true) =>
     app.request('http://localhost/api/sources/probe', {
       method: 'POST',
@@ -171,7 +171,7 @@ test('cancelling remote discovery terminates only its probe SSH process', async 
   process.env.PATH = root
   const controller = new AbortController(),
     result = probeSource(
-      { transport: 'ssh', target: 'ssh://fixture@example.test' },
+      { runtime: 'herdr', transport: 'ssh', target: 'ssh://fixture@example.test' },
       controller.signal,
     )
   let pid = 0

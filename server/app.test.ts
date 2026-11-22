@@ -111,6 +111,7 @@ test('authentication, CSRF rejection and persistent canvas CRUD', async () => {
           'POST',
           {
             name: 'Bad',
+            runtime: 'herdr',
             transport: 'ssh',
             target: '-oProxyCommand=evil',
           },
@@ -156,6 +157,7 @@ test('empty herdr settings explicitly clear overrides while omitted PATCH fields
     })
   const created = await call('/api/sources', 'POST', {
     name: 'Herdr',
+    runtime: 'herdr',
     transport: 'local',
     herdrSession: 'named',
     herdrSocket: '/fixture/custom.sock',
@@ -192,12 +194,21 @@ test('empty herdr settings explicitly clear overrides while omitted PATCH fields
     { herdrSocket: null },
   ])
     assert.equal((await call(path, 'PATCH', body)).status, 400)
+  // Every connection names its runtime, by its current name only.
+  for (const runtime of [undefined, 'tui', 'core'])
+    assert.equal(
+      (await call('/api/sources', 'POST', { name: 'Untyped', runtime, transport: 'local' })).status,
+      400,
+    )
+  assert.equal((await call(path, 'PATCH', { runtime: 'core' })).status, 400)
+  assert.equal(store.get<Source>('source', original.id)!.runtime, 'herdr')
   assert.equal(
     Object.hasOwn(store.get<Record<string, unknown>>('source', original.id)!, 'herdrSocket'),
     false,
   )
   const defaults = await call('/api/sources', 'POST', {
     name: 'Default',
+    runtime: 'herdr',
     transport: 'local',
     herdrSession: '',
     herdrSocket: '   ',
@@ -209,7 +220,7 @@ test('empty herdr settings explicitly clear overrides while omitted PATCH fields
 })
 
 test('connection identity treats blank form defaults equivalently and preserves meaningful SSH paths', () => {
-  const local: Source = { id: 'fixture', name: 'Local', transport: 'local' }
+  const local: Source = { id: 'fixture', name: 'Local', runtime: 'herdr', transport: 'local' }
   assert.equal(
     sourceConnectionKey(local),
     sourceConnectionKey({
@@ -244,6 +255,7 @@ test('connection identity treats blank form defaults equivalently and preserves 
   for (const patch of [
     { id: 'other' },
     { target: 'other.invalid' },
+    { runtime: 'hc' as const },
     { transport: 'local' as const },
     { herdrSession: 'work' },
     { herdrSocket: '/fixture/other.sock' },

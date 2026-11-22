@@ -20,7 +20,7 @@ async function listen(server: Server) {
 async function fixture(t: TestContext, onChange?: (sourceId: string, windowId: string) => void) {
   const root = await mkdtemp(join(tmpdir(), 'cv-capture-test-')),
     store = new Store(join(root, 'state.db'))
-  const source: Source = { id: 'source', name: 'Fixture', transport: 'local' }
+  const source: Source = { id: 'source', name: 'Fixture', runtime: 'herdr', transport: 'local' }
   store.put('source', source)
   store.addSession('first')
   store.addSession('other')

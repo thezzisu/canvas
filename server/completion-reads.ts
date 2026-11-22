@@ -216,7 +216,7 @@ export class CompletionReads {
     this.snapshots.delete(sourceId)
   }
   projectResources(source: Source, resource: SourceResource): SourceResource {
-    if (source.runtime === 'core') return resource
+    if (source.runtime === 'hc') return resource
     if (
       resource.status !== 'online' ||
       resource.error ||

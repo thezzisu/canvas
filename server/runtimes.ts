@@ -72,7 +72,7 @@ export interface Runtime {
   openTerminal(source: Source, spaceId: string, windowId: string): Promise<TerminalHandle>
 }
 const runtimeOf = (source: Source): Runtime =>
-  source.runtime === 'core' ? coreRuntime : herdrRuntime
+  source.runtime === 'hc' ? coreRuntime : herdrRuntime
 
 /** A draft probe owns its temporary forward and never joins an existing connection. */
 export async function probeSource(

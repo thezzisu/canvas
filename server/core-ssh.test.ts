@@ -129,7 +129,7 @@ test(
     const source: Source = {
       id: `core-ssh-${randomUUID()}`,
       name: 'Core SSH fixture',
-      runtime: 'core',
+      runtime: 'hc',
       transport: 'ssh',
       target: `ssh://${user}@127.0.0.1:${port}`,
       herdrSocket: socket,

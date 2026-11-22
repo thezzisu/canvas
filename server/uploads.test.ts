@@ -58,7 +58,7 @@ function fixture(
     inbox?: string
   } = {},
 ) {
-  const source: Source = { id: randomUUID(), name: 'Fixture', transport: 'local' }
+  const source: Source = { id: randomUUID(), name: 'Fixture', runtime: 'herdr', transport: 'local' }
   const socket = new FakeSocket(),
     other = new FakeSocket()
   const files = new Map<string, Buffer>(),
@@ -730,6 +730,7 @@ test('real native terminal receives no upload paths until the whole batch succee
       const source: Source = {
         id: randomUUID(),
         name: 'Native fixture',
+        runtime: 'herdr',
         transport: 'local',
         herdrSocket: join(config, 'herdr/sessions/upload-batch/herdr.sock'),
       }

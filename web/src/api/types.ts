@@ -9,7 +9,7 @@ export type { ProgramStatus } from '../../../shared/status'
 export interface Source {
   id: string
   name: string
-  runtime?: 'tui' | 'core'
+  runtime: 'herdr' | 'hc'
   transport: 'local' | 'ssh'
   target?: string
   sshIdentityFile?: string

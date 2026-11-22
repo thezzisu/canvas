@@ -26,8 +26,8 @@ const formId = useId()
 const draft = reactive<Source>({
   id: '',
   name: '',
-  // A new connection starts on herdr-core; one saved without a runtime is herdr.
-  runtime: props.source ? 'tui' : 'core',
+  // A new connection starts on herdr-core.
+  runtime: 'hc',
   transport: 'local',
   target: '',
   herdrSession: '',
@@ -109,8 +109,8 @@ async function submit() {
   emit('close', true)
 }
 const runtimes = [
-  { label: 'Herdr Core / App', value: 'core' },
-  { label: 'Herdr TUI', value: 'tui' },
+  { label: 'Herdr Core / App', value: 'hc' },
+  { label: 'Herdr TUI', value: 'herdr' },
 ]
 const transports = computed(() => [
   { label: t('app.local'), value: 'local', icon: 'i-lucide-server', disabled: busy.value },
@@ -122,7 +122,7 @@ const probeText = computed(() =>
     : probe.value.error
       ? t('app.connectionProbeFailed')
       : probe.value.version
-        ? `${draft.runtime === 'core' ? 'herdr-core' : 'herdr'} ${probe.value.version}`
+        ? `${draft.runtime === 'hc' ? 'herdr-core' : 'herdr'} ${probe.value.version}`
         : '',
 )
 </script>
@@ -205,7 +205,7 @@ const probeText = computed(() =>
                   v-model="draft.herdrSocket"
                   name="herdrSocket"
                   :placeholder="
-                    draft.runtime === 'core' ? '/path/to/default.sock' : '/path/to/herdr.sock'
+                    draft.runtime === 'hc' ? '/path/to/default.sock' : '/path/to/herdr.sock'
                   "
                   class="w-full"
               /></UFormField>

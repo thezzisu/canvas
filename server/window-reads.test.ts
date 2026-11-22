@@ -14,8 +14,18 @@ test('window read times are ordered, survive restarts and leave with their windo
     store.close()
     rmSync(dir, { recursive: true, force: true })
   })
-  const source = store.put<Source>('source', { id: randomUUID(), name: 'A', transport: 'local' })
-  const other = store.put<Source>('source', { id: randomUUID(), name: 'B', transport: 'local' })
+  const source = store.put<Source>('source', {
+    id: randomUUID(),
+    name: 'A',
+    runtime: 'herdr',
+    transport: 'local',
+  })
+  const other = store.put<Source>('source', {
+    id: randomUUID(),
+    name: 'B',
+    runtime: 'herdr',
+    transport: 'local',
+  })
   const key = (connection: Source, windowId: string) => `${connection.id}/${windowId}`
   const revision = store.revision
   store.markWindowRead(source, 'one')

@@ -24,7 +24,7 @@ const notRouted = (result: { code: number | null; stderr: string }, reason: RegE
   assert.equal(result.code, 1, result.stderr)
   assert.match(result.stderr, reason)
 }
-const source: Source = { id: randomUUID(), name: 'Open', transport: 'local' }
+const source: Source = { id: randomUUID(), name: 'Open', runtime: 'herdr', transport: 'local' }
 const resources = {
   id: source.id,
   name: source.name,

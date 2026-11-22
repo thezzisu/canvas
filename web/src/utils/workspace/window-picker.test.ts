@@ -4,8 +4,8 @@ import { pickerChecked, pickerGroups, updatePickerSelection } from './window-pic
 
 test('window picker retains configured connection order and excludes added windows from group selection after space moves', () => {
   const sources = [
-    { id: 'b', name: 'Second machine', transport: 'local' as const },
-    { id: 'a', name: 'First machine', transport: 'local' as const },
+    { id: 'b', name: 'Second machine', runtime: 'herdr' as const, transport: 'local' as const },
+    { id: 'a', name: 'First machine', runtime: 'herdr' as const, transport: 'local' as const },
   ]
   const resources = [
     {
@@ -59,7 +59,9 @@ test('tri-state bulk selection modifies only eligible visible keys and preserves
 })
 
 test('window search includes the displayed active terminal title and follows title changes', () => {
-  const sources = [{ id: 'source', name: 'Machine', transport: 'local' as const }]
+  const sources = [
+    { id: 'source', name: 'Machine', runtime: 'herdr' as const, transport: 'local' as const },
+  ]
   const window = {
     id: 'tab',
     name: '3',

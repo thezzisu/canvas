@@ -45,7 +45,7 @@ import { join } from 'node:path';
 import { hostname, userInfo } from 'node:os';
 import { editorAuthority } from './server/source-command.ts';
 const root = process.env.CANVAS_AUTHORITY_TEST_ROOT;
-const source = { id: 'fixture', name: 'Fixture', transport: 'ssh' };
+const source = { id: 'fixture', name: 'Fixture', runtime: 'herdr', transport: 'ssh' };
 ${body}
 `
   await new Promise<void>((resolve, reject) => {

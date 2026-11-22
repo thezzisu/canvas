@@ -55,7 +55,7 @@ async function fixture(t: TestContext) {
     timeouts?: { start: number; idle: number },
     tty = false,
     fault?: { stage: 'registry' | 'record' | 'probe' | 'connect'; errno: number },
-    runtime?: 'core' | 'tui',
+    runtime?: 'hc' | 'herdr',
   ) =>
     new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
       // Load the real executable and shorten only its inactivity intervals. This
@@ -740,7 +740,7 @@ test('canvas open routes core terminal identity without falling back to inherite
     undefined,
     false,
     undefined,
-    'core',
+    'hc',
   )
   assert.equal(explicit.code, 0, explicit.stderr)
   assert.equal(endpoint.headers.at(-1)!.paneId, 't8')

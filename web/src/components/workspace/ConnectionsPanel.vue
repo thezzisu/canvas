@@ -57,7 +57,7 @@ watch(
   { flush: 'sync' },
 )
 const resourceOf = (source: Source) => workspace.resources.find((item) => item.id === source.id)
-const runtime = (source: Source) => (source.runtime === 'core' ? 'herdr-core' : 'herdr')
+const runtime = (source: Source) => (source.runtime === 'hc' ? 'herdr-core' : 'herdr')
 const online = (resource?: SourceResource) => resource?.status === 'online' && !resource.error
 /** A window that has no card here, addressed as the canvas node it would be. */
 const windowRef = (sourceId: string, spaceId: string, windowId: string): TerminalCanvasNode => ({

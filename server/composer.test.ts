@@ -31,6 +31,7 @@ async function fixture(t: TestContext) {
   const source = store.put<Source>('source', {
     id: randomUUID(),
     name: 'Fixture',
+    runtime: 'herdr',
     transport: 'local',
   })
   const target = { sourceId: source.id, windowId: 'window-a' }

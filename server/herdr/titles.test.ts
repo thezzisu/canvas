@@ -47,6 +47,7 @@ test('an open window shows each title herdr publishes without waiting for a redr
   const source: Source = {
     id: 'herdr-titles',
     name: 'Herdr titles',
+    runtime: 'herdr',
     transport: 'local',
     herdrSocket: join(root, 'config', 'herdr', 'sessions', session, 'herdr.sock'),
     herdrSession: session,

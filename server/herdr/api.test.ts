@@ -238,6 +238,7 @@ test('herdr runtime discovers sockets and performs resource CRUD without executa
   const source: Source = {
     id: 'native-api',
     name: 'Native',
+    runtime: 'herdr',
     transport: 'local',
     herdrSocket: paths.api,
   }

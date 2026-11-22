@@ -44,7 +44,7 @@ import { useSessionStore } from './session'
 /** The connection fields that identify a herdr endpoint; changing one invalidates its windows. */
 export function sourceConnection(source: Source) {
   return {
-    runtime: source.runtime || 'tui',
+    runtime: source.runtime,
     transport: source.transport,
     herdrSession: source.herdrSession?.trim() || '',
     herdrSocket: source.herdrSocket?.trim() || '',

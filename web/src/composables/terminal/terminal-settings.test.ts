@@ -19,6 +19,7 @@ import type { Source, SourceResource } from '../../api/types.ts'
 const source: Source = {
   id: 'connection',
   name: 'Connection',
+  runtime: 'herdr',
   transport: 'ssh',
   target: 'host',
   herdrSession: 'main',
@@ -111,7 +112,7 @@ test('native identities isolate overrides across tabs and runtimes while default
   for (const identity of [
     terminalIdentityKey('other', source, 'first'),
     terminalIdentityKey('backend', source, 'new'),
-    terminalIdentityKey('backend', { ...source, runtime: 'core' }, 'first'),
+    terminalIdentityKey('backend', { ...source, runtime: 'hc' }, 'first'),
   ]) {
     key.value = identity
     assert.deepEqual(terminal.effective.value, defaultTerminalSettings)
@@ -152,7 +153,7 @@ test('confirmed native closure removes its overrides; offline discovery and othe
   assert(store.getItem(terminalDefaultsKey))
   pruneTerminalPreferences(
     'backend',
-    [{ ...source, runtime: 'core' }],
+    [{ ...source, runtime: 'hc' }],
     resources('offline', []),
     store,
   )

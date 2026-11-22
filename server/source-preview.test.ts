@@ -20,7 +20,12 @@ async function fixture(t: TestContext, idleTtlMs?: number) {
     assets = new AssetStore(root, store)
   store.addSession('owner')
   store.addSession('other')
-  const source: Source = { id: randomUUID(), name: 'Preview fixture', transport: 'local' }
+  const source: Source = {
+    id: randomUUID(),
+    name: 'Preview fixture',
+    runtime: 'herdr',
+    transport: 'local',
+  }
   store.put('source', source)
   const captures = new CaptureService(store)
   const previews = new SourcePreviewService(

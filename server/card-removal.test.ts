@@ -30,6 +30,7 @@ async function fixture(t: TestContext) {
   const source = store.put<Source>('source', {
     id: randomUUID(),
     name: 'Native',
+    runtime: 'herdr',
     transport: 'local',
   })
   const terminal: CanvasNode = {

@@ -361,7 +361,7 @@ async function fixture(
   await writeFile(join(root, 'report.txt'), 'fixture file\n')
   const store = new Store(join(root, 'canvas.db')),
     assets = new AssetStore(root, store)
-  const source: Source = { id: randomUUID(), name: 'Fixture', transport: 'local' }
+  const source: Source = { id: randomUUID(), name: 'Fixture', runtime: 'herdr', transport: 'local' }
   store.put('source', source)
   store.addSession('first-session')
   store.addSession('other-session')

@@ -422,7 +422,7 @@ export class OpenDownloadService {
       .flatMap((space) => space.windows)
       .filter((window) =>
         window.panes.some(
-          (pane) => (source.runtime === 'core' ? pane.terminalId : pane.id) === header.paneId,
+          (pane) => (source.runtime === 'hc' ? pane.terminalId : pane.id) === header.paneId,
         ),
       )
     if (matches.length !== 1) {

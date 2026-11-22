@@ -66,6 +66,7 @@ test('native herdr transport works with an unmodified server: split rendering, k
   const source: Source = {
     id: 'herdr-test',
     name: 'Herdr test',
+    runtime: 'herdr',
     transport: 'local',
     herdrSocket: join(root, 'config', 'herdr', 'sessions', session, 'herdr.sock'),
     herdrSession: session,

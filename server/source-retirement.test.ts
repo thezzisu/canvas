@@ -8,6 +8,7 @@ import { TerminalManager } from './terminals.ts'
 const source: Source = {
   id: '663ee353-dbab-4a62-9628-0548fbb8ea4d',
   name: 'Original',
+  runtime: 'herdr',
   transport: 'local',
   herdrSocket: '/fixture/a.sock',
 }

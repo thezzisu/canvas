@@ -17,7 +17,7 @@ test('instance navigation order is durable, category scoped, and published only 
   })
   for (const id of ['a', 'b', 'c']) {
     store.put<Canvas>('canvas', { id, name: id, nodes: [] })
-    store.put<Source>('source', { id, name: id, transport: 'local' })
+    store.put<Source>('source', { id, name: id, runtime: 'herdr', transport: 'local' })
   }
   assert.deepEqual(store.navigationOrder(), { canvases: ['a', 'b', 'c'], sources: ['a', 'b', 'c'] })
   assert.equal(store.get('navigation', 'order'), undefined)
@@ -36,7 +36,7 @@ test('instance navigation order is durable, category scoped, and published only 
   store = new Store(file)
   assert.deepEqual(store.navigationOrder(), { canvases: ['c', 'a', 'b'], sources: ['b', 'a', 'c'] })
   store.remove('source', 'a')
-  store.put<Source>('source', { id: 'new', name: 'new', transport: 'local' })
+  store.put<Source>('source', { id: 'new', name: 'new', runtime: 'herdr', transport: 'local' })
   assert.deepEqual(store.navigationOrder().sources, ['b', 'c', 'new'])
   assert.deepEqual(
     store.updateNavigationOrder('sources', ['c', 'a', 'b']).sources,

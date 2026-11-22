@@ -38,7 +38,7 @@ test('terminal presentation dimensions are shared across canvases while position
   const sourceId = randomUUID(),
     windowId = 'generation:@1',
     key = `${sourceId}/${windowId}`
-  store.put('source', { id: sourceId, name: 'Source', transport: 'local' })
+  store.put('source', { id: sourceId, name: 'Source', runtime: 'herdr', transport: 'local' })
   const node = (id: string, width = 900) => ({
     id,
     type: 'terminal' as const,
@@ -223,7 +223,7 @@ test('only committed terminal dimensions and canonical cell changes invalidate n
   const id = randomUUID(),
     sourceId = randomUUID(),
     windowId = 'tab'
-  store.put('source', { id: sourceId, name: 'Fixture', transport: 'local' })
+  store.put('source', { id: sourceId, name: 'Fixture', runtime: 'herdr', transport: 'local' })
   store.put<Canvas>('canvas', {
     id,
     name: 'Fixture',

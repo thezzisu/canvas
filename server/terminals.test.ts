@@ -136,6 +136,7 @@ async function fixture(
   const source: Source = {
     id: root,
     name: 'Fixture',
+    runtime: 'herdr',
     transport: 'local',
     herdrSession: session,
     herdrSocket: join(config, 'herdr/sessions', session, 'herdr.sock'),
@@ -1717,7 +1718,7 @@ function fakeWindow(cols = 8, rows = 2) {
     resize: (cols, rows) => void sizes.push({ cols, rows }),
     kill() {},
   }
-  const source: Source = { id: 'fake', name: 'Fake', transport: 'local' }
+  const source: Source = { id: 'fake', name: 'Fake', runtime: 'herdr', transport: 'local' }
   const terminal = new LiveTerminal(
     'fake/window',
     source.id,

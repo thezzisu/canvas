@@ -86,7 +86,7 @@ test(
     const source: Source = {
       id: 'core-native',
       name: 'Core native fixture',
-      runtime: 'core',
+      runtime: 'hc',
       transport: 'local',
       herdrSocket: socket,
     }
@@ -152,8 +152,7 @@ test(
     )
     rpc = await CoreRpc.connect(socket)
     assert.equal(
-      (await probeSource({ runtime: 'core', transport: 'local', herdrSocket: socket }))
-        .serverVersion,
+      (await probeSource({ runtime: 'hc', transport: 'local', herdrSocket: socket })).serverVersion,
       rpc.hello.version,
     )
     const created = await createSpace(source, 'Synthetic')

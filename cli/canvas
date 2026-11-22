@@ -35,12 +35,12 @@ def identity_runtime():
     core = bool(os.environ.get("HC_TERMINAL_SOCKET") or os.environ.get("HC_TERMINAL_ID"))
     tui = bool(os.environ.get("HERDR_SOCKET_PATH") or os.environ.get("HERDR_PANE_ID"))
     if core and tui:
-        raise CanvasError("both Core and TUI identities are present; specify --runtime core or --runtime tui")
-    return "core" if core else "tui"
+        raise CanvasError("both Core and TUI identities are present; specify --runtime hc or --runtime herdr")
+    return "hc" if core else "herdr"
 
 
 def terminal_identity():
-    core = identity_runtime() == "core"
+    core = identity_runtime() == "hc"
     native_socket = os.environ.get("HC_TERMINAL_SOCKET" if core else "HERDR_SOCKET_PATH", "")
     pane = os.environ.get("HC_TERMINAL_ID" if core else "HERDR_PANE_ID", "")
     if native_socket and pane and os.path.isabs(native_socket) and len(pane) <= 256:
@@ -51,7 +51,7 @@ def terminal_identity():
 
 def routing_error(message):
     native_socket, pane = terminal_identity()
-    core = identity_runtime() == "core"
+    core = identity_runtime() == "hc"
     socket_key, pane_key = ("HC_TERMINAL_SOCKET", "HC_TERMINAL_ID") if core else ("HERDR_SOCKET_PATH", "HERDR_PANE_ID")
     return CanvasError(message + "\n  " + socket_key + "=" + json.dumps(native_socket)
                        + " " + pane_key + "=" + json.dumps(pane))
@@ -854,14 +854,14 @@ def main():
     opened = commands.add_parser("open", help="open a file, folder or web address", epilog=
         "Routing uses HERDR_SOCKET_PATH and HERDR_PANE_ID, or HC_TERMINAL_SOCKET and HC_TERMINAL_ID, from this process. "
         "A daemon must receive the originating pane's values for each invocation.")
-    opened.add_argument("--runtime", choices=["core", "tui"], help="select the originating runtime in nested terminals")
+    opened.add_argument("--runtime", choices=["hc", "herdr"], help="select the originating runtime in nested terminals")
     opened.add_argument("--preview", action="store_true", help="serve a local file or directory in this terminal using capture")
     opened.add_argument("--preview-root", help="explicit resource root for --preview (default: the selected file's directory)")
     opened.add_argument("path", help="file, folder or HTTP(S) address")
     preview = commands.add_parser("preview", help="serve a directory and preview its static website", epilog=
         "Uses capture in a connected single-pane tab. Return keeps the server running; Stop app or Ctrl+C stops it. "
         "Relative URLs work under the capture prefix; root-relative URLs require site support for that prefix.")
-    preview.add_argument("--runtime", choices=["core", "tui"], help="explicit identity for nested terminal environments")
+    preview.add_argument("--runtime", choices=["hc", "herdr"], help="explicit identity for nested terminal environments")
     preview.add_argument("--preview-root", help="explicit resource root (default: the selected directory)")
     preview.add_argument("path", nargs="?", default=".", help="directory to serve (default: current directory)")
     capture = commands.add_parser("capture", help="run a command and display its Web UI", epilog=
@@ -878,7 +878,7 @@ def main():
     capture.add_argument("--env", action="append", default=[], metavar="NAME=VALUE", help="child-only environment override; named variables expand after PORT injection")
     capture.add_argument("-c", "--shell", help="run this explicit shell script instead of a command")
     capture.add_argument("--timeout", type=float, default=120, help="startup deadline in seconds")
-    capture.add_argument("--runtime", choices=["core", "tui"], help="explicit identity for nested terminal environments")
+    capture.add_argument("--runtime", choices=["hc", "herdr"], help="explicit identity for nested terminal environments")
     capture.add_argument("command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args()
     selected_runtime = arguments.runtime

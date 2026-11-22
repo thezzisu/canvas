@@ -57,8 +57,7 @@ export function validateSource(source: Source): void {
   if (!source.id || !source.name || !['local', 'ssh'].includes(source.transport))
     throw new Error('Invalid source')
   if (source.transport === 'ssh') parseSshTarget(source.target ?? '')
-  if (source.runtime !== undefined && !['tui', 'core'].includes(source.runtime))
-    throw new Error('Invalid runtime')
+  if (!['herdr', 'hc'].includes(source.runtime)) throw new Error('Invalid runtime')
   validateHerdrLocation(source)
   for (const value of [source.herdrSession, source.sshIdentityFile, source.sshKnownHostsFile]) {
     if (value && /[\x00-\x1f\x7f]/u.test(value))

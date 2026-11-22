@@ -91,6 +91,7 @@ async function fixture(t: TestContext) {
   const source = store.put<Source>('source', {
     id: randomUUID(),
     name: 'Source',
+    runtime: 'herdr',
     transport: 'local',
     herdrSocket: apiPath,
   })
@@ -502,6 +503,7 @@ test('official herdr window and final-pane closes remove references while nonfin
   const source = store.put<Source>('source', {
     id: randomUUID(),
     name: 'Isolated native',
+    runtime: 'herdr',
     transport: 'local',
     herdrSocket: join(config, 'herdr/sessions/close-reference/herdr.sock'),
   })

@@ -71,6 +71,7 @@ test('SSH file commands preserve exact arguments without allocating a terminal',
   const source: Source = {
     id: 'python-command',
     name: 'Files',
+    runtime: 'herdr',
     transport: 'ssh',
     target: 'ssh://alice@example.test:2222',
   }
@@ -100,6 +101,7 @@ test("discovery selects each tab's remembered pane rather than global focus or t
   const source: Source = {
     id: randomUUID(),
     name: 'Titles',
+    runtime: 'herdr',
     transport: 'local',
     herdrSocket: join(root, 'herdr.sock'),
   }
@@ -226,6 +228,7 @@ test('official herdr preserves inactive single and split tab titles without atta
   const source: Source = {
     id: randomUUID(),
     name: 'Isolated titles',
+    runtime: 'herdr',
     transport: 'local',
     herdrSocket: join(config, 'herdr/sessions/titles/herdr.sock'),
   }
@@ -347,7 +350,7 @@ async function helperFixture(t: import('node:test').TestContext) {
   return {
     root,
     target: join(root, '.local/bin/canvas'),
-    source: { id: 'helper', name: 'Fixture', transport: 'local' } as Source,
+    source: { id: 'helper', name: 'Fixture', runtime: 'herdr', transport: 'local' } as Source,
   }
 }
 
@@ -493,6 +496,7 @@ test('SSH helper installation refreshes only marked helpers in an isolated home'
   const source: Source = {
     id: 'helper-ssh',
     name: 'Fixture',
+    runtime: 'herdr',
     transport: 'ssh',
     target: 'fixture.invalid',
   }
@@ -512,6 +516,7 @@ test('SSH herdr discovers native sockets and shares direct API forwarding withou
   const source: Source = {
     id: 'remote-local-client',
     name: 'Remote',
+    runtime: 'herdr',
     transport: 'ssh',
     target: 'ssh://alice@example.test',
     herdrSession: 'work',

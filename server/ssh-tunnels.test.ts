@@ -272,6 +272,7 @@ test('independent web leases to the same SSH endpoint survive each other closing
   const source: Source = {
     id: 'web-lease-test',
     name: 'Fixture',
+    runtime: 'herdr',
     transport: 'ssh',
     target: 'example.test',
   }

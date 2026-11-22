@@ -19,7 +19,7 @@ async function listen(server: Server, host = '127.0.0.1') {
 async function fixture(t: TestContext, prepare?: typeof prepareLoopback, now?: () => number) {
   const directory = await mkdtemp(join(tmpdir(), 'canvas-forward-')),
     store = new Store(join(directory, 'state.db'))
-  const source: Source = { id: 'source', name: 'Fixture', transport: 'local' }
+  const source: Source = { id: 'source', name: 'Fixture', runtime: 'herdr', transport: 'local' }
   store.put('source', source)
   store.addSession('first')
   store.addSession('second')
