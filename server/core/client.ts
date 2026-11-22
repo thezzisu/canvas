@@ -663,7 +663,6 @@ class CoreWindowClient implements WindowTransport {
         this.rows,
       )
       const { frame, panes: surfacePanes, splits, owners, layers } = composition
-      const visible = new Set(owners)
       const signature = JSON.stringify([
         this.state.coreId,
         this.options.tabId,
@@ -673,28 +672,7 @@ class CoreWindowClient implements WindowTransport {
       ])
       if (signature !== this.layoutToken.signature)
         this.layoutToken = { signature, token: randomUUID() }
-      const shell: ClientShellSnapshot = {
-        boot_id: this.state.coreId,
-        revision: ++this.revision,
-        focused_workspace_id: this.options.spaceId,
-        focused_tab_id: this.options.tabId,
-        focused_pane_id: this.focused || null,
-        tabs: [{ tab_id: this.options.tabId, workspace_id: this.options.spaceId, focused: true }],
-        panes: surfacePanes.map((pane) => ({
-          pane_id: pane.pane_id,
-          tab_id: this.options.tabId,
-          workspace_id: this.options.spaceId,
-          focused: pane.focused,
-          right_click_passthrough: false,
-          label: this.metadata.current?.panes.find((item) => item.id === pane.pane_id)?.name || '',
-          ...cwds(
-            this.attached.get(pane.pane_id),
-            this.state!.terminals.find(
-              (terminal) => terminal.address === this.attached.get(pane.pane_id)?.address,
-            ),
-          ),
-        })),
-      }
+      const shell = this.shellSnapshot(this.state, surfacePanes)
       const surface: PaneSurfaceFrame = {
         boot_id: this.state.coreId,
         projection_revision: shell.revision,
@@ -708,28 +686,7 @@ class CoreWindowClient implements WindowTransport {
       this.surface = surface
       this.input.refresh()
       this.renderedContent = { surface, shell, composition }
-      const current = this.metadata.current
-      this.renderedMetadata = current
-        ? {
-            ...current,
-            layout: this.layoutToken.token,
-            panes: current.panes.map((metadata) => {
-              const pane = this.attached.get(metadata.id),
-                owner = layers.indexOf(metadata.id) + 1
-              if (
-                !metadata.completion ||
-                (pane &&
-                  owner > 0 &&
-                  visible.has(owner) &&
-                  this.completionPainted(pane, metadata.completion))
-              )
-                return metadata
-              const { completion: _completion, ...pending } = metadata
-              return pending
-            }),
-          }
-        : undefined
-      const painted = this.renderedMetadata
+      const painted = (this.renderedMetadata = this.paintedMetadata(layers, new Set(owners)))
       if (!painted) this.painted.clear()
       this.screen.set({
         grid: this.selection ? markSelection(composition, this.selection) : frame,
@@ -742,6 +699,62 @@ class CoreWindowClient implements WindowTransport {
     })
   }
 
+  /** The window as herdr's shell describes one: this tab alone, and its panes. */
+  private shellSnapshot(
+    state: CoreSnapshot,
+    panes: PaneSurfaceFrame['panes'],
+  ): ClientShellSnapshot {
+    const { spaceId, tabId } = this.options
+    return {
+      boot_id: state.coreId,
+      revision: ++this.revision,
+      focused_workspace_id: spaceId,
+      focused_tab_id: tabId,
+      focused_pane_id: this.focused || null,
+      tabs: [{ tab_id: tabId, workspace_id: spaceId, focused: true }],
+      panes: panes.map((pane) => {
+        const attached = this.attached.get(pane.pane_id)
+        return {
+          pane_id: pane.pane_id,
+          tab_id: tabId,
+          workspace_id: spaceId,
+          focused: pane.focused,
+          right_click_passthrough: false,
+          label: this.metadata.current?.panes.find((item) => item.id === pane.pane_id)?.name || '',
+          ...cwds(
+            attached,
+            state.terminals.find((terminal) => terminal.address === attached?.address),
+          ),
+        }
+      }),
+    }
+  }
+  /**
+   * The metadata as painted: a pane's completion is announced only once the frame that shows
+   * it is on screen, in a layer that is visible.
+   */
+  private paintedMetadata(layers: readonly string[], visible: ReadonlySet<number>) {
+    const current = this.metadata.current
+    if (!current) return
+    return {
+      ...current,
+      layout: this.layoutToken.token,
+      panes: current.panes.map((metadata) => {
+        const pane = this.attached.get(metadata.id),
+          owner = layers.indexOf(metadata.id) + 1
+        if (
+          !metadata.completion ||
+          (pane &&
+            owner > 0 &&
+            visible.has(owner) &&
+            this.completionPainted(pane, metadata.completion))
+        )
+          return metadata
+        const { completion: _completion, ...pending } = metadata
+        return pending
+      }),
+    }
+  }
   /**
    * Whether a pane's program is in the middle of a synchronized update. Its engine already holds
    * the half-drawn screen, so the whole window waits for the update's end, or, for a program that
