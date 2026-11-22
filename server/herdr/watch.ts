@@ -65,58 +65,23 @@ export function watchHerdr(
   handlers: HerdrWatchHandlers,
 ): { refresh(): void; close(): void } {
   const aborted = new AbortController()
-  let statuses: { close(): void } | undefined,
-    starting: { close(): void } | undefined,
-    // The panes whose status is subscribed or being subscribed.
-    followed = ''
+  let changes: { close(): void },
+    statuses: { close(): void } | undefined,
+    // The panes whose status is followed, or '' to follow them anew.
+    followed = '',
+    lostAt = -Infinity
 
   const close = () => {
     if (aborted.signal.aborted) return
     aborted.abort()
     reread[Symbol.dispose]()
-    events.close()
+    changes.close()
     statuses?.close()
-    starting?.close()
   }
   const fail = (error: Error) => {
     if (aborted.signal.aborted) return
     close()
     handlers.ended(error)
-  }
-  const followStatuses = (panes: string[]) => {
-    const key = JSON.stringify(panes)
-    if (key === followed) return
-    followed = key
-    starting?.close()
-    starting = undefined
-    if (!panes.length) {
-      statuses?.close()
-      statuses = undefined
-      return
-    }
-    const next = subscribeHerdrEvents(
-      api,
-      panes.map((pane_id) => ({ type: 'pane.agent_status_changed', pane_id })),
-      {
-        started() {
-          // The new list holds before the old one goes.
-          statuses?.close()
-          statuses = next
-          starting = undefined
-          reread.schedule()
-        },
-        event: () => reread.schedule(),
-        // A pane that closed meanwhile refuses the whole list: read again and follow what is left.
-        ended() {
-          if (starting === next) starting = undefined
-          else if (statuses === next) statuses = undefined
-          else return
-          followed = ''
-          reread.schedule(RETRY_MS)
-        },
-      },
-    )
-    starting = next
   }
   const reread = new Reread(async (readAt) => {
     const result = await herdrApiRequest(api, 'session.snapshot', {}, { signal: aborted.signal })
@@ -124,8 +89,28 @@ export function watchHerdr(
     followStatuses(agentPanes(result))
     handlers.snapshot(result, readAt)
   }, fail)
-  let lostAt = -Infinity
-  const followChanges = (): { close(): void } =>
+  // A status change in between is read after the new subscription starts.
+  const followStatuses = (panes: string[]) => {
+    if (panes.join() === followed) return
+    followed = panes.join()
+    statuses?.close()
+    statuses = panes.length
+      ? subscribeHerdrEvents(
+          api,
+          panes.map((pane_id) => ({ type: 'pane.agent_status_changed', pane_id })),
+          {
+            started: () => reread.schedule(),
+            event: () => reread.schedule(),
+            // A pane that closed meanwhile refuses the whole list: read again and follow the rest.
+            ended() {
+              followed = ''
+              reread.schedule(RETRY_MS)
+            },
+          },
+        )
+      : undefined
+  }
+  const followChanges = () =>
     subscribeHerdrEvents(api, CHANGES, {
       started: () => void reread.now(),
       event(name, data) {
@@ -133,18 +118,15 @@ export function watchHerdr(
           handlers.pane(data.pane as PaneRecord)
         reread.schedule()
       },
-      // herdr dropped events it could not deliver, and its socket holds: follow again and read
-      // anew. Events lost again at once are taken for a break.
+      // herdr dropped events it could not deliver over a socket that still works: follow again
+      // and read anew. Events lost again at once are taken for a break.
       ended(error, lost) {
         const now = performance.now()
-        if (!lost || now - lostAt < RETRY_MS || aborted.signal.aborted) {
-          fail(error)
-          return
-        }
+        if (!lost || now - lostAt < RETRY_MS) return fail(error)
         lostAt = now
-        events = followChanges()
+        changes = followChanges()
       },
     })
-  let events = followChanges()
+  changes = followChanges()
   return { refresh: () => reread.schedule(), close }
 }
