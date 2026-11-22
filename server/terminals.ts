@@ -57,7 +57,7 @@
 //   focus             take input control
 //   view-visible      { visible, focused? }
 //   focus-resize-begin | -update { token, cols, rows }, focus-resize-end { token }
-//   presentation-cancel { token, lease }
+//   presentation-cancel { lease }, the maximization a peer saw, which no other has the number of
 //   completion-fence  { generation }, completion-read { generation, paneId, bootId, sequence }
 //   ping              { id }
 //
@@ -136,8 +136,6 @@ export class LiveTerminal {
     token: string
     lease: number
     releasing?: boolean
-    /** The token it had before a new channel of its view took it over under one of its own. */
-    handedFrom?: string
     /** It passed to a new channel of its view, whose first request renames it. */
     handedOver?: boolean
   }
@@ -664,7 +662,6 @@ export class LiveTerminal {
           if (handed?.handedOver && handed.owner === ws && !handed.releasing) {
             // The lease passed to this channel: the browser names it anew, and nothing else changes.
             handed.handedOver = false
-            handed.handedFrom = handed.token
             handed.token = msg.token
             if (this.views.get(ws)!.shown) this.presentation(ws)
           } else this.maximize(ws, msg.token)
@@ -680,17 +677,9 @@ export class LiveTerminal {
           void this.releaseMaximized(ws, msg.token)
           return
         }
-        if (
-          msg.type === 'presentation-cancel' &&
-          typeof msg.token === 'string' &&
-          Number.isSafeInteger(msg.lease)
-        ) {
+        if (msg.type === 'presentation-cancel' && Number.isSafeInteger(msg.lease)) {
           const current = this.maximized
-          if (
-            current &&
-            current.lease === msg.lease &&
-            (current.token === msg.token || current.handedFrom === msg.token)
-          )
+          if (current && current.lease === msg.lease)
             void this.releaseMaximized(current.owner, current.token)
           else this.presentation(ws)
           return

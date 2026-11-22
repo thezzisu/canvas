@@ -320,11 +320,7 @@ export function mountTerminal(
       )
         return
       setState(session, { ...session.state, presentationCancelling: true })
-      session.connection!.send({
-        type: 'presentation-cancel',
-        token: presentation.token,
-        lease: presentation.lease,
-      })
+      session.connection!.send({ type: 'presentation-cancel', lease: presentation.lease })
     },
     async readText(signal: AbortSignal) {
       return (await api<{ text: string }>(`${windowPath(resource)}/text`, { signal }, context)).text

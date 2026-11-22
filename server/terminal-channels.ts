@@ -29,7 +29,7 @@
 //   and `held`, and cells carry both after the ack. They are the server's wall clock and how
 //   long ago it took the last message, which together give the clock offset and round trip.
 // - `ack` is the last taken, so it is cumulative. It rides on whatever the channel sends next,
-//   or goes alone after ACK_DELAY_MS. An ack is never acknowledged. `at` is the server's clock.
+//   or goes alone after ACK_DELAY_MS. An ack is never acknowledged.
 import { EventEmitter } from 'node:events'
 import type { WebSocket } from 'ws'
 import { log, logging } from './log.ts'
