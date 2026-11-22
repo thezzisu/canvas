@@ -158,7 +158,6 @@ test('core multiplex installs attach routing before same-chunk frames and credit
   attached.stream.write(Buffer.from([0, 128, 255]))
   attached.stream.resize(100, 30)
   attached.stream.focus(true)
-  attached.stream.facts({ fg: '#ffffff', cell: [8, 16] })
   await delay()
   assert.deepEqual(
     f.received.find((frame) => frame.channel === 1 && frame.kind === 0)?.data,
@@ -171,11 +170,6 @@ test('core multiplex installs attach routing before same-chunk frames and credit
   assert.deepEqual(
     [...f.received.find((frame) => frame.channel === 1 && frame.kind === 4)!.data],
     [1],
-  )
-  assert.equal(
-    JSON.parse(f.received.find((frame) => frame.channel === 1 && frame.kind === 5)!.data.toString())
-      .fg,
-    '#ffffff',
   )
   attached.stream.close()
   await delay()

@@ -147,9 +147,6 @@ export class CoreStream {
   focus(focused: boolean): void {
     this.send(4, Buffer.from([focused ? 1 : 0]))
   }
-  facts(display: Record<string, unknown>): void {
-    this.send(5, Buffer.from(JSON.stringify(display)))
-  }
   credit(bytes: number): void {
     if (!Number.isInteger(bytes) || bytes < 0 || bytes > 0xffffffff)
       throw new Error('Invalid core credit')
