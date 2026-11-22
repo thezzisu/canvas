@@ -11,6 +11,7 @@ import { prepareLoopback } from './source-connections.ts'
 import { sourceConnectionKey, type Source, type Store } from './state.ts'
 import type { CaptureDescriptor } from '../shared/capture.ts'
 import { captureRequestBase, normalizeCapturePublicBase } from './capture-address.ts'
+import { LineSplitter } from './lines.ts'
 
 const PREFIX = '/api/capture/'
 const hop = new Set([
@@ -677,22 +678,25 @@ export function serveCaptureRequest(
     socket.end()
   })
   socket.setTimeout(0)
-  let pending = Buffer.alloc(0),
-    ready = false
+  const lines = new LineSplitter(MAX_CAPTURE_LINE)
+  let ready = false
   socket.on('data', (chunk: Buffer) => {
-    pending = Buffer.concat([pending, chunk])
-    const newline = pending.indexOf(10)
-    if (pending.length > MAX_CAPTURE_LINE) return void socket.destroy()
-    if (newline < 0) return
-    let value
+    let complete: Buffer[], value
     try {
-      value = JSON.parse(pending.subarray(0, newline).toString('utf8'))
+      complete = lines.push(chunk)
+      if (!complete.length) return
+      value = JSON.parse(complete[0]!.toString('utf8'))
     } catch {
       return void socket.destroy()
     }
-    pending = pending.subarray(newline + 1)
     // One `ready`, alone, with nothing after it.
-    if (ready || value?.action !== 'ready' || pending.length || value.port !== undefined)
+    if (
+      ready ||
+      complete.length > 1 ||
+      lines.rest.length ||
+      value?.action !== 'ready' ||
+      value.port !== undefined
+    )
       return void socket.destroy()
     ready = true
     lease

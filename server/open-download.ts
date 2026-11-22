@@ -16,6 +16,7 @@ import type { SourceResource } from './runtimes.ts'
 import { directoryPath } from './directory-path.ts'
 import { sanitizeEditorAuthority, type EditorAuthority } from '../shared/editor-target.ts'
 import { webUrl, type OpenedUrl } from './url-forward.ts'
+import { LineSplitter } from './lines.ts'
 
 const MAX_HEADER = 16 * 1024
 const MAX_TRANSFERS_PER_SOURCE = 4
@@ -366,27 +367,29 @@ export class OpenDownloadService {
   private accept(source: Source, secret: string, socket: Socket): void {
     socket.pause()
     socket.setTimeout(HANDSHAKE_TIMEOUT, () => socket.destroy())
-    let bytes = Buffer.alloc(0)
+    const lines = new LineSplitter(MAX_HEADER)
     let headerReceived = false
     socket.once('end', () => {
       if (!headerReceived && !socket.destroyed) socket.end(rejected)
     })
     const readHeader = (chunk: Buffer) => {
-      bytes = Buffer.concat([bytes, chunk])
-      const end = bytes.indexOf(0x0a)
-      if (end < 0) {
-        if (bytes.length > MAX_HEADER) socket.destroy()
+      let complete: Buffer[]
+      try {
+        complete = lines.push(chunk)
+      } catch {
+        socket.destroy()
         return
       }
+      if (!complete.length) return
       headerReceived = true
       socket.off('data', readHeader)
       socket.pause()
-      const line = bytes.subarray(0, end)
-      if (end + 1 !== bytes.length || end + 1 > MAX_HEADER) {
+      // The header alone: what follows is sent only after it is answered.
+      if (complete.length > 1 || lines.rest.length) {
         socket.end(rejected)
         return
       }
-      void this.acceptHeader(source, secret, socket, line).catch(() => socket.destroy())
+      void this.acceptHeader(source, secret, socket, complete[0]!).catch(() => socket.destroy())
     }
     socket.on('data', readHeader)
     socket.resume()

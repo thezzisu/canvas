@@ -1,4 +1,5 @@
 import { createConnection, type Socket } from 'node:net'
+import { LineSplitter } from '../lines.ts'
 
 const HEADER = 9
 export const CORE_MAX_PAYLOAD = 16 * 1024 * 1024
@@ -367,8 +368,8 @@ export class CoreRpc {
       stream.close()
       throw new Error('Invalid core subscription snapshot')
     }
-    let started = false,
-      bytes: Buffer = Buffer.alloc(0)
+    let started = false
+    const lines = new LineSplitter(CORE_MAX_PAYLOAD)
     return {
       snapshot: {
         seq: result.seq as number,
@@ -379,12 +380,14 @@ export class CoreRpc {
         if (started) return
         started = true
         stream.onData(async (data) => {
-          bytes = Buffer.concat([bytes, data])
-          let end: number
-          while ((end = bytes.indexOf(10)) >= 0) {
-            if (end > CORE_MAX_PAYLOAD) throw new Error('Core event message is too large')
-            const value = json(bytes.subarray(0, end))
-            bytes = bytes.subarray(end + 1)
+          let complete: Buffer[]
+          try {
+            complete = lines.push(data)
+          } catch {
+            throw new Error('Core event message is too large')
+          }
+          for (const line of complete) {
+            const value = json(line)
             if (
               value.jsonrpc !== '2.0' ||
               !['event', 'heartbeat', 'missed'].includes(value.method as string) ||
@@ -395,7 +398,6 @@ export class CoreRpc {
               throw new Error('Invalid core event notification')
             await listener(value as unknown as CoreNotification)
           }
-          if (bytes.length > CORE_MAX_PAYLOAD) throw new Error('Core event message is too large')
         })
       },
       close: () => stream.close(),

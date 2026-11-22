@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { CaptureLease } from './capture.ts'
 import { CaptureService } from './capture.ts'
 import { normalizeCapturePublicBase } from './capture-address.ts'
+import { LineSplitter } from './lines.ts'
 import { sourcePythonCommand } from './source-command.ts'
 import { sourceConnectionKey, type FileOrigin, type Source, type Store } from './state.ts'
 
@@ -118,7 +119,7 @@ export class SourcePreviewService {
       try {
         const { port, path } = await new Promise<{ port: number; path: string }>(
           (resolve, reject) => {
-            let pending = ''
+            const lines = new LineSplitter(16_384)
             const failed = () => {
               cleanup()
               reject(new SourcePreviewError('source-preview-start-failed'))
@@ -126,12 +127,10 @@ export class SourcePreviewService {
             const timer = setTimeout(failed, 15_000)
             timer.unref()
             const data = (chunk: Buffer) => {
-              pending += chunk.toString('utf8')
-              if (pending.length > 16_384) return failed()
-              const newline = pending.indexOf('\n')
-              if (newline < 0) return
               try {
-                const value = JSON.parse(pending.slice(0, newline))
+                const [line] = lines.push(chunk)
+                if (!line) return
+                const value = JSON.parse(line.toString('utf8'))
                 if (
                   !Number.isInteger(value.port) ||
                   value.port < 1 ||

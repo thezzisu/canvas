@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { LineSplitter } from './lines.ts'
 import { sourcePythonCommand } from './source-command.ts'
 import type { Source } from './state.ts'
 
@@ -98,8 +99,8 @@ export async function writeInboxFile(
     env: command.env,
     stdio: ['pipe', 'pipe', 'pipe'],
   })
-  let output = '',
-    received = 0,
+  const lines = new LineSplitter(32768)
+  let received = 0,
     path: string | undefined,
     settled = false
   let resolve!: (path: string) => void, reject!: (error: Error) => void
@@ -137,17 +138,16 @@ export async function writeInboxFile(
   child.on('error', () => fail(new Error('unreachable')))
   child.stderr.on('data', () => {})
   child.stdout.on('data', (chunk: Buffer) => {
-    output += chunk.toString('utf8')
-    while (output.includes('\n')) {
-      const end = output.indexOf('\n'),
-        line = output.slice(0, end)
-      output = output.slice(end + 1)
-      if (line.length > 32768) {
-        fail(new Error('invalidResponse'))
-        return
-      }
+    let complete: Buffer[]
+    try {
+      complete = lines.push(chunk)
+    } catch {
+      fail(new Error('invalidResponse'))
+      return
+    }
+    for (const line of complete) {
       try {
-        const message = JSON.parse(line)
+        const message = JSON.parse(line.toString('utf8'))
         if (message.ready === true) {
           if (!settled) renew()
         } else if (
@@ -172,7 +172,6 @@ export async function writeInboxFile(
         fail(new Error('invalidResponse'))
       }
     }
-    if (output.length > 32768) fail(new Error('invalidResponse'))
   })
   child.once('close', (code) => {
     clearTimeout(timer)

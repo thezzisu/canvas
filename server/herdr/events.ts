@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createConnection } from 'node:net'
+import { LineSplitter } from '../lines.ts'
 
 // One `events.subscribe` stream of a herdr API socket.
 
@@ -24,8 +25,8 @@ export function subscribeHerdrEvents(
 ): { close(): void } {
   const id = randomUUID(),
     socket = createConnection(socketPath)
-  let buffer = Buffer.alloc(0),
-    started = false,
+  const lines = new LineSplitter(MAX_LINE)
+  let started = false,
     done = false
   const close = () => {
     if (done) return
@@ -51,13 +52,18 @@ export function subscribeHerdrEvents(
   socket.on('error', (error) => end(`Herdr API connection failed: ${error.message}`))
   socket.once('close', () => end('Herdr ended the event subscription'))
   socket.on('data', (chunk: Buffer) => {
-    buffer = Buffer.concat([buffer, chunk])
-    for (let index; !done && (index = buffer.indexOf(10)) >= 0;) {
-      const line = buffer.subarray(0, index).toString('utf8')
-      buffer = buffer.subarray(index + 1)
+    let complete: Buffer[]
+    try {
+      complete = lines.push(chunk)
+    } catch {
+      end('Herdr event is too large')
+      return
+    }
+    for (const line of complete) {
+      if (done) return
       let message
       try {
-        message = JSON.parse(line)
+        message = JSON.parse(line.toString('utf8'))
       } catch {
         end('Invalid herdr event')
         return
@@ -77,7 +83,6 @@ export function subscribeHerdrEvents(
           message.data && typeof message.data === 'object' ? message.data : {},
         )
     }
-    if (buffer.length > MAX_LINE) end('Herdr event is too large')
   })
   return { close }
 }

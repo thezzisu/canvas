@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { realpath, stat } from 'node:fs/promises'
 import { createConnection } from 'node:net'
+import { LineSplitter } from '../lines.ts'
 import { tmpdir } from 'node:os'
 import { dirname, join, parse } from 'node:path'
 
@@ -109,11 +110,10 @@ export function herdrApiRequest(
 ): Promise<Record<string, unknown>> {
   if (options.signal?.aborted) return Promise.reject(options.signal.reason)
   const id = randomUUID(),
-    maxBytes = options.maxResponseBytes ?? 8 * 1024 * 1024
+    lines = new LineSplitter(options.maxResponseBytes ?? 8 * 1024 * 1024)
   return new Promise((resolve, reject) => {
     const socket = createConnection(socketPath)
-    let bytes = Buffer.alloc(0),
-      settled = false
+    let settled = false
     const done = (error?: Error, result?: Record<string, unknown>) => {
       if (settled) return
       settled = true
@@ -133,18 +133,18 @@ export function herdrApiRequest(
     socket.once('connect', () => socket.write(JSON.stringify({ id, method, params }) + '\n'))
     socket.on('error', (error) => done(new Error(`Herdr API connection failed: ${error.message}`)))
     socket.once('end', () => done(new Error('Herdr API closed before its response')))
-    socket.on('data', (value) => {
+    socket.on('data', (chunk: Buffer) => {
       if (settled) return
-      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value)
-      if (bytes.length + chunk.length > maxBytes) {
+      let line: Buffer | undefined
+      try {
+        line = lines.push(chunk)[0]
+      } catch {
         done(new Error('Herdr API response is too large'))
         return
       }
-      bytes = Buffer.concat([bytes, chunk])
-      const end = bytes.indexOf(10)
-      if (end < 0) return
+      if (!line) return
       try {
-        const response = JSON.parse(bytes.subarray(0, end).toString('utf8'))
+        const response = JSON.parse(line.toString('utf8'))
         if (!response || typeof response !== 'object' || response.id !== id)
           throw new Error('Invalid herdr API response')
         if (response.error)
