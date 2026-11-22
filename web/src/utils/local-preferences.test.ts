@@ -107,7 +107,6 @@ test('unregistered preference namespaces are retired without touching sessions o
   const retire = [
     'canvas:card-zoom:old-boot:note',
     'canvas:note-scroll:old-boot:c:note',
-    'canvas:capture-hidden:expired-lease',
     'canvas:overview:statuses',
     'canvas:overview:order',
     'canvas:last-canvas:removed',

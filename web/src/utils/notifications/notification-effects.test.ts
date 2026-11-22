@@ -11,8 +11,6 @@ test('notification runtime caches are bounded and preserve per-backend delivery 
     Object.defineProperty(globalThis, name, { configurable: true, value })
   }
   const values = new Map<string, string>([
-    ['canvas:notifications:delivered:retired-boot', '{}'],
-    ['canvas:notifications:focus:retired-boot', '{}'],
     ['canvas:notifications:sound', 'true'],
     ['canvas:notifications:badge-owner', '"existing-badge"'],
     ['unrelated', 'keep'],
@@ -149,9 +147,7 @@ test('notification runtime caches are bounded and preserve per-backend delivery 
     foreground = true
   }
 
-  await t.test('retires only obsolete per-startup cache keys', () => {
-    assert(!values.has('canvas:notifications:delivered:retired-boot'))
-    assert(!values.has('canvas:notifications:focus:retired-boot'))
+  await t.test('loading the module leaves stored keys as they are', () => {
     assert.equal(values.get('canvas:notifications:sound'), 'true')
     assert.equal(values.get('canvas:notifications:badge-owner'), '"existing-badge"')
     assert.equal(values.get('unrelated'), 'keep')
@@ -241,13 +237,6 @@ test('notification runtime caches are bounded and preserve per-backend delivery 
       assert.deepEqual(
         [...values.keys()].filter((key) => key.startsWith('canvas:notifications:effects')),
         ['canvas:notifications:effects'],
-      )
-      assert(
-        ![...values.keys()].some(
-          (key) =>
-            key.startsWith('canvas:notifications:delivered:') ||
-            key.startsWith('canvas:notifications:focus:'),
-        ),
       )
       now += 750
       await deliver('next', 'quiet', { quiet: true })

@@ -13,21 +13,6 @@ const focusKey = 'canvas:notifications:focus'
 const badgeKey = 'canvas:notifications:badge-owner'
 const ownerKey = (owner: string) => `canvas:notifications:owner:${owner}`
 
-// Retire the former per-startup caches. The fixed runtime keys below cannot grow
-// with server restarts and are separate from persistent notification preferences.
-try {
-  for (let index = localStorage.length - 1; index >= 0; index--) {
-    const key = localStorage.key(index)
-    if (
-      key?.startsWith('canvas:notifications:delivered:') ||
-      key?.startsWith('canvas:notifications:focus:')
-    )
-      localStorage.removeItem(key)
-  }
-} catch {
-  /* Optional runtime storage may be unavailable. */
-}
-
 /** The browser releases this lease even when a tab closes without cleanup. */
 export function holdNotificationOwner(owner: string) {
   const controller = new AbortController()

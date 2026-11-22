@@ -55,16 +55,15 @@ export function clearInstancePreferences(instance: string, storage?: Storage) {
   )
 }
 
-/** Object preferences cannot outlive a registered frontend instance. This also
- * retires unowned startup-UUID records without guessing which server owned them. */
+/** Object preferences cannot outlive a registered frontend instance. */
 export function pruneInstancePreferences(instances: readonly { id: string }[], storage?: Storage) {
   const valid = new Set(instances.map((instance) => instance.id))
   removeWhere((key) => {
     if (browserViews.has(key)) return false
     if (terminalPrefixes.some((prefix) => key.startsWith(prefix)))
       return !valid.has(terminalInstance(key) || '')
-    const prefix = [...objectPrefixes, 'canvas:last-canvas:', 'canvas:capture-hidden:'].find(
-      (prefix) => key.startsWith(prefix),
+    const prefix = [...objectPrefixes, 'canvas:last-canvas:'].find((prefix) =>
+      key.startsWith(prefix),
     )
     if (!prefix) return false
     return !valid.has(key.slice(prefix.length).split(':')[0]!)
