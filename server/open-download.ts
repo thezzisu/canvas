@@ -137,6 +137,60 @@ function safeFilename(value: unknown): string | undefined {
   return value
 }
 
+/** What a helper asks for over the bridge, once its header is read and checked. */
+type HelperRequest = { paneId: string } & (
+  | { kind: 'capture' }
+  | { kind: 'directory' | 'url'; path: string }
+  | { kind: 'file'; filename: string; size: number; path?: string }
+)
+/** The helper's header as a request, or undefined for anything not exactly one. */
+function helperRequest(
+  header: Record<string, unknown>,
+  secret: string,
+  nativeSocket?: string,
+): HelperRequest | undefined {
+  const given = Buffer.from(typeof header.secret === 'string' ? header.secret : ''),
+    expected = Buffer.from(secret)
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return
+  const { paneId } = header
+  if (
+    header.version !== 1 ||
+    header.nativeSocket !== nativeSocket ||
+    typeof paneId !== 'string' ||
+    !paneId ||
+    paneId.length > 256
+  )
+    return
+  try {
+    switch (header.kind) {
+      case 'capture':
+        return { kind: 'capture', paneId }
+      case 'directory':
+      case 'url':
+        if (header.size !== undefined || header.filename !== undefined) return
+        return {
+          kind: header.kind,
+          paneId,
+          path: header.kind === 'url' ? webUrl(header.url).href : directoryPath(header.path),
+        }
+      case 'file': {
+        const filename = safeFilename(header.filename),
+          size = header.size
+        if (!filename || typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0) return
+        return {
+          kind: 'file',
+          paneId,
+          filename,
+          size,
+          ...(header.path === undefined ? {} : { path: directoryPath(header.path) }),
+        }
+      }
+    }
+  } catch {
+    // An unusable path or URL.
+  }
+}
+
 function contentDisposition(
   filename: string,
   mode: 'attachment' | 'inline' = 'attachment',
@@ -342,131 +396,68 @@ export class OpenDownloadService {
     socket: Socket,
     line: Buffer,
   ): Promise<void> {
-    let header: Record<string, unknown>
+    const refuse = (reason?: string) => {
+      socket.end(reason ? jsonLine({ ok: false, reason }) : rejected)
+    }
+    let header: unknown
     try {
       header = JSON.parse(line.toString('utf8'))
     } catch {
-      socket.end(rejected)
-      return
+      return refuse()
     }
-    if (!header || typeof header !== 'object' || Array.isArray(header)) {
-      socket.end(rejected)
-      return
-    }
-    const givenSecret =
-      typeof header.secret === 'string' ? Buffer.from(header.secret) : Buffer.alloc(0)
-    const expectedSecret = Buffer.from(secret)
-    if (
-      givenSecret.length !== expectedSecret.length ||
-      !timingSafeEqual(givenSecret, expectedSecret)
-    ) {
-      socket.end(rejected)
-      return
-    }
-    if (
-      header.version !== 1 ||
-      header.nativeSocket !== this.bridges.get(source.id)?.record.nativeSocket ||
-      typeof header.paneId !== 'string' ||
-      !header.paneId ||
-      header.paneId.length > 256
-    ) {
-      socket.end(rejected)
-      return
-    }
-    const isCapture = header.kind === 'capture'
-    const isDirectory = header.kind === 'directory',
-      isUrl = header.kind === 'url'
-    let path: string | undefined
-    if (isDirectory || isUrl) {
-      try {
-        path = isUrl ? webUrl(header.url).href : directoryPath(header.path)
-      } catch {
-        socket.end(rejected)
-        return
-      }
-      if (header.size !== undefined || header.filename !== undefined) {
-        socket.end(rejected)
-        return
-      }
-    } else if (
-      !isCapture &&
-      (header.kind !== 'file' ||
-        !Number.isSafeInteger(header.size) ||
-        (header.size as number) < 0 ||
-        !safeFilename(header.filename))
-    ) {
-      socket.end(rejected)
-      return
-    }
-    if (header.kind === 'file' && header.path !== undefined) {
-      try {
-        path = directoryPath(header.path)
-      } catch {
-        socket.end(rejected)
-        return
-      }
-    }
+    const request =
+      header && typeof header === 'object' && !Array.isArray(header)
+        ? helperRequest(
+            header as Record<string, unknown>,
+            secret,
+            this.bridges.get(source.id)?.record.nativeSocket,
+          )
+        : undefined
+    if (!request) return refuse()
     const bridge = this.bridges.get(source.id)
-    if (!bridge || bridge.source !== source || bridge.sockets.size > MAX_TRANSFERS_PER_SOURCE) {
-      socket.end(rejected)
-      return
-    }
+    if (!bridge || bridge.source !== source || bridge.sockets.size > MAX_TRANSFERS_PER_SOURCE)
+      return refuse()
     let resources: SourceResource
     try {
       resources = await this.options.resources(source)
     } catch {
-      socket.end(rejected)
-      return
+      return refuse()
     }
     const matches = resources.spaces
       .flatMap((space) => space.windows)
       .filter((window) =>
         window.panes.some(
-          (pane) => (source.runtime === 'hc' ? pane.terminalId : pane.id) === header.paneId,
+          (pane) => (source.runtime === 'hc' ? pane.terminalId : pane.id) === request.paneId,
         ),
       )
-    if (matches.length !== 1) {
-      socket.end(jsonLine({ ok: false, reason: 'pane-unavailable' }))
-      return
-    }
-    const windowId = matches[0]!.id
-    const recipient = await this.options.recipient(source.id, windowId).catch(() => undefined)
+    if (matches.length !== 1) return refuse('pane-unavailable')
+    const [window] = matches as [(typeof matches)[number]]
+    const recipient = await this.options.recipient(source.id, window.id).catch(() => undefined)
     if (socket.destroyed) return
     if (
       !recipient ||
       !recipient.isCurrent() ||
       recipient.socket.readyState !== 1 ||
       !recipient.sessionId
-    ) {
-      socket.end(jsonLine({ ok: false, reason: 'not-attached' }))
-      return
-    }
-    if (isCapture) {
-      if (matches[0]!.panes.length !== 1) {
-        socket.end(jsonLine({ ok: false, reason: 'capture-requires-single-pane' }))
-        return
-      }
-      if (!this.options.capture) {
-        socket.end(jsonLine({ ok: false, reason: 'capture-unavailable' }))
-        return
-      }
-      const release = this.retainSource(source.id)
-      socket.once('close', release)
-      await this.options.capture(
+    )
+      return refuse('not-attached')
+    if (request.kind === 'capture') {
+      if (window.panes.length !== 1) return refuse('capture-requires-single-pane')
+      if (!this.options.capture) return refuse('capture-unavailable')
+      socket.once('close', this.retainSource(source.id))
+      return this.options.capture(
         source,
-        windowId,
-        header.paneId as string,
-        header,
+        window.id,
+        request.paneId,
+        header as Record<string, unknown>,
         socket,
         recipient,
       )
-      return
     }
-    if (isDirectory || isUrl) {
-      await this.sendReference(source, path!, socket, recipient, isUrl ? 'url' : 'directory')
-      return
-    }
-    const filename = safeFilename(header.filename)!
+    if (request.kind !== 'file')
+      return this.sendReference(source, request.path, socket, recipient, request.kind)
+    const { filename, size, path } = request,
+      windowId = window.id
     const id = randomBytes(32).toString('base64url')
     const ticket: DownloadTicket = {
       id,
@@ -478,7 +469,7 @@ export class OpenDownloadService {
         ? { origin: { sourceId: source.id, sourceKey: sourceConnectionKey(source), path } }
         : {}),
       filename,
-      size: header.size as number,
+      size,
       state: 'offered',
       transferred: 0,
       recipient: recipient.socket,
