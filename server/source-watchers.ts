@@ -18,7 +18,8 @@ const digestOf = (resource: SourceResource) =>
 interface Watched {
   source: Source
   key: string
-  following?: Following
+  following: Following
+  /** The digest of what was last pushed; none when the next reading is pushed whatever it is. */
   sent?: string
 }
 
@@ -43,10 +44,7 @@ export class SourceWatchers implements Disposable {
   view(): Disposable {
     this.viewers++
     clearTimeout(this.grace)
-    for (const entry of this.watched.values()) {
-      entry.sent = undefined
-      entry.following?.refresh()
-    }
+    for (const entry of this.watched.values()) this.resend(entry)
     if (!this.closed) {
       this.running = true
       this.sync()
@@ -70,36 +68,39 @@ export class SourceWatchers implements Disposable {
     for (const [id, entry] of this.watched)
       if (!present.has(id)) {
         this.watched.delete(id)
-        entry.following?.[Symbol.dispose]()
+        entry.following[Symbol.dispose]()
       }
     for (const source of sources) {
       const key = sourceConnectionKey(source)
       const known = this.watched.get(source.id)
-      if (known?.key === key && !known.following?.closed) {
+      // A watch whose connections were released ends for good, as when an edit failed to save.
+      if (known?.key === key && !known.following.closed) {
         const renamed = known.source.name !== source.name
         known.source = source
-        if (renamed) known.following?.refresh()
+        if (renamed) known.following.refresh()
         continue
       }
-      known?.following?.[Symbol.dispose]()
-      const entry: Watched = { source, key }
-      this.watched.set(source.id, entry)
-      entry.following = this.options.follow(source, {
-        snapshot: (listing, readAt) =>
-          this.publish(entry, { status: 'online', readAt, ...listing }),
-        failed: (error) =>
-          this.publish(entry, {
-            status: 'offline',
-            error: error.message,
-            readAt: serverTime(),
-            spaces: [],
-          }),
-      })
+      known?.following[Symbol.dispose]()
+      this.watch(source, key)
     }
+  }
+  private watch(source: Source, key: string) {
+    const entry = { source, key } as Watched
+    this.watched.set(source.id, entry)
+    entry.following = this.options.follow(source, {
+      snapshot: (listing, readAt) => this.publish(entry, { status: 'online', readAt, ...listing }),
+      failed: (error) =>
+        this.publish(entry, {
+          status: 'offline',
+          error: error.message,
+          readAt: serverTime(),
+          spaces: [],
+        }),
+    })
   }
   /** Something Canvas adds to the source's listing changed. */
   refresh(sourceId: string) {
-    this.watched.get(sourceId)?.following?.refresh()
+    this.watched.get(sourceId)?.following.refresh()
   }
   /**
    * A browser read this listing for itself. Read later than the last push, it is what that
@@ -107,9 +108,11 @@ export class SourceWatchers implements Disposable {
    */
   answered(resource: SourceResource) {
     const entry = this.watched.get(resource.id)
-    if (!entry || digestOf(resource) === entry.sent) return
+    if (entry && digestOf(resource) !== entry.sent) this.resend(entry)
+  }
+  private resend(entry: Watched) {
     entry.sent = undefined
-    entry.following?.refresh()
+    entry.following.refresh()
   }
   private publish(entry: Watched, listed: Omit<SourceResource, 'id' | 'name'>) {
     if (this.watched.get(entry.source.id) !== entry) return
@@ -124,7 +127,7 @@ export class SourceWatchers implements Disposable {
     this.running = false
     const ending = [...this.watched.values()]
     this.watched.clear()
-    for (const entry of ending) entry.following?.[Symbol.dispose]()
+    for (const entry of ending) entry.following[Symbol.dispose]()
   }
   [Symbol.dispose]() {
     this.closed = true
