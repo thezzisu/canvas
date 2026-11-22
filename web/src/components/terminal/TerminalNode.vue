@@ -13,7 +13,7 @@ import {
 } from 'vue'
 import type { NodeProps } from '@vue-flow/core'
 import UButton from '@nuxt/ui/components/Button.vue'
-import UProgress from '@nuxt/ui/components/Progress.vue'
+import { progressShare } from '../../utils/canvas/progress-fill'
 import type { DropdownMenuItem } from '@nuxt/ui/components/DropdownMenu.vue'
 import { NodeResizer } from '@vue-flow/node-resizer'
 import { log, logWindow } from '../../utils/diagnostics/log'
@@ -68,11 +68,6 @@ import type { TerminalData } from '../../api/types'
 const loadComposer = () => import('./TerminalComposer.vue')
 const TerminalComposer = defineAsyncComponent(loadComposer)
 const { t } = useI18n()
-/** A program's progress colour by its state; normal and indeterminate take the card's. */
-const progressColour: Partial<Record<string, 'error' | 'neutral'>> = {
-  error: 'error',
-  paused: 'neutral',
-}
 const props = defineProps<
   Pick<NodeProps<TerminalData>, 'id' | 'data'> &
     Partial<Omit<NodeProps<TerminalData>, 'id' | 'data'>>
@@ -804,15 +799,20 @@ async function resized(event: { params: { width: number; height: number; x: numb
         mobileFocus ? { '--cutout-width': `calc(${cutoutWidth}px / var(--ui-zoom))` } : undefined
       "
     >
-      <!-- A program's progress report (OSC 9;4) along the header's lower edge. -->
-      <UProgress
+      <!-- A program's progress report (OSC 9;4), as light behind the header's content. -->
+      <div
         v-if="data.progress"
         class="terminal-progress"
-        size="2xs"
-        :model-value="data.progress.value"
-        :color="progressColour[data.progress.state] ?? 'primary'"
+        role="progressbar"
         :aria-label="t('terminal.progress')"
-      />
+        aria-valuemin="0"
+        aria-valuemax="100"
+        :aria-valuenow="data.progress.value ?? undefined"
+        :data-state="data.progress.state"
+        :style="{ '--progress-share': progressShare(data.progress) }"
+      >
+        <span class="terminal-progress-fill" />
+      </div>
       <PaneIndicators
         :panes="data.panes"
         :status="data.status"

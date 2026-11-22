@@ -83,6 +83,15 @@
   /* Pages that are white by nature: PDFs, captured web pages, rendered previews. */
   --paper: #fff;
   --scrollbar: var(--ui-color-neutral-600);
+  /* A program's progress (OSC 9;4) only adds light, so a card keeps its status colour under it:
+     the filled part of a header is lighter, with a sweep while it runs and a mark where it
+     stopped. A minimap block is already light, so there the unfilled part is dimmed instead. */
+  --progress-fill: rgb(255 255 255 / 0.09);
+  --progress-sweep: rgb(255 255 255 / 0.13);
+  --progress-edge: rgb(255 255 255 / 0.45);
+  --progress-rest: rgb(0 0 0 / 0.42);
+  --progress-glint: rgb(255 255 255 / 0.55);
+  --progress-mark: rgb(255 255 255 / 0.7);
 
   --card-shadow: 0 5px 16px rgb(0 0 0 / 0.2);
   --float-shadow: 0 6px 20px rgb(0 0 0 / 0.2);

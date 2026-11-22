@@ -302,11 +302,65 @@ html {
   border-bottom: 1px solid var(--ui-border-accented);
   user-select: none;
   cursor: grab;
+  /* The progress fill paints between the header's colour and its content. */
+  isolation: isolate;
 }
+/* A program's progress (OSC 9;4): light over the header up to its share. While it runs a sweep
+   moves through the filled part only, rightwards, or leftwards without a percentage; paused
+   breathes; stopped holds still with a mark at its edge. Without motion, only the fill shows. */
 .terminal-progress {
   position: absolute;
-  inset: auto 0 0;
+  inset: 0;
+  z-index: -1;
   pointer-events: none;
+}
+.terminal-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--progress-share) * 100%);
+  overflow: hidden;
+  background: var(--progress-fill);
+}
+.terminal-progress[data-state='error'] .terminal-progress-fill {
+  box-shadow: inset -1px 0 0 var(--progress-edge);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .terminal-progress-fill {
+    transition: width var(--duration) ease-out;
+  }
+  .terminal-progress:is([data-state='normal'], [data-state='indeterminate'])
+    .terminal-progress-fill::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    /* The band is SWEEP_BAND of the fill (utils/canvas/progress-fill.ts), as on the minimap. */
+    background: linear-gradient(90deg, transparent, var(--progress-sweep), transparent) no-repeat;
+    background-size: 30% 100%;
+    animation: progress-sweep 1.8s linear infinite;
+  }
+  .terminal-progress[data-state='indeterminate'] .terminal-progress-fill::after {
+    animation-direction: reverse;
+  }
+  .terminal-progress[data-state='paused'] .terminal-progress-fill {
+    animation: progress-breath 3.6s ease-in-out infinite;
+  }
+}
+@keyframes progress-sweep {
+  from {
+    background-position: -50% 0;
+  }
+  to {
+    background-position: 150% 0;
+  }
+}
+@keyframes progress-breath {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
 }
 .terminal-header:active {
   cursor: grabbing;
@@ -838,14 +892,40 @@ html {
 .minimap-card-backing {
   fill: var(--surface);
 }
-.minimap-progress {
-  fill: var(--ui-primary);
+.minimap-progress-rest {
+  fill: var(--progress-rest);
 }
-.minimap-progress-error {
-  fill: var(--ui-error);
+.minimap-progress-glint {
+  stop-color: var(--progress-glint);
 }
-.minimap-progress-paused {
-  fill: var(--ui-text-muted);
+.minimap-progress-edge {
+  stroke: var(--progress-mark);
+  stroke-width: 1.5;
+}
+/* The sweep's band is SWEEP_BAND of the filled part, so it crosses it in one fixed travel. */
+.minimap-progress-sweep {
+  display: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .minimap-progress-sweep {
+    display: inline;
+    transform-box: fill-box;
+    animation: minimap-progress-sweep 1.8s linear infinite;
+  }
+  .minimap-progress-sweep.reverse {
+    animation-direction: reverse;
+  }
+  .minimap-progress[data-state='paused'] .minimap-progress-rest {
+    animation: progress-breath 3.6s ease-in-out infinite reverse;
+  }
+}
+@keyframes minimap-progress-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(calc(100% / 0.3));
+  }
 }
 .vue-flow__minimap-node.minimap-card {
   cursor: pointer;
