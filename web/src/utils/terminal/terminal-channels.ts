@@ -116,6 +116,8 @@ export class TerminalChannels {
   /** Channel numbers are never used twice on a socket. */
   private next = 0
   private readonly unfollow?: () => void
+  /** Looks at the send buffer until what was sent has left it, when its time starts. */
+  private draining?: ReturnType<typeof setTimeout>
 
   constructor(
     private readonly socket: WebSocket,
@@ -129,7 +131,10 @@ export class TerminalChannels {
   ) {
     this.watch = new LinkWatch(
       {
-        drained: () => !!this.outbox?.drain(this.socket.bufferedAmount, page.now()),
+        movedAt: () => {
+          this.outbox?.drain(this.socket.bufferedAmount, page.now())
+          return this.outbox?.movedAt ?? -Infinity
+        },
         oldest: () => this.outbox?.oldest,
         busy: () => [...this.channels.values()].some(({ events }) => events.busy?.()),
         visible: () => page.visible(),
@@ -269,7 +274,17 @@ export class TerminalChannels {
     const text = JSON.stringify(message)
     this.socket.send(text)
     this.outbox?.sent(utf8Length(text), this.page.now(), this.socket.bufferedAmount)
+    this.followDrain()
     this.watch.sent()
+  }
+  /** The socket says nothing when its buffer drains: it is looked at, less often the longer. */
+  private followDrain(delay = 1) {
+    if (this.draining !== undefined || !this.socket.bufferedAmount) return
+    this.draining = setTimeout(() => {
+      this.draining = undefined
+      this.outbox?.drain(this.socket.bufferedAmount, this.page.now())
+      this.followDrain(Math.min(delay * 2, 250))
+    }, delay)
   }
   private release(channel: number) {
     if (!this.channels.delete(channel)) return false
@@ -280,6 +295,7 @@ export class TerminalChannels {
     return true
   }
   private stop() {
+    clearTimeout(this.draining)
     this.watch.stop()
     this.unfollow?.()
     this.idle()
@@ -384,6 +400,7 @@ export class TerminalChannels {
     else if (this.release(channel)) target.events.closed('closed')
   }
   private ended(end: LinkEnd) {
+    clearTimeout(this.draining)
     this.watch.stop()
     this.unfollow?.()
     const open = [...this.channels.values()]

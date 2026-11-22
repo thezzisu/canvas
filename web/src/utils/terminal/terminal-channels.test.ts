@@ -29,13 +29,17 @@ class FakeSocket {
   up = true
   /** Sent bytes wait in the browser's buffer until drained by hand. */
   holding = false
+  /** Sent bytes leave the browser's buffer a moment after `send`, as a real socket's do. */
+  lagging = false
   onopen?: () => void
   onmessage?: (event: { data: unknown }) => void
   onerror?: () => void
   onclose?: () => void
   send(data: string) {
     this.sent.push(JSON.parse(data))
-    if (this.holding) this.bufferedAmount += new TextEncoder().encode(data).length
+    const length = new TextEncoder().encode(data).length
+    if (this.holding || this.lagging) this.bufferedAmount += length
+    if (this.lagging) setTimeout(() => (this.bufferedAmount -= length), 0)
     this.total++
     if (this.up) this.got = this.total
   }
@@ -268,6 +272,15 @@ test('a way up that holds what was sent is probed, then in doubt, then given up,
   assert.equal(f.socket.readyState, 3)
 })
 
+test("bytes leaving the buffer after they were sent, the probe's among them, are no answer", () => {
+  const f = linked()
+  f.socket.lagging = true
+  f.socket.up = false
+  f.connection.send({ type: 'input', data: 'x' })
+  f.pass(7 * TIMEOUT + 100)
+  assert.deepEqual(f.a.log, ['doubt', 'stalled'])
+})
+
 test('an answer clears the doubt and starts the count again', () => {
   const f = linked()
   f.socket.up = false
@@ -330,7 +343,7 @@ test('each answer is a round trip, and a slow link waits longer before it probes
   assert.deepEqual(f.socket.sent.at(-1), { type: 'ping' })
 })
 
-test('an upload sharing the way up, or bytes leaving the buffer, are progress', () => {
+test('nothing is judged during an upload, nor while a long message still leaves the buffer', () => {
   const f = linked({ busy: true })
   f.socket.up = false
   f.connection.send({ type: 'input', data: 'x' })

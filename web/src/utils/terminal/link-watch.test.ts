@@ -21,9 +21,10 @@ test('a message leaves when the buffer drains past it, and an answer to it is a 
   box.sent(10, 0, 10)
   box.sent(20, 0, 30)
   assert.equal(box.oldest!.left, undefined, 'still in the browser')
-  assert.equal(box.drain(20, 50), true)
-  assert.equal(box.oldest!.left, 50)
-  assert.equal(box.drain(20, 60), false, 'nothing more left')
+  box.drain(20, 50)
+  assert.deepEqual([box.oldest!.left, box.movedAt], [50, 50])
+  box.drain(20, 60)
+  assert.equal(box.movedAt, 50, 'nothing more left')
   box.drain(0, 70)
   // Received 30 ms before the server sent this; 200 ms after the first left.
   assert.deepEqual(box.stamped({ got: 1, since: 30, quiet: 30 }, 250, 10), {

@@ -9,9 +9,11 @@
  *   the server held it. They are smoothed as RFC 6298 smooths them.
  * - A timeout is that round trip and four times its variation, at least a second (RFC 6298), and
  *   the server's ack delay (RFC 9002). It doubles with each one that passes without progress.
- * - Progress is the server receiving more, bytes of the next message reaching it, or bytes
- *   leaving this browser's buffer. Bytes arriving here that the server sent before the next
- *   message could have reached it prove nothing, and are waited through.
+ * - Progress is the server receiving more, or bytes of the next message reaching it. A message
+ *   still in this browser's buffer is waited for while the buffer moves; its time starts when it
+ *   leaves. Bytes arriving here that the server sent before the next message could have reached
+ *   it prove nothing, and are waited through. While another transfer shares the way up, such as
+ *   an upload, nothing is judged.
  * - After one timeout without progress the socket is probed; after the probe's own, in silence,
  *   the link is in doubt and the terminal shows it and takes no input. Bytes the server sent well
  *   after the next message should have reached it, without it, prove the way up holds it: the
@@ -84,6 +86,8 @@ export class Outbox {
   private count = 0
   private bytes = 0
   private drainedBytes = 0
+  /** When bytes last left the browser's buffer. */
+  movedAt = -Infinity
   private pending: Sent[] = []
   /** The last message the server said it received, when it left here, and its byte gap. */
   private last: { index: number; left: number; gap: number }
@@ -96,14 +100,14 @@ export class Outbox {
     this.pending.push({ index: ++this.count, end: this.bytes, at: now })
     this.drain(buffered, now)
   }
-  /** Notes what left the browser's buffer; whether anything did since the last look. */
+  /** Notes what left the browser's buffer. */
   drain(buffered: number, now: number) {
     const drained = this.bytes - buffered
-    if (drained <= this.drainedBytes) return false
+    if (drained <= this.drainedBytes) return
     this.drainedBytes = drained
+    this.movedAt = now
     for (const sent of this.pending)
       if (sent.left === undefined && sent.end <= drained) sent.left = now
-    return true
   }
   /** The oldest message the server has yet to say it received. */
   get oldest(): Readonly<Sent> | undefined {
@@ -137,8 +141,8 @@ export class Outbox {
 
 export type StallReason = 'silent' | 'held' | 'network'
 interface Link {
-  /** Notes what left the browser's buffer; whether anything did since the last look. */
-  drained(): boolean
+  /** When bytes last left the browser's buffer. */
+  movedAt(): number
   oldest(): { at: number; left?: number } | undefined
   /** Something else shares the way up and may hold it, such as an upload. */
   busy(): boolean
@@ -244,14 +248,19 @@ export class LinkWatch {
       this.timer = setTimeout(() => this.check(false), 0)
       return
     }
-    if (this.link.drained() || this.link.busy()) return this.progress()
+    const movedAt = this.link.movedAt()
+    // Another transfer up the same way may hold it: judge nothing until it ends.
+    if (this.link.busy()) return this.arm(now + this.timeout, true)
     const oldest = this.link.oldest()
+    // Still in this browser's buffer, it is on its way while the buffer moves.
+    if (oldest && oldest.left === undefined && now - movedAt < this.timeout)
+      return this.arm(movedAt + this.timeout, true)
     if (!oldest) {
       if (!this.link.watching()) return
       if (now - this.heard < this.timeout) return this.arm(this.heard + this.timeout)
       return this.link.probe()
     }
-    const waited = now - Math.max(oldest.left ?? oldest.at, this.waitFrom)
+    const waited = now - Math.max(oldest.left ?? Math.max(oldest.at, movedAt), this.waitFrom)
     if (waited < this.timeout) return this.arm(now + this.timeout - waited, true)
     this.failures++
     if (this.failures >= ATTEMPTS) return this.link.stalled(this.doubted ? 'held' : 'silent')
