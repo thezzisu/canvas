@@ -102,6 +102,7 @@ export function disconnect(session: Session) {
   session.shown = -1
   session.awaitingPaint = []
   endFocusSize(session)
+  session.handedLease = undefined
   if (connection) {
     disconnectDownloads(connection)
     connection.close()
@@ -334,9 +335,11 @@ function receive(
     // is followed by its release, which would read as another view taking the window.
     if (message.owned === true && message.token !== session.focusResize?.token) {
       // The size this view had on its channel before passed to this one. A view no longer
-      // maximized gives it back; a maximized one asks again and the window keeps its size.
-      if (!session.magnified && typeof message.token === 'string')
-        connection.send({ type: 'focus-resize-end', token: message.token })
+      // maximized gives it back; a maximized one asks again and the window keeps its size, or
+      // holds it until it is restored.
+      if (typeof message.token !== 'string') return
+      if (!session.magnified) connection.send({ type: 'focus-resize-end', token: message.token })
+      else if (!session.focusResize) session.handedLease = message.token
       return
     }
     const revision = (session.presentationRevision = (session.presentationRevision || 0) + 1)

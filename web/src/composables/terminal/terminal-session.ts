@@ -100,6 +100,11 @@ export interface Session {
   /** Ends that wait if no answer comes; see `boundAnswer`. */
   answerLimit?: ReturnType<typeof setTimeout>
   focusResize?: { token: string; suspended: boolean; requested?: TerminalGrid }
+  /**
+   * The lease the server passed to this connection from the view's last one, while the view has
+   * not asked under a token of its own, which renames it. Restoring the view ends it.
+   */
+  handedLease?: string
   presentationFrame?: number
   presentationRevision?: number
 

@@ -116,6 +116,8 @@ export function updateFocusSize(session: Session) {
   const proposed = proposedSize(session)
   if (!proposed) return
   if (!session.focusResize) {
+    // The server renames a lease passed to this connection rather than taking the window again.
+    session.handedLease = undefined
     session.focusResize = { token: uuid(), suspended: false, requested: proposed }
     claimFocus(session)
     session.connection!.send({
@@ -136,8 +138,13 @@ export function updateFocusSize(session: Session) {
   if (rewraps(session.mirror, proposed)) awaitFrame(session)
 }
 export function endFocusSize(session: Session) {
-  const request = session.focusResize
-  if (!request) return
+  const request = session.focusResize,
+    handed = session.handedLease
+  session.handedLease = undefined
+  if (!request) {
+    if (handed) session.connection?.send({ type: 'focus-resize-end', token: handed })
+    return
+  }
   session.focusResize = undefined
   if (session.connection?.send({ type: 'focus-resize-end', token: request.token })) {
     // The server answers the owner's release with a frame of the window at its shared size.
