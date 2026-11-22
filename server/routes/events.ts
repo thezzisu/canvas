@@ -108,10 +108,12 @@ export function eventRoutes({ app, store, account, terminals, options }: RouteCo
             controller.enqueue(encoder.encode(': keepalive\n\n'))
         }, 15_000)
         heartbeat.unref()
-        publish()
-        // Listening comes first, so the reading this browser causes reaches it.
+        // Listening comes first, so the reading this browser causes reaches it. The state goes
+        // first all the same: those readings arrive later. A session that ended meanwhile closes
+        // the stream here, which ends both.
         listed = options.watchers?.changes.subscribe(publishListing)
         viewing = options.watchers?.view()
+        publish()
       },
       pull: flush,
       cancel: () => close(),
