@@ -135,39 +135,13 @@ export class UploadService {
         )
           throw new Error('invalidReference')
       }
-      const total = request.files.reduce((sum, file) => sum + file.size, 0)
-      if (!Number.isSafeInteger(total)) throw new Error('invalidSize')
-      const key = `${source.id}/${windowId}`
-      if (this.stopped || this.batches.has(key)) throw new Error('busy')
-      const generation = this.sourceGenerations.get(source.id) || 0
-      const paste = await this.terminals.captureFilePaste(source.id, windowId, socket)
-      if (this.stopped || (this.sourceGenerations.get(source.id) || 0) !== generation)
-        throw new Error('closed')
-      if (!paste || socket.readyState !== 1) throw new Error('notConnected')
-      if (this.batches.has(key)) throw new Error('busy')
-      const batch: Batch = {
-        key,
+      const batch = await this.open(source, windowId, socket, session, {
         id,
-        source,
-        windowId,
-        socket,
-        session,
         files: request.files,
         parts: request.parts ?? filePasteParts(request.files.length),
         tokens: request.files.map(() => randomBytes(32).toString('base64url')),
-        paths: [],
-        next: 0,
-        busy: false,
-        completedBytes: 0,
-        transferred: 0,
-        total,
-        controller: new AbortController(),
-        lastProgress: 0,
-        paste,
-      }
-      this.batches.set(key, batch)
+      })
       batch.tokens.forEach((token, index) => this.tokens.set(token, { batch, index }))
-      this.deadline(batch)
       this.send(socket, {
         type: 'upload-ready',
         id,
@@ -183,20 +157,70 @@ export class UploadService {
         typeof input.id === 'string'
       )
         id = input.id.slice(0, 100)
-      this.send(socket, {
-        type: 'upload-progress',
-        id,
-        state: 'failed',
-        transferred: 0,
-        total: 0,
-        error:
-          error instanceof z.ZodError
-            ? 'invalidRequest'
-            : error instanceof Error
-              ? error.message
-              : 'startFailed',
-      })
+      this.refuse(socket, id, error instanceof z.ZodError ? 'invalidRequest' : error)
     }
+  }
+  /** A batch that could not start. */
+  private refuse(socket: TerminalChannel, id: string, error: unknown) {
+    this.send(socket, {
+      type: 'upload-progress',
+      id,
+      state: 'failed',
+      transferred: 0,
+      total: 0,
+      error:
+        typeof error === 'string' ? error : error instanceof Error ? error.message : 'startFailed',
+    })
+  }
+  /**
+   * Starts a batch for the window, which takes its input until the batch ends: one at a time,
+   * from the browser that controls the window, and none while its connection is being edited.
+   */
+  private async open(
+    source: Source,
+    windowId: string,
+    socket: TerminalChannel,
+    session: string,
+    request: Pick<Batch, 'id' | 'files' | 'parts' | 'tokens'> & { stored?: boolean },
+  ): Promise<Batch> {
+    const total = request.files.reduce((sum, file) => sum + file.size, 0)
+    if (!Number.isSafeInteger(total)) throw new Error('invalidSize')
+    const key = `${source.id}/${windowId}`
+    if (this.stopped || this.batches.has(key)) throw new Error('busy')
+    const generation = this.sourceGenerations.get(source.id) || 0
+    const paste = await this.terminals.captureFilePaste(source.id, windowId, socket)
+    if (this.stopped || (this.sourceGenerations.get(source.id) || 0) !== generation)
+      throw new Error('closed')
+    if (!paste || socket.readyState !== 1) throw new Error('notConnected')
+    if (this.batches.has(key)) throw new Error('busy')
+    const batch: Batch = {
+      ...request,
+      key,
+      source,
+      windowId,
+      socket,
+      session,
+      paths: [],
+      next: 0,
+      busy: !!request.stored,
+      completedBytes: 0,
+      transferred: 0,
+      total,
+      controller: new AbortController(),
+      lastProgress: 0,
+      paste,
+    }
+    this.batches.set(key, batch)
+    this.deadline(batch)
+    return batch
+  }
+  /** The next file of the batch is in the inbox at `path`. */
+  private wrote(batch: Batch, path: string) {
+    batch.paths.push(path)
+    batch.completedBytes += batch.files[batch.next]!.size
+    batch.transferred = batch.completedBytes
+    batch.next++
+    this.deadline(batch)
   }
   /** Deliver Canvas-held files and text through the same ordered native paste as browser uploads. */
   async sendStored(
@@ -218,46 +242,20 @@ export class UploadService {
         0,
       )
       if (text > MAX_TERMINAL_PASTE_BYTES) throw new Error('tooLarge')
-      const total = request.files.reduce((sum, file) => sum + file.size, 0)
-      if (!Number.isSafeInteger(total)) throw new Error('invalidSize')
-      const key = `${source.id}/${windowId}`
-      if (this.stopped || this.batches.has(key)) throw new Error('busy')
-      const generation = this.sourceGenerations.get(source.id) || 0
-      const paste = await this.terminals.captureFilePaste(source.id, windowId, socket)
-      if (this.stopped || (this.sourceGenerations.get(source.id) || 0) !== generation)
-        throw new Error('closed')
-      if (!paste || socket.readyState !== 1) throw new Error('notConnected')
-      if (this.batches.has(key)) throw new Error('busy')
-      const current: Batch = (batch = {
-        key,
+      const current = (batch = await this.open(source, windowId, socket, session, {
         id,
-        source,
-        windowId,
-        socket,
-        session,
         files: request.files,
         parts: request.parts,
         tokens: [],
-        paths: [],
-        next: 0,
-        busy: true,
-        completedBytes: 0,
-        transferred: 0,
-        total,
-        controller: new AbortController(),
-        lastProgress: 0,
-        paste,
         stored: true,
-      })
-      this.batches.set(key, current)
-      this.deadline(current)
+      }))
       this.progress(current, 'uploading')
-      for (const [index, file] of request.files.entries()) {
+      for (const file of request.files) {
         const bytes = await file.open()
         if (!bytes) throw new Error('fileMissing')
         let path: string
         try {
-          if (this.batches.get(key) !== current) return
+          if (this.batches.get(current.key) !== current) return
           path = await this.options.write(
             source,
             file,
@@ -268,29 +266,18 @@ export class UploadService {
         } finally {
           bytes.destroy()
         }
-        if (this.batches.get(key) !== current) {
-          this.cleanup(source, [path])
-          return
-        }
-        current.paths.push(path)
-        current.next = index + 1
-        current.completedBytes += file.size
-        current.transferred = current.completedBytes
-        this.deadline(current)
+        if (this.batches.get(current.key) !== current) return this.cleanup(source, [path])
+        this.wrote(current, path)
       }
       if (await this.deliver(current)) request.delivered()
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'failed'
-      if (batch) this.fail(batch, message, false, batch.files[batch.next]?.name)
-      else
-        this.send(socket, {
-          type: 'upload-progress',
-          id,
-          state: 'failed',
-          transferred: 0,
-          total: 0,
-          error: message,
-        })
+      if (!batch) return this.refuse(socket, id, error)
+      this.fail(
+        batch,
+        error instanceof Error ? error.message : 'failed',
+        false,
+        batch.files[batch.next]?.name,
+      )
     }
   }
   private written(batch: Batch, received: number) {
@@ -408,12 +395,8 @@ export class UploadService {
         this.cleanup(batch.source, [path])
         return 409
       }
-      batch.paths.push(path)
-      batch.next++
-      batch.completedBytes += batch.files[index]!.size
-      batch.transferred = batch.completedBytes
+      this.wrote(batch, path)
       batch.busy = false
-      this.deadline(batch)
       if (batch.next === batch.files.length) {
         if (!(await this.deliver(batch))) return 409
       } else this.progress(batch, 'uploading')
