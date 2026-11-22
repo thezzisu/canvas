@@ -98,6 +98,9 @@ export function parseHerdrSockets(text: string): HerdrSockets {
 }
 
 /** One bounded newline-JSON API request; mutations are never retried. */
+/** herdr answered, and its answer was an error: where it listens is right. */
+export class HerdrApiError extends Error {}
+
 export function herdrApiRequest(
   socketPath: string,
   method: string,
@@ -145,7 +148,7 @@ export function herdrApiRequest(
         if (!response || typeof response !== 'object' || response.id !== id)
           throw new Error('Invalid herdr API response')
         if (response.error)
-          throw new Error(
+          throw new HerdrApiError(
             typeof response.error.message === 'string'
               ? `herdr: ${response.error.message.slice(0, 500)}`
               : 'Herdr API request failed',

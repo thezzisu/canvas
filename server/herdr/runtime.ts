@@ -7,6 +7,7 @@ import { watchHerdr } from './watch.ts'
 import { followSource, type StartWatch } from '../source-follow.ts'
 import {
   discoverHerdrPython,
+  HerdrApiError,
   herdrApiRequest,
   localHerdrSockets,
   parseHerdrSockets,
@@ -116,7 +117,8 @@ async function requestHerdr(
       const { api } = await connectedHerdrSockets(source, signal)
       return await herdrApiRequest(api, method, params, { signal })
     } catch (error) {
-      forgetEndpoint(source)
+      // Only a server that was not reached may listen elsewhere now.
+      if (!(error instanceof HerdrApiError) && !signal?.aborted) forgetEndpoint(source)
       throw error
     }
   })

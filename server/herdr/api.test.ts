@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createServer, type Socket } from 'node:net'
-import { mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, symlink, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -399,4 +399,87 @@ test('herdr runtime discovers sockets and performs resource CRUD without executa
   } finally {
     store.close()
   }
+})
+
+test('an endpoint that answered with an error is kept; one that cannot be reached is looked up again', async (t) => {
+  const { closeRuntimeConnections, holdConnections } = await import('../source-connections.ts')
+  const { listResources, renameWindow } = await import('../runtimes.ts')
+  const root = await mkdtemp(join(tmpdir(), 'cv-endpoint-')),
+    clients = new Set<Socket>(),
+    servers: ReturnType<typeof createServer>[] = []
+  // Two herdr servers, told apart by their workspace's label. Each refuses every change.
+  const herdr = async (name: string) => {
+    const directory = join(root, name)
+    await mkdir(directory)
+    const api = createServer((socket) => {
+      clients.add(socket)
+      socket.on('close', () => clients.delete(socket))
+      socket.on('error', () => {})
+      let input = ''
+      socket.on('data', (chunk) => {
+        input += chunk.toString()
+        if (!input.includes('\n')) return
+        const request = JSON.parse(input.split('\n')[0]!)
+        const answer =
+          request.method === 'session.snapshot'
+            ? {
+                result: {
+                  type: 'session_snapshot',
+                  snapshot: {
+                    version: '0.9.5',
+                    workspaces: [{ workspace_id: 'w1', label: name }],
+                    tabs: [{ workspace_id: 'w1', tab_id: 'w1:t1', label: 'Window' }],
+                    panes: [{ tab_id: 'w1:t1', pane_id: 'w1:p1', focused: true }],
+                  },
+                },
+              }
+            : { error: { code: 'invalid', message: 'Fixture refuses' } }
+        socket.end(JSON.stringify({ id: request.id, ...answer }) + '\n')
+      })
+    })
+    const client = createServer((socket) => socket.on('error', () => {}))
+    servers.push(api, client)
+    await Promise.all([
+      new Promise<void>((resolve) => api.listen(join(directory, 'herdr.sock'), resolve)),
+      new Promise<void>((resolve) => client.listen(join(directory, 'herdr-client.sock'), resolve)),
+    ])
+    return { directory, api }
+  }
+  const [first, second] = [await herdr('first'), await herdr('second')]
+  const point = async (target: string) => {
+    for (const name of ['herdr.sock', 'herdr-client.sock']) {
+      await unlink(join(root, name)).catch(() => {})
+      await symlink(join(target, name), join(root, name))
+    }
+  }
+  await point(first.directory)
+  t.after(async () => {
+    await closeRuntimeConnections('remembered-endpoint')
+    for (const client of clients) client.destroy()
+    await Promise.all(
+      servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
+    )
+    await rm(root, { recursive: true, force: true })
+  })
+  const source: Source = {
+    id: 'remembered-endpoint',
+    name: 'Remembered',
+    runtime: 'herdr',
+    transport: 'local',
+    herdrSocket: join(root, 'herdr.sock'),
+  }
+  // Held, as a watch holds it while a browser listens: an unheld source forgets everything.
+  const held = holdConnections(source)
+  t.after(() => held[Symbol.asyncDispose]())
+  const label = async () => {
+    const listed = await listResources(source)
+    return listed.status === 'online' ? listed.spaces[0]?.name : listed.status
+  }
+  assert.equal(await label(), 'first')
+  await point(second.directory)
+  await assert.rejects(renameWindow(source, 'w1', 'w1:t1', 'Renamed'), /Fixture refuses/u)
+  assert.equal(await label(), 'first', 'herdr answered, so where it listens is still known')
+  await new Promise<void>((resolve) => first.api.close(() => resolve()))
+  assert.equal(await label(), 'offline')
+  assert.equal(await label(), 'second', 'a server that could not be reached is looked up again')
 })
