@@ -201,12 +201,31 @@ interface SelectionState extends ScreenSelection {
   pane: PaneSurfacePane
   boot: string
   generation: number
-  dragging: boolean
   base: number
   pointer?: Mouse
   scrollOffsets: Set<number>
   word?: { anchor: Point; bounds: [number, number] }
 }
+/** What a held mouse button is doing; one at a time. */
+type Drag =
+  /** A program that takes the mouse is sent the drag. */
+  | {
+      kind: 'mouse'
+      target: InputTarget
+      rect: SurfaceRect
+      button: ClientMouseButton
+      last: Mouse
+    }
+  | {
+      kind: 'split'
+      split: PaneSurfaceSplit
+      offset: number
+      topology: string
+      boot: string
+      last?: number
+    }
+  | { kind: 'scrollbar'; pane: string; boot: string; grab: number }
+  | { kind: 'select'; selection: SelectionState }
 
 /** Per connection/tab ownership; async endpoint replies cannot retarget queued input. */
 export class HerdrInputRouter implements Disposable {
@@ -217,20 +236,7 @@ export class HerdrInputRouter implements Disposable {
   private focus?: PendingFocus
   private batch?: { target: InputTarget; events: ClientPaneInputEvent[]; bytes: number }
   private latest = new Map<string, { params: Record<string, unknown>; valid: () => boolean }>()
-  private mouseGesture?: {
-    target: InputTarget
-    rect: SurfaceRect
-    button: ClientMouseButton
-    last: Mouse
-  }
-  private splitGesture?: {
-    split: PaneSurfaceSplit
-    offset: number
-    topology: string
-    boot: string
-    last?: number
-  }
-  private scrollbarGesture?: { pane: string; boot: string; grab: number }
+  private drag?: Drag
   private selection?: SelectionState
   private selectionRevision = 0
   private selectionScrollTimer?: ReturnType<typeof setTimeout>
@@ -338,6 +344,12 @@ export class HerdrInputRouter implements Disposable {
     const pane = context.panes.find((pane) => pane.pane_id === id)
     return pane && this.paneTarget(pane)
   }
+  /** Where a target's cells are, in a surface where it is valid. */
+  private rect(target: InputTarget, surface: PaneSurfaceFrame) {
+    return target.kind === 'popup'
+      ? popupInputRect(surface)!
+      : surface.panes.find((pane) => pane.pane_id === target.id)!.inner_rect
+  }
   private send(target: InputTarget, event: ClientPaneInputEvent) {
     const bytes =
       'Paste' in event
@@ -363,11 +375,7 @@ export class HerdrInputRouter implements Disposable {
     this.enqueue(() => {
       if (this.batch === batch) this.batch = undefined
       if (!this.valid(target)) return
-      const surface = this.options.getSurface()!
-      const rect =
-        target.kind === 'popup'
-          ? popupInputRect(surface)!
-          : surface.panes.find((pane) => pane.pane_id === target.id)!.inner_rect
+      const rect = this.rect(target, this.options.getSurface()!)
       const events = batch.events.map((event) => {
         if (!('Mouse' in event) || !('Cell' in event.Mouse.position)) return event
         const { column, row } = event.Mouse.position.Cell
@@ -400,23 +408,23 @@ export class HerdrInputRouter implements Disposable {
       boot: context.snapshot.boot_id,
     })
     const target: InputTarget = { kind: 'pane', id: pane.pane_id, boot: focus.boot, focus }
+    const failed = () => {
+      focus.failed = true
+      if (this.focus === focus) this.focus = undefined
+    }
     this.enqueue(async () => {
-      if (!this.valid(target)) {
-        focus.failed = true
-        if (this.focus === focus) this.focus = undefined
-        return
-      }
+      if (!this.valid(target)) return failed()
       try {
         await this.options.request('pane.focus', { pane_id: pane.pane_id })
       } catch (reason) {
-        focus.failed = true
-        if (this.focus === focus) this.focus = undefined
+        failed()
         throw reason
       }
     })
   }
   private clearSelection() {
     this.stopSelectionScroll()
+    if (this.drag?.kind === 'select') this.drag = undefined
     const selected = !!this.selection
     this.selection = undefined
     this.selectionRevision++
@@ -457,38 +465,7 @@ export class HerdrInputRouter implements Disposable {
     // projection gap; later input still requires a valid matching surface.
     if (!context && snapshot?.focused_tab_id === this.options.tabId && !this.options.getSurface())
       return
-    if (this.mouseGesture) {
-      if (!this.valid(this.mouseGesture.target)) this.mouseGesture = undefined
-      else
-        this.mouseGesture.rect =
-          this.mouseGesture.target.kind === 'popup'
-            ? popupInputRect(context!.surface)!
-            : context!.panes.find((pane) => pane.pane_id === this.mouseGesture!.target.id)!
-                .inner_rect
-    }
-    if (
-      this.splitGesture &&
-      (!context ||
-        context.surface.popup ||
-        context.snapshot.boot_id !== this.splitGesture.boot ||
-        this.topology(context) !== this.splitGesture.topology)
-    )
-      this.splitGesture = undefined
-    if (this.splitGesture && context) {
-      this.splitGesture.split = context.surface.splits.find(
-        (split) =>
-          split.direction === this.splitGesture!.split.direction &&
-          JSON.stringify(split.path) === JSON.stringify(this.splitGesture!.split.path),
-      )!
-    }
-    if (
-      this.scrollbarGesture &&
-      (!context ||
-        context.surface.popup ||
-        context.snapshot.boot_id !== this.scrollbarGesture.boot ||
-        !context.panes.some((pane) => pane.pane_id === this.scrollbarGesture!.pane))
-    )
-      this.scrollbarGesture = undefined
+    if (this.drag && !this.followDrag(this.drag, context)) this.drag = undefined
     if (this.selection) {
       if (!this.selectionValid(this.selection)) this.clearSelection()
       else {
@@ -511,14 +488,38 @@ export class HerdrInputRouter implements Disposable {
         this.scrollTargets.delete(id)
     }
   }
+  /** Keeps a drag on what it holds as the surface changes, or says that it cannot. */
+  private followDrag(drag: Drag, context: ReturnType<HerdrInputRouter['context']>) {
+    if (drag.kind === 'mouse') {
+      if (!this.valid(drag.target)) return false
+      drag.rect = this.rect(drag.target, context!.surface)
+      return true
+    }
+    if (drag.kind === 'select') return true
+    if (!context || context.surface.popup || context.snapshot.boot_id !== drag.boot) return false
+    if (drag.kind === 'scrollbar') return context.panes.some((pane) => pane.pane_id === drag.pane)
+    if (this.topology(context) !== drag.topology) return false
+    drag.split = context.surface.splits.find(
+      (split) =>
+        split.direction === drag.split.direction &&
+        JSON.stringify(split.path) === JSON.stringify(drag.split.path),
+    )!
+    return true
+  }
+  /** Lets go of whatever the mouse held; a program holding the button is told it went up. */
+  private endDrag() {
+    const drag = this.drag
+    this.drag = undefined
+    if (drag?.kind !== 'mouse' || !this.valid(drag.target)) return
+    const event = this.mouseEvent(drag.rect, drag.last, { Up: drag.button })
+    if (event) this.send(drag.target, event)
+  }
   private route(input: ParsedInput) {
     if (this.disposed) return
     this.refresh()
     if ('focus' in input) {
       if (!input.focus) {
-        this.releaseMouse()
-        this.splitGesture = undefined
-        this.scrollbarGesture = undefined
+        this.endDrag()
         this.clearSelection()
         this.lastClick = undefined
       }
@@ -531,7 +532,7 @@ export class HerdrInputRouter implements Disposable {
     }
     const target = this.target()
     if (!target) return
-    if ('Key' in input.event && this.selection && !this.selection.dragging) {
+    if ('Key' in input.event && this.selection && this.drag?.kind !== 'select') {
       const { code, modifiers } = input.event.Key
       if (
         (modifiers === (CONTROL | SHIFT) &&
@@ -565,13 +566,6 @@ export class HerdrInputRouter implements Disposable {
         lines: 3,
       },
     }
-  }
-  private releaseMouse() {
-    const gesture = this.mouseGesture
-    this.mouseGesture = undefined
-    if (!gesture || !this.valid(gesture.target)) return
-    const event = this.mouseEvent(gesture.rect, gesture.last, { Up: gesture.button })
-    if (event) this.send(gesture.target, event)
   }
   private topology(context: NonNullable<ReturnType<HerdrInputRouter['context']>>) {
     return JSON.stringify([
@@ -657,7 +651,7 @@ export class HerdrInputRouter implements Disposable {
     if (
       this.disposed ||
       this.selection !== selection ||
-      !selection.dragging ||
+      this.drag?.kind !== 'select' ||
       !this.selectionValid(selection) ||
       !selection.pointer
     )
@@ -732,6 +726,73 @@ export class HerdrInputRouter implements Disposable {
     }
     return wordBounds(text, point.col)
   }
+  /** A held button moved or went up. */
+  private moveDrag(
+    drag: Drag,
+    event: Mouse,
+    context: NonNullable<ReturnType<HerdrInputRouter['context']>>,
+    up: boolean,
+  ) {
+    if (up) this.drag = undefined
+    if (drag.kind === 'mouse') {
+      if (!this.valid(drag.target)) {
+        this.drag = undefined
+        return
+      }
+      drag.rect = this.rect(drag.target, context.surface)
+      drag.last = event
+      const message = this.mouseEvent(
+        drag.rect,
+        event,
+        up ? { Up: drag.button } : { Drag: drag.button },
+      )
+      if (message) this.send(drag.target, message)
+    } else if (drag.kind === 'scrollbar') {
+      const pane = context.panes.find((pane) => pane.pane_id === drag.pane)
+      if (pane && context.snapshot.boot_id === drag.boot)
+        this.scroll(pane, scrollOffset(pane, event.row, drag.grab))
+    } else if (drag.kind === 'split') {
+      if (drag.boot !== context.snapshot.boot_id || drag.topology !== this.topology(context)) return
+      const split = drag.split,
+        horizontal = split.direction === 'Horizontal'
+      const pointer = horizontal ? event.column : event.row,
+        origin = horizontal ? split.area.x : split.area.y,
+        length = horizontal ? split.area.width : split.area.height
+      const ratio = Math.max(
+        0.1,
+        Math.min(0.9, (pointer + drag.offset - origin) / Math.max(1, length)),
+      )
+      if (ratio === drag.last) return
+      drag.last = ratio
+      this.endpointLatest(
+        'split:' + JSON.stringify(split.path),
+        'layout.set_split_ratio',
+        { tab_id: this.options.tabId, path: split.path, ratio },
+        () => {
+          const current = this.context()
+          return (
+            !!current &&
+            !current.surface.popup &&
+            current.snapshot.boot_id === drag.boot &&
+            this.topology(current) === drag.topology
+          )
+        },
+      )
+    } else {
+      const { selection } = drag,
+        pane = context.panes.find((pane) => pane.pane_id === selection.pane_id)!
+      const point = local(pane.inner_rect, event)
+      this.moveSelection(selection, pane, event)
+      if (!up) {
+        this.selectionScroll(selection)
+        if (this.lastClick && !same(this.lastClick.point, point)) this.lastClick = undefined
+        return
+      }
+      this.stopSelectionScroll()
+      if (same(selection.anchor, selection.cursor) && !selection.word) this.clearSelection()
+      else this.copySelection(selection)
+    }
+  }
   private routeMouse(event: Mouse) {
     const context = this.context()
     if (!context) return
@@ -739,31 +800,12 @@ export class HerdrInputRouter implements Disposable {
     const up = kind === 'Release' || (typeof kind === 'object' && 'Up' in kind)
     const drag = typeof kind === 'object' && 'Drag' in kind
     const down = typeof kind === 'object' && 'Down' in kind
-    if (down && this.mouseGesture) this.releaseMouse()
-    if (this.mouseGesture && (up || drag)) {
-      const gesture = this.mouseGesture
-      if (
-        typeof kind === 'object' &&
-        (('Up' in kind && kind.Up !== gesture.button) ||
-          ('Drag' in kind && kind.Drag !== gesture.button))
-      )
-        return
-      if (!this.valid(gesture.target)) {
-        this.mouseGesture = undefined
-        return
-      }
-      gesture.rect =
-        gesture.target.kind === 'popup'
-          ? popupInputRect(context.surface)!
-          : context.panes.find((pane) => pane.pane_id === gesture.target.id)!.inner_rect
-      gesture.last = event
-      const message = this.mouseEvent(
-        gesture.rect,
-        event,
-        up ? { Up: gesture.button } : { Drag: gesture.button },
-      )
-      if (message) this.send(gesture.target, message)
-      if (up) this.mouseGesture = undefined
+    if (down) this.endDrag()
+    const held = this.drag
+    if (held && (up || drag)) {
+      const button = held.kind === 'mouse' ? held.button : 'Left',
+        pressed = typeof kind !== 'object' ? undefined : 'Up' in kind ? kind.Up : kind.Drag
+      if (pressed === undefined || pressed === button) this.moveDrag(held, event, context, up)
       return
     }
     if (context.surface.popup) {
@@ -783,80 +825,10 @@ export class HerdrInputRouter implements Disposable {
         },
         message = this.mouseEvent(rect, event)
       if (message) this.send(target, message)
-      if (down) this.mouseGesture = { target, rect, button: kind.Down, last: event }
+      if (down) this.drag = { kind: 'mouse', target, rect, button: kind.Down, last: event }
       return
     }
-    if (
-      (this.scrollbarGesture || this.splitGesture || this.selection?.dragging) &&
-      typeof kind === 'object' &&
-      (('Up' in kind && kind.Up !== 'Left') || ('Drag' in kind && kind.Drag !== 'Left'))
-    )
-      return
-    if (this.scrollbarGesture && (up || drag)) {
-      const gesture = this.scrollbarGesture,
-        pane = context.panes.find((pane) => pane.pane_id === gesture.pane)
-      if (pane && context.snapshot.boot_id === gesture.boot)
-        this.scroll(pane, scrollOffset(pane, event.row, gesture.grab))
-      if (up) this.scrollbarGesture = undefined
-      return
-    }
-    if (this.splitGesture && (up || drag)) {
-      const gesture = this.splitGesture
-      if (
-        gesture.boot === context.snapshot.boot_id &&
-        gesture.topology === this.topology(context)
-      ) {
-        const split = gesture.split,
-          horizontal = split.direction === 'Horizontal'
-        const pointer = horizontal ? event.column : event.row,
-          origin = horizontal ? split.area.x : split.area.y,
-          length = horizontal ? split.area.width : split.area.height
-        const ratio = Math.max(
-          0.1,
-          Math.min(0.9, (pointer + gesture.offset - origin) / Math.max(1, length)),
-        )
-        if (ratio !== gesture.last) {
-          gesture.last = ratio
-          this.endpointLatest(
-            'split:' + JSON.stringify(split.path),
-            'layout.set_split_ratio',
-            { tab_id: this.options.tabId, path: split.path, ratio },
-            () => {
-              const current = this.context()
-              return (
-                !!current &&
-                !current.surface.popup &&
-                current.snapshot.boot_id === gesture.boot &&
-                this.topology(current) === gesture.topology
-              )
-            },
-          )
-        }
-      }
-      if (up) this.splitGesture = undefined
-      return
-    }
-    if (this.selection?.dragging && (up || drag)) {
-      const selection = this.selection,
-        pane = context.panes.find((pane) => pane.pane_id === selection.pane_id)!
-      const point = local(pane.inner_rect, event)
-      this.moveSelection(selection, pane, event)
-      if (drag) this.selectionScroll(selection)
-      if (drag && this.lastClick && !same(this.lastClick.point, point)) this.lastClick = undefined
-      if (up) {
-        this.stopSelectionScroll()
-        selection.dragging = false
-        if (same(selection.anchor, selection.cursor) && !selection.word) this.clearSelection()
-        else this.copySelection(selection)
-      }
-      return
-    }
-    if (down) {
-      this.releaseMouse()
-      this.clearSelection()
-      this.splitGesture = undefined
-      this.scrollbarGesture = undefined
-    }
+    if (down) this.clearSelection()
     if (down && kind.Down === 'Left') {
       const barPane = context.panes.find(
         (pane) => pane.scrollbar_rect && contains(pane.scrollbar_rect, event) && thumb(pane),
@@ -866,7 +838,8 @@ export class HerdrInputRouter implements Disposable {
         this.focusPane(barPane)
         const bar = thumb(barPane)!
         if (event.row >= bar.top && event.row < bar.top + bar.length)
-          this.scrollbarGesture = {
+          this.drag = {
+            kind: 'scrollbar',
             pane: barPane.pane_id,
             boot: context.snapshot.boot_id,
             grab: event.row - bar.top,
@@ -877,7 +850,8 @@ export class HerdrInputRouter implements Disposable {
       const split = context.surface.splits.find((split) => contains(split.hit_rect, event))
       if (split) {
         this.lastClick = undefined
-        this.splitGesture = {
+        this.drag = {
+          kind: 'split',
           split,
           offset: split.pos - (split.direction === 'Horizontal' ? event.column : event.row),
           topology: this.topology(context),
@@ -923,7 +897,7 @@ export class HerdrInputRouter implements Disposable {
         message = this.mouseEvent(pane.inner_rect, event)
       if (message) this.send(target, message)
       if (down)
-        this.mouseGesture = { target, rect: pane.inner_rect, button: kind.Down, last: event }
+        this.drag = { kind: 'mouse', target, rect: pane.inner_rect, button: kind.Down, last: event }
     } else if (down && kind.Down === 'Left') {
       const point = local(pane.inner_rect, event),
         at = Date.now(),
@@ -943,20 +917,18 @@ export class HerdrInputRouter implements Disposable {
         cursor: bounds ? { row: point.row, col: bounds[1] } : point,
         boot: context.snapshot.boot_id,
         generation: this.selectionRevision,
-        dragging: true,
         base: top(pane),
         scrollOffsets: new Set(),
         word: bounds ? { anchor: point, bounds } : undefined,
       }
+      this.drag = { kind: 'select', selection: this.selection }
       if (bounds) this.highlight(this.selection)
     }
   }
   [Symbol.dispose]() {
     this.disposed = true
     this.parser[Symbol.dispose]()
-    this.mouseGesture = undefined
-    this.splitGesture = undefined
-    this.scrollbarGesture = undefined
+    this.drag = undefined
     this.clearSelection()
     this.scrollTargets.clear()
     this.latest.clear()
