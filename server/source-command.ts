@@ -105,6 +105,65 @@ export function sourcePythonCommand(source: Source, script: string, args: string
 
 /** Private loopback transport for an explicitly opened web application. */
 
+/** How long a helper on a source may go without a sign of life. */
+const HELPER_IDLE_MS = 60_000
+/** How long a helper asked to stop has before it is killed. */
+const HELPER_KILL_MS = 2000
+
+/**
+ * Runs a Python helper on the source for one transfer. It fails as stalled once `renew` has not
+ * been called for a minute, or as cancelled when `signal` aborts; `stop` asks it to end, and
+ * kills it if it has not two seconds later. `exited` resolves with its exit code.
+ */
+export function runSourceHelper(
+  source: Source,
+  script: string,
+  args: string[],
+  options: {
+    signal: AbortSignal
+    failed(reason: 'stalled' | 'cancelled'): void
+  },
+) {
+  const command = sourcePythonCommand(source, script, args)
+  const child = spawn(command.file, command.args, {
+    env: command.env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  let ended = false,
+    idle: ReturnType<typeof setTimeout> | undefined,
+    killing: ReturnType<typeof setTimeout> | undefined
+  const cancelled = () => options.failed('cancelled')
+  options.signal.addEventListener('abort', cancelled, { once: true })
+  const exited = new Promise<number | null>((resolve) =>
+    child.once('close', (code) => {
+      ended = true
+      clearTimeout(idle)
+      clearTimeout(killing)
+      options.signal.removeEventListener('abort', cancelled)
+      resolve(code)
+    }),
+  )
+  const renew = () => {
+    clearTimeout(idle)
+    if (ended) return
+    idle = setTimeout(() => options.failed('stalled'), HELPER_IDLE_MS)
+    idle.unref()
+  }
+  renew()
+  return {
+    child,
+    exited,
+    renew,
+    stop() {
+      if (ended) return
+      child.stdin.destroy()
+      child.kill('SIGTERM')
+      killing ??= setTimeout(() => child.kill('SIGKILL'), HELPER_KILL_MS)
+      killing.unref()
+    },
+  }
+}
+
 export async function editorAuthority(
   source: Source,
 ): Promise<{ hostName: string; user: string; port: number }> {

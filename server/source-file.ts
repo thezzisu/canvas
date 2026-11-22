@@ -1,5 +1,5 @@
-import { execFile, spawn } from 'node:child_process'
-import { sourcePythonCommand } from './source-command.ts'
+import { execFile } from 'node:child_process'
+import { runSourceHelper, sourcePythonCommand } from './source-command.ts'
 import { withoutFileLocation } from './content-candidates.ts'
 import type { Source } from './state.ts'
 
@@ -118,55 +118,31 @@ export async function readSourceFile(
   )
     throw new Error('Invalid file path')
   signal.throwIfAborted()
-  const command = sourcePythonCommand(source, readFilePython, [path])
-  const child = spawn(command.file, command.args, {
-    env: command.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
   let stderr = '',
-    ended = false,
     failure: Error | undefined
-  let timer: ReturnType<typeof setTimeout>, killing: ReturnType<typeof setTimeout> | undefined
-  const stop = () => {
-    if (ended) return
-    child.kill('SIGTERM')
-    if (!killing) {
-      killing = setTimeout(() => child.kill('SIGKILL'), 2000)
-      killing.unref()
-    }
-  }
-  const fail = (error: Error) => {
-    failure ||= error
-    stop()
-  }
-  const renew = () => {
-    clearTimeout(timer)
-    if (ended) return
-    timer = setTimeout(() => fail(new Error('File read timed out')), 60_000)
-    timer.unref()
-  }
-  const abort = () => fail(new Error('File transfer cancelled'))
-  signal.addEventListener('abort', abort, { once: true })
+  const helper = runSourceHelper(source, readFilePython, [path], {
+    signal,
+    failed(reason) {
+      failure ||= new Error(
+        reason === 'stalled' ? 'File read timed out' : 'File transfer cancelled',
+      )
+      helper.stop()
+    },
+  })
+  const { child, renew } = helper
+  // The helper reads nothing from Canvas.
+  child.stdin.end()
   child.stderr.on('data', (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-1200)
   })
-  const done = new Promise<void>((resolve) => {
-    child.once('error', () => {
-      failure ||= new Error('Cannot connect to the source')
-    })
-    child.once('close', (code) => {
-      ended = true
-      clearTimeout(timer)
-      clearTimeout(killing)
-      signal.removeEventListener('abort', abort)
-      if (code !== 0) failure ||= new Error(stderr.trim() || 'Could not read this file')
-      resolve()
-    })
+  child.once('error', () => {
+    failure ||= new Error('Cannot connect to the source')
   })
-  renew()
+  const done = helper.exited.then((code) => {
+    if (code !== 0) failure ||= new Error(stderr.trim() || 'Could not read this file')
+  })
   const close = async () => {
-    clearTimeout(timer)
-    stop()
+    helper.stop()
     child.stdout.destroy()
     await done
   }

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { LineSplitter } from './lines.ts'
-import { sourcePythonCommand } from './source-command.ts'
+import { runSourceHelper, sourcePythonCommand } from './source-command.ts'
 import type { Source } from './state.ts'
 
 export interface InboxFile {
@@ -94,47 +94,26 @@ export async function writeInboxFile(
 ): Promise<string> {
   validateInboxFile(file)
   signal.throwIfAborted()
-  const command = sourcePythonCommand(source, inboxPython, ['write', file.name, String(file.size)])
-  const child = spawn(command.file, command.args, {
-    env: command.env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
   const lines = new LineSplitter(32768)
   let received = 0,
     path: string | undefined,
     settled = false
-  let resolve!: (path: string) => void, reject!: (error: Error) => void
-  const result = new Promise<string>((ok, fail) => {
-    resolve = ok
-    reject = fail
-  })
+  const { promise: result, resolve, reject } = Promise.withResolvers<string>()
   // Attach immediately: a remote process can fail while the caller reads HTTP.
   void result.catch(() => {})
-  let timer: ReturnType<typeof setTimeout>
-  let killing: ReturnType<typeof setTimeout> | undefined
-  const stop = () => {
-    child.stdin.destroy()
-    child.kill('SIGTERM')
-    if (!killing) {
-      killing = setTimeout(() => child.kill('SIGKILL'), 2000)
-      killing.unref()
-    }
-  }
   const fail = (error: Error) => {
     if (settled) return
     settled = true
-    clearTimeout(timer)
-    stop()
+    helper.stop()
     reject(error)
   }
-  const renew = () => {
-    clearTimeout(timer)
-    timer = setTimeout(() => fail(new Error('timeout')), 60_000)
-    timer.unref()
-  }
-  const abort = () => fail(new Error('cancelled'))
-  signal.addEventListener('abort', abort, { once: true })
-  child.stdin.on('error', () => fail(new Error('interrupted')))
+  const helper = runSourceHelper(source, inboxPython, ['write', file.name, String(file.size)], {
+    signal,
+    failed: (reason) => fail(new Error(reason === 'stalled' ? 'timeout' : 'cancelled')),
+  })
+  const { child, renew } = helper,
+    stdin = child.stdin
+  stdin.on('error', () => fail(new Error('interrupted')))
   child.on('error', () => fail(new Error('unreachable')))
   child.stderr.on('data', () => {})
   child.stdout.on('data', (chunk: Buffer) => {
@@ -173,10 +152,7 @@ export async function writeInboxFile(
       }
     }
   })
-  child.once('close', (code) => {
-    clearTimeout(timer)
-    clearTimeout(killing)
-    signal.removeEventListener('abort', abort)
+  void helper.exited.then((code) => {
     if (settled) {
       // Cancellation can race the durable rename and final stdout message.
       // Reap a reported completed file after the writer has stopped as well.
@@ -190,7 +166,6 @@ export async function writeInboxFile(
       reject(new Error('failed'))
     }
   })
-  renew()
   try {
     const sending = (async () => {
       let sent = 0
@@ -200,11 +175,11 @@ export async function writeInboxFile(
         sent += chunk.byteLength
         if (sent > file.size) throw new Error('sizeMismatch')
         await new Promise<void>((ok, fail) =>
-          child.stdin.write(chunk, (error) => (error ? fail(error) : ok())),
+          stdin.write(chunk, (error) => (error ? fail(error) : ok())),
         )
       }
       if (sent !== file.size) throw new Error('incomplete')
-      child.stdin.end()
+      stdin.end()
       return await result
     })()
     return await Promise.race([result, sending])
