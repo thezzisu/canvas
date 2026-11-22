@@ -63,7 +63,6 @@ function dimension(value: number): boolean {
 
 /** An ordered channel. Credit follows completed parsing, never just receipt. */
 export class CoreStream {
-  private readonly listeners = new Set<Listener<CoreFrame>>()
   private readonly dataListeners = new Set<Listener<Buffer>>()
   private readonly resizeListeners = new Set<Listener<{ cols: number; rows: number }>>()
   private readonly closeListeners = new Set<(reason?: Record<string, unknown>) => void>()
@@ -77,12 +76,6 @@ export class CoreStream {
     readonly channel: number,
     private readonly rpc: CoreRpc,
   ) {}
-  onFrame(listener: Listener<CoreFrame>): Disposable {
-    this.listeners.add(listener)
-    this.started = true
-    this.schedule()
-    return { [Symbol.dispose]: () => void this.listeners.delete(listener) }
-  }
   onData(listener: Listener<Buffer>): Disposable {
     this.dataListeners.add(listener)
     this.started = true
@@ -125,7 +118,6 @@ export class CoreStream {
     try {
       while (!this.ended && this.queue.length) {
         const value = this.queue.shift()!
-        for (const listener of this.listeners) await listener(value)
         if (value.kind === 'data') {
           for (const listener of this.dataListeners) await listener(value.data)
           this.queuedBytes -= value.data.length
@@ -182,7 +174,6 @@ export class CoreStream {
     this.queue = []
     this.queuedBytes = 0
     for (const listener of this.closeListeners) listener(reason)
-    this.listeners.clear()
     this.dataListeners.clear()
     this.resizeListeners.clear()
     this.closeListeners.clear()
