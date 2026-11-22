@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { RETIRE_MS, TerminalChannels, type ConnectionEvents } from './terminal-channels.ts'
 import { STALL_MS } from './link-watch.ts'
 import { TerminalView } from './terminal-view.ts'
+import { setLogSink } from '../diagnostics/log.ts'
 
 // The fixture's clock stands still, so no test here may run on real timers.
 beforeEach(() => mock.timers.enable({ apis: ['setTimeout'] }))
@@ -315,4 +316,28 @@ test('nothing new is numbered on a channel before the input to send again', () =
   f.socket.json({ type: 'resume', channel: 0, taken: 0, ack: 0 })
   assert.deepEqual(f.socket.sent, [{ type: 'input', data: 'typed', channel: 0, seq: 1 }])
   assert.equal(connection.send({ type: 'focus' }), true)
+})
+
+test('the log names every message and ack, with times, and never what was typed', (t) => {
+  const lines: Record<string, unknown>[] = []
+  setLogSink((event, fields) => lines.push({ event, ...fields }))
+  t.after(() => setLogSink(undefined))
+  const f = fixture(),
+    a = listener()
+  const connection = f.channels.open(window('a'), view(), a.events)
+  f.socket.accept()
+  assert.equal(f.socket.sent.at(-1)!.timed, true)
+  f.socket.json({ type: 'hello', socket: 'ab12', version: '0.5.0' })
+  f.socket.json({ type: 'resume', channel: 0, taken: null, ack: 0 })
+  connection.send({ type: 'input', data: 'secret' })
+  f.page.time += 80
+  f.socket.json({ type: 'status', channel: 0, ack: 1, sentAt: Date.now(), held: 10 })
+  const events = lines.map((line) => line.event)
+  for (const event of ['socket', 'resumed', 'send', 'receive', 'ack'])
+    assert(events.includes(event), event)
+  const ack = lines.find((line) => line.event === 'ack')!
+  assert.deepEqual([ack.socket, ack.to, ack.waited, ack.rtt], ['ab12', 1, 80, 70])
+  f.socket.cells(0, 1, 5, 0, 42)
+  assert.deepEqual(a.log.at(-1), [42], 'the times are not the cells')
+  assert(!JSON.stringify(lines).includes('secret'))
 })

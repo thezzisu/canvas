@@ -1,3 +1,5 @@
+import { log, logging } from '../log.ts'
+import { logIdentifier } from '../../shared/log-line.ts'
 import { createConnection, type Socket } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { HerdrInputRouter } from './input.ts'
@@ -483,8 +485,39 @@ class HerdrClient implements WindowTransport {
       ? surface
       : undefined
   }
+  private heldSince?: { at: number; timer: ReturnType<typeof setTimeout> }
+  /** Logs a screen that the consistency gate held back for a second or more. */
+  private watchHeld(held: boolean) {
+    if (!logging('link')) return
+    if (held && this.initialized && !this.closed) {
+      this.heldSince ??= {
+        at: Date.now(),
+        timer: setTimeout(() => {
+          log('link', 'screen-held', {
+            tab: logIdentifier(this.options.tabId),
+            focusReady: this.focusReady,
+            focused: this.snapshot?.focused_tab_id === this.options.tabId,
+            projection: this.surface?.projection_revision,
+            snapshot: this.snapshot?.revision,
+            cols: this.cols,
+            rows: this.rows,
+            surfaceCols: this.surface?.frame.width,
+            surfaceRows: this.surface?.frame.height,
+          })
+        }, 1000).unref(),
+      }
+      return
+    }
+    if (!this.heldSince) return
+    clearTimeout(this.heldSince.timer)
+    const ms = Date.now() - this.heldSince.at
+    this.heldSince = undefined
+    if (ms >= 1000)
+      log('link', 'screen-held', { tab: logIdentifier(this.options.tabId), released: true, ms })
+  }
   private render() {
     const surface = this.coherentSurface()
+    this.watchHeld(!surface)
     if (!surface || this.closed) return
     this.paneFocus.set(surface.panes.find((pane) => pane.focused)?.pane_id)
     this.input.refresh()

@@ -19,6 +19,8 @@ const categories: Record<LogCategory, boolean> = {
   link: debuglog('canvas:link').enabled,
   source: debuglog('canvas:source').enabled,
 }
+/** Whether a category is on, for a caller that would measure something only to log it. */
+export const logging = (category: LogCategory) => categories[category]
 export function log(category: LogCategory, event: LogEvent, fields?: LogFields) {
   if (categories[category]) process.stderr.write(line(event, fields) + '\n')
 }

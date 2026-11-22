@@ -36,6 +36,12 @@ export class TerminalView {
     })
     return seq
   }
+  /** When the stall that cost the view its last channel was seen. */
+  stalledAt?: number
+  /** When a message not yet taken was sent. */
+  sentAt(sequence: number): number | undefined {
+    return this.owed.find((owed) => owed.seq === sequence)?.at
+  }
   /** When the oldest message not yet taken was sent. */
   get waitingSince(): number | undefined {
     return this.owed[0]?.at

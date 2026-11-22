@@ -1,8 +1,15 @@
 import { useLocalStorage } from '@vueuse/core'
 import { computed, shallowRef, watch } from 'vue'
 import { frontendBuild } from '../utils/build-info'
-import { logLine, logTime, type LogEvent, type LogFields } from '../../../shared/log-line'
-import { batchesToDrop, logFileName, setLogSink } from '../utils/diagnostics/log'
+import {
+  logIdentifier,
+  logLine,
+  logTime,
+  logType,
+  type LogEvent,
+  type LogFields,
+} from '../../../shared/log-line'
+import { batchesToDrop, logFileName, serverBuild, setLogSink } from '../utils/diagnostics/log'
 import { developerMode, viewportPolicy } from './developer-mode'
 
 // The diagnostic log of this browser: what the page did and when, kept in IndexedDB so that it
@@ -119,6 +126,7 @@ export async function downloadDiagnosticLog() {
     t: logTime(now),
     e: 'header',
     ...frontendBuild,
+    server: serverBuild,
     userAgent: navigator.userAgent,
     viewport: `${innerWidth}x${innerHeight}`,
     devicePixelRatio,
@@ -137,6 +145,13 @@ export async function downloadDiagnosticLog() {
   URL.revokeObjectURL(link.href)
 }
 
+/** What Chrome says of the link; other browsers have none of it. */
+interface NetworkState extends EventTarget {
+  type?: string
+  effectiveType?: string
+  rtt?: number
+  downlink?: number
+}
 /** What the page itself does, logged only while the log is on. */
 function watchPage() {
   const stop = new AbortController(),
@@ -183,6 +198,17 @@ function watchPage() {
       })
     : undefined
   tasks?.observe({ type: 'longtask' })
+  const connection = (navigator as Navigator & { connection?: NetworkState }).connection
+  const network = () =>
+    record('network', {
+      online: navigator.onLine,
+      type: logType(connection?.type),
+      effective: connection?.effectiveType ? logIdentifier(connection.effectiveType) : undefined,
+      rtt: connection?.rtt,
+      downlink: connection?.downlink,
+    })
+  if (connection) listen(connection, 'change', network)
+  network()
   record('session', { width: innerWidth, height: innerHeight, dpr: devicePixelRatio })
   return () => {
     stop.abort()

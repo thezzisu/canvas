@@ -5,7 +5,8 @@
 //                         windowId }
 //                       { type: 'close', channel }
 //                       { channel, seq, ...message }, a window message (terminals.ts)
-//   server to browser   { channel, ack, ...message }
+//   server to browser   { type: 'hello', socket, version, revision }, once after signing in
+//                       { channel, ack, ...message }
 //                       { type: 'ack', channel, ack, at }, when nothing else carried it in time
 //                       { type: 'close', channel, ack }, the server ended the channel
 //                       binary: the channel and the ack as unsigned LEB128 integers, then a
@@ -24,11 +25,16 @@
 // - A message is taken when it arrives, whether it is then applied or refused, so a program
 //   that is slow to answer never reads as a link that lost the message. One that is not newer
 //   than the last taken is dropped.
+// - An `open` with `timed` is a browser keeping its diagnostic log: JSON then carries `sentAt`
+//   and `held`, and cells carry both after the ack. They are the server's wall clock and how
+//   long ago it took the last message, which together give the clock offset and round trip.
 // - `ack` is the last taken, so it is cumulative. It rides on whatever the channel sends next,
 //   or goes alone after ACK_DELAY_MS. An ack is never acknowledged. `at` is the server's clock.
 import { EventEmitter } from 'node:events'
 import type { WebSocket } from 'ws'
 import { serverTime } from './server-time.ts'
+import { log, logging } from './log.ts'
+import { inputKind, logIdentifier, logType, logWindow } from '../shared/log-line.ts'
 import type { TerminalTarget } from './terminals.ts'
 
 /** No tab shows more windows at once than the server keeps open. */
@@ -57,6 +63,9 @@ export class TerminalChannel extends EventEmitter<{
   /** The view's last message taken; it is cumulative. */
   taken = 0
   private owedAck?: ReturnType<typeof setTimeout>
+  /** When it last took a message, on the wall clock. */
+  takenAt = 0
+  private acked = 0
   constructor(
     private readonly socket: WebSocket,
     readonly id: number,
@@ -65,6 +74,10 @@ export class TerminalChannel extends EventEmitter<{
     readonly attempt: number,
     /** The view is maximized: it keeps the window's size from the channel before. */
     readonly maximized: boolean,
+    /** The browser logs, so what is sent says when. */
+    private readonly timed = false,
+    /** The names both logs use for the socket and the window. */
+    readonly names: Record<string, ReturnType<typeof logIdentifier>> = {},
   ) {
     super()
   }
@@ -77,19 +90,34 @@ export class TerminalChannel extends EventEmitter<{
     ).unref()
     if (seq <= this.taken) return false
     this.taken = seq
+    this.takenAt = Date.now()
     return true
   }
   /** `sent` runs once the message has left for the network. */
   send(message: object | Uint8Array, sent?: () => void) {
     this.settleAck()
     if (this.readyState !== 1 || this.socket.readyState !== 1) return
+    if (this.taken !== this.acked) {
+      this.acked = this.taken
+      log('link', 'ack', { ...this.names, channel: this.id, seq: this.taken })
+    }
+    const sentAt = this.timed ? Date.now() : 0
+    const held = this.takenAt ? Math.max(0, sentAt - this.takenAt) : 0
     if (!(message instanceof Uint8Array)) {
-      this.socket.send(JSON.stringify({ ...message, channel: this.id, ack: this.taken }), sent)
+      const times = this.timed ? { sentAt, held } : {}
+      this.socket.send(
+        JSON.stringify({ ...message, ...times, channel: this.id, ack: this.taken }),
+        sent,
+      )
       return
     }
     const prefix: number[] = []
     pushInteger(prefix, this.id)
     pushInteger(prefix, this.taken)
+    if (this.timed) {
+      pushInteger(prefix, sentAt)
+      pushInteger(prefix, held)
+    }
     const bytes = new Uint8Array(prefix.length + message.length)
     bytes.set(prefix)
     bytes.set(message, prefix.length)
@@ -118,6 +146,7 @@ export class TerminalChannel extends EventEmitter<{
 export function serveTerminalChannels(
   socket: WebSocket,
   open: (channel: TerminalChannel, target: TerminalTarget) => void,
+  socketName = logIdentifier(''),
 ) {
   const channels = new Map<number, TerminalChannel>()
   socket.on('message', (bytes, binary) => {
@@ -133,7 +162,22 @@ export function serveTerminalChannels(
     const channel = channels.get(id)
     if (message.type === 'close') channel?.ended()
     else if (message.type !== 'open') {
-      if (channel?.take(message.seq)) channel.emit('message', message)
+      if (!channel) return
+      const started = performance.now()
+      const taken = channel.take(message.seq)
+      if (taken) channel.emit('message', message)
+      if (!logging('link')) return
+      const input = message.type === 'input' && typeof message.data === 'string'
+      log('link', 'message', {
+        ...channel.names,
+        channel: id,
+        type: logType(message.type),
+        seq: typeof message.seq === 'number' ? message.seq : undefined,
+        taken,
+        kind: input ? inputKind(message.data as string) : undefined,
+        bytes: input ? (message.data as string).length : undefined,
+        ms: performance.now() - started,
+      })
     } else if (!channel && channels.size < MAX_CHANNELS) {
       const { sourceId, spaceId, windowId, view, attempt } = message
       if (
@@ -152,9 +196,17 @@ export function serveTerminalChannels(
         socket.send(JSON.stringify({ type: 'close', channel: id, ack: 0 }))
         return
       }
-      const opened = new TerminalChannel(socket, id, view, attempt, message.maximized === true)
+      const names = { socket: socketName, w: logWindow({ sourceId, windowId }) }
+      const maximized = message.maximized === true,
+        timed = message.timed === true
+      const opened = new TerminalChannel(socket, id, view, attempt, maximized, timed, names)
       channels.set(id, opened)
-      opened.once('close', () => channels.delete(id))
+      const line = { ...names, channel: id, view: logIdentifier(view), attempt }
+      log('link', 'channel', { ...line, state: 'open' })
+      opened.once('close', () => {
+        channels.delete(id)
+        log('link', 'channel', { ...line, state: 'close', seq: opened.taken })
+      })
       open(opened, { sourceId, spaceId, windowId })
     }
   })

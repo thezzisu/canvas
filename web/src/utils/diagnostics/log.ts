@@ -22,6 +22,12 @@ export function batchesToDrop(sizes: readonly number[], incoming: number, cap = 
 export const logFileName = (epoch: number, offsetMinutes?: number) =>
   `canvas-log-${logTime(epoch, offsetMinutes).slice(0, 19).replace(/[-:]/gu, '').replace('T', '-')}.ndjson`
 
+/** The server last spoken to, which a downloaded log names beside the frontend. */
+export let serverBuild: { version?: string; revision?: string } | undefined
+export function sawServer(build: typeof serverBuild) {
+  serverBuild = build
+}
+
 let sink: ((event: LogEvent, fields?: LogFields) => void) | undefined
 /** Writes to the diagnostic log; while it is off, this is all that runs. */
 export function log(event: LogEvent, fields?: LogFields) {

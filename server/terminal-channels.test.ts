@@ -230,3 +230,27 @@ test('an ack rides on the next message, and goes alone only when none comes in t
   t.mock.timers.tick(ACK_DELAY_MS)
   assert.equal(f.socket.sent.length, 1, 'a repeated message is acknowledged again')
 })
+
+test('a browser that logs is told when each message left, and one that does not is not', () => {
+  const f = fixture()
+  f.socket.say({ type: 'open', channel: 0, ...target('a'), timed: true })
+  f.socket.say({ type: 'open', channel: 1, ...target('b') })
+  const [timed, plain] = f.opened.map(({ channel }) => channel)
+  timed!.send({ type: 'status' })
+  plain!.send({ type: 'status' })
+  const [first, second] = f.socket.sent.splice(0) as Record<string, unknown>[]
+  assert.equal(typeof first!.sentAt, 'number')
+  assert.equal(first!.held, 0)
+  assert.equal('sentAt' in second!, false)
+  timed!.send(Uint8Array.of(9))
+  const bytes = f.socket.sent[0] as number[]
+  let at = 2,
+    sentAt = 0
+  for (let shift = 0; ; shift++) {
+    const byte = bytes[at++]!
+    sentAt += (byte & 0x7f) * 2 ** (7 * shift)
+    if (byte < 0x80) break
+  }
+  assert(Math.abs(sentAt - Date.now()) < 5000, 'the wall clock survives the integer')
+  assert.deepEqual(bytes.slice(at), [0, 9])
+})

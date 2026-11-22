@@ -28,6 +28,14 @@ export type LogEvent =
   | 'event-loop'
   | 'tunnel'
   | 'watch'
+  | 'network'
+  | 'send'
+  | 'receive'
+  | 'message'
+  | 'ack'
+  | 'stall'
+  | 'resumed'
+  | 'screen-held'
 
 /** Every word a field may hold. */
 export type LogWord =
@@ -73,6 +81,9 @@ export const logIdentifier = (value: string) => value as LogId
 export const logWindow = (resource: { sourceId: string; windowId: string }) =>
   `${resource.sourceId}/${resource.windowId}` as LogId
 export type LogFields = Record<string, number | boolean | LogWord | LogId | undefined>
+/** A protocol message's type is a word of ours; anything else is not named. */
+export const logType = (value: unknown) =>
+  typeof value === 'string' && /^[a-z][a-z-]{0,31}$/u.test(value) ? logIdentifier(value) : undefined
 /** An identifier is letters, digits and a few marks; anything else is not written. */
 const identifier = /^[\w.:/-]{1,96}$/u
 

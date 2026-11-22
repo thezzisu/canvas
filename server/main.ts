@@ -35,6 +35,7 @@ import { captureAddress } from './capture-address.ts'
 import { SourcePreviewService } from './source-preview.ts'
 import { captureToolbarHeight } from '../shared/capture.ts'
 import { sendComposer } from './composer-send.ts'
+import { buildInfo } from './build-info.ts'
 import { announceLogging, log, watchEventLoop } from './log.ts'
 import { logIdentifier } from '../shared/log-line.ts'
 const dataDir = process.env.CANVAS_DATA_DIR ?? join(homedir(), '.local/share/canvas')
@@ -308,9 +309,11 @@ const upgrade = (
           return
         }
         socketSessions.set(ws, token)
-        logSocket(ws, request)
-        serveTerminalChannels(ws, (channel, target) =>
-          openWindowChannel(channel, target, token, captureBase),
+        const socket = logSocket(ws, request)
+        serveTerminalChannels(
+          ws,
+          (channel, target) => openWindowChannel(channel, target, token, captureBase),
+          socket,
         )
       },
     ),
@@ -325,7 +328,16 @@ function logSocket(ws: WebSocket, request: IncomingMessage) {
     .trim()
   const address = logIdentifier(forwarded || request.socket.remoteAddress || '')
   log('link', 'socket', { socket, address, state: 'open' })
+  ws.send(
+    JSON.stringify({
+      type: 'hello',
+      socket,
+      version: buildInfo.version,
+      revision: buildInfo.revision,
+    }),
+  )
   ws.once('close', (code) => log('link', 'socket', { socket, address, state: 'close', code }))
+  return socket
 }
 /** Attaches a window to a channel of an authenticated socket. */
 function openWindowChannel(

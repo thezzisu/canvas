@@ -70,6 +70,8 @@ import { sourceConnectionKey, type Source } from './state.ts'
 import { openTerminal } from './runtimes.ts'
 import { GeometryController, type Size } from './geometry.ts'
 import { serverTime } from './server-time.ts'
+import { warn } from './log.ts'
+import { logIdentifier } from '../shared/log-line.ts'
 import type { WindowTransport } from './transport.ts'
 import { Events, type Subscribable } from './channels.ts'
 import { NotificationIntake } from './notification-intake.ts'
@@ -503,6 +505,12 @@ export class LiveTerminal {
   /** The view's channel before this one ends, and what it held passes to this one. */
   private supersede(previous: TerminalChannel, ws: TerminalChannel) {
     if (!this.clients.has(previous)) return
+    // The browser gave this channel up while the server still held it open.
+    warn('CANVAS_STALL', 'stall', {
+      ...previous.names,
+      view: logIdentifier(previous.view),
+      silent: previous.takenAt ? Date.now() - previous.takenAt : undefined,
+    })
     if (this.controller === previous) this.controller = ws
     if (this.downloadController === previous) this.downloadController = ws
     if (this.maximized?.owner === previous && ws.maximized) this.maximized.owner = ws
