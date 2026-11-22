@@ -300,6 +300,8 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
   if (request.signal?.aborted) aborted()
   try {
     await connect()
+    // The signal cancels only the opening: once open, the tunnel is shared until it is closed.
+    request.signal?.removeEventListener('abort', aborted)
     const tunnel = logIdentifier(request.sourceId)
     log('source', 'tunnel', { tunnel, state: 'open' })
     reconnecting = (async () => {

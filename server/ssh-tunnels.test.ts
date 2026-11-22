@@ -169,6 +169,22 @@ test('SSH socket forwarding shares an owner-only endpoint and reconnects without
   }
 })
 
+test('a caller that gives up later leaves the tunnel to those who share it', async () => {
+  const setup = await fixture()
+  try {
+    const first = new AbortController()
+    const tunnel = await ensureSocketTunnel({ ...setup.request, signal: first.signal })
+    assert.equal(await ensureSocketTunnel(setup.request), tunnel)
+    first.abort()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.equal(tunnel.alive(), true)
+    assert.equal(await echo(tunnel.sockets['herdr.sock']!, 'shared\n'), 'shared\n')
+    await closeSocketTunnels(setup.request.sourceId)
+  } finally {
+    await setup.close()
+  }
+})
+
 test('closing one source does not disconnect another source tunnel', async () => {
   const setup = await fixture()
   try {
