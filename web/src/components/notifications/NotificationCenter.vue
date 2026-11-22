@@ -103,6 +103,8 @@ function current() {
 function syncFocus() {
   void syncNotificationFocus(props.backendId, owner, props.focus, current)
 }
+// A page already in front records its focus for this backend now, not at its next change.
+onMounted(syncFocus)
 function interacting(event: CanvasNotification) {
   const focus = props.focus
   return (
