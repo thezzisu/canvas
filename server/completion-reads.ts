@@ -13,15 +13,17 @@ interface ReadRecord {
   completed: Record<string, number>
 }
 const kind = 'completion-read'
+/** What is known of one source's windows, over the connection it was learnt on. */
+interface Known {
+  connection: string
+  windows: Map<string, WindowMetadata>
+  /** The last full snapshot taken in, and the server generations seen to end before it. */
+  snapshot?: { owner: object; bootId: string; revision: number; retired: Set<string> }
+}
 
 /** One single-user Canvas owns these read watermarks; browser views only acknowledge them. */
 export class CompletionReads {
-  private snapshots = new Map<
-    string,
-    { owner: object; bootId: string; revision: number; retired: Set<string> }
-  >()
-  private connections = new Map<string, string>()
-  private windows = new Map<string, Map<string, WindowMetadata>>()
+  private known = new Map<string, Known>()
   /** The sources whose reads changed. */
   readonly changes = new Events<string>()
   constructor(private readonly store: Store) {
@@ -29,10 +31,20 @@ export class CompletionReads {
     store.once('close', () => {
       store.off('change', this.pruneSources)
       this.changes[Symbol.dispose]()
-      this.windows.clear()
-      this.connections.clear()
-      this.snapshots.clear()
+      this.known.clear()
     })
+  }
+  /** What is known of the source over its connection, which a new connection starts afresh. */
+  private knownOf(source: Source): Known {
+    const connection = sourceConnectionKey(source)
+    let known = this.known.get(source.id)
+    if (known?.connection !== connection)
+      this.known.set(source.id, (known = { connection, windows: new Map() }))
+    return known
+  }
+  private windowsOf(source: Source) {
+    const known = this.known.get(source.id)
+    return known?.connection === sourceConnectionKey(source) ? known.windows : undefined
   }
   private current(source: Source) {
     const value = this.store.get<Source>('source', source.id)
@@ -45,23 +57,17 @@ export class CompletionReads {
       : undefined
   }
   private pruneSources = () => {
-    for (const [id, connection] of this.connections) {
+    const connected = (id: string, connection: string) => {
       const source = this.store.get<Source>('source', id)
-      if (!source || sourceConnectionKey(source) !== connection) {
-        this.windows.delete(id)
-        this.connections.delete(id)
-        this.snapshots.delete(id)
-      }
+      return !!source && sourceConnectionKey(source) === connection
     }
-    for (const record of this.store.list<ReadRecord>(kind)) {
-      const source = this.store.get<Source>('source', record.id)
-      if (!source || sourceConnectionKey(source) !== record.connection) {
-        this.windows.delete(record.id)
+    for (const [id, known] of this.known)
+      if (!connected(id, known.connection)) this.known.delete(id)
+    for (const record of this.store.list<ReadRecord>(kind))
+      if (!connected(record.id, record.connection)) {
+        this.known.get(record.id)?.windows.clear()
         this.store.remove(kind, record.id)
       }
-    }
-    for (const sourceId of this.windows.keys())
-      if (!this.store.get('source', sourceId)) this.windows.delete(sourceId)
   }
   observeSnapshot(
     source: Source,
@@ -70,7 +76,8 @@ export class CompletionReads {
     owner: object,
   ) {
     if (!this.current(source)) return
-    const previous = this.snapshots.get(source.id)
+    const known = this.knownOf(source),
+      previous = known.snapshot
     if (
       previous?.retired.has(state.bootId) ||
       (previous?.owner === owner &&
@@ -81,11 +88,10 @@ export class CompletionReads {
     const retired = previous?.retired || new Set<string>()
     if (previous && previous.bootId !== state.bootId) retired.add(previous.bootId)
     if (retired.size > 8) retired.delete(retired.values().next().value!)
-    this.snapshots.set(source.id, { ...state, owner, retired })
+    known.snapshot = { ...state, owner, retired }
     for (const window of windows) this.observe(source, window)
     const present = new Set(windows.map((window) => window.id))
-    for (const id of this.windows.get(source.id)?.keys() || [])
-      if (!present.has(id)) this.removeWindow(source, id)
+    for (const id of known.windows.keys()) if (!present.has(id)) known.windows.delete(id)
     const record = this.record(source, state.bootId)
     if (record) {
       // Panes can move between windows; only a full source snapshot proves removal.
@@ -102,20 +108,16 @@ export class CompletionReads {
   }
   observe(source: Source, metadata: WindowMetadata): WindowMetadata {
     if (!this.current(source) || !metadata.bootId) return metadata
+    const { windows } = this.knownOf(source)
     if (metadata.readAuthority === 'native') {
-      this.connections.set(source.id, sourceConnectionKey(source))
-      const windows = this.windows.get(source.id) || new Map<string, WindowMetadata>()
       windows.set(metadata.id, metadata)
-      this.windows.set(source.id, windows)
       return metadata
     }
-    this.connections.set(source.id, sourceConnectionKey(source))
-    const previous = this.windows.get(source.id)
-    const boot = previous?.values().next().value?.bootId
-    if (boot && boot !== metadata.bootId) this.windows.delete(source.id)
+    // A server that started again knows none of the windows before.
+    const boot = windows.values().next().value?.bootId
+    if (boot && boot !== metadata.bootId) windows.clear()
     let record = this.record(source, metadata.bootId)
     if (!record && this.store.get(kind, source.id)) this.store.remove(kind, source.id)
-    const windows = this.windows.get(source.id) || new Map<string, WindowMetadata>()
     const old = windows.get(metadata.id)
     if (old?.bootId === metadata.bootId)
       metadata = {
@@ -145,7 +147,6 @@ export class CompletionReads {
     if (changed) this.store.put(kind, record!)
     metadata = this.project(source, metadata)
     windows.set(metadata.id, metadata)
-    this.windows.set(source.id, windows)
     return metadata
   }
   project(source: Source, metadata: WindowMetadata): WindowMetadata {
@@ -182,14 +183,14 @@ export class CompletionReads {
     paneId: string,
   ): { windowId: string; completion: CompletionToken } | undefined {
     if (!this.current(source)) return
-    for (const window of this.windows.get(source.id)?.values() || []) {
+    for (const window of this.windowsOf(source)?.values() || []) {
       const pane = window.panes.find((pane) => pane.id === paneId)
       if (pane?.completion) return { windowId: window.id, completion: pane.completion }
     }
   }
   acknowledge(source: Source, windowId: string, paneId: string, token: unknown): boolean {
     if (!this.current(source) || !isCompletionToken(token)) return false
-    const window = this.windows.get(source.id)?.get(windowId)
+    const window = this.windowsOf(source)?.get(windowId)
     if (window?.readAuthority === 'native') return false
     const pane = window?.panes.find((pane) => pane.id === paneId)
     if (!pane?.completion || !sameCompletion(pane.completion, token)) return false
@@ -208,29 +209,22 @@ export class CompletionReads {
     return true
   }
   removeWindow(source: Source, windowId: string) {
-    this.windows.get(source.id)?.delete(windowId)
+    this.windowsOf(source)?.delete(windowId)
   }
   disconnected(sourceId: string) {
-    this.windows.delete(sourceId)
-    this.connections.delete(sourceId)
-    this.snapshots.delete(sourceId)
+    this.known.delete(sourceId)
   }
   projectResources(source: Source, resource: SourceResource): SourceResource {
     if (source.runtime === 'hc') return resource
-    if (
-      resource.status !== 'online' ||
-      resource.error ||
-      !this.current(source) ||
-      this.connections.get(source.id) !== sourceConnectionKey(source)
-    )
+    const windows = this.windowsOf(source)
+    if (resource.status !== 'online' || resource.error || !this.current(source) || !windows)
       return resource
-    const windows = this.windows.get(source.id)
     return {
       ...resource,
       spaces: resource.spaces.map((space) => ({
         ...space,
         windows: space.windows.map((window) => {
-          const known = windows?.get(window.id)
+          const known = windows.get(window.id)
           if (!known) return window
           const panes = window.panes.map((pane) => {
             const native = known.panes.find(
