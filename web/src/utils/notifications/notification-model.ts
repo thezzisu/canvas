@@ -54,6 +54,20 @@ export function notificationPresent(
   )
 }
 
+/**
+ * Whether a shown notice still stands. An agent asking for attention does while its pane still
+ * asks; a completion, or a notice a program sent, does while its pane is there.
+ */
+export function notificationStands(
+  event: CanvasNotification,
+  resources: readonly SourceResource[],
+): boolean {
+  return (
+    notificationPresent(event, resources) &&
+    (event.kind !== 'attention' || notificationCurrent(event, resources))
+  )
+}
+
 export function attentionSummary(resources: readonly SourceResource[]) {
   const windows = new Map<string, 'attention' | 'done'>()
   for (const source of resources) {

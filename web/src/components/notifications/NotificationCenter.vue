@@ -15,7 +15,7 @@ import {
   notificationKey,
   notificationTarget,
   notificationCurrent,
-  notificationPresent,
+  notificationStands,
 } from '../../utils/notifications/notification-model'
 import {
   deliverNotificationEffects,
@@ -118,9 +118,9 @@ function noticeValid(notice: Notice) {
   )
 }
 function toastValid(notice: Notice) {
-  return notice.event.kind === 'done'
-    ? current() && !notice.dismissed && notificationPresent(notice.event, props.resources)
-    : noticeValid(notice)
+  return notice.event.kind === 'attention'
+    ? noticeValid(notice)
+    : current() && !notice.dismissed && notificationStands(notice.event, props.resources)
 }
 function acceptsToast(id: string | number) {
   const notice = [...active.values()].find((notice) => `${toastPrefix}${notice.event.id}` === id)
@@ -235,10 +235,7 @@ function show(event: CanvasNotification, focus?: PaneFocus) {
 function reconcile() {
   clearTimeout(timer)
   for (const [key, notice] of active) {
-    if (
-      !notificationPresent(notice.event, props.resources) ||
-      (notice.event.kind !== 'done' && !notificationCurrent(notice.event, props.resources))
-    ) {
+    if (!notificationStands(notice.event, props.resources)) {
       toast.remove(`${toastPrefix}${notice.event.id}`)
       active.delete(key)
     } else if (!toastValid(notice)) {

@@ -7,6 +7,7 @@ import {
   notificationCurrent,
   notificationKey,
   notificationPresent,
+  notificationStands,
   notificationTarget,
 } from './notification-model.ts'
 import { mergeLiveResources } from '../workspace/live-resources.ts'
@@ -164,4 +165,23 @@ test('favicon uses native urgency across panes, excludes offline sources and res
   assert.equal(faviconStatus([{ ...resources[0]!, status: 'offline' }]), undefined)
   assert.equal(faviconStatus([{ ...resources[0]!, error: 'offline' }]), undefined)
   assert.equal(faviconStatus([]), undefined)
+})
+
+test("a program's notice stands while its window does; an agent's attention while it still asks", () => {
+  const program: CanvasNotification = {
+    id: 'program',
+    sourceId: 'source',
+    kind: 'custom',
+    origin: 'program',
+    title: 'Window',
+    body: 'Build finished',
+    windowId: 'window',
+    paneId: 'pane1',
+  }
+  // No window status is ever "custom"; the notice is about the program, not a status.
+  assert.equal(notificationStands(program, resources), true)
+  assert.equal(notificationStands({ ...program, paneId: 'closed' }, resources), false)
+  const attention = { ...program, kind: 'attention' as const, origin: undefined }
+  assert.equal(notificationStands(attention, resources), true)
+  assert.equal(notificationStands({ ...attention, paneId: 'pane2' }, resources), false)
 })
