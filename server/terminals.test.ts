@@ -2168,6 +2168,31 @@ test('a maximized view keeps the window at its size over a new channel, without 
   }
 })
 
+test('over a new channel, a maximized view asking under a token of its own keeps its lease', async () => {
+  const f = fakeWindow()
+  f.show('screen')
+  const old = new Client(),
+    peer = new Client()
+  f.terminal.join(old.socket)
+  f.terminal.join(peer.socket)
+  old.command({ type: 'focus-resize-begin', token: 'first', cols: 30, rows: 9 })
+  await f.terminal.geometry.drain()
+  f.show('screen', 30, 9)
+  const seen = presentation(peer)!
+  const next = successor(old, true)
+  f.terminal.join(next.socket)
+  next.command({ type: 'focus-resize-begin', token: 'second', cols: 30, rows: 9 })
+  await f.terminal.geometry.drain()
+  assert.equal(presentation(next)?.token, 'second')
+  assert.equal(presentation(next)?.lease, seen.lease, 'not taken again')
+  assert.equal(presentation(peer)?.lease, seen.lease, 'peers are told of nothing new')
+  // A peer that cancels what it saw, under the token it saw, still ends it.
+  peer.command({ type: 'presentation-cancel', token: seen.token, lease: seen.lease })
+  await f.terminal.geometry.drain()
+  assert.equal(f.sizes.length, 2, 'the cancel restores the shared size')
+  await f.terminal.close()
+})
+
 test('a view no longer maximized gives the size back when its new channel joins', async () => {
   const f = fakeWindow()
   f.show('screen')

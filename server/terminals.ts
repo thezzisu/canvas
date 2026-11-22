@@ -136,6 +136,10 @@ export class LiveTerminal {
     token: string
     lease: number
     releasing?: boolean
+    /** The token it had before a new channel of its view took it over under one of its own. */
+    handedFrom?: string
+    /** It passed to a new channel of its view, whose first request renames it. */
+    handedOver?: boolean
   }
   private presentationRevision = 0
   private focusedPaneId?: string
@@ -513,7 +517,10 @@ export class LiveTerminal {
     })
     if (this.controller === previous) this.controller = ws
     if (this.downloadController === previous) this.downloadController = ws
-    if (this.maximized?.owner === previous && ws.maximized) this.maximized.owner = ws
+    if (this.maximized?.owner === previous && ws.maximized) {
+      this.maximized.owner = ws
+      this.maximized.handedOver = true
+    }
     previous.close()
   }
   private remember(view: string, record: ViewRecord) {
@@ -653,7 +660,14 @@ export class LiveTerminal {
           typeof msg.token === 'string' &&
           msg.token.length <= 100
         ) {
-          this.maximize(ws, msg.token)
+          const handed = this.maximized
+          if (handed?.handedOver && handed.owner === ws && !handed.releasing) {
+            // The lease passed to this channel: the browser names it anew, and nothing else changes.
+            handed.handedOver = false
+            handed.handedFrom = handed.token
+            handed.token = msg.token
+            if (this.views.get(ws)!.shown) this.presentation(ws)
+          } else this.maximize(ws, msg.token)
           this.geometry.begin(record, msg.token, size)
           return
         }
@@ -672,7 +686,11 @@ export class LiveTerminal {
           Number.isSafeInteger(msg.lease)
         ) {
           const current = this.maximized
-          if (current && current.token === msg.token && current.lease === msg.lease)
+          if (
+            current &&
+            current.lease === msg.lease &&
+            (current.token === msg.token || current.handedFrom === msg.token)
+          )
             void this.releaseMaximized(current.owner, current.token)
           else this.presentation(ws)
           return
