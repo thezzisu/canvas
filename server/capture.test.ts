@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import test, { type TestContext } from 'node:test'
-import { once } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import { createServer, request, type IncomingHttpHeaders, type Server } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { WebSocket, WebSocketServer } from 'ws'
-import { CaptureError, CaptureService } from './capture.ts'
+import { CaptureError, CaptureService, serveCaptureRequest } from './capture.ts'
 import { normalizeCapturePublicBase } from './capture-address.ts'
 import { Store, type Source } from './state.ts'
 
@@ -734,4 +734,91 @@ test('capture failures preserve their specific public category', async (t) => {
   )
   await failing.close()
   assert.throws(() => failing.prepareCapture(f.source, options), reason('capture-stopping'))
+})
+
+test('a capture request is prepared, started by one ready line, and refused otherwise', async () => {
+  class Helper extends EventEmitter {
+    written: Record<string, unknown>[] = []
+    destroyed = false
+    ended = false
+    write(line: string) {
+      this.written.push(JSON.parse(line))
+      return true
+    }
+    end(line?: string) {
+      if (line) this.write(line)
+      this.ended = true
+    }
+    destroy() {
+      this.destroyed = true
+    }
+    setTimeout() {}
+    resume() {}
+    say(text: string) {
+      this.emit('data', Buffer.from(text))
+    }
+  }
+  const leases: { closed: number; ready?: string }[] = []
+  const captures = {
+    prepareCapture(_source: unknown, options: { port: number }) {
+      if (options.port === 2) throw new CaptureError('capture-limit', 'Too many')
+      const lease = { closed: 0, ready: undefined as string | undefined }
+      leases.push(lease)
+      return {
+        id: 'lease',
+        publicUrl: 'https://canvas.example/api/capture/lease/',
+        ready: async (bootstrap?: string) => void (lease.ready = bootstrap ?? 'none'),
+        close: () => void lease.closed++,
+      }
+    },
+  }
+  const context = {
+    source: { id: 's', name: 'S', runtime: 'herdr', transport: 'local' } as Source,
+    windowId: 'w',
+    paneId: 'p',
+    session: 'session',
+    publicBase: 'https://canvas.example/api/',
+  }
+  const serve = (header: Record<string, unknown>, overrides: { publicBase?: string } = {}) => {
+    const helper = new Helper()
+    serveCaptureRequest(captures as never, helper as never, header, { ...context, ...overrides })
+    return helper
+  }
+  const refused = (helper: Helper) => [helper.ended, helper.written.at(-1)?.reason]
+  assert.deepEqual(refused(serve({ port: 80, title: 'App' }, { publicBase: undefined })), [
+    true,
+    'capture-address-unavailable',
+  ])
+  assert.deepEqual(refused(serve({ port: 0, title: 'App' })), [true, 'capture-invalid-request'])
+  assert.deepEqual(refused(serve({ port: 80, title: 'x'.repeat(121) })), [
+    true,
+    'capture-invalid-request',
+  ])
+  assert.deepEqual(refused(serve({ port: 2, title: 'App' })), [true, 'capture-limit'])
+  assert.equal(leases.length, 0)
+
+  const helper = serve({ port: 80, title: 'App' })
+  assert.deepEqual(helper.written, [
+    {
+      ok: true,
+      state: 'prepared',
+      id: 'lease',
+      publicUrl: 'https://canvas.example/api/capture/lease/',
+    },
+  ])
+  helper.say('{"action":"ready","bootstrap')
+  helper.say('Url":"https://app/login"}\n')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(leases[0]!.ready, 'https://app/login')
+  assert.deepEqual(helper.written.at(-1), { ok: true, state: 'ready' })
+  helper.say('{"action":"ready"}\n')
+  assert.equal(helper.destroyed, true, 'one ready only')
+  helper.emit('close')
+  assert.equal(leases[0]!.closed, 1, 'the capture ends with the socket')
+
+  for (const line of ['not json\n', '{"action":"ready","port":1}\n', 'x'.repeat(33 * 1024)]) {
+    const bad = serve({ port: 80, title: 'App' })
+    bad.say(line)
+    assert.equal(bad.destroyed, true, line.slice(0, 30))
+  }
 })

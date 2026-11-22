@@ -5,6 +5,7 @@ import {
   type OutgoingHttpHeaders,
   type ServerResponse,
 } from 'node:http'
+import type { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import { prepareLoopback } from './source-connections.ts'
 import { sourceConnectionKey, type Source, type Store } from './state.ts'
@@ -614,4 +615,94 @@ export class CaptureService {
       .catch(cancel)
     return true
   }
+}
+
+/** What a terminal's capture request is bound to. */
+export interface CaptureRequestContext {
+  source: Source
+  windowId: string
+  paneId: string
+  session: string
+  /** The browser API base of the channel that serves the window; none behind no known base. */
+  publicBase?: string
+}
+const MAX_CAPTURE_LINE = 32 * 1024
+
+/**
+ * Serves one `canvas capture` over the helper's socket, as newline-delimited JSON: the header
+ * prepares a capture and is answered `prepared`; the helper's one `ready` line starts it and is
+ * answered `ready`. Any refusal is `{ ok: false, reason }` and ends the socket; the capture ends
+ * with it.
+ */
+export function serveCaptureRequest(
+  captures: CaptureService,
+  socket: Socket,
+  header: Record<string, unknown>,
+  context: CaptureRequestContext,
+): void {
+  const reject = (reason: string) => socket.end(JSON.stringify({ ok: false, reason }) + '\n')
+  const send = (message: object) => socket.write(JSON.stringify(message) + '\n')
+  const { publicBase } = context
+  if (!publicBase) return void reject('capture-address-unavailable')
+  const port = Number(header.port)
+  if (
+    !Number.isInteger(header.port) ||
+    port < 1 ||
+    port > 65535 ||
+    typeof header.title !== 'string' ||
+    header.title.length > 120
+  )
+    return void reject('capture-invalid-request')
+  let lease: CaptureLease
+  try {
+    lease = captures.prepareCapture(context.source, {
+      windowId: context.windowId,
+      paneId: context.paneId,
+      session: context.session,
+      publicBase,
+      port,
+      title: header.title,
+      ...(header.preview === 'static' ? { preview: 'static' } : {}),
+      onStop: () => {
+        if (!socket.destroyed) send({ action: 'stop' })
+      },
+      onEnded: () => socket.destroy(),
+    })
+  } catch (error) {
+    return void reject(error instanceof CaptureError ? error.reason : 'capture-failed')
+  }
+  socket.once('close', () => lease.close())
+  socket.once('end', () => {
+    lease.close()
+    socket.end()
+  })
+  socket.setTimeout(0)
+  let pending = Buffer.alloc(0),
+    ready = false
+  socket.on('data', (chunk: Buffer) => {
+    pending = Buffer.concat([pending, chunk])
+    const newline = pending.indexOf(10)
+    if (pending.length > MAX_CAPTURE_LINE) return void socket.destroy()
+    if (newline < 0) return
+    let value
+    try {
+      value = JSON.parse(pending.subarray(0, newline).toString('utf8'))
+    } catch {
+      return void socket.destroy()
+    }
+    pending = pending.subarray(newline + 1)
+    // One `ready`, alone, with nothing after it.
+    if (ready || value?.action !== 'ready' || pending.length || value.port !== undefined)
+      return void socket.destroy()
+    ready = true
+    lease
+      .ready(typeof value.bootstrapUrl === 'string' ? value.bootstrapUrl : undefined)
+      .then(() => {
+        if (socket.destroyed) lease.close()
+        else send({ ok: true, state: 'ready' })
+      })
+      .catch((error) => reject(error instanceof CaptureError ? error.reason : 'capture-failed'))
+  })
+  send({ ok: true, state: 'prepared', id: lease.id, publicUrl: lease.publicUrl })
+  socket.resume()
 }

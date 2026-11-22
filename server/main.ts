@@ -30,7 +30,7 @@ import { AssetStore } from './assets.ts'
 import { UploadService } from './uploads.ts'
 import { WindowContentService } from './window-content.ts'
 import { UrlForwardService } from './url-forward.ts'
-import { CaptureError, CaptureService, type CaptureLease } from './capture.ts'
+import { CaptureService, serveCaptureRequest } from './capture.ts'
 import { captureAddress } from './capture-address.ts'
 import { SourcePreviewService } from './source-preview.ts'
 import { captureToolbarHeight } from '../shared/capture.ts'
@@ -77,92 +77,18 @@ store.on('change', (normalGeometryChanged: boolean) => {
 const uploads = new UploadService(terminals)
 const helperBytes = readFileSync(new URL('../cli/canvas', import.meta.url))
 const sourcePreviews = new SourcePreviewService(store, captures, helperBytes.toString('utf8'))
+/** The session each terminal socket signed in with, and what each of its channels serves. */
 const socketSessions = new WeakMap<import('ws').WebSocket, string>()
-const channelSessions = new WeakMap<TerminalChannel, string>()
-const channelCaptureBases = new WeakMap<TerminalChannel, string>()
+const channels = new WeakMap<TerminalChannel, { session: string; captureBase?: string }>()
 const downloads = new OpenDownloadService({
-  capture: async (source, windowId, paneId, header, socket, recipient) => {
-    const publicBase = channelCaptureBases.get(recipient.socket)
-    const reject = (reason: string) => socket.end(JSON.stringify({ ok: false, reason }) + '\n')
-    if (!publicBase) {
-      reject('capture-address-unavailable')
-      return
-    }
-    if (
-      !Number.isInteger(header.port) ||
-      Number(header.port) < 1 ||
-      Number(header.port) > 65535 ||
-      typeof header.title !== 'string' ||
-      header.title.length > 120
-    ) {
-      reject('capture-invalid-request')
-      return
-    }
-    let lease: CaptureLease
-    try {
-      lease = captures.prepareCapture(source, {
-        windowId,
-        paneId,
-        session: recipient.sessionId,
-        publicBase,
-        port: Number(header.port),
-        title: header.title,
-        ...(header.preview === 'static' ? { preview: 'static' } : {}),
-        onStop: () => {
-          if (!socket.destroyed) socket.write(JSON.stringify({ action: 'stop' }) + '\n')
-        },
-        onEnded: () => socket.destroy(),
-      })
-    } catch (error) {
-      reject(error instanceof CaptureError ? error.reason : 'capture-failed')
-      return
-    }
-    socket.once('close', () => lease.close())
-    socket.once('end', () => {
-      lease.close()
-      socket.end()
-    })
-    socket.setTimeout(0)
-    let pending = Buffer.alloc(0),
-      ready = false
-    socket.on('data', (chunk) => {
-      pending = Buffer.concat([pending, Buffer.from(chunk)])
-      if (pending.length > 32 * 1024) {
-        socket.destroy()
-        return
-      }
-      const newline = pending.indexOf(10)
-      if (newline < 0) return
-      try {
-        const value = JSON.parse(pending.subarray(0, newline).toString('utf8'))
-        pending = pending.subarray(newline + 1)
-        if (ready || value.action !== 'ready' || pending.length || value.port !== undefined) {
-          socket.destroy()
-          return
-        }
-        ready = true
-        void lease
-          .ready(typeof value.bootstrapUrl === 'string' ? value.bootstrapUrl : undefined)
-          .then(() => {
-            if (socket.destroyed) {
-              lease.close()
-              return
-            }
-            socket.write(JSON.stringify({ ok: true, state: 'ready' }) + '\n')
-          })
-          .catch((error) => {
-            reject(error instanceof CaptureError ? error.reason : 'capture-failed')
-          })
-      } catch {
-        socket.destroy()
-      }
-    })
-    socket.write(
-      JSON.stringify({ ok: true, state: 'prepared', id: lease.id, publicUrl: lease.publicUrl }) +
-        '\n',
-    )
-    socket.resume()
-  },
+  capture: async (source, windowId, paneId, header, socket, recipient) =>
+    serveCaptureRequest(captures, socket, header, {
+      source,
+      windowId,
+      paneId,
+      session: recipient.sessionId,
+      publicBase: channels.get(recipient.socket)?.captureBase,
+    }),
   openUrl: (source, url, session) => urlForwards.open(source, url, session),
   directoryAuthority: editorAuthority,
   createUpload: (metadata) => assets.begin(metadata),
@@ -174,7 +100,7 @@ const downloads = new OpenDownloadService({
   recipient: async (sourceId, windowId) => {
     const recipient = await terminals.downloadRecipient(sourceId, windowId)
     const socket = recipient?.socket
-    const sessionId = socket && channelSessions.get(socket)
+    const sessionId = socket && channels.get(socket)?.session
     return socket && sessionId && store.hasSession(sessionId)
       ? {
           socket,
@@ -246,22 +172,19 @@ app.use('*', serveCanvasStatic(staticDir))
 const requestListener = getRequestListener(app.fetch)
 const wss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 })
 let stopping = false
+/** Ends a socket whose session ended; true if it did. */
+function endExpired(ws: WebSocket) {
+  const session = socketSessions.get(ws)
+  if (session === undefined || store.hasSession(session)) return false
+  ws.close(1008, 'Session expired')
+  ws.terminate()
+  return true
+}
 store.on('sessions', () => {
-  for (const ws of wss.clients)
-    if (socketSessions.has(ws) && !store.hasSession(socketSessions.get(ws)!)) {
-      ws.close(1008, 'Session expired')
-      ws.terminate()
-    }
+  for (const ws of wss.clients) endExpired(ws)
 })
 const heartbeat = setInterval(() => {
-  for (const ws of wss.clients) {
-    if (socketSessions.has(ws) && !store.hasSession(socketSessions.get(ws)!)) {
-      ws.close(1008, 'Session expired')
-      ws.terminate()
-      continue
-    }
-    if (ws.readyState === 1) ws.ping()
-  }
+  for (const ws of wss.clients) if (!endExpired(ws) && ws.readyState === 1) ws.ping()
 }, 30_000)
 heartbeat.unref()
 const upgrade = (
@@ -356,8 +279,7 @@ function openWindowChannel(
     const now = store.get<Source>('source', sourceId)
     return !!now && sourceConnectionKey(now) === sourceConnectionKey(source)
   }
-  channelSessions.set(channel, session)
-  if (captureBase) channelCaptureBases.set(channel, captureBase)
+  channels.set(channel, { session, captureBase })
   channel.once('close', () => uploads.disconnected(channel))
   channel.on('message', (message) => {
     if (!store.hasSession(session)) return
