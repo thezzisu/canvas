@@ -24,7 +24,13 @@ import {
 
 /** This view may act on the window: it is live, shown and not behind another maximized view. */
 export function operable(session: Session) {
-  return interactive(session) && online(session) && !maximizedElsewhere(session)
+  return (
+    interactive(session) &&
+    online(session) &&
+    !maximizedElsewhere(session) &&
+    // Keys typed into a link that may be stuck would land after a wait the user cannot see.
+    !session.state.linkDoubt
+  )
 }
 /** The wheel over this terminal scrolls it, rather than the canvas around it. */
 export function ownsWheel(session: Session, event: WheelEvent) {

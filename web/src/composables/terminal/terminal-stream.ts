@@ -114,6 +114,7 @@ export function disconnect(session: Session) {
   setState(session, {
     ...session.state,
     readOnly: true,
+    linkDoubt: false,
     presentation: undefined,
     presentationCancelling: false,
     focusResize: undefined,
@@ -453,6 +454,12 @@ export async function connect(session: Session, probe: boolean) {
       watching: () =>
         !!session.reportedVisible &&
         !!session.metadata?.panes.some((pane) => pane.status === 'working'),
+      busy: () => session.uploads.hasPending,
+      doubted: (on) => {
+        if (session.connection !== connection || session.state.linkDoubt === on) return
+        log('channel', { w: session.logId, state: on ? 'doubt' : 'clear' })
+        setState(session, { ...session.state, linkDoubt: on })
+      },
     },
   )
   session.connection = connection

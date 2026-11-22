@@ -6,7 +6,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { serveTerminalChannels, type TerminalChannel } from './terminal-channels.ts'
+import { serveTerminalChannels, TerminalSocket, type TerminalChannel } from './terminal-channels.ts'
 import { CellMirror } from '../shared/cell-wire.ts'
 import { gridText, mirrorText } from './test-grid.ts'
 import { terminalInputChunks } from '../web/src/utils/terminal/terminal-input-chunks.ts'
@@ -1920,7 +1920,9 @@ test('a window that redraws without pause keeps one message on the shared socket
     windows = [busy, quiet]
   busy.show('zero')
   quiet.show('zero')
-  serveTerminalChannels(socket as never, (channel) => windows[channel.id]!.terminal.join(channel))
+  serveTerminalChannels(new TerminalSocket(socket as never), (channel) =>
+    windows[channel.id]!.terminal.join(channel),
+  )
   for (const channel of [0, 1])
     socket.emit(
       'message',

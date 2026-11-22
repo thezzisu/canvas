@@ -5,12 +5,14 @@
 //                         windowId }
 //                       { type: 'close', channel }
 //                       { channel, seq, ...message }, a window message (terminals.ts)
+//                       any other message, such as { type: 'ping' }, only counts as received
 //   server to browser   { type: 'hello', socket, version, revision }, once after signing in
 //                       { channel, ack, ...message }
-//                       { type: 'ack', channel, ack }, when nothing else carried it in time
+//                       { type: 'ack' }, when nothing else went out in time
 //                       { type: 'close', channel, ack }, the server ended the channel
-//                       binary: the channel and the ack as unsigned LEB128 integers, then a
-//                       cell message
+//                       binary: unsigned LEB128 integers, the channel, the ack, then `got`,
+//                       `since` and `quiet` (and `sentAt` when timed), then a cell message
+//                       every JSON message also carries `got`, `since` and `quiet`
 //
 // The browser picks the channel number, a non-negative integer it has not used on this socket.
 // A channel is what a window's own socket would be: it opens with `status`, and its end, from
@@ -25,11 +27,18 @@
 // - A message is taken when it arrives, whether it is then applied or refused, so a program
 //   that is slow to answer never reads as a link that lost the message. One that is not newer
 //   than the last taken is dropped.
-// - An `open` with `timed` is a browser keeping its diagnostic log: JSON then carries `sentAt`
-//   and `held`, and cells carry both after the ack. They are the server's wall clock and how
-//   long ago it took the last message, which together give the clock offset and round trip.
-// - `ack` is the last taken, so it is cumulative. It rides on whatever the channel sends next,
-//   or goes alone after ACK_DELAY_MS. An ack is never acknowledged.
+// - `ack` is the view's last message taken, so it is cumulative. It rides on the channel's
+//   messages and lets the browser forget input it would otherwise send again (`resume`).
+//
+// Liveness (web/src/utils/terminal/link-watch.ts): everything sent on the socket says what the
+// server had received on it when it was sent. `got` counts its messages, the authentication
+// first; `since` is how many milliseconds ago the last of them arrived, and `quiet` how many ago
+// any byte did. The browser takes round trips from them, and tells bytes queued before its
+// message could have arrived from bytes sent after. A `{ type: 'ack' }` goes alone when nothing
+// else went out within ACK_DELAY_MS of a message arriving. Nothing acknowledges it.
+//
+// An `open` with `timed` is a browser keeping its diagnostic log: its channel's messages also
+// carry `sentAt`, the server's wall clock, which with `since` gives the clock offset.
 import { EventEmitter } from 'node:events'
 import type { WebSocket } from 'ws'
 import { log, logging } from './log.ts'
@@ -39,7 +48,7 @@ import type { TerminalTarget } from './terminals.ts'
 /** No tab shows more windows at once than the server keeps open. */
 const MAX_CHANNELS = 128
 const MAX_CHANNEL = 0x7fffffff
-/** How long an ack waits for a message to ride on. */
+/** How long the server waits for a message that would carry what it received, before an ack. */
 export const ACK_DELAY_MS = 100
 const VIEW = /^[A-Za-z0-9_-]{8,64}$/u
 
@@ -53,6 +62,70 @@ function pushInteger(bytes: number[], value: number) {
   bytes.push(rest)
 }
 
+/** What the server has received on the socket, as each message it sends there says it. */
+interface Stamp {
+  got: number
+  since: number
+  quiet: number
+}
+/**
+ * One browser's terminal socket, which stamps all it sends with what it has received. It must
+ * be made before anything else listens to the socket, so that it counts the authentication.
+ */
+export class TerminalSocket {
+  private got = 0
+  private messageAt = performance.now()
+  private byteAt = this.messageAt
+  private owedAck?: ReturnType<typeof setTimeout>
+  constructor(
+    readonly ws: WebSocket,
+    /** The stream under the socket, whose bytes say that the browser's way up moves. */
+    stream?: { on(event: 'data', listener: () => void): unknown },
+  ) {
+    ws.on('message', () => {
+      this.got++
+      this.messageAt = performance.now()
+      this.owedAck ??= setTimeout(() => this.send({ type: 'ack' }), ACK_DELAY_MS)
+      this.owedAck.unref()
+    })
+    stream?.on('data', () => (this.byteAt = performance.now()))
+    ws.once('close', () => this.settleAck())
+  }
+  get open() {
+    return this.ws.readyState === 1
+  }
+  private stamp(): Stamp {
+    const now = performance.now()
+    return {
+      got: this.got,
+      since: Math.round(now - this.messageAt),
+      // The bytes of the message arrive before it does.
+      quiet: Math.round(now - Math.max(this.byteAt, this.messageAt)),
+    }
+  }
+  private settleAck() {
+    clearTimeout(this.owedAck)
+    this.owedAck = undefined
+  }
+  /** Sends a JSON message with the stamp. */
+  send(message: object, sent?: () => void) {
+    this.settleAck()
+    if (this.open) this.ws.send(JSON.stringify({ ...message, ...this.stamp() }), sent)
+  }
+  /** Sends a cell message: `prefix` integers, the stamp, `suffix` integers, then the cells. */
+  sendCells(prefix: number[], suffix: number[], cells: Uint8Array, sent?: () => void) {
+    this.settleAck()
+    if (!this.open) return
+    const { got, since, quiet } = this.stamp()
+    const head: number[] = []
+    for (const value of [...prefix, got, since, quiet, ...suffix]) pushInteger(head, value)
+    const bytes = new Uint8Array(head.length + cells.length)
+    bytes.set(head)
+    bytes.set(cells, head.length)
+    this.ws.send(bytes, sent)
+  }
+}
+
 /** `readyState` is 1 while open and 3 after, as a socket's; `message` and `close` are emitted. */
 export class TerminalChannel extends EventEmitter<{
   message: [message: Record<string, unknown>]
@@ -61,14 +134,13 @@ export class TerminalChannel extends EventEmitter<{
   readyState: 1 | 3 = 1
   /** The view's last message taken; it is cumulative. */
   taken = 0
-  private owedAck?: ReturnType<typeof setTimeout>
   /** When it last took a message, on the wall clock. */
   takenAt = 0
   /** Who ended it, for the log. */
   endedBy?: Extract<LogWord, 'browser' | 'server' | 'superseded' | 'socket'>
   private acked = 0
   constructor(
-    private readonly socket: WebSocket,
+    private readonly socket: TerminalSocket,
     readonly id: number,
     /** The page's view this channel carries, and which of its channels this is. */
     readonly view: string,
@@ -85,7 +157,6 @@ export class TerminalChannel extends EventEmitter<{
   /** Takes a numbered message; false for one that was taken before or has no number. */
   take(seq: unknown): boolean {
     if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 1) return false
-    this.owedAck ??= setTimeout(() => this.send({ type: 'ack' }), ACK_DELAY_MS).unref()
     if (seq <= this.taken) return false
     this.taken = seq
     this.takenAt = Date.now()
@@ -93,43 +164,29 @@ export class TerminalChannel extends EventEmitter<{
   }
   /** `sent` runs once the message has left for the network. */
   send(message: object | Uint8Array, sent?: () => void) {
-    this.settleAck()
-    if (this.readyState !== 1 || this.socket.readyState !== 1) return
+    if (this.readyState !== 1) return
     if (this.taken !== this.acked) {
       this.acked = this.taken
       log('link', 'ack', { ...this.names, channel: this.id, seq: this.taken })
     }
-    const sentAt = this.timed ? Date.now() : 0
-    const held = this.takenAt ? Math.max(0, sentAt - this.takenAt) : 0
-    if (!(message instanceof Uint8Array)) {
-      const times = this.timed ? { sentAt, held } : {}
+    const timed = this.timed ? [Date.now()] : []
+    if (message instanceof Uint8Array)
+      this.socket.sendCells([this.id, this.taken], timed, message, sent)
+    else
       this.socket.send(
-        JSON.stringify({ ...message, ...times, channel: this.id, ack: this.taken }),
+        {
+          ...message,
+          ...(this.timed ? { sentAt: timed[0] } : {}),
+          channel: this.id,
+          ack: this.taken,
+        },
         sent,
       )
-      return
-    }
-    const prefix: number[] = []
-    pushInteger(prefix, this.id)
-    pushInteger(prefix, this.taken)
-    if (this.timed) {
-      pushInteger(prefix, sentAt)
-      pushInteger(prefix, held)
-    }
-    const bytes = new Uint8Array(prefix.length + message.length)
-    bytes.set(prefix)
-    bytes.set(message, prefix.length)
-    this.socket.send(bytes, sent)
-  }
-  private settleAck() {
-    clearTimeout(this.owedAck)
-    this.owedAck = undefined
   }
   /** The server ends it, or a later channel of its view replaces it. */
   close(reason: 'server' | 'superseded' = 'server') {
     if (this.readyState !== 1) return
-    if (this.socket.readyState === 1)
-      this.socket.send(JSON.stringify({ type: 'close', channel: this.id, ack: this.taken }))
+    this.socket.send({ type: 'close', channel: this.id, ack: this.taken })
     this.ended(reason)
   }
   /** The browser, or the socket, ended it. */
@@ -137,19 +194,18 @@ export class TerminalChannel extends EventEmitter<{
     if (this.readyState !== 1) return
     this.endedBy = by
     this.readyState = 3
-    this.settleAck()
     this.emit('close')
   }
 }
 
 /** Runs the channels of an authenticated socket; `open` attaches a window to a new one. */
 export function serveTerminalChannels(
-  socket: WebSocket,
+  socket: TerminalSocket,
   open: (channel: TerminalChannel, target: TerminalTarget) => void,
   socketName = logIdentifier(''),
 ) {
   const channels = new Map<number, TerminalChannel>()
-  socket.on('message', (bytes, binary) => {
+  socket.ws.on('message', (bytes, binary) => {
     if (binary) return
     let message: Record<string, unknown>
     try {
@@ -193,7 +249,7 @@ export function serveTerminalChannels(
         !Number.isSafeInteger(attempt) ||
         attempt < 1
       ) {
-        socket.send(JSON.stringify({ type: 'close', channel: id, ack: 0 }))
+        socket.send({ type: 'close', channel: id, ack: 0 })
         return
       }
       const names = { socket: socketName, w: logWindow({ sourceId, windowId }) }
@@ -215,7 +271,7 @@ export function serveTerminalChannels(
       open(opened, { sourceId, spaceId, windowId })
     }
   })
-  socket.once('close', () => {
+  socket.ws.once('close', () => {
     for (const channel of [...channels.values()]) channel.ended('socket')
   })
 }

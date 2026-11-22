@@ -267,7 +267,8 @@ const loading = computed(
     keepTerminal.value &&
     !maximizedElsewhere.value &&
     (status.value.status === 'connecting' ||
-      (status.value.status === 'connected' && firstFrame.value)),
+      // The link may be stuck: the screen stays, under the notice, and takes no input.
+      (status.value.status === 'connected' && (firstFrame.value || !!status.value.linkDoubt))),
 )
 watch(loading, (on) => log('loading', { w: logWindow(props.data), on, opaque: firstFrame.value }))
 const resizeState = computed(() =>
@@ -1147,7 +1148,9 @@ async function resized(event: { params: { width: number; height: number; x: numb
             />{{
               status.retryAttempt
                 ? t('terminal.connection.reconnecting', { attempt: status.retryAttempt })
-                : t('common.loading')
+                : status.linkDoubt
+                  ? t('terminal.connection.interrupted')
+                  : t('common.loading')
             }}</span
           >
         </div>

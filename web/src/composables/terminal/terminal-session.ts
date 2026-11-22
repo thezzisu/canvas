@@ -46,6 +46,8 @@ export type TerminalStatus = {
   keyboardDeck?: boolean
   keyboardComposer?: boolean
   retryAttempt?: number
+  /** The link may be stuck: the card says so and takes no input until it is clear. */
+  linkDoubt?: boolean
 }
 /** The panes of a painted screen, with what each has completed. */
 export interface CompletionFrame {
@@ -197,6 +199,7 @@ const logged = (state: TerminalStatus) => ({
   retry: state.retryAttempt,
   ready: state.screenReady,
   readOnly: state.readOnly,
+  doubt: state.linkDoubt,
   maximized: state.presentation?.maximized,
   owned: state.presentation?.owned,
   sizeOwned: state.focusResize?.owned,

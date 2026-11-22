@@ -3,14 +3,53 @@ import assert from 'node:assert/strict'
 import { EventEmitter, once } from 'node:events'
 import { WebSocket, WebSocketServer } from 'ws'
 import { authenticateWebSocket } from './websocket-auth.ts'
-import { ACK_DELAY_MS, serveTerminalChannels, type TerminalChannel } from './terminal-channels.ts'
+import { setTimeout as sleep } from 'node:timers/promises'
+import {
+  ACK_DELAY_MS,
+  serveTerminalChannels,
+  TerminalSocket,
+  type TerminalChannel,
+} from './terminal-channels.ts'
 import type { TerminalTarget } from './terminals.ts'
 
+/** Reads `count` unsigned LEB128 integers, then returns them with the bytes after. */
+function integers(bytes: Uint8Array, count: number) {
+  const values: number[] = []
+  let at = 0
+  while (values.length < count) {
+    let value = 0
+    for (let shift = 0; ; shift++) {
+      const byte = bytes[at++]!
+      value += (byte & 0x7f) * 2 ** (7 * shift)
+      if (byte < 0x80) break
+    }
+    values.push(value)
+  }
+  return { values, rest: [...bytes.subarray(at)] }
+}
+type Stamp = { got: number; since: number; quiet: number }
+/** Splits what the server stamps on a message from the message. */
+function unstamp(data: string | Uint8Array): {
+  message: Record<string, unknown> | number[]
+  stamp: Stamp
+} {
+  if (typeof data === 'string') {
+    const { got, since, quiet, ...message } = JSON.parse(data)
+    return { message, stamp: { got, since, quiet } }
+  }
+  // The channel and the ack, then the stamp.
+  const { values, rest } = integers(data, 5)
+  const [channel, ack, got, since, quiet] = values as [number, number, number, number, number]
+  return { message: [channel, ack, ...rest], stamp: { got, since, quiet } }
+}
 class FakeSocket extends EventEmitter {
   readyState = 1
   sent: (Record<string, unknown> | number[])[] = []
+  stamps: Stamp[] = []
   send(data: string | Uint8Array) {
-    this.sent.push(typeof data === 'string' ? JSON.parse(data) : [...data])
+    const { message, stamp } = unstamp(data)
+    this.sent.push(message)
+    this.stamps.push(stamp)
   }
   say(message: object) {
     this.emit('message', Buffer.from(JSON.stringify(message)), false)
@@ -19,12 +58,16 @@ class FakeSocket extends EventEmitter {
 function fixture() {
   const socket = new FakeSocket(),
     opened: { channel: TerminalChannel; target: TerminalTarget; log: unknown[] }[] = []
-  serveTerminalChannels(socket as unknown as WebSocket, (channel, target) => {
-    const log: unknown[] = []
-    channel.on('message', (message) => log.push(message.type))
-    channel.once('close', () => log.push('close'))
-    opened.push({ channel, target, log })
-  })
+  // The fake socket is its own stream: `data` events are bytes arriving.
+  serveTerminalChannels(
+    new TerminalSocket(socket as unknown as WebSocket, socket),
+    (channel, target) => {
+      const log: unknown[] = []
+      channel.on('message', (message) => log.push(message.type))
+      channel.once('close', () => log.push('close'))
+      opened.push({ channel, target, log })
+    },
+  )
   return { socket, opened }
 }
 const target = (windowId: string) => ({
@@ -61,7 +104,7 @@ test('a channel carries one window: its messages in, and its JSON and cells out 
   assert.deepEqual(f.socket.sent, [
     { type: 'status', status: 'connected', channel: 0, ack: 1 },
     [0, 1, 1, 2],
-    [0xac, 0x02, 1, 3],
+    [300, 1, 3],
   ])
 })
 
@@ -122,20 +165,21 @@ test('one authentication serves every channel of the socket', async (t) => {
   const accepted: string[] = [],
     targets: string[] = []
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 })
-  server.on('connection', (socket) =>
+  server.on('connection', (socket) => {
+    const link = new TerminalSocket(socket)
     authenticateWebSocket(
       socket,
       (token) => token === 'valid',
       (token) => {
         accepted.push(token)
-        serveTerminalChannels(socket, (channel, { windowId }) => {
+        serveTerminalChannels(link, (channel, { windowId }) => {
           targets.push(windowId)
           channel.send({ type: 'status', status: 'connecting' })
           channel.send(Uint8Array.of(7))
         })
       },
-    ),
-  )
+    )
+  })
   await once(server, 'listening')
   const address = server.address()
   assert(address && typeof address !== 'string')
@@ -146,10 +190,13 @@ test('one authentication serves every channel of the socket', async (t) => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
   })
   await once(client, 'open')
-  const received: unknown[] = []
-  client.on('message', (data, binary) =>
-    received.push(binary ? [...(data as Buffer)] : JSON.parse(String(data))),
-  )
+  const received: unknown[] = [],
+    got: number[] = []
+  client.on('message', (data, binary) => {
+    const { message, stamp } = unstamp(binary ? new Uint8Array(data as Buffer) : String(data))
+    received.push(message)
+    got.push(stamp.got)
+  })
   // Sent at once, as a browser does: the channels wait for nothing but the order of messages.
   client.send(JSON.stringify({ type: 'auth', token: 'valid' }))
   for (const channel of [0, 1, 2])
@@ -164,18 +211,20 @@ test('one authentication serves every channel of the socket', async (t) => {
       [channel, 0, 7],
     ]),
   )
+  assert.deepEqual(got, [2, 2, 3, 3, 4, 4], 'the authentication and each open counted')
 })
 
 test('channels opened before authentication are never attached', async (t) => {
   const targets: string[] = []
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 })
-  server.on('connection', (socket) =>
+  server.on('connection', (socket) => {
+    const link = new TerminalSocket(socket)
     authenticateWebSocket(
       socket,
       (token) => token === 'valid',
-      () => serveTerminalChannels(socket, (_, { windowId }) => void targets.push(windowId)),
-    ),
-  )
+      () => serveTerminalChannels(link, (_, { windowId }) => void targets.push(windowId)),
+    )
+  })
   await once(server, 'listening')
   const address = server.address()
   assert(address && typeof address !== 'string')
@@ -224,7 +273,7 @@ test('a channel says who ended it', () => {
   )
 })
 
-test('an ack rides on the next message, and goes alone only when none comes in time', (t) => {
+test("the view's ack rides on its channel, and the socket says alone what it got only when nothing went out", (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = fixture()
   f.socket.say({ type: 'open', channel: 0, ...target('a') })
@@ -232,19 +281,34 @@ test('an ack rides on the next message, and goes alone only when none comes in t
   t.mock.timers.tick(ACK_DELAY_MS - 1)
   f.opened[0]!.channel.send(Uint8Array.of(9))
   t.mock.timers.tick(ACK_DELAY_MS * 2)
-  assert.deepEqual(f.socket.sent.splice(0), [[0, 0xc8, 0x01, 9]], 'the cells carried it')
+  assert.deepEqual(f.socket.sent.splice(0), [[0, 200, 9]], 'the cells carried it')
+  assert.equal(f.socket.stamps.splice(0)[0]!.got, 2)
   f.socket.say({ type: 'view-visible', channel: 0, seq: 201 })
-  f.socket.say({ type: 'view-visible', channel: 0, seq: 202 })
+  // Any message counts, whether or not a channel takes it.
+  f.socket.say({ type: 'ping' })
   t.mock.timers.tick(ACK_DELAY_MS - 1)
   assert.deepEqual(f.socket.sent, [])
   t.mock.timers.tick(1)
-  const [alone] = f.socket.sent.splice(0) as Record<string, unknown>[]
-  assert.deepEqual(alone, { type: 'ack', channel: 0, ack: 202 }, 'it carries nothing else')
+  assert.deepEqual(f.socket.sent.splice(0), [{ type: 'ack' }], 'it carries nothing but the stamp')
+  assert.equal(f.socket.stamps.splice(0)[0]!.got, 4)
   t.mock.timers.tick(ACK_DELAY_MS * 2)
   assert.deepEqual(f.socket.sent, [], 'an ack is not repeated')
-  f.socket.say({ type: 'input', channel: 0, seq: 202 })
-  t.mock.timers.tick(ACK_DELAY_MS)
-  assert.equal(f.socket.sent.length, 1, 'a repeated message is acknowledged again')
+})
+
+test("a stamp says how long ago the last message arrived, and the last of anyone's bytes", async () => {
+  const f = fixture()
+  f.socket.say({ type: 'open', channel: 0, ...target('a') })
+  await sleep(40)
+  f.opened[0]!.channel.send({ type: 'status' })
+  const idle = f.socket.stamps.at(-1)!
+  assert(idle.since >= 35 && idle.quiet >= 35, JSON.stringify(idle))
+  // Bytes of the next message have arrived, though it has not yet.
+  f.socket.emit('data', Buffer.from('{"type":'))
+  await sleep(20)
+  f.opened[0]!.channel.send({ type: 'status' })
+  const moving = f.socket.stamps.at(-1)!
+  assert.equal(moving.got, 1)
+  assert(moving.since >= 55 && moving.quiet < moving.since - 30, JSON.stringify(moving))
 })
 
 test('a browser that logs is told when each message left, and one that does not is not', () => {
@@ -256,17 +320,13 @@ test('a browser that logs is told when each message left, and one that does not 
   plain!.send({ type: 'status' })
   const [first, second] = f.socket.sent.splice(0) as Record<string, unknown>[]
   assert.equal(typeof first!.sentAt, 'number')
-  assert.equal(first!.held, 0)
   assert.equal('sentAt' in second!, false)
   timed!.send(Uint8Array.of(9))
-  const bytes = f.socket.sent[0] as number[]
-  let at = 2,
-    sentAt = 0
-  for (let shift = 0; ; shift++) {
-    const byte = bytes[at++]!
-    sentAt += (byte & 0x7f) * 2 ** (7 * shift)
-    if (byte < 0x80) break
-  }
-  assert(Math.abs(sentAt - Date.now()) < 5000, 'the wall clock survives the integer')
-  assert.deepEqual(bytes.slice(at), [0, 9])
+  const [, , ...rest] = f.socket.sent[0] as number[]
+  const {
+    values: [sentAt],
+    rest: cells,
+  } = integers(Uint8Array.from(rest), 1)
+  assert(Math.abs(sentAt! - Date.now()) < 5000, 'the wall clock survives the integer')
+  assert.deepEqual(cells, [9])
 })

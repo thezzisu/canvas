@@ -1,7 +1,6 @@
 import test, { afterEach, beforeEach, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { RETIRE_MS, TerminalChannels, type ConnectionEvents } from './terminal-channels.ts'
-import { STALL_MS } from './link-watch.ts'
 import { TerminalView } from './terminal-view.ts'
 import { setLogSink } from '../diagnostics/log.ts'
 
@@ -9,17 +8,45 @@ import { setLogSink } from '../diagnostics/log.ts'
 beforeEach(() => mock.timers.enable({ apis: ['setTimeout'] }))
 afterEach(() => mock.timers.reset())
 
+const leb128 = (values: number[]) =>
+  values.flatMap((value) => {
+    const bytes: number[] = []
+    for (; value > 0x7f; value = Math.floor(value / 0x80)) bytes.push((value % 0x80) | 0x80)
+    return [...bytes, value]
+  })
+/**
+ * The browser's socket, and a server behind it that receives at once what is sent, unless the
+ * way up is stuck, and stamps what it sends as the real one does.
+ */
 class FakeSocket {
   readonly OPEN = 1
   readyState = 0
   binaryType = ''
+  bufferedAmount = 0
   sent: Record<string, unknown>[] = []
+  /** What the server has received, and whether the way up carries anything. */
+  got = 0
+  up = true
+  /** Sent bytes wait in the browser's buffer until drained by hand. */
+  holding = false
   onopen?: () => void
   onmessage?: (event: { data: unknown }) => void
   onerror?: () => void
   onclose?: () => void
   send(data: string) {
     this.sent.push(JSON.parse(data))
+    if (this.holding) this.bufferedAmount += new TextEncoder().encode(data).length
+    this.total++
+    if (this.up) this.got = this.total
+  }
+  /** The way up carries again what it held. */
+  thaw() {
+    this.up = true
+    this.got = this.total
+  }
+  private total = 0
+  stamp() {
+    return { got: this.got, since: 0, quiet: 0 }
   }
   close() {
     this.readyState = 3
@@ -29,9 +56,14 @@ class FakeSocket {
     this.onopen!()
   }
   json(message: object) {
-    this.onmessage!({ data: JSON.stringify(message) })
+    this.onmessage!({ data: JSON.stringify({ ...this.stamp(), ...message }) })
   }
-  cells(...bytes: number[]) {
+  /** A cell message on `channel`, with the view's ack, the stamp and the cells. */
+  cells(channel: number, ack: number, ...cells: number[]) {
+    const { got, since, quiet } = this.stamp()
+    this.raw(...leb128([channel, ack, got, since, quiet]), ...cells)
+  }
+  raw(...bytes: number[]) {
     this.onmessage!({ data: Uint8Array.from(bytes).buffer })
   }
 }
@@ -45,18 +77,24 @@ function listener() {
     message: (message) => log.push(message.type),
     cells: (bytes) => log.push([...bytes]),
     closed: (end) => log.push(end),
+    doubted: (on) => log.push(on ? 'doubt' : 'clear'),
   }
   return { log, events }
 }
 function fixture() {
   const socket = new FakeSocket()
-  let idle = 0
+  let idle = 0,
+    network: (() => void) | undefined
   const page = { time: 0, shown: true }
   const channels = new TerminalChannels(socket as unknown as WebSocket, 'token', () => idle++, {
     now: () => page.time,
     visible: () => page.shown,
+    onNetwork(changed) {
+      network = changed
+      return () => (network = undefined)
+    },
   })
-  return { socket, channels, page, idle: () => idle }
+  return { socket, channels, page, idle: () => idle, network: () => network?.() }
 }
 
 test('the socket authenticates once, then opens the channels asked for before and after', () => {
@@ -91,9 +129,9 @@ test('messages and cells reach only their channel', () => {
   f.socket.json({ type: 'status' })
   f.socket.onmessage!({ data: '{' })
   f.socket.cells(0, 0, 1, 2)
-  f.socket.cells(0xc7, 0x01, 0, 9, 9)
-  f.socket.cells(0x80)
-  f.socket.cells()
+  f.socket.cells(199, 0, 9, 9)
+  f.socket.raw(0x80)
+  f.socket.raw()
   assert.deepEqual(a.log, ['metadata', [1, 2]])
   assert.deepEqual(b.log, ['status', [9, 9]])
 })
@@ -169,22 +207,30 @@ test("a view's numbers go on over its channels, and every kind of message acknow
   assert.equal(f.socket.sent.at(-1)!.seq, 3)
   f.socket.cells(2, 1, 7)
   assert.equal(same.taken, 1)
-  f.socket.json({ type: 'status', channel: 2, ack: 2 })
-  assert.equal(same.taken, 2)
-  f.socket.json({ type: 'ack', channel: 2, ack: 3 })
+  f.socket.json({ type: 'status', channel: 2, ack: 3 })
   assert.equal(same.taken, 3)
-  f.socket.json({ type: 'ack', channel: 2, ack: 1 })
-  f.socket.json({ type: 'ack', channel: 2, ack: 9 })
+  f.socket.json({ type: 'status', channel: 2, ack: 1 })
+  f.socket.json({ type: 'status', channel: 2, ack: 9 })
   assert.equal(same.taken, 3, 'an ack is cumulative and never of what was not sent')
-  assert.deepEqual(a.log, [[7], 'status'], "an ack is not the session's to hear")
+  // What the socket received rides alone when nothing else went.
+  f.socket.json({ type: 'ack' })
+  assert.deepEqual(
+    a.log,
+    [[7], 'status', 'status', 'status'],
+    "an ack is not the session's to hear",
+  )
 })
 
 /** A window's channel that the server has joined, and a clock that moves the timers with it. */
-function linked(watching = false) {
+function linked(options: { watching?: boolean; busy?: boolean } = {}) {
   const f = fixture(),
     a = listener(),
     same = view()
-  const connection = f.channels.open(window('a'), same, { ...a.events, watching: () => watching })
+  const connection = f.channels.open(window('a'), same, {
+    ...a.events,
+    watching: () => !!options.watching,
+    busy: () => !!options.busy,
+  })
   f.socket.accept()
   f.socket.json({ type: 'resume', channel: 0, taken: null, ack: 0 })
   f.socket.sent = []
@@ -196,17 +242,23 @@ function linked(watching = false) {
   }
   return { ...f, a, view: same, connection, pass }
 }
+/** Before any round trip is measured: a second, and the server's ack delay. */
+const TIMEOUT = 1100
 
-test('input nobody acknowledged for two seconds gives the socket up, and only then', () => {
+test('a way up that holds what was sent is probed, then in doubt, then given up, each timeout twice the last', () => {
   const f = linked()
+  f.socket.up = false
   f.connection.send({ type: 'input', data: 'x' })
-  // The way down still works, which says nothing of the way up.
-  f.pass(1000)
-  f.socket.cells(0, 0, 9)
-  f.pass(STALL_MS - 1010)
-  assert.deepEqual(f.a.log, [[9]])
+  f.pass(TIMEOUT - 10)
+  assert.deepEqual(f.socket.sent.length, 1)
   f.pass(20)
-  assert.deepEqual(f.a.log, [[9], 'stalled'])
+  assert.deepEqual(f.socket.sent.at(-1), { type: 'ping' }, 'first, a probe')
+  f.pass(2 * TIMEOUT)
+  assert.deepEqual(f.a.log, ['doubt'], 'the probe went unanswered too')
+  f.pass(4 * TIMEOUT - 30)
+  assert.deepEqual(f.a.log, ['doubt'])
+  f.pass(40)
+  assert.deepEqual(f.a.log, ['doubt', 'stalled'])
   assert.equal(f.idle(), 1, 'the next connection gets a socket of its own')
   assert.equal(f.connection.send({ type: 'input', data: 'y' }), false, 'nothing more goes into it')
   f.socket.cells(0, 1, 8)
@@ -216,58 +268,119 @@ test('input nobody acknowledged for two seconds gives the socket up, and only th
   assert.equal(f.socket.readyState, 3)
 })
 
-test('an ack in time is no stall, and progress restarts the wait', () => {
+test('an answer clears the doubt and starts the count again', () => {
   const f = linked()
-  for (const data of ['1', '2', '3']) f.connection.send({ type: 'input', data })
-  f.pass(1900)
-  f.socket.cells(0, 1, 7)
-  f.pass(1900)
-  f.socket.json({ type: 'ack', channel: 0, ack: 2 })
-  f.pass(1900)
-  f.socket.json({ type: 'status', channel: 0, ack: 3 })
-  f.pass(10_000)
-  assert.deepEqual(f.a.log, [[7], 'status'])
-})
-
-test('a page that was busy reads what arrived before it calls a stall', () => {
-  const f = linked()
+  f.socket.up = false
   f.connection.send({ type: 'input', data: 'x' })
-  f.page.time += 6000
-  mock.timers.tick(STALL_MS)
-  assert.deepEqual(f.a.log, [])
-  f.socket.json({ type: 'ack', channel: 0, ack: 1 })
-  f.pass(5000)
-  assert.deepEqual(f.a.log, [])
+  f.pass(3 * TIMEOUT + 20)
+  assert.deepEqual(f.a.log, ['doubt'])
+  f.socket.thaw()
+  f.socket.json({ type: 'status', channel: 0, ack: 1 })
+  assert.deepEqual(f.a.log, ['doubt', 'clear', 'status'])
+  f.pass(30_000)
+  assert.deepEqual(f.a.log, ['doubt', 'clear', 'status'], 'nothing is owed, so nothing is judged')
 })
 
-test('a hidden page judges nothing until it shows', () => {
+test('bytes the server sent before the input could reach it are waited through', () => {
   const f = linked()
+  f.pass(500)
+  f.socket.up = false
+  f.connection.send({ type: 'input', data: 'x' })
+  // A burst the server sent long before: it had last heard from the browser well before this.
+  for (let i = 0; i < 6; i++) {
+    f.pass(900)
+    f.socket.json({ type: 'status', channel: 0, ack: 0, got: f.socket.got, since: 0, quiet: 0 })
+  }
+  assert.deepEqual(
+    f.a.log.filter((entry) => entry !== 'status'),
+    [],
+    'no doubt, no stall',
+  )
+})
+
+test('bytes the server sent well after the input should have reached it, without it, put the link in doubt at once', () => {
+  const f = linked()
+  f.socket.up = false
+  f.connection.send({ type: 'input', data: 'x' })
+  f.pass(200)
+  // The server last received a message 2 s ago; the input left 200 ms ago.
+  f.socket.json({ type: 'status', channel: 0, ack: 0, got: f.socket.got, since: 2000, quiet: 2000 })
+  assert.deepEqual(f.a.log, ['doubt', 'status'])
+})
+
+test('each answer is a round trip, and a slow link waits longer before it probes', () => {
+  const f = linked()
+  // Twenty answers a second after each input: the estimate is near a second, still uneven.
+  for (let i = 0; i < 20; i++) {
+    f.socket.up = false
+    f.connection.send({ type: 'input', data: String(i) })
+    f.pass(1000)
+    f.socket.thaw()
+    f.socket.json({ type: 'status', channel: 0, ack: i + 1 })
+  }
+  f.socket.up = false
+  f.connection.send({ type: 'input', data: 'x' })
+  f.pass(TIMEOUT + 300)
+  assert.equal(
+    f.socket.sent.at(-1)!.type,
+    'input',
+    'what is late for a fast link is not for this one',
+  )
+  f.pass(200)
+  assert.deepEqual(f.socket.sent.at(-1), { type: 'ping' })
+})
+
+test('an upload sharing the way up, or bytes leaving the buffer, are progress', () => {
+  const f = linked({ busy: true })
+  f.socket.up = false
+  f.connection.send({ type: 'input', data: 'x' })
+  f.pass(20 * TIMEOUT)
+  assert.deepEqual(f.a.log, [])
+  const g = linked()
+  g.socket.up = false
+  g.socket.holding = true
+  g.connection.send({ type: 'input', data: '中'.repeat(400_000) })
+  assert.equal(g.socket.bufferedAmount > 1_200_000, true)
+  for (let i = 0; i < 20; i++) {
+    g.socket.bufferedAmount -= 40_000
+    g.pass(TIMEOUT)
+  }
+  assert.deepEqual(g.a.log, [], 'a paste still draining is no stall')
+  g.pass(8 * TIMEOUT)
+  assert.deepEqual(g.a.log, ['doubt', 'stalled'], 'one that stopped is')
+})
+
+test('a hidden page judges nothing; shown again, it asks afresh', () => {
+  const f = linked()
+  f.socket.up = false
   f.connection.send({ type: 'view-visible', visible: false })
   f.page.shown = false
   f.pass(30_000)
   assert.deepEqual(f.a.log, [])
   f.page.shown = true
   f.channels.shown()
-  f.pass(300)
+  assert.deepEqual(f.socket.sent.at(-1), { type: 'ping' })
+  f.pass(TIMEOUT - 20)
+  assert.deepEqual(f.a.log, [], 'the wait starts on return')
+})
+
+test('another network gives the socket up at once', () => {
+  const f = linked()
+  f.network()
   assert.deepEqual(f.a.log, ['stalled'])
 })
 
 test('silence is questioned only under a working agent', () => {
-  const f = linked()
-  f.pass(30_000)
-  assert.deepEqual(f.socket.sent, [])
+  const quiet = linked()
+  quiet.pass(30_000)
+  assert.deepEqual(quiet.socket.sent, [])
+  const f = linked({ watching: true })
+  f.pass(TIMEOUT + 20)
+  assert.deepEqual(f.socket.sent, [{ type: 'ping' }])
+  f.socket.json({ type: 'ack' })
+  f.pass(TIMEOUT + 20)
+  assert.equal(f.socket.sent.length, 2, 'asked again after another silence')
   assert.deepEqual(f.a.log, [])
-})
-
-test('a silent socket under a working agent is probed, and a probe without an answer is a stall', () => {
-  const f = linked(true)
-  f.pass(2010)
-  assert.deepEqual(f.socket.sent, [{ type: 'ping', id: 'link', channel: 0, seq: 1 }])
-  f.socket.json({ type: 'pong', id: 'link', channel: 0, ack: 1 })
-  f.pass(2010)
-  assert.equal(f.socket.sent.length, 2)
-  f.pass(2010)
-  assert.deepEqual(f.a.log, ['pong', 'stalled'])
 })
 
 test('a new channel first sends again the input that was not taken, and nothing else', () => {
@@ -276,7 +389,6 @@ test('a new channel first sends again the input that was not taken, and nothing 
   f.connection.send({ type: 'focus' })
   f.connection.send({ type: 'input', data: 'b' })
   f.connection.send({ type: 'input', data: 'c' })
-  f.pass(STALL_MS + 10)
   const next = fixture(),
     b = listener()
   next.channels.open(window('a'), f.view, b.events)
@@ -297,7 +409,6 @@ test('pointer input is not sent again: it names cells of a screen that may have 
   f.connection.send({ type: 'input', data: '\x1b[200~pasted\x1b[201~' })
   f.connection.send({ type: 'input', data: '\x1b[I' })
   f.connection.send({ type: 'input', data: 'k' })
-  f.pass(STALL_MS + 10)
   const next = fixture()
   next.channels.open(window('a'), f.view, listener().events)
   next.socket.accept()
@@ -313,21 +424,20 @@ test('input is not sent again to a window that forgot the view, or after the use
   for (const forget of [false, true]) {
     const f = fixture(),
       same = view()
-    same.number({ type: 'input', data: 'synthetic' }, 0)
+    same.number({ type: 'input', data: 'synthetic' })
     if (forget) same.forgetInput()
     f.channels.open(window('a'), same, listener().events)
     f.socket.accept()
     f.socket.sent = []
     f.socket.json({ type: 'resume', channel: 0, taken: forget ? 0 : null, ack: 0 })
     assert.deepEqual(f.socket.sent, [])
-    assert.equal(same.waitingSince, undefined)
   }
 })
 
 test('nothing new is numbered on a channel before the input to send again', () => {
   const f = fixture(),
     same = view()
-  same.number({ type: 'input', data: 'typed' }, 0)
+  same.number({ type: 'input', data: 'typed' })
   const connection = f.channels.open(window('a'), same, listener().events)
   f.socket.accept()
   f.socket.sent = []
@@ -348,15 +458,19 @@ test('the log names every message and ack, with times, and never what was typed'
   assert.equal(f.socket.sent.at(-1)!.timed, true)
   f.socket.json({ type: 'hello', socket: 'ab12', version: '0.5.0' })
   f.socket.json({ type: 'resume', channel: 0, taken: null, ack: 0 })
+  f.socket.up = false
   connection.send({ type: 'input', data: 'secret' })
   f.page.time += 80
-  f.socket.json({ type: 'status', channel: 0, ack: 1, sentAt: Date.now(), held: 10 })
+  f.socket.thaw()
+  f.socket.json({ type: 'status', channel: 0, ack: 1, sentAt: Date.now(), since: 10, quiet: 10 })
   const events = lines.map((line) => line.event)
   for (const event of ['socket', 'resumed', 'send', 'receive', 'ack'])
     assert(events.includes(event), event)
-  const ack = lines.find((line) => line.event === 'ack')!
-  assert.deepEqual([ack.socket, ack.to, ack.waited, ack.rtt], ['ab12', 1, 80, 70])
-  f.socket.cells(0, 1, 5, 0, 42)
+  const ack = lines.findLast((line) => line.event === 'ack')!
+  assert.deepEqual([ack.socket, ack.got, ack.rtt], ['ab12', 3, 70])
+  assert.equal(typeof ack.offset, 'number')
+  // A timed channel's cells carry the server's clock after the stamp.
+  f.socket.raw(0, 1, 4, 0, 0, 5, 42)
   assert.deepEqual(a.log.at(-1), [42], 'the times are not the cells')
   assert(!JSON.stringify(lines).includes('secret'))
 })

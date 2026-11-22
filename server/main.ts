@@ -15,7 +15,7 @@ import { CompletionReads } from './completion-reads.ts'
 import { TerminalManager, type TerminalTarget } from './terminals.ts'
 import { allowedOrigin, parseAllowedOrigins, bearerToken } from './auth.ts'
 import { authenticateWebSocket } from './websocket-auth.ts'
-import { serveTerminalChannels, type TerminalChannel } from './terminal-channels.ts'
+import { serveTerminalChannels, TerminalSocket, type TerminalChannel } from './terminal-channels.ts'
 import { closeRuntimeConnections } from './source-connections.ts'
 import {
   prepareOpenBridge,
@@ -219,7 +219,9 @@ const upgrade = (
     socket.destroy()
     return
   }
-  wss.handleUpgrade(request, socket, head, (ws) =>
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    // Before anything else listens, so that it counts the authentication.
+    const link = new TerminalSocket(ws, socket)
     authenticateWebSocket(
       ws,
       (token) => store.hasSession(token),
@@ -232,18 +234,17 @@ const upgrade = (
           return
         }
         socketSessions.set(ws, token)
-        const socket = logSocket(ws, request)
         serveTerminalChannels(
-          ws,
+          link,
           (channel, target) => openWindowChannel(channel, target, token, captureBase),
-          socket,
+          logSocket(link, request),
         )
       },
-    ),
-  )
+    )
+  })
 }
 /** Logs a socket's life under an identifier of its own, with the address it came from. */
-function logSocket(ws: WebSocket, request: IncomingMessage) {
+function logSocket(link: TerminalSocket, request: IncomingMessage) {
   const socket = logIdentifier(randomBytes(4).toString('hex'))
   // Behind a proxy the first forwarded hop is the browser. It is only ever logged.
   const forwarded = String(request.headers['x-forwarded-for'] ?? '')
@@ -251,15 +252,8 @@ function logSocket(ws: WebSocket, request: IncomingMessage) {
     .trim()
   const address = logIdentifier(forwarded || request.socket.remoteAddress || '')
   log('link', 'socket', { socket, address, state: 'open' })
-  ws.send(
-    JSON.stringify({
-      type: 'hello',
-      socket,
-      version: buildInfo.version,
-      revision: buildInfo.revision,
-    }),
-  )
-  ws.once('close', (code) => log('link', 'socket', { socket, address, state: 'close', code }))
+  link.send({ type: 'hello', socket, version: buildInfo.version, revision: buildInfo.revision })
+  link.ws.once('close', (code) => log('link', 'socket', { socket, address, state: 'close', code }))
   return socket
 }
 /** Attaches a window to a channel of an authenticated socket. */

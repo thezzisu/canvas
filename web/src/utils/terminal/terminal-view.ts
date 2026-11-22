@@ -1,10 +1,9 @@
 import { inputKind } from '../../../../shared/log-line'
 
+/** Keys and pastes, kept until taken so that they can be sent again. */
 interface Owed {
   seq: number
-  at: number
-  /** Keys and pastes, kept until taken so that they can be sent again. */
-  input?: string
+  input: string
 }
 /**
  * Pointer input names cells of the screen it was meant for, which may have changed by the time
@@ -14,7 +13,7 @@ const resent = (data: string) => ['key', 'paste'].includes(inputKind(data))
 
 /**
  * One view of a window for as long as the page lives, over any number of connections. It numbers
- * what it sends and keeps what the server has yet to take.
+ * what it sends and keeps the input the server has yet to take.
  */
 export class TerminalView {
   private attempts = 0
@@ -33,26 +32,15 @@ export class TerminalView {
     return ++this.attempts
   }
   /** Numbers a message about to be sent. */
-  number(message: object, at: number) {
+  number(message: object) {
     const seq = ++this.sequence
     const { type, data } = message as { type?: unknown; data?: unknown }
-    this.owed.push({
-      seq,
-      at,
-      ...(type === 'input' && typeof data === 'string' && resent(data) ? { input: data } : {}),
-    })
+    if (type === 'input' && typeof data === 'string' && resent(data))
+      this.owed.push({ seq, input: data })
     return seq
   }
   /** When the stall that cost the view its last channel was seen. */
   stalledAt?: number
-  /** When a message not yet taken was sent. */
-  sentAt(sequence: number): number | undefined {
-    return this.owed.find((owed) => owed.seq === sequence)?.at
-  }
-  /** When the oldest message not yet taken was sent. */
-  get waitingSince(): number | undefined {
-    return this.owed[0]?.at
-  }
   /** Whether it took more. Cumulative, so an ack that comes late or twice changes nothing. */
   acknowledged(sequence: unknown): boolean {
     if (
@@ -71,15 +59,13 @@ export class TerminalView {
    * old numbers and before anything new. A window that does not know the view gets none: that
    * input may have been applied, so it is lost rather than typed twice.
    */
-  resumed(taken: unknown, at: number): { seq: number; data: string }[] {
+  resumed(taken: unknown): { seq: number; data: string }[] {
     this.acknowledged(taken)
-    const again = typeof taken === 'number' ? this.owed.filter((o) => o.input !== undefined) : []
-    // Whatever else was owed is told afresh by the new channel's handshake.
-    this.owed = again.map((o) => ({ ...o, at }))
-    return again.map((o) => ({ seq: o.seq, data: o.input! }))
+    if (typeof taken !== 'number') this.owed = []
+    return this.owed.map((o) => ({ seq: o.seq, data: o.input }))
   }
   /** The user left or gave up: what they typed is no longer sent again behind their back. */
   forgetInput() {
-    this.owed = this.owed.map(({ seq, at }) => ({ seq, at }))
+    this.owed = []
   }
 }
