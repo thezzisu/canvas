@@ -313,164 +313,187 @@ class HerdrClient implements WindowTransport {
   }
 
   private receive(message: ServerMessage) {
-    if (!this.welcomed) {
-      if (message.type !== 'control' || message.kind !== 'endpoint.welcome.v1')
-        throw new Error('Herdr endpoint welcome is missing')
-      const welcome = JSON.parse(message.data)
-      if (welcome.error)
-        throw new Error(
-          typeof welcome.error.message === 'string'
-            ? welcome.error.message
-            : 'Herdr handshake rejected',
+    if (!this.welcomed) return this.welcome(message)
+    switch (message.type) {
+      case 'control':
+        if (message.kind === 'endpoint.agent-completions.v1') this.completionsOf(message.data)
+        else if (message.kind === 'shell.snapshot.v1') this.snapshotOf(parseSnapshot(message.data))
+        return
+      case 'surface':
+        validateSurface(message.surface)
+        if (
+          this.surface &&
+          message.surface.boot_id === this.surface.boot_id &&
+          message.surface.surface_revision <= this.surface.surface_revision
         )
-      if (
-        welcome.generation !== 1 ||
-        welcome.snapshot_codec !== 'shell.snapshot.v1' ||
-        welcome.surface_codec !== 'shell.surface.v1' ||
-        welcome.input_codec !== 'shell.input.semantic.v1' ||
-        welcome.blob_codec !== 'shell.blob.v1' ||
-        !Array.isArray(welcome.methods)
+          return
+        this.surface = message.surface
+        return this.render()
+      case 'patch':
+        if (!this.surface) throw new Error('Herdr patch arrived before its complete surface')
+        if (message.patch.surface_revision <= this.surface.surface_revision) return
+        this.surface = applySurfacePatch(this.surface, message.patch)
+        return this.render()
+      case 'response':
+        return this.response(message)
+      case 'clipboard':
+        return this.clipboard(message.data)
+      // herdr names no pane for a bell and sends it only to the client last used.
+      case 'bell':
+        return this.bells.emit(undefined)
+      case 'notification':
+        if (this.initialized) this.notifications.emit(message.notification)
+        return
+      case 'shutdown':
+        return this.finish({ exitCode: 0 })
+      case 'error':
+        throw new Error(message.message)
+    }
+  }
+  /** The endpoint's first message: the codecs and methods it speaks. */
+  private welcome(message: ServerMessage) {
+    if (message.type !== 'control' || message.kind !== 'endpoint.welcome.v1')
+      throw new Error('Herdr endpoint welcome is missing')
+    const welcome = JSON.parse(message.data)
+    if (welcome.error)
+      throw new Error(
+        typeof welcome.error.message === 'string'
+          ? welcome.error.message
+          : 'Herdr handshake rejected',
       )
-        throw new Error('Herdr server has no compatible endpoint generation 1 codecs')
-      this.methods = new Set(
-        welcome.methods.filter((method: unknown): method is string => typeof method === 'string'),
-      )
-      if (!this.methods.has('tab.focus'))
-        throw new Error('Herdr server cannot focus an independent tab client')
-      this.welcomed = true
+    if (
+      welcome.generation !== 1 ||
+      welcome.snapshot_codec !== 'shell.snapshot.v1' ||
+      welcome.surface_codec !== 'shell.surface.v1' ||
+      welcome.input_codec !== 'shell.input.semantic.v1' ||
+      welcome.blob_codec !== 'shell.blob.v1' ||
+      !Array.isArray(welcome.methods)
+    )
+      throw new Error('Herdr server has no compatible endpoint generation 1 codecs')
+    this.methods = new Set(
+      welcome.methods.filter((method: unknown): method is string => typeof method === 'string'),
+    )
+    if (!this.methods.has('tab.focus'))
+      throw new Error('Herdr server cannot focus an independent tab client')
+    this.welcomed = true
+  }
+  /** Which turns the server counts as completed, for the snapshot of the same revision. */
+  private completionsOf(data: string) {
+    const value = JSON.parse(data)
+    if (
+      !value ||
+      typeof value.boot_id !== 'string' ||
+      !Number.isSafeInteger(value.revision) ||
+      value.revision < 0 ||
+      !value.completions ||
+      typeof value.completions !== 'object' ||
+      Array.isArray(value.completions)
+    )
+      throw new Error('Invalid herdr completion metadata')
+    const values = new Map<string, number>()
+    for (const [id, sequence] of Object.entries(value.completions)) {
+      if (typeof sequence !== 'number' || !Number.isSafeInteger(sequence) || sequence < 0)
+        throw new Error('Invalid herdr completion sequence')
+      values.set(id, sequence)
+    }
+    if (
+      !this.completions ||
+      this.completions.bootId !== value.boot_id ||
+      this.completions.revision < value.revision
+    )
+      this.completions = { bootId: value.boot_id, revision: value.revision, values }
+  }
+  private snapshotOf(snapshot: ClientShellSnapshot) {
+    if (this.snapshot && snapshot.boot_id !== this.snapshot.boot_id)
+      throw new Error('Herdr endpoint restarted; reconnect this window')
+    if (this.snapshot && snapshot.revision < this.snapshot.revision) return
+    this.snapshot = snapshot
+    if (!snapshot.tabs.some((tab) => tab.tab_id === this.options.tabId)) {
+      this.finish({ exitCode: 0, reason: 'removed' }, new Error('Herdr tab no longer exists'))
       return
     }
-    if (message.type === 'control') {
-      if (message.kind === 'endpoint.agent-completions.v1') {
-        const value = JSON.parse(message.data)
-        if (
-          !value ||
-          typeof value.boot_id !== 'string' ||
-          !Number.isSafeInteger(value.revision) ||
-          value.revision < 0 ||
-          !value.completions ||
-          typeof value.completions !== 'object' ||
-          Array.isArray(value.completions)
-        )
-          throw new Error('Invalid herdr completion metadata')
-        const values = new Map<string, number>()
-        for (const [id, sequence] of Object.entries(value.completions)) {
-          if (typeof sequence !== 'number' || !Number.isSafeInteger(sequence) || sequence < 0)
-            throw new Error('Invalid herdr completion sequence')
-          values.set(id, sequence)
-        }
-        if (
-          !this.completions ||
-          this.completions.bootId !== value.boot_id ||
-          this.completions.revision < value.revision
-        )
-          this.completions = { bootId: value.boot_id, revision: value.revision, values }
-        return
+    this.followCompletions(snapshot)
+    this.snapshotWindows = undefined
+    this.snapshots.set()
+    this.updateMetadata()
+    if (
+      !this.focusRequested &&
+      (!this.focusReady || snapshot.focused_tab_id !== this.options.tabId)
+    )
+      this.focusTab()
+    this.render()
+  }
+  /**
+   * Which panes' agents completed a turn: the server's own count when it sends one for this
+   * snapshot, otherwise a turn that was seen working and is now idle or done.
+   */
+  private followCompletions(snapshot: ClientShellSnapshot) {
+    const companion =
+      this.completions?.bootId === snapshot.boot_id &&
+      this.completions.revision === snapshot.revision
+        ? this.completions.values
+        : undefined
+    const present = new Set<string>()
+    for (const agent of Array.isArray(snapshot.agents) ? snapshot.agents : []) {
+      if (!agent || typeof agent.pane_id !== 'string') continue
+      const id = agent.pane_id,
+        sequence = agent.state_change_seq
+      present.add(id)
+      if (agent.agent_status === 'working') {
+        this.working.add(id)
+        this.completed.delete(id)
+        continue
       }
-      if (message.kind !== 'shell.snapshot.v1') return
-      const snapshot = parseSnapshot(message.data)
-      if (this.snapshot && snapshot.boot_id !== this.snapshot.boot_id)
-        throw new Error('Herdr endpoint restarted; reconnect this window')
-      if (this.snapshot && snapshot.revision < this.snapshot.revision) return
-      this.snapshot = snapshot
-      if (!snapshot.tabs.some((tab) => tab.tab_id === this.options.tabId)) {
-        this.finish({ exitCode: 0, reason: 'removed' }, new Error('Herdr tab no longer exists'))
-        return
-      }
-      const companion =
-        this.completions?.bootId === snapshot.boot_id &&
-        this.completions.revision === snapshot.revision
-          ? this.completions.values
-          : undefined
-      const present = new Set<string>()
-      for (const agent of Array.isArray(snapshot.agents) ? snapshot.agents : []) {
-        if (!agent || typeof agent.pane_id !== 'string') continue
-        const id = agent.pane_id,
-          sequence = agent.state_change_seq
-        present.add(id)
-        if (agent.agent_status === 'working') {
-          this.working.add(id)
-          this.completed.delete(id)
-          continue
-        }
-        const worked = this.working.delete(id)
-        if (
-          (agent.agent_status === 'idle' || agent.agent_status === 'done') &&
-          Number.isSafeInteger(sequence) &&
-          sequence >= 0 &&
-          (companion
-            ? companion.get(id) === sequence
-            : agent.agent_status === 'done' || worked || this.completed.get(id) === sequence)
-        )
-          this.completed.set(id, sequence)
-        else this.completed.delete(id)
-      }
-      for (const id of this.completed.keys()) if (!present.has(id)) this.completed.delete(id)
-      for (const id of this.working) if (!present.has(id)) this.working.delete(id)
-      this.snapshotWindows = undefined
-      this.snapshots.set()
-      this.updateMetadata()
+      const worked = this.working.delete(id)
       if (
-        !this.focusRequested &&
-        (!this.focusReady || snapshot.focused_tab_id !== this.options.tabId)
-      ) {
-        this.focusRequested = true
-        this.focusReady = false
-        void this.request('tab.focus', { tab_id: this.options.tabId })
-          .then(() => {
-            if (this.closed) return
-            this.focusRequested = false
-            this.focusReady = true
-            this.render()
-          })
-          .catch((error) => this.fail(error))
-      }
-      this.render()
-    } else if (message.type === 'surface') {
-      validateSurface(message.surface)
-      if (
-        this.surface &&
-        message.surface.boot_id === this.surface.boot_id &&
-        message.surface.surface_revision <= this.surface.surface_revision
+        (agent.agent_status === 'idle' || agent.agent_status === 'done') &&
+        Number.isSafeInteger(sequence) &&
+        sequence >= 0 &&
+        (companion
+          ? companion.get(id) === sequence
+          : agent.agent_status === 'done' || worked || this.completed.get(id) === sequence)
       )
-        return
-      this.surface = message.surface
-      this.render()
-    } else if (message.type === 'patch') {
-      if (!this.surface) throw new Error('Herdr patch arrived before its complete surface')
-      if (message.patch.surface_revision <= this.surface.surface_revision) return
-      this.surface = applySurfacePatch(this.surface, message.patch)
-      this.render()
-    } else if (message.type === 'response') {
-      const request = this.requests.get(message.request_id)
-      if (!request || request.boot !== message.boot_id) return
-      request.size += message.data.length
-      if (request.size > MAX_BUFFER) throw new Error('Herdr endpoint response exceeded its limit')
-      request.chunks.push(message.data)
-      if (!message.final_chunk) return
-      this.requests.delete(message.request_id)
-      clearTimeout(request.timer)
-      try {
-        const response = JSON.parse(Buffer.concat(request.chunks).toString('utf8'))
-        if (response.id !== message.request_id)
-          throw new Error('Herdr endpoint response ID mismatch')
-        if (response.error)
-          throw new Error(
-            typeof response.error.message === 'string'
-              ? response.error.message
-              : 'Herdr endpoint request failed',
-          )
-        request.resolve(response.result)
-      } catch (error) {
-        request.reject(error instanceof Error ? error : new Error('Invalid herdr response'))
-      }
-    } else if (message.type === 'clipboard') this.clipboard(message.data)
-    // herdr names no pane for a bell and sends it only to the client last used.
-    else if (message.type === 'bell') this.bells.emit(undefined)
-    else if (message.type === 'notification') {
-      if (this.initialized) this.notifications.emit(message.notification)
-    } else if (message.type === 'shutdown') this.finish({ exitCode: 0 })
-    else if (message.type === 'error') throw new Error(message.message)
+        this.completed.set(id, sequence)
+      else this.completed.delete(id)
+    }
+    for (const id of this.completed.keys()) if (!present.has(id)) this.completed.delete(id)
+    for (const id of this.working) if (!present.has(id)) this.working.delete(id)
+  }
+  /** Brings this window's tab to the front of its own client, which is what it shows. */
+  private focusTab() {
+    this.focusRequested = true
+    this.focusReady = false
+    void this.request('tab.focus', { tab_id: this.options.tabId })
+      .then(() => {
+        if (this.closed) return
+        this.focusRequested = false
+        this.focusReady = true
+        this.render()
+      })
+      .catch((error) => this.fail(error))
+  }
+  private response(message: Extract<ServerMessage, { type: 'response' }>) {
+    const request = this.requests.get(message.request_id)
+    if (!request || request.boot !== message.boot_id) return
+    request.size += message.data.length
+    if (request.size > MAX_BUFFER) throw new Error('Herdr endpoint response exceeded its limit')
+    request.chunks.push(message.data)
+    if (!message.final_chunk) return
+    this.requests.delete(message.request_id)
+    clearTimeout(request.timer)
+    try {
+      const response = JSON.parse(Buffer.concat(request.chunks).toString('utf8'))
+      if (response.id !== message.request_id) throw new Error('Herdr endpoint response ID mismatch')
+      if (response.error)
+        throw new Error(
+          typeof response.error.message === 'string'
+            ? response.error.message
+            : 'Herdr endpoint request failed',
+        )
+      request.resolve(response.result)
+    } catch (error) {
+      request.reject(error instanceof Error ? error : new Error('Invalid herdr response'))
+    }
   }
 
   private coherentSurface() {
