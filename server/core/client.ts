@@ -199,38 +199,7 @@ class CoreWindowClient implements WindowTransport {
     if (this.closed) return
     if (!nativeSnapshot && this.state?.coreId === state.coreId && state !== this.state)
       state = { ...state, terminals: this.state.terminals }
-    const ended: Array<{ id: string; terminal: string }> = []
-    const tabs =
-      state === this.state
-        ? []
-        : state.spaces.flatMap((space) => space.tabs).filter((tab) => !tab.synthetic)
-    for (const tab of tabs) {
-      for (const pane of panes(tab)) {
-        if (!pane.terminal) continue
-        const terminal = state.terminals.find((item) => item.address === pane.terminal)
-        if (
-          terminal?.state === 'finished' &&
-          ['exited', 'killed'].includes(String(terminal.reason))
-        )
-          ended.push({ id: pane.id, terminal: pane.terminal })
-        else if (!terminal) {
-          // Missing from a snapshot is not an exit: layout and native facts
-          // have separate waterlines. Ask only whether the record is closed.
-          try {
-            const result = await this.options.rpc.call('terminal.get', { terminal: pane.terminal })
-            const record =
-              result.terminal && typeof result.terminal === 'object'
-                ? (result.terminal as Record<string, unknown>)
-                : result
-            if (['exited', 'killed'].includes(String(record.reason)))
-              ended.push({ id: pane.id, terminal: pane.terminal })
-          } catch (error) {
-            if (error instanceof CoreRpcError && error.kind === 'not_found')
-              ended.push({ id: pane.id, terminal: pane.terminal })
-          }
-        }
-      }
-    }
+    const ended = state === this.state ? [] : await this.endedPanes(state)
     if (ended.length) {
       await this.options.layout.reconcileClosedPanes(ended, () => !this.closed)
       state = await this.options.layout.snapshot(state.terminals)
@@ -266,129 +235,169 @@ class CoreWindowClient implements WindowTransport {
       }
     if (!projected.panes.some((pane) => pane.id === this.focused))
       this.focused = projected.panes.find((pane) => pane.terminal)?.id || projected.panes[0]?.id
-    await Promise.all(
-      projected.panes.map(async (projected) => {
-        if (!projected.terminal) return
-        const terminal = state.terminals.find((terminal) => terminal.address === projected.terminal)
-        const available = terminal?.state === 'live' && !(terminal.reason && !terminal.pid)
-        const previous = this.attached.get(projected.id)
-        if (previous) {
-          // Fresh native facts recover ended streams and initial waiting panes in
-          // the same way, even when the restarted event was missed.
-          if (!nativeSnapshot || previous.stream || !previous.ready || !available) return
-          this.disposePane(previous)
-          this.attached.delete(previous.id)
-        }
-        const pane = this.makePane(
-          projected.id,
-          projected.terminal,
-          projected.rect.width,
-          projected.rect.height,
-        )
-        this.attached.set(pane.id, pane)
-        if (!available) {
-          pane.engine.write(
-            terminal?.state === 'live' ? '[Waiting for terminal recovery]' : '[Terminal finished]',
-          )
-          pane.ready = true
-          pane.painted()
-          return
-        }
-        try {
-          const attached = await this.options.rpc.attach({
-            terminal: pane.address,
-            cols: pane.wanted.cols,
-            rows: pane.wanted.rows,
-            history: HISTORY,
-            resumed: true,
-            // Programs asking for their colours are told the ones Canvas paints with.
-            display: {
-              fg: cssColour(terminalTheme.foreground),
-              bg: cssColour(terminalTheme.background),
-              cursor: cssColour(terminalTheme.cursor),
-              cell: [CORE_CELL.width, CORE_CELL.height],
-            },
-          })
-          if (pane.disposed || this.closed) {
-            attached.stream.close()
-            return
-          }
-          pane.stream = attached.stream
-          pane.resources.defer(() => attached.stream.close())
-          const nativeCols = Number(attached.terminal.cols),
-            nativeRows = Number(attached.terminal.rows)
-          validateViewport(nativeCols, nativeRows, 'core')
-          pane.engine.resize(nativeCols, nativeRows)
-          pane.parsedTurn = Number.isSafeInteger(attached.terminal.turn)
-            ? Number(attached.terminal.turn)
-            : 0
-          const initialStatus = attached.terminal.status as { state?: unknown } | null | undefined
-          pane.parsedState =
-            typeof initialStatus?.state === 'string' ? initialStatus.state : undefined
-          // Install all handlers before enabling queued DATA delivery.
-          pane.resources.use(
-            attached.stream.onResize((size) =>
-              this.enqueue(() => {
-                if (!pane.disposed) {
-                  pane.engine.resize(size.cols, size.rows)
-                  pane.revision++
-                  this.render()
-                }
-              }),
-            ),
-          )
-          pane.resources.use(
-            attached.stream.onClose((reason) => {
-              pane.stream = undefined
-              pane.ready = true
-              pane.painted()
-              if (!this.closed && !pane.disposed)
-                void this.refresh(async () => {
-                  if (
-                    !pane.disposed &&
-                    ['exited', 'killed', 'finished'].includes(String(reason?.reason))
-                  ) {
-                    await this.options.layout.reconcileClosedPanes(
-                      [{ id: pane.id, terminal: pane.address }],
-                      () => !this.closed,
-                    )
-                  }
-                  return this.options.layout.snapshot(this.state?.terminals)
-                })
-            }),
-          )
-          pane.resources.use(
-            attached.stream.onData((data) =>
-              this.enqueue(() => {
-                if (pane.disposed) return
-                // The core ends its first paint by saying whether the program wants win32 keys.
-                pane.live = pane.paintComplete
-                if (pane.win32.scan(data)) pane.paintComplete = true
-                const alternate = pane.engine.alternateScreen
-                pane.engine.write(data)
-                pane.revision++
-                // The scrollbar's column is the program's on the alternate screen.
-                if (pane.engine.alternateScreen !== alternate) this.resizeStreams(pane)
-                if (pane.paintComplete) {
-                  pane.ready = true
-                  pane.painted()
-                }
-                this.render()
-              }),
-            ),
-          )
-        } catch (error) {
-          this.disposePane(pane)
-          this.attached.delete(pane.id)
-          throw error
-        }
-      }),
-    )
+    await Promise.all(projected.panes.map((pane) => this.attachPane(pane, state, nativeSnapshot)))
     this.resizeStreams()
     this.revision++
     this.updateMetadata()
     this.snapshots.set()
     this.render()
+  }
+
+  /** The panes of a new snapshot whose program has exited, asking the core where in doubt. */
+  private async endedPanes(state: CoreSnapshot) {
+    const ended: Array<{ id: string; terminal: string }> = []
+    for (const tab of state.spaces.flatMap((space) => space.tabs).filter((tab) => !tab.synthetic)) {
+      for (const pane of panes(tab)) {
+        if (!pane.terminal) continue
+        const terminal = state.terminals.find((item) => item.address === pane.terminal)
+        if (
+          terminal?.state === 'finished' &&
+          ['exited', 'killed'].includes(String(terminal.reason))
+        )
+          ended.push({ id: pane.id, terminal: pane.terminal })
+        else if (!terminal) {
+          // Missing from a snapshot is not an exit: layout and native facts
+          // have separate waterlines. Ask only whether the record is closed.
+          try {
+            const result = await this.options.rpc.call('terminal.get', { terminal: pane.terminal })
+            const record =
+              result.terminal && typeof result.terminal === 'object'
+                ? (result.terminal as Record<string, unknown>)
+                : result
+            if (['exited', 'killed'].includes(String(record.reason)))
+              ended.push({ id: pane.id, terminal: pane.terminal })
+          } catch (error) {
+            if (error instanceof CoreRpcError && error.kind === 'not_found')
+              ended.push({ id: pane.id, terminal: pane.terminal })
+          }
+        }
+      }
+    }
+    return ended
+  }
+  /** Attaches a projected pane's terminal, unless the pane already shows it. */
+  private async attachPane(
+    projected: ReturnType<typeof projectTab>['panes'][number],
+    state: CoreSnapshot,
+    nativeSnapshot: boolean,
+  ) {
+    if (!projected.terminal) return
+    const terminal = state.terminals.find((terminal) => terminal.address === projected.terminal)
+    const available = terminal?.state === 'live' && !(terminal.reason && !terminal.pid)
+    const previous = this.attached.get(projected.id)
+    if (previous) {
+      // Fresh native facts recover ended streams and initial waiting panes in
+      // the same way, even when the restarted event was missed.
+      if (!nativeSnapshot || previous.stream || !previous.ready || !available) return
+      this.disposePane(previous)
+      this.attached.delete(previous.id)
+    }
+    const pane = this.makePane(
+      projected.id,
+      projected.terminal,
+      projected.rect.width,
+      projected.rect.height,
+    )
+    this.attached.set(pane.id, pane)
+    if (!available) {
+      pane.engine.write(
+        terminal?.state === 'live' ? '[Waiting for terminal recovery]' : '[Terminal finished]',
+      )
+      pane.ready = true
+      pane.painted()
+      return
+    }
+    try {
+      const attached = await this.options.rpc.attach({
+        terminal: pane.address,
+        cols: pane.wanted.cols,
+        rows: pane.wanted.rows,
+        history: HISTORY,
+        resumed: true,
+        // Programs asking for their colours are told the ones Canvas paints with.
+        display: {
+          fg: cssColour(terminalTheme.foreground),
+          bg: cssColour(terminalTheme.background),
+          cursor: cssColour(terminalTheme.cursor),
+          cell: [CORE_CELL.width, CORE_CELL.height],
+        },
+      })
+      if (pane.disposed || this.closed) {
+        attached.stream.close()
+        return
+      }
+      pane.stream = attached.stream
+      pane.resources.defer(() => attached.stream.close())
+      const nativeCols = Number(attached.terminal.cols),
+        nativeRows = Number(attached.terminal.rows)
+      validateViewport(nativeCols, nativeRows, 'core')
+      pane.engine.resize(nativeCols, nativeRows)
+      pane.parsedTurn = Number.isSafeInteger(attached.terminal.turn)
+        ? Number(attached.terminal.turn)
+        : 0
+      const initialStatus = attached.terminal.status as { state?: unknown } | null | undefined
+      pane.parsedState = typeof initialStatus?.state === 'string' ? initialStatus.state : undefined
+      this.followStream(pane, attached.stream)
+    } catch (error) {
+      this.disposePane(pane)
+      this.attached.delete(pane.id)
+      throw error
+    }
+  }
+  /** What a pane's stream says: its size, its end and its bytes, in the order sent. */
+  private followStream(pane: CorePane, stream: CoreStream) {
+    // Install all handlers before enabling queued DATA delivery.
+    pane.resources.use(
+      stream.onResize((size) =>
+        this.enqueue(() => {
+          if (!pane.disposed) {
+            pane.engine.resize(size.cols, size.rows)
+            pane.revision++
+            this.render()
+          }
+        }),
+      ),
+    )
+    pane.resources.use(
+      stream.onClose((reason) => {
+        pane.stream = undefined
+        pane.ready = true
+        pane.painted()
+        if (!this.closed && !pane.disposed)
+          void this.refresh(async () => {
+            if (
+              !pane.disposed &&
+              ['exited', 'killed', 'finished'].includes(String(reason?.reason))
+            ) {
+              await this.options.layout.reconcileClosedPanes(
+                [{ id: pane.id, terminal: pane.address }],
+                () => !this.closed,
+              )
+            }
+            return this.options.layout.snapshot(this.state?.terminals)
+          })
+      }),
+    )
+    pane.resources.use(
+      stream.onData((data) =>
+        this.enqueue(() => {
+          if (pane.disposed) return
+          // The core ends its first paint by saying whether the program wants win32 keys.
+          pane.live = pane.paintComplete
+          if (pane.win32.scan(data)) pane.paintComplete = true
+          const alternate = pane.engine.alternateScreen
+          pane.engine.write(data)
+          pane.revision++
+          // The scrollbar's column is the program's on the alternate screen.
+          if (pane.engine.alternateScreen !== alternate) this.resizeStreams(pane)
+          if (pane.paintComplete) {
+            pane.ready = true
+            pane.painted()
+          }
+          this.render()
+        }),
+      ),
+    )
   }
 
   /** A pane for a place `width` columns wide; its program starts beside the scrollbar. */
