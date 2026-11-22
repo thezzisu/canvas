@@ -3,13 +3,19 @@ import type { SourceResource } from '../../api/types'
 import { t } from '../../plugins/i18n'
 import type { FontPresentation } from '../../utils/settings/fonts'
 import { preventFileNavigation } from '../../utils/terminal/uploads'
-import { metadataAfterPoll, type LiveWindowMetadata } from '../../utils/workspace/live-resources'
+import { metadataAfterListing } from '../../utils/workspace/live-resources'
 import { clearDownloads } from '../files/downloads'
 import { clearCaptures, removeCaptures } from './capture'
 import { clearDirectories } from './directories'
 import { disposeSession } from './terminal-create'
 import { focusTerminal, ownsWheel } from './terminal-keys'
-import { liveTerminalMetadata, metadataKey, metadataSources } from './terminal-metadata'
+import {
+  liveTerminalMetadata,
+  metadataKey,
+  metadataPublishedAt,
+  metadataSources,
+  sawServerTime,
+} from './terminal-metadata'
 import { setTerminalFont } from './terminal-presentation'
 import { clearReadFocus, finishTerminalReadGesture } from './terminal-read-focus'
 import {
@@ -103,19 +109,17 @@ export function retainTerminalMetadata(
   }
   if (next.size !== liveTerminalMetadata.value.size) liveTerminalMetadata.value = next
 }
-/** A poll answered: live metadata it has caught up with is dropped, and vanished windows close. */
-export function acknowledgeTerminalMetadata(
-  started: ReadonlyMap<string, LiveWindowMetadata>,
-  resources: readonly SourceResource[],
-) {
+/** Sources were listed: metadata they have caught up with is dropped, and vanished windows close. */
+export function acknowledgeTerminalMetadata(resources: readonly SourceResource[]) {
   const current = liveTerminalMetadata.value
+  for (const source of resources) sawServerTime(source.readAt)
   const online = new Map(
     resources
       .filter((source) => source.status === 'online' && !source.error)
       .map((source) => [source.id, source]),
   )
-  const next = metadataAfterPoll(current, started, [...online.keys()])
-  if (next.size !== liveTerminalMetadata.value.size) liveTerminalMetadata.value = next
+  const next = metadataAfterListing(current, metadataPublishedAt, [...online.values()])
+  if (next.size !== current.size) liveTerminalMetadata.value = next
   for (const session of sessions.values()) {
     const source = online.get(session.resource.sourceId)
     if (!source) continue
@@ -126,7 +130,7 @@ export function acknowledgeTerminalMetadata(
     if (present) {
       if (session.state.status === 'closed' && next.get(key) !== null)
         session.reconnect.resume(true)
-    } else if (current.get(key) === started.get(key)) windowRemoved(session)
+    } else if (!next.has(key)) windowRemoved(session, source.readAt)
   }
 }
 
@@ -148,6 +152,7 @@ export function installTerminalEvents() {
 export function clearTerminals() {
   clearReadFocus()
   liveTerminalMetadata.value = new Map()
+  metadataPublishedAt.clear()
   metadataSources.clear()
   clearDownloads()
   clearDirectories()

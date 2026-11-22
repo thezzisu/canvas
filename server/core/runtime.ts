@@ -11,8 +11,16 @@ import {
   sourcePythonCommand,
   validateSource,
 } from '../source-command.ts'
-import { holding, trackTerminal, tunnelRequest } from '../source-connections.ts'
-import type { Runtime } from '../runtimes.ts'
+import { watchCore } from './watch.ts'
+import type { StartWatch } from '../source-follow.ts'
+import {
+  forgetEndpoint,
+  holding,
+  rememberEndpoint,
+  trackTerminal,
+  tunnelRequest,
+} from '../source-connections.ts'
+import type { Runtime, RuntimeListing } from '../runtimes.ts'
 
 async function discoverCoreSocket(source: Source, signal?: AbortSignal): Promise<string> {
   signal?.throwIfAborted()
@@ -28,7 +36,7 @@ async function discoverCoreSocket(source: Source, signal?: AbortSignal): Promise
 }
 
 async function connectedCoreSocket(source: Source, signal?: AbortSignal): Promise<string> {
-  const socket = await discoverCoreSocket(source, signal)
+  const socket = await rememberEndpoint(source, () => discoverCoreSocket(source, signal))
   signal?.throwIfAborted()
   if (source.transport === 'local') return socket
   const tunnel = await ensureSocketTunnel({
@@ -45,13 +53,42 @@ async function withCore<T>(
 ): Promise<T> {
   validateSource(source)
   return holding(source, async () => {
-    const rpc = await CoreRpc.connect(await connectedCoreSocket(source, signal), { signal })
+    const rpc = await connectCore(source, signal)
     try {
       return await operation(new CoreLayout(rpc), rpc)
     } finally {
       rpc.close()
     }
   })
+}
+
+async function connectCore(source: Source, signal?: AbortSignal): Promise<CoreRpc> {
+  try {
+    return await CoreRpc.connect(await connectedCoreSocket(source, signal), { signal })
+  } catch (error) {
+    forgetEndpoint(source)
+    throw error
+  }
+}
+
+const watch: StartWatch<RuntimeListing> = async (source, handlers, signal) => {
+  validateSource(source)
+  const rpc = await connectCore(source, signal)
+  const layout = new CoreLayout(rpc)
+  return watchCore(
+    rpc,
+    async () => ({
+      spaces: layout.resources(await layout.snapshot()),
+      serverVersion: rpc.hello.version,
+    }),
+    {
+      snapshot: (value, readAt) => handlers.snapshot(value, readAt),
+      ended(error) {
+        forgetEndpoint(source)
+        handlers.ended(error)
+      },
+    },
+  )
 }
 
 /** herdr-core, through one RPC connection per operation and per open window. */
@@ -62,7 +99,8 @@ export const coreRuntime: Runtime = {
       spaces: layout.resources(await layout.snapshot()),
       serverVersion: rpc.hello.version,
     })),
-  nativeSocket: (source) => discoverCoreSocket(source),
+  nativeSocket: (source) => rememberEndpoint(source, () => discoverCoreSocket(source)),
+  watch,
   createSpace: (source, label, sourceSpaceId) =>
     withCore(source, (layout) => layout.createSpace(label, sourceSpaceId)),
   renameSpace: (source, spaceId, label) =>

@@ -31,7 +31,7 @@
 //   presentation      { maximized, owned, token?, lease? }; after the FRAME when a view resumes
 //   focus-resize      { active, owned, token?, reason? }, the maximized viewport lease
 //   pane-focus        { paneId }
-//   metadata          { window }
+//   metadata          { window, at }, `at` when it was published on the server's clock
 //   mouse-areas       { areas }, where the window's programs take the mouse (MouseArea[]);
 //                     sent when it changes, and on joining when any program takes it
 //   completion-frame  { generation, focusedPaneId, layout, panes }; follows the cell message
@@ -60,8 +60,9 @@ import type { TerminalChannel } from './terminal-channels.ts'
 import { sourceConnectionKey, type Source } from './state.ts'
 import { openTerminal } from './runtimes.ts'
 import { GeometryController, type Size } from './geometry.ts'
+import { serverTime } from './server-time.ts'
 import type { WindowTransport } from './transport.ts'
-import type { Subscribable } from './channels.ts'
+import { Events, type Subscribable } from './channels.ts'
 import { NotificationIntake } from './notification-intake.ts'
 import type { FrameData } from './herdr/wire.ts'
 import { GridEncoder } from './cell-grid.ts'
@@ -114,6 +115,7 @@ export class LiveTerminal {
   private presentationRevision = 0
   private focusedPaneId?: string
   private metadata?: WindowMetadata
+  private metadataAt = 0
   private bellQueued = false
   private rawMetadata?: WindowMetadata
   private frame?: WindowMetadata
@@ -250,6 +252,7 @@ export class LiveTerminal {
   private publishMetadata() {
     if (this.closed || !this.rawMetadata) return
     this.metadata = this.reads?.project(this.source, this.rawMetadata) || this.rawMetadata
+    this.metadataAt = serverTime()
     for (const ws of this.clients) this.sendMetadata(ws)
   }
   /**
@@ -265,7 +268,7 @@ export class LiveTerminal {
     }
     const state = { due: false }
     this.metadataSends.set(ws, state)
-    ws.send({ type: 'metadata', window: this.metadata }, () => {
+    ws.send({ type: 'metadata', window: this.metadata, at: this.metadataAt }, () => {
       this.metadataSends.delete(ws)
       if (state.due && !this.closed) this.sendMetadata(ws)
     })
@@ -680,7 +683,7 @@ export class LiveTerminal {
     // viewport/tunnel cleanup so viewers never treat that cleanup as an outage.
     if (reason === 'removed')
       for (const ws of this.clients) {
-        json(ws, { type: 'status', status: 'removed' })
+        json(ws, { type: 'status', status: 'removed', at: serverTime() })
         ws.close()
       }
     this.closing = (async () => {
@@ -710,6 +713,8 @@ export class TerminalManager {
   private stopped = false
   private closingSources = new Set<string>()
   private readonly intake: NotificationIntake
+  /** Sources whose open windows changed what Canvas adds to their listing. */
+  readonly listingChanges = new Events<string>()
   constructor(
     private readonly reads?: CompletionReads,
     private readonly onFocusedWindowRemoved?: (source: Source, windowId: string) => void,
@@ -782,6 +787,7 @@ export class TerminalManager {
               this.entries.delete(key)
               this.live.delete(terminal)
               this.intake.observe(source)
+              this.listingChanges.emit(source.id)
             },
             transport,
             source,
@@ -799,6 +805,13 @@ export class TerminalManager {
           transport.notifications.subscribe((notification) =>
             this.intake.receive(source, terminal, notification),
           )
+          let progress = JSON.stringify(terminal.progress)
+          transport.metadata.subscribe(() => {
+            const next = JSON.stringify(terminal.progress)
+            if (next === progress) return
+            progress = next
+            this.listingChanges.emit(source.id)
+          })
           return terminal
         } catch (error) {
           transport?.kill()

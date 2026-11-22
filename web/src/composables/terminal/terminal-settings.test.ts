@@ -141,6 +141,7 @@ test('confirmed native closure removes its overrides; offline discovery and othe
       id: source.id,
       name: source.name,
       status,
+      readAt: 0,
       spaces: [{ id: 'space', name: 'Space', windows: ids.map((id) => ({ id, name: id })) }],
     },
   ]

@@ -12,12 +12,14 @@ test('window picker retains configured connection order and excludes added windo
       id: 'a',
       name: 'First machine',
       status: 'connected',
+      readAt: 0,
       spaces: [{ id: 'space', name: 'Work', windows: [{ id: 'w', name: 'Agent' }] }],
     },
     {
       id: 'b',
       name: 'Second machine',
       status: 'connected',
+      readAt: 0,
       spaces: [
         {
           id: 'moved',
@@ -87,6 +89,7 @@ test('window search includes the displayed active terminal title and follows tit
       id: 'source',
       name: 'Machine',
       status: 'online',
+      readAt: 0,
       spaces: [{ id: 'space', name: 'Work', windows: [window] }],
     },
   ]

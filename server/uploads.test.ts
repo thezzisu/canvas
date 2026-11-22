@@ -112,6 +112,7 @@ function fixture(
       (await options.beforeResources?.(),
       {
         ...source,
+        readAt: 0,
         status: 'online',
         spaces: [
           {

@@ -2,12 +2,9 @@
 import { ensureSocketTunnel } from '../ssh-tunnels.ts'
 import type { Source } from '../state.ts'
 import { createHerdrClient } from '../herdr/client.ts'
-import {
-  PaneTitles,
-  paneTitle,
-  subscribePaneUpdates,
-  type PaneRecord,
-} from '../herdr/pane-titles.ts'
+import { PaneTitles, paneTitle, type PaneRecord } from '../herdr/pane-titles.ts'
+import { watchHerdr } from './watch.ts'
+import { followSource, type StartWatch } from '../source-follow.ts'
 import {
   discoverHerdrPython,
   herdrApiRequest,
@@ -25,12 +22,14 @@ import {
 } from '../source-command.ts'
 import {
   closeTerminals,
+  forgetEndpoint,
   holding,
   onRelease,
+  rememberEndpoint,
   trackTerminal,
   tunnelRequest,
 } from '../source-connections.ts'
-import type { PaneResource, Runtime, SourceResource } from '../runtimes.ts'
+import type { PaneResource, Runtime, RuntimeListing } from '../runtimes.ts'
 
 async function discoverHerdrSockets(source: Source, signal?: AbortSignal): Promise<HerdrSockets> {
   signal?.throwIfAborted()
@@ -47,7 +46,7 @@ async function discoverHerdrSockets(source: Source, signal?: AbortSignal): Promi
 }
 
 async function connectedHerdrSockets(source: Source, signal?: AbortSignal): Promise<HerdrSockets> {
-  const paths = await discoverHerdrSockets(source, signal)
+  const paths = await rememberEndpoint(source, () => discoverHerdrSockets(source, signal))
   signal?.throwIfAborted()
   if (source.transport === 'local') return paths
   const tunnel = await ensureSocketTunnel({
@@ -57,68 +56,47 @@ async function connectedHerdrSockets(source: Source, signal?: AbortSignal): Prom
   return { api: tunnel.sockets['herdr.sock']!, client: tunnel.sockets['herdr-client.sock']! }
 }
 
-/** Pane titles of each herdr source that has an open window, followed through its API. */
-const followedTitles = new Map<string, { titles: PaneTitles; stop(): void }>()
+/** Pane titles of each followed herdr source, as its watch is told them. */
+const followedTitles = new Map<string, PaneTitles>()
 onRelease((sourceId) => {
-  for (const [id, followed] of followedTitles)
+  for (const [id, titles] of followedTitles)
     if (sourceId === undefined || id === sourceId) {
-      followed.stop()
       followedTitles.delete(id)
+      titles.clear()
     }
 })
-
-/**
- * Subscribes to the source's `pane.updated` events, then reads `session.snapshot`, so no change
- * falls between the two. A subscription that ends forgets the titles and starts again.
- */
-function followPaneTitles(source: Source): PaneTitles {
-  const followed = followedTitles.get(source.id)
-  if (followed) return followed.titles
-  const titles = new PaneTitles()
-  let subscription: { close(): void } | undefined,
-    retry: ReturnType<typeof setTimeout> | undefined,
-    delay = 1000,
-    stopped = false
-  const restart = () => {
-    if (stopped) return
-    titles.clear()
-    retry = setTimeout(() => void start(), delay)
-    retry.unref()
-    delay = Math.min(delay * 2, 30_000)
-  }
-  const start = async () => {
-    let api: string
-    try {
-      api = (await connectedHerdrSockets(source)).api
-    } catch {
-      restart()
-      return
-    }
-    if (stopped) return
-    subscription = subscribePaneUpdates(api, {
-      started: () =>
-        void herdrApiRequest(api, 'session.snapshot')
-          .then((result) => {
-            if (stopped) return
-            titles.replace(snapshotPanes(result))
-            delay = 1000
-          })
-          .catch(() => subscription?.close()),
-      pane: (record) => titles.update(record),
-      ended: restart,
-    })
-  }
-  followedTitles.set(source.id, {
-    titles,
-    stop: () => {
-      stopped = true
-      clearTimeout(retry)
-      subscription?.close()
-      titles.clear()
-    },
-  })
-  void start()
+function titlesOf(source: Source): PaneTitles {
+  let titles = followedTitles.get(source.id)
+  if (!titles) followedTitles.set(source.id, (titles = new PaneTitles()))
   return titles
+}
+
+const watch: StartWatch<RuntimeListing> = async (source, handlers, signal) => {
+  validateSource(source)
+  const titles = titlesOf(source)
+  try {
+    const { api } = await connectedHerdrSockets(source, signal)
+    const watching = watchHerdr(api, {
+      snapshot: (result, readAt) => handlers.snapshot(listing(source, result), readAt),
+      pane: (record) => titles.update(record),
+      ended(error) {
+        // What it said may be out of date, and it may listen elsewhere when it is back.
+        titles.clear()
+        forgetEndpoint(source)
+        handlers.ended(error)
+      },
+    })
+    return {
+      refresh: () => watching.refresh(),
+      close() {
+        watching.close()
+        titles.clear()
+      },
+    }
+  } catch (error) {
+    forgetEndpoint(source)
+    throw error
+  }
 }
 
 function snapshotPanes(result: Record<string, unknown>): PaneRecord[] {
@@ -133,9 +111,15 @@ async function requestHerdr(
   signal?: AbortSignal,
 ) {
   validateSource(source)
-  return holding(source, async () =>
-    herdrApiRequest((await connectedHerdrSockets(source, signal)).api, method, params, { signal }),
-  )
+  return holding(source, async () => {
+    try {
+      const { api } = await connectedHerdrSockets(source, signal)
+      return await herdrApiRequest(api, method, params, { signal })
+    } catch (error) {
+      forgetEndpoint(source)
+      throw error
+    }
+  })
 }
 
 function name(value: string): string {
@@ -144,11 +128,12 @@ function name(value: string): string {
   return value.trim()
 }
 
-async function resources(
-  source: Source,
-  signal?: AbortSignal,
-): Promise<Pick<SourceResource, 'spaces' | 'serverVersion'>> {
-  const response = await requestHerdr(source, 'session.snapshot', {}, signal)
+async function resources(source: Source, signal?: AbortSignal): Promise<RuntimeListing> {
+  return listing(source, await requestHerdr(source, 'session.snapshot', {}, signal))
+}
+
+/** What Canvas lists of a `session.snapshot`. */
+function listing(source: Source, response: Record<string, unknown>): RuntimeListing {
   const snapshot = response.snapshot as {
     version?: unknown
     agents?: Array<{
@@ -174,7 +159,7 @@ async function resources(
   if (!snapshot || !Array.isArray(snapshot.workspaces) || !Array.isArray(snapshot.tabs))
     throw new Error('Unexpected herdr snapshot response')
   // A followed source's titles may be newer than this snapshot: per pane, the newer wins.
-  const titles = followedTitles.get(source.id)?.titles
+  const titles = followedTitles.get(source.id)
   titles?.replace(snapshotPanes(response))
   // PaneInfo.focused is global; layouts retain each tab's selected pane.
   const focusedPanes = new Map(
@@ -268,7 +253,9 @@ export const herdrRuntime: Runtime = {
     return serverVersion
   },
   resources: (source) => resources(source),
-  nativeSocket: async (source) => (await discoverHerdrSockets(source)).api,
+  nativeSocket: async (source) =>
+    (await rememberEndpoint(source, () => discoverHerdrSockets(source))).api,
+  watch,
   async createSpace(source, label, sourceSpaceId) {
     if (sourceSpaceId) await requireSpace(source, sourceSpaceId)
     return createdWindow(
@@ -327,7 +314,10 @@ export const herdrRuntime: Runtime = {
   },
   async openTerminal(source, spaceId, windowId) {
     const sockets = await connectedHerdrSockets(source)
-    const { cleanup } = trackTerminal(source, spaceId, windowId)
+    // An open window follows its source for the titles.
+    const titles = titlesOf(source)
+    const following = followSource(source, watch, { snapshot() {}, failed() {} })
+    const { cleanup } = trackTerminal(source, spaceId, windowId, () => following[Symbol.dispose]())
     return {
       connect: (cols, rows) =>
         createHerdrClient({
@@ -338,7 +328,7 @@ export const herdrRuntime: Runtime = {
           readSelection: (params) => herdrApiRequest(sockets.api, 'pane.selection.read', params),
           readContent: async (params) =>
             (await herdrApiRequest(sockets.api, 'pane.read', params, { timeoutMs: 5000 })).read,
-          titles: followPaneTitles(source),
+          titles,
         }),
       cleanup,
     }

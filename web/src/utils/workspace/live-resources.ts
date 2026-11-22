@@ -19,21 +19,32 @@ export function windowIsClosed(
   )
 }
 
-/** A poll may supersede only metadata that was already known when it began. */
-export function metadataAfterPoll(
+/** A listing may supersede only metadata published before its read began. */
+export function metadataAfterListing(
   current: ReadonlyMap<string, LiveWindowMetadata>,
-  started: ReadonlyMap<string, LiveWindowMetadata>,
-  sourceIds: readonly string[],
+  publishedAt: ReadonlyMap<string, number>,
+  listings: readonly Pick<SourceResource, 'id' | 'readAt'>[],
 ) {
-  const sources = new Set(sourceIds)
+  const readAt = new Map(listings.map((listing) => [listing.id, listing.readAt]))
   return new Map(
-    [...current].filter(
-      ([key, value]) => !sources.has(key.slice(0, key.indexOf('/'))) || started.get(key) !== value,
-    ),
+    [...current].filter(([key]) => {
+      const read = readAt.get(key.slice(0, key.indexOf('/')))
+      return read === undefined || (publishedAt.get(key) ?? 0) > read
+    }),
   )
 }
 
-/** Live endpoint metadata wins over an older or slow all-source poll. */
+/** The listings that are news: a push and a request may overtake each other. */
+export function newerListings(
+  held: readonly SourceResource[],
+  incoming: readonly SourceResource[],
+): SourceResource[] {
+  return incoming.filter(
+    (listing) => !held.some((known) => known.id === listing.id && known.readAt > listing.readAt),
+  )
+}
+
+/** Live endpoint metadata wins over a listing read before it. */
 export function mergeLiveResources(
   sources: readonly SourceResource[],
   metadata: ReadonlyMap<string, LiveWindowMetadata>,
@@ -51,7 +62,7 @@ export function mergeLiveResources(
             ...live,
             panes: live.panes.map((pane) => ({
               ...pane,
-              // A pane the server has no title for yet keeps the polled one.
+              // A pane the server has no title for yet keeps the listed one.
               terminalTitle:
                 pane.terminalTitle ??
                 window.panes?.find((previous) => previous.id === pane.id)?.terminalTitle,

@@ -529,6 +529,14 @@ test('SSH herdr discovers native sockets and shares direct API forwarding withou
       input += data.toString()
       if (!input.includes('\n')) return
       const request = JSON.parse(input.split('\n')[0]!)
+      input = ''
+      // An open window follows its source through one subscription on the same forward.
+      if (request.method === 'events.subscribe') {
+        socket.write(
+          JSON.stringify({ id: request.id, result: { type: 'subscription_started' } }) + '\n',
+        )
+        return
+      }
       assert.equal(request.method, 'session.snapshot')
       socket.end(
         JSON.stringify({
@@ -760,6 +768,7 @@ test('a listing carries the progress its open windows report, and only theirs', 
   const resource: SourceResource = {
     id: 'source',
     name: 'Source',
+    readAt: 0,
     status: 'online',
     spaces: [{ id: 'space', name: 'Space', windows: [window('open'), window('closed')] }],
   }

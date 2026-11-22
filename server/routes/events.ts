@@ -1,10 +1,11 @@
-// The live event stream of state changes and notifications.
+// The live event stream of state changes, what the sources list, and notifications.
 import { bearerToken } from '../auth.ts'
 import { type Source } from '../state.ts'
 import type { CanvasNotification } from '../../shared/notification.ts'
+import type { SourceResource } from '../runtimes.ts'
 import type { RouteContext } from './context.ts'
 
-export function eventRoutes({ app, store, account, terminals }: RouteContext) {
+export function eventRoutes({ app, store, account, terminals, options }: RouteContext) {
   app.get('/api/events', (c) => {
     const session = bearerToken(c.req.header('authorization'))
     const encoder = new TextEncoder()
@@ -13,14 +14,23 @@ export function eventRoutes({ app, store, account, terminals }: RouteContext) {
     const notificationQueue: string[] = []
     let heartbeat: ReturnType<typeof setInterval> | undefined
     let notifications: Disposable | undefined
+    // A browser that is slow is sent each source as last read, not the readings in between.
+    const listings = new Map<string, string>()
+    let listed: Disposable | undefined
+    let viewing: Disposable | undefined
     let closed = false
     const flush = () => {
       if (!closed && (controller.desiredSize ?? 0) > 0) {
-        const event = pending || notificationQueue.shift()
-        if (event) {
-          pending = undefined
-          controller.enqueue(encoder.encode(event))
+        let event = pending || notificationQueue.shift()
+        pending = undefined
+        if (!event) {
+          const next = listings.entries().next().value
+          if (next) {
+            listings.delete(next[0])
+            event = next[1]
+          }
         }
+        if (event) controller.enqueue(encoder.encode(event))
       }
     }
     const close = (unauthorized = false) => {
@@ -28,6 +38,9 @@ export function eventRoutes({ app, store, account, terminals }: RouteContext) {
       closed = true
       clearInterval(heartbeat)
       notifications?.[Symbol.dispose]()
+      listed?.[Symbol.dispose]()
+      viewing?.[Symbol.dispose]()
+      listings.clear()
       notificationQueue.length = 0
       store.off('change', publish)
       store.off('sessions', checkSession)
@@ -71,6 +84,11 @@ export function eventRoutes({ app, store, account, terminals }: RouteContext) {
       notificationQueue.push(`event: notification\ndata: ${JSON.stringify(notification)}\n\n`)
       flush()
     }
+    const publishListing = (resource: SourceResource) => {
+      if (closed || !checkSession()) return
+      listings.set(resource.id, `event: resources\ndata: ${JSON.stringify(resource)}\n\n`)
+      flush()
+    }
     const aborted = () => close()
     const stream = new ReadableStream<Uint8Array>({
       start(value) {
@@ -91,6 +109,9 @@ export function eventRoutes({ app, store, account, terminals }: RouteContext) {
         }, 15_000)
         heartbeat.unref()
         publish()
+        // Listening comes first, so the reading this browser causes reaches it.
+        listed = options.watchers?.changes.subscribe(publishListing)
+        viewing = options.watchers?.view()
       },
       pull: flush,
       cancel: () => close(),

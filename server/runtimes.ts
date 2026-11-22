@@ -6,7 +6,15 @@ import type { CompletionToken } from '../shared/completion.ts'
 import { type ProgramStatus } from '../shared/status.ts'
 import type { WindowProgress } from '../shared/window-metadata.ts'
 import { validateSource } from './source-command.ts'
+import { serverTime } from './server-time.ts'
 import { closeRuntimeConnections, holding } from './source-connections.ts'
+import {
+  followSource,
+  refreshSource,
+  type FollowListener,
+  type Following,
+  type StartWatch,
+} from './source-follow.ts'
 import { coreRuntime } from './core/runtime.ts'
 import { herdrRuntime } from './herdr/runtime.ts'
 
@@ -40,8 +48,12 @@ export interface SourceResource {
   status: 'online' | 'offline'
   error?: string
   serverVersion?: string
+  /** When the read of it began, on the server's clock. */
+  readAt: number
   spaces: SpaceResource[]
 }
+/** What a runtime lists of a source. */
+export type RuntimeListing = Pick<SourceResource, 'spaces' | 'serverVersion'>
 export interface TerminalHandle {
   connect(cols: number, rows: number): Promise<WindowTransport>
   cleanup(): Promise<void>
@@ -51,7 +63,9 @@ export interface TerminalHandle {
 export interface Runtime {
   /** The server's version, read through a connection of its own. */
   version(source: Source, signal?: AbortSignal): Promise<string>
-  resources(source: Source): Promise<Pick<SourceResource, 'spaces' | 'serverVersion'>>
+  resources(source: Source): Promise<RuntimeListing>
+  /** Reports what `resources` would list, whenever it may have changed. */
+  watch: StartWatch<RuntimeListing>
   /** The socket a canvas helper on the source talks to. */
   nativeSocket(source: Source): Promise<string>
   createSpace(
@@ -89,7 +103,13 @@ export async function probeSource(
 
 export async function listResources(source: Source): Promise<SourceResource> {
   validateSource(source)
-  const result: SourceResource = { id: source.id, name: source.name, status: 'online', spaces: [] }
+  const result: SourceResource = {
+    id: source.id,
+    name: source.name,
+    status: 'online',
+    readAt: serverTime(),
+    spaces: [],
+  }
   try {
     Object.assign(result, await runtimeOf(source).resources(source))
   } catch (error) {
@@ -138,18 +158,32 @@ export async function nativeSocketForSource(source: Source): Promise<string> {
   validateSource(source)
   return runtimeOf(source).nativeSocket(source)
 }
+/** Follows what the source lists, until disposed. */
+export const followResources = (
+  source: Source,
+  listener: FollowListener<RuntimeListing>,
+): Following => followSource(source, runtimeOf(source).watch, listener)
+
+/** A change Canvas makes is read again: not every runtime announces every one. */
+async function changing<T>(source: Source, change: (runtime: Runtime) => Promise<T>): Promise<T> {
+  try {
+    return await change(runtimeOf(source))
+  } finally {
+    refreshSource(source)
+  }
+}
 export const createSpace = (source: Source, label?: string, sourceSpaceId?: string) =>
-  runtimeOf(source).createSpace(source, label, sourceSpaceId)
+  changing(source, (runtime) => runtime.createSpace(source, label, sourceSpaceId))
 export const renameSpace = (source: Source, spaceId: string, label: string) =>
-  runtimeOf(source).renameSpace(source, spaceId, label)
+  changing(source, (runtime) => runtime.renameSpace(source, spaceId, label))
 export const closeSpace = (source: Source, spaceId: string) =>
-  runtimeOf(source).closeSpace(source, spaceId)
+  changing(source, (runtime) => runtime.closeSpace(source, spaceId))
 export const createWindow = (source: Source, spaceId: string, label?: string) =>
-  runtimeOf(source).createWindow(source, spaceId, label)
+  changing(source, (runtime) => runtime.createWindow(source, spaceId, label))
 export const renameWindow = (source: Source, spaceId: string, windowId: string, label: string) =>
-  runtimeOf(source).renameWindow(source, spaceId, windowId, label)
+  changing(source, (runtime) => runtime.renameWindow(source, spaceId, windowId, label))
 export const closeWindow = (source: Source, spaceId: string, windowId: string) =>
-  runtimeOf(source).closeWindow(source, spaceId, windowId)
+  changing(source, (runtime) => runtime.closeWindow(source, spaceId, windowId))
 
 export function openTerminal(
   source: Source,

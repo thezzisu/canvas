@@ -200,7 +200,13 @@ test('state streaming reads UTF-8 and SSE fields across arbitrary network chunk 
     },
   })
   const events: Array<{ event: string; data: string }> = []
-  await readStateEvents(stream, (event, data) => events.push({ event, data }))
+  let chunks = 0
+  await readStateEvents(
+    stream,
+    (event, data) => events.push({ event, data }),
+    () => chunks++,
+  )
+  assert(chunks > 0, 'arriving bytes keep the stream from being taken for stuck')
   assert.deepEqual(
     events.map((item) => item.event),
     ['state', 'unauthorized'],

@@ -29,6 +29,7 @@ const resources = {
   id: source.id,
   name: source.name,
   status: 'online' as const,
+  readAt: 0,
   spaces: [
     {
       id: 'space',

@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSocketTunnels, ensureSocketTunnel } from './ssh-tunnels.ts'
 import { isLoopbackHost } from './loopback.ts'
-import type { Source } from './state.ts'
+import { sourceConnectionKey, type Source } from './state.ts'
 import { commandEnvironment, sshOptions, validateSource } from './source-command.ts'
 
 const active = new Set<{
@@ -81,23 +81,46 @@ const releases = new Set<(sourceId?: string) => void>()
 export function onRelease(release: (sourceId?: string) => void) {
   releases.add(release)
 }
+const discovered = new Map<string, { sourceId: string; value: unknown }>()
+/** Where the source's runtime listens, looked up again only after connecting there failed. */
+export async function rememberEndpoint<T>(source: Source, discover: () => Promise<T>): Promise<T> {
+  const key = sourceConnectionKey(source)
+  const known = discovered.get(key)
+  if (known) return known.value as T
+  const value = await discover()
+  discovered.set(key, { sourceId: source.id, value })
+  return value
+}
+export function forgetEndpoint(source: Source) {
+  discovered.delete(sourceConnectionKey(source))
+}
 /** Close only Canvas-owned socket forwards; no workstation SSH configuration changes. */
 export async function closeRuntimeConnections(sourceId?: string): Promise<void> {
   for (const release of releases) release(sourceId)
+  for (const [key, endpoint] of discovered)
+    if (sourceId === undefined || endpoint.sourceId === sourceId) discovered.delete(key)
   await closeSocketTunnels(sourceId)
 }
 
+/** Keeps the source's connections up until the returned hold is released. */
+export function holdConnections(source: Source): AsyncDisposable {
+  preparing.set(source.id, (preparing.get(source.id) || 0) + 1)
+  let held = true
+  return {
+    async [Symbol.asyncDispose]() {
+      if (!held) return
+      held = false
+      const count = preparing.get(source.id)! - 1
+      if (count) preparing.set(source.id, count)
+      else preparing.delete(source.id)
+      await releaseIdleConnections(source.id)
+    },
+  }
+}
 /** Keeps the source's connections up while `operation` runs, and releases them if unused after. */
 export async function holding<T>(source: Source, operation: () => Promise<T>): Promise<T> {
-  preparing.set(source.id, (preparing.get(source.id) || 0) + 1)
-  try {
-    return await operation()
-  } finally {
-    const count = preparing.get(source.id)! - 1
-    if (count) preparing.set(source.id, count)
-    else preparing.delete(source.id)
-    await releaseIdleConnections(source.id)
-  }
+  await using _held = holdConnections(source)
+  return await operation()
 }
 
 /**

@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto'
-import { createConnection } from 'node:net'
 import { Events, type Subscribable } from '../channels.ts'
 
 // The pane titles of one herdr server, as its API publishes them: `session.snapshot` and
@@ -76,72 +74,4 @@ export class PaneTitles implements PaneTitleSource {
   private notify(changed: ReadonlySet<string>) {
     if (changed.size) this.changes.emit(changed)
   }
-}
-
-const MAX_LINE = 1024 * 1024
-
-/**
- * Follows `pane.updated` on herdr's API socket. `started` runs once herdr has accepted the
- * subscription, so a snapshot read after it misses nothing; `ended` runs once, when the
- * subscription ends for any reason, including herdr reporting lost events.
- */
-export function subscribePaneUpdates(
-  socketPath: string,
-  handlers: { started(): void; pane(record: PaneRecord): void; ended(error?: Error): void },
-  options: { timeoutMs?: number } = {},
-): { close(): void } {
-  const id = randomUUID(),
-    socket = createConnection(socketPath)
-  let buffer = Buffer.alloc(0),
-    started = false,
-    ended = false
-  const end = (error?: Error) => {
-    if (ended) return
-    ended = true
-    clearTimeout(timer)
-    socket.destroy()
-    handlers.ended(error)
-  }
-  const timer = setTimeout(
-    () => end(new Error('Herdr did not start the pane subscription')),
-    options.timeoutMs ?? 15_000,
-  )
-  timer.unref()
-  socket.once('connect', () =>
-    socket.write(
-      JSON.stringify({
-        id,
-        method: 'events.subscribe',
-        params: { subscriptions: [{ type: 'pane.updated' }] },
-      }) + '\n',
-    ),
-  )
-  socket.on('error', (error) => end(new Error(`Herdr API connection failed: ${error.message}`)))
-  socket.once('end', () => end(new Error('Herdr ended the pane subscription')))
-  socket.on('data', (chunk: Buffer) => {
-    buffer = Buffer.concat([buffer, chunk])
-    for (let index; !ended && (index = buffer.indexOf(10)) >= 0;) {
-      const line = buffer.subarray(0, index).toString('utf8')
-      buffer = buffer.subarray(index + 1)
-      let message
-      try {
-        message = JSON.parse(line)
-      } catch {
-        end(new Error('Invalid herdr event'))
-        return
-      }
-      if (message?.id === id) {
-        if (message.error || message.result?.type !== 'subscription_started') {
-          end(new Error(`Herdr ended the pane subscription: ${message.error?.code || 'refused'}`))
-          return
-        }
-        started = true
-        clearTimeout(timer)
-        handlers.started()
-      } else if (started && message?.event === 'pane_updated' && message.data?.pane)
-        handlers.pane(message.data.pane)
-    }
-    if (buffer.length > MAX_LINE) end(new Error('Herdr event is too large'))
-  })
-  return { close: () => end() }
 }

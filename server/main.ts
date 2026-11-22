@@ -22,7 +22,8 @@ import {
   writeRemoteBridgeRegistry,
   installCanvasHelper,
 } from './canvas-helper.ts'
-import { listResources } from './runtimes.ts'
+import { followResources, listResources, withProgress } from './runtimes.ts'
+import { SourceWatchers } from './source-watchers.ts'
 import { editorAuthority } from './source-command.ts'
 import { OpenDownloadService } from './open-download.ts'
 import { AssetStore } from './assets.ts'
@@ -60,8 +61,17 @@ const terminals = new TerminalManager(
   (sourceId, windowId) => captures.current(sourceId, windowId),
   (source, windowId) => store.markWindowRead(source, windowId),
 )
+const watchers = new SourceWatchers({
+  sources: () => store.list<Source>('source'),
+  follow: followResources,
+  project: (source, resource) =>
+    completionReads.projectResources(source, withProgress(resource, terminals.progress(source.id))),
+})
+completionReads.changes.subscribe((sourceId) => watchers.refresh(sourceId))
+terminals.listingChanges.subscribe((sourceId) => watchers.refresh(sourceId))
 store.on('change', (normalGeometryChanged: boolean) => {
   if (normalGeometryChanged) terminals.refreshNormalSizes()
+  watchers.sync()
 })
 const uploads = new UploadService(terminals)
 const helperBytes = readFileSync(new URL('../cli/canvas', import.meta.url))
@@ -182,6 +192,7 @@ const windowContent = new WindowContentService({
 const allowedOrigins = parseAllowedOrigins(process.env.CANVAS_ALLOWED_ORIGINS)
 const app = createApp(store, account, terminals, {
   completionReads,
+  watchers,
   updateAccount: (username, password) => accounts.update(username, password),
   allowedOrigins,
   openDownload: (ticket, session) => downloads.open(ticket, session),
@@ -407,6 +418,7 @@ async function stop() {
   stopping = true
   clearInterval(heartbeat)
   eventLoop[Symbol.dispose]()
+  watchers[Symbol.dispose]()
   windowContent.close()
   await captures.close()
   await sourcePreviews.close()

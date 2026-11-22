@@ -27,6 +27,7 @@ export type LogEvent =
   | 'frame-gap'
   | 'event-loop'
   | 'tunnel'
+  | 'watch'
 
 /** Every word a field may hold. */
 export type LogWord =

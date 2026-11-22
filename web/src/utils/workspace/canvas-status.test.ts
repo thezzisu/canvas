@@ -13,6 +13,7 @@ const resources: SourceResource[] = [
     id: 'a',
     name: 'A',
     status: 'online',
+    readAt: 0,
     spaces: [
       {
         id: 'space',
@@ -112,6 +113,7 @@ test('an offline source cannot override live work in another source or leak stat
   const online = {
     ...resources[0]!,
     id: 'b',
+    readAt: 0,
     spaces: [
       {
         id: 's',
@@ -132,6 +134,7 @@ test('an offline source cannot override live work in another source or leak stat
 test('online connections count every window across spaces; unavailable ones keep only their reason', () => {
   const source: SourceResource = {
     ...resources[0]!,
+    readAt: 0,
     spaces: [
       ...resources[0]!.spaces,
       { id: 'other', name: 'Other', windows: [{ id: 'idle', name: 'Idle', status: 'idle' }] },

@@ -1,6 +1,8 @@
 export async function readStateEvents(
   stream: ReadableStream<Uint8Array>,
   receive: (event: string, data: string) => void,
+  /** Bytes arrived, if only a keepalive. */
+  alive: () => void = () => {},
 ) {
   const reader = stream.getReader(),
     decoder = new TextDecoder()
@@ -11,6 +13,7 @@ export async function readStateEvents(
     while (true) {
       const chunk = await reader.read()
       if (chunk.done) break
+      alive()
       buffer += decoder.decode(chunk.value, { stream: true })
       let end: number
       while ((end = buffer.indexOf('\n')) >= 0) {

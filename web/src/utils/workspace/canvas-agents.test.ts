@@ -15,6 +15,7 @@ const resources: SourceResource[] = [
     id: 'a',
     name: 'A',
     status: 'online',
+    readAt: 0,
     spaces: [
       {
         id: 's',
@@ -92,6 +93,7 @@ test('agent labels include unknown states, explicit agent states need no label, 
       id: 'a',
       name: 'A',
       status: 'online',
+      readAt: 0,
       spaces: [
         {
           id: 's',

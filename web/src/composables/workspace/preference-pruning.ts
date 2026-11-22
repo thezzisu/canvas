@@ -46,7 +46,7 @@ export function usePreferencePruning(retained: () => ReadonlySet<string> | undef
         workspace.state.sources.map((source) =>
           terminalIdentityKey(activeInstance.value.id, source, ''),
         ),
-        workspace.polledResources.map((source) => [
+        workspace.listedResources.map((source) => [
           source.id,
           source.status,
           !!source.error,
@@ -57,8 +57,8 @@ export function usePreferencePruning(retained: () => ReadonlySet<string> | undef
       const state = workspace.state
       if (!state) return
       const instance = activeInstance.value.id
-      pruneTerminalPreferences(instance, state.sources, workspace.polledResources)
-      pruneCaptureViews(instance, state.sources, workspace.polledResources)
+      pruneTerminalPreferences(instance, state.sources, workspace.listedResources)
+      pruneCaptureViews(instance, state.sources, workspace.listedResources)
     },
   )
   return { pruneCards }

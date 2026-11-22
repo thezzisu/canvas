@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { computed, ref } from 'vue'
 import {
   mergeLiveResources,
-  metadataAfterPoll,
+  metadataAfterListing,
+  newerListings,
   windowIsClosed,
   type LiveWindowMetadata,
 } from './live-resources.ts'
@@ -16,6 +17,7 @@ const source = (): SourceResource => ({
   id: 'source',
   name: 'Source',
   status: 'online',
+  readAt: 2,
   spaces: [
     {
       id: 'space',
@@ -129,23 +131,23 @@ test('live metadata never resurrects removed windows or sources and preserves ti
   assert.equal(mergeLiveResources([other], live)[0]!.spaces[0]!.windows[0]!.status, 'done')
 })
 
-test('a newer successful poll can refresh fields not pushed by herdr while in-flight changes and offline sources stay live', () => {
+test('a later listing can refresh fields not pushed by herdr while newer changes and offline sources stay live', () => {
   const old = metadata('done'),
     fresh = metadata('idle')
-  const started = new Map([
-    ['source/window', old],
-    ['offline/window', old],
-  ])
   const changed = new Map([
     ['source/window', fresh],
     ['offline/window', old],
   ])
   assert.equal(
-    metadataAfterPoll(changed, started, ['source']).get('source/window'),
+    metadataAfterListing(changed, new Map([['source/window', 2]]), [
+      { id: 'source', readAt: 1 },
+    ]).get('source/window'),
     fresh,
-    'a slow old poll erased newer native metadata',
+    'a listing read earlier erased newer native metadata',
   )
-  const after = metadataAfterPoll(changed, changed, ['source'])
+  const after = metadataAfterListing(changed, new Map([['source/window', 2]]), [
+    { id: 'source', readAt: 3 },
+  ])
   assert.equal(after.has('source/window'), false)
   assert.equal(after.get('offline/window'), old)
   const refreshed = source()
@@ -157,23 +159,23 @@ test('a newer successful poll can refresh fields not pushed by herdr while in-fl
   )
 })
 
-test('confirmed window removal wins over in-flight and offline polls until a newer online snapshot', () => {
-  const started = new Map<string, LiveWindowMetadata>([['source/window', metadata('done')]])
+test('confirmed window removal wins over earlier and offline listings until a later online one', () => {
+  const at = new Map([['source/window', 2]])
   const removed = new Map<string, LiveWindowMetadata>([['source/window', null]])
-  const stale = metadataAfterPoll(removed, started, ['source'])
+  const stale = metadataAfterListing(removed, at, [{ id: 'source', readAt: 1 }])
   assert.equal(stale.get('source/window'), null)
   assert.equal(
     windowIsClosed(source(), 'window', stale.get('source/window')),
     true,
-    'a stale present snapshot cannot resume a window removed during that poll',
+    'a stale present snapshot cannot resume a window removed after it was read',
   )
   assert.deepEqual(
     mergeLiveResources([source()], stale)[0]!.spaces[0]!.windows,
     [],
-    'an older poll resurrected the closed window',
+    'an older listing resurrected the closed window',
   )
   const offline = { ...source(), status: 'offline', error: 'Connection lost' }
-  const hidden = metadataAfterPoll(removed, removed, [])
+  const hidden = metadataAfterListing(removed, at, [])
   assert.deepEqual(
     mergeLiveResources([offline], hidden)[0]!.spaces[0]!.windows,
     [],
@@ -183,11 +185,11 @@ test('confirmed window removal wins over in-flight and offline polls until a new
     count: 0,
     status: null,
   })
-  const fresh = metadataAfterPoll(removed, removed, ['source'])
+  const fresh = metadataAfterListing(removed, at, [{ id: 'source', readAt: 3 }])
   assert.equal(
     fresh.has('source/window'),
     false,
-    'a new authoritative poll must be able to describe a replacement native window',
+    'a new authoritative listing must be able to describe a replacement native window',
   )
   assert.equal(
     windowIsClosed(source(), 'window', fresh.get('source/window')),
@@ -199,4 +201,11 @@ test('confirmed window removal wins over in-flight and offline polls until a new
     mergeLiveResources([{ ...source(), id: 'unrelated' }], removed)[0]!.spaces[0]!.windows.length,
     1,
   )
+})
+
+test('of a push and a request that overtook each other, the later read wins', () => {
+  const held = [source()]
+  assert.deepEqual(newerListings(held, [{ ...source(), readAt: 1 }]), [])
+  assert.equal(newerListings(held, [{ ...source(), readAt: 3 }]).length, 1)
+  assert.equal(newerListings(held, [{ ...source(), id: 'other', readAt: 1 }]).length, 1)
 })

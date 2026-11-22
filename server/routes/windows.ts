@@ -4,6 +4,7 @@ import { bearerToken } from '../auth.ts'
 import { receiveFile } from '../canvas-files.ts'
 import { sourceConnectionKey, nodeLayoutSchema, composerKey, type Source } from '../state.ts'
 import * as runtimes from '../runtimes.ts'
+import { refreshSource } from '../source-follow.ts'
 import { parseWriteMark } from '../write-order.ts'
 import type { RouteContext } from './context.ts'
 import {
@@ -128,6 +129,8 @@ export function windowRoutes({ app, store, terminals, options, order, source }: 
       command,
       authorized,
     )
+    // herdr announces no new pane label.
+    refreshSource(connection)
     if (command.action === 'close') {
       const after = await runtimes.listResources(connection)
       if (

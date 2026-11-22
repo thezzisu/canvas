@@ -18,6 +18,7 @@ const source = (
   id,
   name: id.toUpperCase(),
   status,
+  readAt: 0,
   spaces: [{ id: 's', name: 'Space', windows }],
 })
 // Reads far older than the recent window unless a test says otherwise.

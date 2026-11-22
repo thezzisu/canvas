@@ -11,7 +11,7 @@ import {
   projectFocusedResources,
   type FocusedStatus,
 } from '../utils/workspace/completion-focus'
-import { mergeLiveResources } from '../utils/workspace/live-resources'
+import { mergeLiveResources, newerListings } from '../utils/workspace/live-resources'
 import { orderedItems, useSidebarOrder } from '../composables/workspace/sidebar-order'
 import { workingSet } from '../utils/workspace/working-set'
 import { retainBackgrounds } from '../composables/workspace/backgrounds'
@@ -75,9 +75,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     'working-set': state.value?.workingSetBackground ?? null,
   }))
 
-  const polledResources = ref<SourceResource[]>([])
+  const listedResources = ref<SourceResource[]>([])
   const rawResources = computed(() =>
-    mergeLiveResources(polledResources.value, liveTerminalMetadata.value),
+    mergeLiveResources(listedResources.value, liveTerminalMetadata.value),
   )
   const focusedStatus = computed<FocusedStatus | undefined>((previous) =>
     focusedCompletionStatus(rawResources.value, terminalReadFocus.value, previous),
@@ -112,7 +112,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const refreshedAt = ref(0)
   const visibility = useDocumentVisibility()
   const pageVisible = computed(() => visibility.value === 'visible')
-  /** Attention animates only from a current poll on a visible page. */
+  /** Attention animates only from a current listing on a visible page. */
   const freshStatuses = computed(() => resourcesFresh.value && pageVisible.value)
   const undiscoveredSources = computed(() =>
     sources.value.filter((source) => !resources.value.some((item) => item.id === source.id)),
@@ -257,7 +257,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     edits.settle(canvases.value)
     if (sourcesChanged) {
       resourcesFresh.value = false
-      polledResources.value = polledResources.value.filter(
+      listedResources.value = listedResources.value.filter(
         (resource) =>
           !changedConnections.includes(resource.id) &&
           sources.value.some((source) => source.id === resource.id),
@@ -273,7 +273,40 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     apply(snapshot)
   }
 
-  /** Discover native windows. A silent refresh joins one in flight and reports nothing. */
+  /** An unreachable source keeps the windows whose terminals are still connected. */
+  function withLiveWindows(source: SourceResource): SourceResource {
+    if (!source.error) return source
+    return {
+      ...source,
+      spaces: (resources.value.find((previous) => previous.id === source.id)?.spaces || []).flatMap(
+        (space) => {
+          const windows = space.windows.filter((window) => hasLiveTerminal(source.id, window.id))
+          return windows.length ? [{ ...space, windows }] : []
+        },
+      ),
+    }
+  }
+  /** Takes what the server listed, pushed or asked for, unless a later read of it is here. */
+  function list(incoming: readonly SourceResource[]) {
+    const news = newerListings(
+      listedResources.value,
+      incoming.filter((listing) => sources.value.some((source) => source.id === listing.id)),
+    ).map(withLiveWindows)
+    resourcesFresh.value = true
+    refreshedAt.value = Date.now()
+    if (news.length) {
+      const merged = new Map(listedResources.value.map((listing) => [listing.id, listing]))
+      for (const listing of news) merged.set(listing.id, listing)
+      listedResources.value = sources.value.flatMap((source) => merged.get(source.id) ?? [])
+      acknowledgeTerminalMetadata(news)
+    }
+    // Pushes alone can complete what a failed first read began.
+    if (!undiscoveredSources.value.length) {
+      resourcesLoaded.value = true
+      loadFailure.value = undefined
+    }
+  }
+  /** Reads every source once. A silent refresh joins one in flight and reports nothing. */
   async function refresh(silent = false): Promise<void> {
     if (resourceRequest) {
       if (silent) return
@@ -284,33 +317,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     refreshing.value = !silent
     const context = apiContext()
     const configuration = JSON.stringify(sources.value)
-    const metadataAtStart = liveTerminalMetadata.value
     resourceRequest = (async () => {
       try {
         const body = await api<{ sources: SourceResource[] }>('/api/resources')
         if (configuration !== JSON.stringify(sources.value)) return
-        // An unreachable source keeps the windows whose terminals are still connected.
-        const discoveredSources = body.sources.map((source) =>
-          source.error
-            ? {
-                ...source,
-                spaces: (
-                  resources.value.find((previous) => previous.id === source.id)?.spaces || []
-                ).flatMap((space) => {
-                  const windows = space.windows.filter((window) =>
-                    hasLiveTerminal(source.id, window.id),
-                  )
-                  return windows.length ? [{ ...space, windows }] : []
-                }),
-              }
-            : source,
-        )
-        resourcesFresh.value = true
         resourcesLoaded.value = true
         loadFailure.value = undefined
-        polledResources.value = discoveredSources
-        acknowledgeTerminalMetadata(metadataAtStart, discoveredSources)
-        refreshedAt.value = Date.now()
+        list(body.sources)
       } catch (reason) {
         if (isCurrentApi(context)) {
           resourcesFresh.value = false
@@ -335,13 +348,21 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   function listen() {
     stateEvents?.close()
     const session = useSessionStore()
-    stateEvents = subscribeState(
-      (snapshot) => apply(snapshot as SharedState),
-      (name) => {
+    stateEvents = subscribeState({
+      // All of it is sent again, perhaps by a restarted server with a clock of its own.
+      connected() {
+        listedResources.value = listedResources.value.map((listing) => ({ ...listing, readAt: 0 }))
+      },
+      disconnected() {
+        resourcesFresh.value = false
+      },
+      state: (snapshot) => apply(snapshot as SharedState),
+      resources: (listing) => list([listing as SourceResource]),
+      account(name) {
         session.username = name
       },
-      (event) => void notified.trigger(event),
-    )
+      notification: (event) => void notified.trigger(event),
+    })
   }
   async function load() {
     const context = apiContext()
@@ -356,9 +377,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       if (isCurrentApi(context)) loadFailure.value = reason
     }
   }
-  useIntervalFn(() => {
-    if (pageVisible.value) void refresh(true)
-  }, 2000)
   watch(pageVisible, (visible) => {
     if (visible) void refresh(true)
   })
@@ -377,7 +395,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     sources.value = []
     canvases.value = []
     windowSizes.value = {}
-    polledResources.value = []
+    listedResources.value = []
     resourcesFresh.value = false
     resourcesLoaded.value = false
     loadFailure.value = undefined
@@ -393,7 +411,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     windowSizes,
     settings,
     systemBackgrounds,
-    polledResources,
+    listedResources,
     rawResources,
     resources,
     orderedSources,

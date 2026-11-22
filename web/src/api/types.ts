@@ -46,6 +46,8 @@ export interface SourceResource {
   status: string
   error?: string
   serverVersion?: string
+  /** When the server began the read of it, on the server's clock. */
+  readAt: number
   spaces: SpaceResource[]
 }
 export interface NodeLayout {

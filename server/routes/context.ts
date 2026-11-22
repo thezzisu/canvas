@@ -4,6 +4,7 @@ import type { AssetStore } from '../assets.ts'
 import type { CompletionReads } from '../completion-reads.ts'
 import type { DownloadResponse } from '../media.ts'
 import type { DownloadContext } from '../open-download.ts'
+import type { SourceWatchers } from '../source-watchers.ts'
 import type { Source, Store } from '../state.ts'
 import type { TerminalManager } from '../terminals.ts'
 import type { UploadService } from '../uploads.ts'
@@ -13,6 +14,7 @@ import type { WriteOrder } from '../write-order.ts'
 /** What the server gives the API beyond its store and terminals; each part is optional. */
 export interface AppOptions {
   completionReads?: CompletionReads
+  watchers?: SourceWatchers
   updateAccount?: (username: string, password?: string) => void
   allowedOrigins?: ReadonlySet<string>
   openDownload?: (ticket: string, sessionId: string) => Promise<DownloadResponse | undefined>

@@ -11,7 +11,13 @@ import { receiveDirectory } from './directories'
 import type { TerminalConnection } from '../../utils/terminal/terminal-channels'
 import { log, logging } from '../../utils/diagnostics/log'
 import { openTerminalConnection, terminalAccess } from './terminal-connection'
-import { liveTerminalMetadata, metadataKey, updateMetadata } from './terminal-metadata'
+import {
+  liveTerminalMetadata,
+  metadataKey,
+  metadataPublishedAt,
+  sawServerTime,
+  updateMetadata,
+} from './terminal-metadata'
 import {
   boundAnswer,
   endFocusSize,
@@ -122,7 +128,7 @@ export function connectionFailed(
   session.reconnect.failed(retry)
 }
 /** The native window is gone: every view of it closes for good. */
-export function windowRemoved(session: Session) {
+export function windowRemoved(session: Session, at?: unknown) {
   const { sourceId, windowId } = session.resource
   removeCaptures(sourceId, windowId)
   for (const view of windowSessions(sourceId, windowId)) {
@@ -145,6 +151,7 @@ export function windowRemoved(session: Session) {
     })
   }
   const key = metadataKey(session.resource)
+  metadataPublishedAt.set(key, sawServerTime(at))
   if (liveTerminalMetadata.value.get(key) !== null) {
     const next = new Map(liveTerminalMetadata.value)
     next.set(key, null)
@@ -304,7 +311,7 @@ function receive(
     if (isMouseAreas(message.areas)) session.painter.setMouseAreas(message.areas)
   } else if (message.type === 'metadata') {
     if (isWindowMetadata(message.window) && message.window.id === windowId)
-      updateMetadata(session, message.window)
+      updateMetadata(session, message.window, message.at)
   } else if (message.type === 'completion-frame') {
     const frame = completionFrame(message)
     // It follows the cells that painted it: it counts once those are on screen.
@@ -345,7 +352,7 @@ function receive(
     if (presentation.maximized && !presentation.owned) update()
     else afterPaint(session, update)
   } else if (message.type === 'status') {
-    if (message.status === 'removed') windowRemoved(session)
+    if (message.status === 'removed') windowRemoved(session, message.at)
     else if (message.status === 'closed' || message.status === 'error')
       connectionFailed(session, typeof message.error === 'string' ? message.error : undefined)
     else if (message.status === 'connected' || message.status === 'connecting') {

@@ -107,6 +107,8 @@ export interface Session {
   connectionRevision: number
   connectionError?: string
   metadata?: WindowMetadata
+  /** When the server published it, on its clock. */
+  metadataAt?: number
   lastName?: string
 
   readGeneration?: number

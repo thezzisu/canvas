@@ -16,6 +16,7 @@ const resource = (status: ProgramStatus): SourceResource[] => [
     id: 'source',
     name: 'Source',
     status: 'online',
+    readAt: 0,
     spaces: [
       {
         id: 'space',

@@ -96,6 +96,7 @@ test('poll projection cannot revive read completion or overwrite a newer native 
   const resource: SourceResource = {
     id: source.id,
     name: source.name,
+    readAt: 0,
     status: 'online',
     spaces: [{ id: 'space', name: 'Space', windows: [window] }],
   }
@@ -238,6 +239,7 @@ test('last endpoint disconnect retires live projection authority without deletin
   const resource: SourceResource = {
     id: source.id,
     name: source.name,
+    readAt: 0,
     status: 'online',
     spaces: [{ id: 'space', name: 'Space', windows: [window] }],
   }
@@ -352,6 +354,7 @@ test('native read labels remain authoritative through reads, unread changes and 
   const resource: SourceResource = {
     id: source.id,
     name: source.name,
+    readAt: 0,
     status: 'online',
     spaces: [{ id: 'space', name: 'Space', windows: [unread] }],
   }

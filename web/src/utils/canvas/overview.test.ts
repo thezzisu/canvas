@@ -18,6 +18,7 @@ const fixture = (): SourceResource[] => [
     id: 'a',
     name: 'a',
     status: 'online',
+    readAt: 0,
     spaces: [
       {
         id: 'first',
@@ -44,6 +45,7 @@ const fixture = (): SourceResource[] => [
     id: 'b',
     name: 'b',
     status: 'online',
+    readAt: 0,
     spaces: [{ id: 'idle-space', name: 'idle-space', windows: [window('b-idle', 'idle')] }],
   },
 ]

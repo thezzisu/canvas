@@ -28,6 +28,7 @@ const resources: SourceResource[] = [
     id: 'source',
     name: 'Source',
     status: 'online',
+    readAt: 0,
     spaces: [
       {
         id: 'space',
@@ -144,6 +145,7 @@ test('favicon follows working and idle live metadata even when the attention bad
         id: 'source',
         name: 'Source',
         status: 'online',
+        readAt: 0,
         spaces: [
           {
             id: 'space',
