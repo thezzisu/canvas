@@ -94,6 +94,17 @@ interface Bridge {
   signature: string
 }
 
+/** One source's bridge: who uses it, and the bridge itself, started and closed in turn. */
+interface SourceBridge {
+  users: number
+  idle?: ReturnType<typeof setTimeout>
+  bridge?: Bridge
+  /** The start or close running now; the next waits for it. */
+  changing: Promise<void>
+  /** A start for this connection, which another caller for it joins. */
+  starting?: { signature: string; promise: Promise<void> }
+}
+
 interface DownloadTicket {
   origin?: FileOrigin
   id: string
@@ -204,11 +215,7 @@ function contentDisposition(
 }
 
 export class OpenDownloadService {
-  private bridges = new Map<string, Bridge>()
-  private preparing = new Map<string, { signature: string; promise: Promise<void> }>()
-  private closing = new Map<string, Promise<void>>()
-  private users = new Map<string, number>()
-  private idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private sources = new Map<string, SourceBridge>()
   private tickets = new Map<string, DownloadTicket>()
   private directories = new Map<string, DirectoryTicket>()
   private staged = new Map<
@@ -225,59 +232,54 @@ export class OpenDownloadService {
     this.socketDirectory = options.socketDirectory ?? tmpdir()
   }
 
+  private source(sourceId: string) {
+    let entry = this.sources.get(sourceId)
+    if (!entry) this.sources.set(sourceId, (entry = { users: 0, changing: Promise.resolve() }))
+    return entry
+  }
+  /** Runs a start or close of the source's bridge after the one before it. */
+  private change(entry: SourceBridge, action: () => Promise<void>) {
+    const next = entry.changing.then(action)
+    entry.changing = next.catch(() => {})
+    return next
+  }
+
+  /** A browser or a transfer uses the source's bridge until the returned release. */
   retainSource(sourceId: string): () => void {
-    clearTimeout(this.idleTimers.get(sourceId))
-    this.idleTimers.delete(sourceId)
-    this.users.set(sourceId, (this.users.get(sourceId) || 0) + 1)
+    const entry = this.source(sourceId)
+    clearTimeout(entry.idle)
+    entry.users++
     let released = false
     return () => {
       if (released) return
       released = true
-      const count = Math.max(0, (this.users.get(sourceId) || 0) - 1)
-      if (count) {
-        this.users.set(sourceId, count)
-        return
-      }
-      this.users.delete(sourceId)
-      if (this.stopping) return
-      const timer = setTimeout(() => {
-        this.idleTimers.delete(sourceId)
-        if (!this.users.has(sourceId)) void this.closeSource(sourceId)
+      if (--entry.users || this.stopping) return
+      entry.idle = setTimeout(() => {
+        if (!entry.users) void this.closeSource(sourceId)
       }, this.options.idleTimeoutMs ?? 20_000)
-      timer.unref()
-      this.idleTimers.set(sourceId, timer)
+      entry.idle.unref()
     }
   }
 
   async ensureSource(source: Source): Promise<void> {
     if (this.stopping) throw new Error('File transfer service is stopping')
-    const signature = sourceConnectionKey(source)
-    const closing = this.closing.get(source.id)
-    if (closing) {
-      await closing
-      return await this.ensureSource(source)
-    }
-    const pending = this.preparing.get(source.id)
-    if (pending) {
-      if (pending.signature === signature) return await pending.promise
-      await pending.promise.catch(() => {})
-      return await this.ensureSource(source)
-    }
-    const current = this.bridges.get(source.id)
-    if (current?.signature === signature) return
-    const promise = this.startSource(source, signature)
-    const task = { signature, promise }
-    this.preparing.set(source.id, task)
+    const entry = this.source(source.id),
+      signature = sourceConnectionKey(source)
+    if (entry.starting?.signature === signature) return await entry.starting.promise
+    const promise = this.change(entry, async () => {
+      if (entry.bridge?.signature === signature) return
+      if (entry.bridge) await this.closeBridge(entry.bridge)
+      await this.startSource(entry, source, signature)
+    })
+    const starting = (entry.starting = { signature, promise })
     try {
       await promise
     } finally {
-      if (this.preparing.get(source.id) === task) this.preparing.delete(source.id)
+      if (entry.starting === starting) entry.starting = undefined
     }
   }
 
-  private async startSource(source: Source, signature: string): Promise<void> {
-    const current = this.bridges.get(source.id)
-    if (current) await this.closeBridge(current)
+  private async startSource(entry: SourceBridge, source: Source, signature: string) {
     if (this.options.installHelper) await this.options.installHelper(source)
 
     const root = await mkdtemp(join(this.socketDirectory, 'cv-open-'))
@@ -318,14 +320,14 @@ export class OpenDownloadService {
         cleanupRegistry: async () => {},
         signature,
       }
-      this.bridges.set(source.id, bridge)
+      entry.bridge = bridge
       if (source.transport === 'ssh') {
         if (!this.options.publishRemote)
           throw new Error('Remote file bridge registry is unavailable')
         bridge.cleanupRegistry = cleanupRegistry = await this.options.publishRemote(source, record)
       } else bridge.cleanupRegistry = cleanupRegistry = await this.publishLocal(record)
     } catch (error) {
-      if (this.bridges.get(source.id)?.root === root) this.bridges.delete(source.id)
+      if (entry.bridge?.root === root) entry.bridge = undefined
       await cleanupRegistry().catch(() => {})
       if (prepared) await prepared.cleanup().catch(() => {})
       for (const socket of sockets) socket.destroy()
@@ -410,11 +412,11 @@ export class OpenDownloadService {
         ? helperRequest(
             header as Record<string, unknown>,
             secret,
-            this.bridges.get(source.id)?.record.nativeSocket,
+            this.sources.get(source.id)?.bridge?.record.nativeSocket,
           )
         : undefined
     if (!request) return refuse()
-    const bridge = this.bridges.get(source.id)
+    const bridge = this.sources.get(source.id)?.bridge
     if (!bridge || bridge.source !== source || bridge.sockets.size > MAX_TRANSFERS_PER_SOURCE)
       return refuse()
     let resources: SourceResource
@@ -816,26 +818,20 @@ export class OpenDownloadService {
   }
 
   async closeSource(sourceId: string): Promise<void> {
-    clearTimeout(this.idleTimers.get(sourceId))
-    this.idleTimers.delete(sourceId)
-    const existing = this.closing.get(sourceId)
-    if (existing) return await existing
-    const operation = (async () => {
-      await this.preparing.get(sourceId)?.promise.catch(() => {})
-      const bridge = this.bridges.get(sourceId)
-      if (bridge) await this.closeBridge(bridge)
-    })()
-    this.closing.set(sourceId, operation)
-    try {
-      await operation
-    } finally {
-      if (this.closing.get(sourceId) === operation) this.closing.delete(sourceId)
-    }
+    const entry = this.sources.get(sourceId)
+    if (!entry) return
+    clearTimeout(entry.idle)
+    await this.change(entry, async () => {
+      if (entry.bridge) await this.closeBridge(entry.bridge)
+    })
+    if (!entry.users && !entry.bridge && this.sources.get(sourceId) === entry)
+      this.sources.delete(sourceId)
   }
 
   private async closeBridge(bridge: Bridge): Promise<void> {
-    const sourceId = bridge.source.id
-    if (this.bridges.get(sourceId) === bridge) this.bridges.delete(sourceId)
+    const sourceId = bridge.source.id,
+      entry = this.sources.get(sourceId)
+    if (entry?.bridge === bridge) entry.bridge = undefined
     for (const [id, ticket] of this.tickets) if (ticket.sourceId === sourceId) this.cancelTicket(id)
     for (const [id, ticket] of this.directories)
       if (ticket.sourceId === sourceId) this.finishDirectory(id, 'not-attached')
@@ -848,11 +844,8 @@ export class OpenDownloadService {
 
   async closeAll(): Promise<void> {
     this.stopping = true
-    for (const timer of this.idleTimers.values()) clearTimeout(timer)
-    this.idleTimers.clear()
-    this.users.clear()
-    await Promise.all([...this.preparing.values()].map(({ promise }) => promise.catch(() => {})))
-    await Promise.all([...this.bridges.keys()].map((id) => this.closeSource(id)))
+    for (const entry of this.sources.values()) entry.users = 0
+    await Promise.all([...this.sources.keys()].map((id) => this.closeSource(id)))
     for (const id of this.tickets.keys()) this.cancelTicket(id)
     for (const id of this.directories.keys()) this.finishDirectory(id, 'not-attached')
     for (const staged of this.staged.values()) clearTimeout(staged.timer)
