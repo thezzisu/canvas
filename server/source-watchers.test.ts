@@ -23,6 +23,9 @@ function fixture(t: TestContext) {
       follows.push(follow)
       return {
         refresh: () => follow.refreshed++,
+        get closed() {
+          return follow.ended
+        },
         [Symbol.dispose]() {
           follow.ended = true
         },
@@ -117,4 +120,16 @@ test('a listing a browser read for itself that differs from the push has the nex
   follow.listener.snapshot(listing('a'), 13)
   assert.equal(f.pushed.length, 2, 'the unchanged reading corrects the browser')
   assert.equal(f.pushed.at(-1)!.status, 'online')
+})
+
+test('a watch its connections released without an edit is opened again', (t) => {
+  const f = fixture(t)
+  f.watchers.view()
+  // A connection edit closes the source's connections first; then saving the edit failed.
+  f.follows[0]!.ended = true
+  f.watchers.sync()
+  assert.equal(f.follows.length, 2)
+  assert.equal(f.follows[1]!.source.id, 's')
+  f.watchers.sync()
+  assert.equal(f.follows.length, 2, 'a live watch is kept')
 })

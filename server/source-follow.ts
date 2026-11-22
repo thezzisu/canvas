@@ -19,6 +19,8 @@ export interface FollowListener<T> {
 }
 export interface Following extends Disposable {
   refresh(): void
+  /** The source's connections were released, which ends its watch for good. */
+  readonly closed: boolean
 }
 
 const FIRST_RETRY_MS = 250
@@ -109,6 +111,9 @@ class Follower<T> {
       void this.open()
     } else this.watch?.refresh()
   }
+  get closed() {
+    return this.aborted.signal.aborted
+  }
   close() {
     if (this.aborted.signal.aborted) return
     this.aborted.abort()
@@ -145,6 +150,9 @@ export function followSource<T>(
   joined.add(listener)
   return {
     refresh: () => joined.refresh(),
+    get closed() {
+      return joined.closed
+    },
     [Symbol.dispose]() {
       if (!joined.listeners.delete(listener) || joined.listeners.size) return
       if (followers.get(key) === (joined as Follower<unknown>)) followers.delete(key)

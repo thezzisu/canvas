@@ -59,12 +59,17 @@ export function sourceRoutes({ app, store, terminals, options, source }: RouteCo
     validateSource({ ...s, id })
     let updated = s
     if (sourceConnectionKey({ ...s, id }) !== sourceConnectionKey(previous)) {
-      await terminals.closeSource(id, async () => {
-        await options.closeOpenBridge?.(id)
-        await closeRuntimeConnections(id)
-        // A name-only edit may have completed while the old connection closed.
-        updated = store.put('source', sourceSchema.parse({ ...source(id), ...patch, id }))
-      })
+      try {
+        await terminals.closeSource(id, async () => {
+          await options.closeOpenBridge?.(id)
+          await closeRuntimeConnections(id)
+          // A name-only edit may have completed while the old connection closed.
+          updated = store.put('source', sourceSchema.parse({ ...source(id), ...patch, id }))
+        })
+      } finally {
+        // Saved, the edit has the source watched anew; failed, its released watch opens again.
+        options.watchers?.sync()
+      }
     } else updated = store.put('source', s)
     return c.json(updated)
   })

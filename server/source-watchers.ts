@@ -75,7 +75,7 @@ export class SourceWatchers implements Disposable {
     for (const source of sources) {
       const key = sourceConnectionKey(source)
       const known = this.watched.get(source.id)
-      if (known?.key === key) {
+      if (known?.key === key && !known.following?.closed) {
         const renamed = known.source.name !== source.name
         known.source = source
         if (renamed) known.following?.refresh()
