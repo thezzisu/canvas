@@ -205,6 +205,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const notified = createEventHook<unknown>()
   let stateEvents: ReturnType<typeof subscribeState> | undefined
   let resourceRequest: Promise<void> | undefined
+  // A read asked for while one runs follows it: the running one may have begun before the change.
+  let readAgain = false
   // A full read that failed is tried again, later each time, until one succeeds. Nothing else
   // asks: changes are pushed, and a source with no listing has nothing to push.
   let listingRetry: ReturnType<typeof setTimeout> | undefined
@@ -329,10 +331,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       loadFailure.value = undefined
     }
   }
-  /** Reads every source once. A silent refresh joins one in flight and reports nothing. */
+  /** Reads every source once. A silent refresh follows one in flight and reports nothing. */
   async function refresh(silent = false): Promise<void> {
     if (resourceRequest) {
-      if (silent) return
+      if (silent) {
+        readAgain = true
+        return
+      }
       await resourceRequest
       return refresh()
     }
@@ -359,7 +364,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         if (isCurrentApi(context)) {
           refreshing.value = false
           resourceRequest = undefined
-          if (configuration !== JSON.stringify(sources.value)) void refresh(true)
+          const again = readAgain || configuration !== JSON.stringify(sources.value)
+          readAgain = false
+          if (again) void refresh(true)
         }
       }
     })()
@@ -428,6 +435,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     refreshing.value = false
     refreshedAt.value = 0
     resourceRequest = undefined
+    readAgain = false
     settleListing()
   }
 
