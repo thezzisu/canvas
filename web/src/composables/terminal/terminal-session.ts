@@ -8,6 +8,7 @@ import type { TerminalGrid } from '../../utils/terminal/terminal-geometry'
 import type { TerminalInputHold } from '../../utils/terminal/terminal-input-hold'
 import type { TerminalReconnect } from '../../utils/terminal/terminal-reconnect'
 import type { TerminalTouchMode } from '../../utils/terminal/terminal-touch'
+import type { TerminalView } from '../../utils/terminal/terminal-view'
 import type { TerminalUploads, TerminalUploadState } from '../../utils/terminal/uploads'
 import type { CellPainter } from './cell-painter'
 import type { bindDesktopInput } from './desktop-input'
@@ -103,6 +104,8 @@ export interface Session {
   presentationRevision?: number
 
   connection?: TerminalConnection
+  /** This page's view of the window, over all of its connections. */
+  view: TerminalView
   reconnect: TerminalReconnect
   connectionRevision: number
   connectionError?: string

@@ -1,4 +1,5 @@
 import { logWindow } from '../../../../shared/log-line'
+import { TerminalView } from '../../utils/terminal/terminal-view'
 import { CellMirror } from '../../../../shared/cell-wire'
 import { terminalTheme } from '../../../../shared/terminal-theme'
 import { isCurrentApi, uuid, type ApiContext } from '../../api/api'
@@ -83,6 +84,7 @@ export function createSession(
   const session: Session = {
     resource: { ...resource },
     logId: logWindow(resource),
+    view: new TerminalView(uuid()),
     state: { status: 'connecting' },
     listeners: new Set(),
     changed: () => {

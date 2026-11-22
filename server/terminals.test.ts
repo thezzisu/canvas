@@ -1924,7 +1924,15 @@ test('a window that redraws without pause keeps one message on the shared socket
     socket.emit(
       'message',
       Buffer.from(
-        JSON.stringify({ type: 'open', channel, sourceId: 's', spaceId: 's', windowId: 'w' }),
+        JSON.stringify({
+          type: 'open',
+          channel,
+          view: `view-000${channel}`,
+          attempt: 1,
+          sourceId: 's',
+          spaceId: 's',
+          windowId: 'w',
+        }),
       ),
       false,
     )

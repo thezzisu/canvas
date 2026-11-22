@@ -1,3 +1,5 @@
+import type { TerminalView } from './terminal-view'
+
 /**
  * A window's link to the server, as a session sees it: JSON either way, cell messages in.
  * Sessions hold nothing else of the transport.
@@ -29,7 +31,7 @@ export interface TerminalWindow {
 export class TerminalChannels {
   private readonly channels = new Map<
     number,
-    { window: TerminalWindow; events: ConnectionEvents }
+    { window: TerminalWindow; view: TerminalView; events: ConnectionEvents }
   >()
   /** Channel numbers are never used twice on a socket. */
   private next = 0
@@ -43,25 +45,25 @@ export class TerminalChannels {
     // The server expects the token first.
     socket.onopen = () => {
       this.write({ type: 'auth', token })
-      for (const [channel, { window }] of this.channels) this.announce(channel, window)
+      for (const [channel, { window, view }] of this.channels) this.announce(channel, window, view)
     }
     socket.onmessage = (event) => this.receive(event.data)
     socket.onerror = () => this.ended(true)
     socket.onclose = () => this.ended(false)
   }
 
-  open(window: TerminalWindow, events: ConnectionEvents): TerminalConnection {
+  open(window: TerminalWindow, view: TerminalView, events: ConnectionEvents): TerminalConnection {
     const channel = this.next++
-    this.channels.set(channel, { window, events })
+    this.channels.set(channel, { window, view, events })
     const live = () => this.channels.has(channel) && this.socket.readyState === this.socket.OPEN
-    if (live()) this.announce(channel, window)
+    if (live()) this.announce(channel, window, view)
     return {
       get open() {
         return live()
       },
       send: (message) => {
         if (!live()) return false
-        this.write({ ...message, channel })
+        this.write({ ...message, channel, seq: view.number() })
         return true
       },
       close: () => {
@@ -72,8 +74,20 @@ export class TerminalChannels {
   }
 
   /** Only the target is sent: a caller's window may be a larger object. */
-  private announce(channel: number, { sourceId, spaceId, windowId }: TerminalWindow) {
-    this.write({ type: 'open', channel, sourceId, spaceId, windowId })
+  private announce(
+    channel: number,
+    { sourceId, spaceId, windowId }: TerminalWindow,
+    view: TerminalView,
+  ) {
+    this.write({
+      type: 'open',
+      channel,
+      view: view.id,
+      attempt: view.attempt(),
+      sourceId,
+      spaceId,
+      windowId,
+    })
   }
   private write(message: object) {
     this.socket.send(JSON.stringify(message))
@@ -88,16 +102,25 @@ export class TerminalChannels {
   }
   private receive(data: unknown) {
     if (data instanceof ArrayBuffer) {
-      // The channel number, an unsigned LEB128 integer, precedes the cell message.
+      // The channel and the ack, unsigned LEB128 integers, precede the cell message.
       const bytes = new Uint8Array(data)
-      let channel = 0
-      for (let at = 0; at < 5 && at < bytes.length; at++) {
-        channel += (bytes[at]! & 0x7f) * 2 ** (7 * at)
-        if (bytes[at]! < 0x80) {
-          this.channels.get(channel)?.events.cells(bytes.subarray(at + 1))
-          return
+      let at = 0
+      const integer = () => {
+        let value = 0
+        for (let shift = 0; shift < 8 && at < bytes.length; shift++) {
+          const byte = bytes[at++]!
+          value += (byte & 0x7f) * 2 ** (7 * shift)
+          if (byte < 0x80) return value
         }
+        return undefined
       }
+      const channel = integer(),
+        ack = integer()
+      if (channel === undefined || ack === undefined) return
+      const target = this.channels.get(channel)
+      if (!target) return
+      target.view.acknowledged(ack)
+      target.events.cells(bytes.subarray(at))
       return
     }
     let message: Record<string, unknown>
@@ -108,10 +131,13 @@ export class TerminalChannels {
     }
     const channel = message?.channel
     if (typeof channel !== 'number') return
-    const events = this.channels.get(channel)?.events
-    if (message.type !== 'close') events?.message(message)
+    const target = this.channels.get(channel)
+    if (!target) return
+    target.view.acknowledged(message.ack)
+    if (message.type === 'ack') return
+    if (message.type !== 'close') target.events.message(message)
     // The server ended this channel alone.
-    else if (this.release(channel)) events!.closed(false)
+    else if (this.release(channel)) target.events.closed(false)
   }
   private ended(failed: boolean) {
     const open = [...this.channels.values()]

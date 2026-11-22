@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { EventEmitter, once } from 'node:events'
 import { WebSocket, WebSocketServer } from 'ws'
 import { authenticateWebSocket } from './websocket-auth.ts'
-import { serveTerminalChannels, type TerminalChannel } from './terminal-channels.ts'
+import { ACK_DELAY_MS, serveTerminalChannels, type TerminalChannel } from './terminal-channels.ts'
 import type { TerminalTarget } from './terminals.ts'
 
 class FakeSocket extends EventEmitter {
@@ -27,7 +27,13 @@ function fixture() {
   })
   return { socket, opened }
 }
-const target = (windowId: string) => ({ sourceId: 'source', spaceId: 'space', windowId })
+const target = (windowId: string) => ({
+  sourceId: 'source',
+  spaceId: 'space',
+  windowId,
+  view: 'view-0001',
+  attempt: 1,
+})
 
 test('a channel carries one window: its messages in, and its JSON and cells out under its number', () => {
   const f = fixture()
@@ -37,8 +43,8 @@ test('a channel carries one window: its messages in, and its JSON and cells out 
     f.opened.map(({ target }) => target.windowId),
     ['a', 'b'],
   )
-  f.socket.say({ type: 'input', channel: 300, data: 'x' })
-  f.socket.say({ type: 'focus', channel: 0 })
+  f.socket.say({ type: 'input', channel: 300, seq: 1, data: 'x' })
+  f.socket.say({ type: 'focus', channel: 0, seq: 1 })
   f.socket.say({ type: 'focus', channel: 1 })
   f.socket.say({ type: 'focus' })
   f.socket.emit('message', Buffer.from('{'), false)
@@ -53,9 +59,9 @@ test('a channel carries one window: its messages in, and its JSON and cells out 
   a!.send(Uint8Array.of(1, 2))
   b!.send(Uint8Array.of(3))
   assert.deepEqual(f.socket.sent, [
-    { type: 'status', status: 'connected', channel: 0 },
-    [0, 1, 2],
-    [0xac, 0x02, 3],
+    { type: 'status', status: 'connected', channel: 0, ack: 1 },
+    [0, 1, 1, 2],
+    [0xac, 0x02, 1, 3],
   ])
 })
 
@@ -69,7 +75,7 @@ test('an open needs a whole target and a number not in use; no socket holds more
     f.socket.say({ type: 'open', ...open })
   assert.deepEqual(
     f.socket.sent.splice(0),
-    [0, 1, 2].map((channel) => ({ type: 'close', channel })),
+    [0, 1, 2].map((channel) => ({ type: 'close', channel, ack: 0 })),
   )
   for (const channel of [-1, 1.5, 2 ** 31, '3'])
     f.socket.say({ type: 'open', channel, ...target('a') })
@@ -97,7 +103,7 @@ test('either side ends a channel alone; the socket closing ends the rest', () =>
   b!.channel.send({ type: 'status' })
   b!.channel.send(Uint8Array.of(1))
   f.socket.say({ type: 'focus', channel: 1 })
-  assert.deepEqual(f.socket.sent, [{ type: 'close', channel: 1 }])
+  assert.deepEqual(f.socket.sent, [{ type: 'close', channel: 1, ack: 0 }])
   assert.deepEqual([a!.channel.readyState, b!.channel.readyState, c!.channel.readyState], [3, 3, 1])
   // The number is free again, though a browser does not reuse one.
   f.socket.say({ type: 'open', channel: 0, ...target('again') })
@@ -154,8 +160,8 @@ test('one authentication serves every channel of the socket', async (t) => {
   assert.deepEqual(
     received,
     [0, 1, 2].flatMap((channel) => [
-      { type: 'status', status: 'connecting', channel },
-      [channel, 7],
+      { type: 'status', status: 'connecting', channel, ack: 0 },
+      [channel, 0, 7],
     ]),
   )
 })
@@ -179,4 +185,48 @@ test('channels opened before authentication are never attached', async (t) => {
   client.send(JSON.stringify({ type: 'open', channel: 0, ...target('a') }))
   const [code] = await once(client, 'close')
   assert.deepEqual([code, targets], [1008, []])
+})
+
+test('a message is taken once, and one without a number never', () => {
+  const f = fixture()
+  f.socket.say({ type: 'open', channel: 0, ...target('a') })
+  for (const seq of [1, 1, 3, 2, 3, undefined, 0, 1.5, '4'])
+    f.socket.say({ type: 'input', channel: 0, seq, data: 'x' })
+  assert.deepEqual(f.opened[0]!.log, ['input', 'input'])
+  assert.equal(f.opened[0]!.channel.taken, 3)
+})
+
+test('an open names its view and which of its channels this is', () => {
+  const f = fixture()
+  for (const open of [
+    { view: undefined },
+    { view: 'short' },
+    { attempt: undefined },
+    { attempt: 0 },
+  ])
+    f.socket.say({ type: 'open', channel: 0, ...target('a'), ...open })
+  assert.equal(f.opened.length, 0)
+})
+
+test('an ack rides on the next message, and goes alone only when none comes in time', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = fixture()
+  f.socket.say({ type: 'open', channel: 0, ...target('a') })
+  f.socket.say({ type: 'input', channel: 0, seq: 200, data: 'x' })
+  t.mock.timers.tick(ACK_DELAY_MS - 1)
+  f.opened[0]!.channel.send(Uint8Array.of(9))
+  t.mock.timers.tick(ACK_DELAY_MS * 2)
+  assert.deepEqual(f.socket.sent.splice(0), [[0, 0xc8, 0x01, 9]], 'the cells carried it')
+  f.socket.say({ type: 'view-visible', channel: 0, seq: 201 })
+  f.socket.say({ type: 'view-visible', channel: 0, seq: 202 })
+  t.mock.timers.tick(ACK_DELAY_MS - 1)
+  assert.deepEqual(f.socket.sent, [])
+  t.mock.timers.tick(1)
+  const [alone] = f.socket.sent.splice(0) as Record<string, unknown>[]
+  assert.deepEqual([alone!.type, alone!.ack, typeof alone!.at], ['ack', 202, 'number'])
+  t.mock.timers.tick(ACK_DELAY_MS * 2)
+  assert.deepEqual(f.socket.sent, [], 'an ack is not repeated')
+  f.socket.say({ type: 'input', channel: 0, seq: 202 })
+  t.mock.timers.tick(ACK_DELAY_MS)
+  assert.equal(f.socket.sent.length, 1, 'a repeated message is acknowledged again')
 })

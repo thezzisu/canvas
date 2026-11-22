@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { TerminalChannels, type ConnectionEvents } from './terminal-channels.ts'
+import { TerminalView } from './terminal-view.ts'
 
 class FakeSocket {
   readonly OPEN = 1
@@ -31,6 +32,7 @@ class FakeSocket {
 const window = (windowId: string) => ({ sourceId: 'source', spaceId: 'space', windowId })
 // A session's window is a canvas node, which has a `type` of its own.
 const node = (windowId: string) => ({ ...window(windowId), type: 'terminal', x: 0 })
+const view = (id = 'view-0001') => new TerminalView(id)
 function listener() {
   const log: unknown[] = []
   const events: ConnectionEvents = {
@@ -49,18 +51,18 @@ function fixture() {
 
 test('the socket authenticates once, then opens the channels asked for before and after', () => {
   const f = fixture(),
-    a = f.channels.open(node('a'), listener().events)
+    a = f.channels.open(node('a'), view('view-000a'), listener().events)
   assert.equal(a.open, false)
   assert.equal(a.send({ type: 'focus' }), false, 'nothing is sent before the socket opens')
   f.socket.accept()
-  const b = f.channels.open(node('b'), listener().events)
+  const b = f.channels.open(node('b'), view('view-000b'), listener().events)
   assert.deepEqual(f.socket.sent, [
     { type: 'auth', token: 'token' },
-    { type: 'open', channel: 0, ...window('a') },
-    { type: 'open', channel: 1, ...window('b') },
+    { type: 'open', channel: 0, view: 'view-000a', attempt: 1, ...window('a') },
+    { type: 'open', channel: 1, view: 'view-000b', attempt: 1, ...window('b') },
   ])
   assert.equal(a.send({ type: 'focus' }) && b.open, true)
-  assert.deepEqual(f.socket.sent.at(-1), { type: 'focus', channel: 0 })
+  assert.deepEqual(f.socket.sent.at(-1), { type: 'focus', channel: 0, seq: 1 })
   assert.equal(f.socket.binaryType, 'arraybuffer')
 })
 
@@ -68,16 +70,17 @@ test('messages and cells reach only their channel', () => {
   const f = fixture(),
     a = listener(),
     b = listener()
-  f.channels.open(window('a'), a.events)
+  f.channels.open(window('a'), view(), a.events)
   f.socket.accept()
-  for (let i = 1; i < 200; i++) f.channels.open(window(`w${i}`), i === 199 ? b.events : a.events)
+  for (let i = 1; i < 200; i++)
+    f.channels.open(window(`w${i}`), view(), i === 199 ? b.events : a.events)
   f.socket.json({ type: 'status', channel: 199 })
   f.socket.json({ type: 'metadata', channel: 0 })
   f.socket.json({ type: 'status', channel: 7000 })
   f.socket.json({ type: 'status' })
   f.socket.onmessage!({ data: '{' })
-  f.socket.cells(0, 1, 2)
-  f.socket.cells(0xc7, 0x01, 9, 9)
+  f.socket.cells(0, 0, 1, 2)
+  f.socket.cells(0xc7, 0x01, 0, 9, 9)
   f.socket.cells(0x80)
   f.socket.cells()
   assert.deepEqual(a.log, ['metadata', [1, 2]])
@@ -89,20 +92,21 @@ test('a channel ends alone and a new one opens beside the others; the last one c
     a = listener(),
     b = listener(),
     again = listener()
-  const first = f.channels.open(window('a'), a.events)
-  f.channels.open(window('b'), b.events)
+  const same = view()
+  const first = f.channels.open(window('a'), same, a.events)
+  f.channels.open(window('b'), view(), b.events)
   f.socket.accept()
   // What a session does with a cell message it cannot apply: close, then open again.
   first.close()
   first.close()
-  const second = f.channels.open(window('a'), again.events)
+  const second = f.channels.open(window('a'), same, again.events)
   assert.deepEqual(f.socket.sent.slice(3), [
     { type: 'close', channel: 0 },
-    { type: 'open', channel: 2, ...window('a') },
+    { type: 'open', channel: 2, view: 'view-0001', attempt: 2, ...window('a') },
   ])
   f.socket.json({ type: 'status', channel: 0 })
-  f.socket.cells(0, 1)
-  f.socket.cells(2, 5)
+  f.socket.cells(0, 0, 1)
+  f.socket.cells(2, 0, 5)
   assert.deepEqual([a.log, again.log, b.log], [[], [[5]], []], 'the closed channel hears nothing')
   f.socket.json({ type: 'close', channel: 1 })
   f.socket.json({ type: 'close', channel: 1 })
@@ -120,7 +124,7 @@ test('losing the socket ends every channel once, and a channel may close itself 
       logs: unknown[][] = []
     for (const id of ['a', 'b', 'c']) {
       const { log, events } = listener()
-      const connection = f.channels.open(window(id), {
+      const connection = f.channels.open(window(id), view(), {
         ...events,
         closed(value) {
           events.closed(value)
@@ -135,4 +139,29 @@ test('losing the socket ends every channel once, and a channel may close itself 
     assert.deepEqual(logs, Array(3).fill([failed ? 'failed' : 'closed']))
     assert.equal(f.idle(), 1)
   }
+})
+
+test("a view's numbers go on over its channels, and every kind of message acknowledges them", () => {
+  const f = fixture(),
+    a = listener(),
+    same = view()
+  f.channels.open(window('keep'), view(), listener().events)
+  f.socket.accept()
+  const first = f.channels.open(window('a'), same, a.events)
+  first.send({ type: 'focus' })
+  first.send({ type: 'input', data: 'x' })
+  first.close()
+  const second = f.channels.open(window('a'), same, a.events)
+  second.send({ type: 'input', data: 'y' })
+  assert.equal(f.socket.sent.at(-1)!.seq, 3)
+  f.socket.cells(2, 1, 7)
+  assert.equal(same.taken, 1)
+  f.socket.json({ type: 'status', channel: 2, ack: 2 })
+  assert.equal(same.taken, 2)
+  f.socket.json({ type: 'ack', channel: 2, ack: 3 })
+  assert.equal(same.taken, 3)
+  f.socket.json({ type: 'ack', channel: 2, ack: 1 })
+  f.socket.json({ type: 'ack', channel: 2, ack: 9 })
+  assert.equal(same.taken, 3, 'an ack is cumulative and never of what was not sent')
+  assert.deepEqual(a.log, [[7], 'status'], "an ack is not the session's to hear")
 })

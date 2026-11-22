@@ -416,20 +416,25 @@ export async function connect(session: Session, probe: boolean) {
   }
   if (session.connectionRevision !== revision || !session.host?.isConnected || document.hidden)
     return
-  const connection: TerminalConnection = openTerminalConnection(context, session.resource, {
-    message: (message) => {
-      if (isCurrentApi(context)) receive(session, connection, message, probe)
+  const connection: TerminalConnection = openTerminalConnection(
+    context,
+    session.resource,
+    session.view,
+    {
+      message: (message) => {
+        if (isCurrentApi(context)) receive(session, connection, message, probe)
+      },
+      cells: (bytes) => {
+        if (isCurrentApi(context)) cells(session, bytes)
+      },
+      // The server ends a channel when the connection changed, and the socket when the session
+      // expired. The reconnect probe verifies the session before signing out.
+      closed: (failed) => {
+        log('channel', { w: session.logId, state: failed ? 'error' : 'closed' })
+        connectionFailed(session, failed ? t('terminal.connection.failed') : undefined)
+      },
     },
-    cells: (bytes) => {
-      if (isCurrentApi(context)) cells(session, bytes)
-    },
-    // The server ends a channel when the connection changed, and the socket when the session
-    // expired. The reconnect probe verifies the session before signing out.
-    closed: (failed) => {
-      log('channel', { w: session.logId, state: failed ? 'error' : 'closed' })
-      connectionFailed(session, failed ? t('terminal.connection.failed') : undefined)
-    },
-  })
+  )
   session.connection = connection
   log('channel', { w: session.logId, state: 'open' })
 }

@@ -5,6 +5,7 @@ import {
   type TerminalConnection,
   type TerminalWindow,
 } from '../../utils/terminal/terminal-channels'
+import type { TerminalView } from '../../utils/terminal/terminal-view'
 import { log } from '../../utils/diagnostics/log'
 
 /** One socket per signed-in instance. It lives from its first channel to its last. */
@@ -15,6 +16,7 @@ const socketKey = (context: ApiContext) => `${context.base}\n${context.token}`
 export function openTerminalConnection(
   context: ApiContext,
   window: TerminalWindow,
+  view: TerminalView,
   events: ConnectionEvents,
 ): TerminalConnection {
   const key = socketKey(context)
@@ -35,7 +37,7 @@ export function openTerminalConnection(
     }))
     sockets.set(key, created)
   }
-  return channels.open(window, events)
+  return channels.open(window, view, events)
 }
 
 const probes = new Map<string, Promise<ReadonlySet<string> | 'expired'>>()
