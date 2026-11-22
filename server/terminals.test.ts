@@ -1768,6 +1768,9 @@ function fakeWindow(cols = 8, rows = 2) {
     ring: (paneId?: string) => {
       channels.bells.emit(paneId)
     },
+    report: (progress?: WindowMetadata['progress']) => {
+      channels.metadata.set({ ...metadata('layout'), ...(progress ? { progress } : {}) })
+    },
     describe: (terminalTitle: string) => {
       const value: WindowMetadata = {
         ...metadata('layout'),
@@ -2040,5 +2043,17 @@ test('a bell rings once, only in the browser at the keyboard, and not where an a
     [],
     'an agent pane, or a bell herdr names no pane for in a window with one, stays quiet',
   )
+  await f.terminal.close()
+})
+
+test('a live terminal knows the progress its window last reported', async () => {
+  const f = fakeWindow()
+  assert.equal(f.terminal.progress, undefined)
+  f.report({ state: 'normal', value: 30 })
+  await tick()
+  assert.deepEqual(f.terminal.progress, { state: 'normal', value: 30 })
+  f.report()
+  await tick()
+  assert.equal(f.terminal.progress, undefined, 'a cleared report is gone')
   await f.terminal.close()
 })

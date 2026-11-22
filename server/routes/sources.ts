@@ -25,8 +25,11 @@ export function sourceRoutes({ app, store, terminals, options, source }: RouteCo
     c.json({
       sources: await Promise.all(
         store.list<Source>('source').map(async (s) => {
-          const resource = await runtimes.listResources(s)
-          return options.completionReads?.projectResources(s, resource) || resource
+          const listed = runtimes.withProgress(
+            await runtimes.listResources(s),
+            terminals.progress(s.id),
+          )
+          return options.completionReads?.projectResources(s, listed) || listed
         }),
       ),
     }),

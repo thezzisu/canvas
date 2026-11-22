@@ -25,6 +25,8 @@ import {
   probeSource,
   openTerminal,
   nativeSocketForSource,
+  withProgress,
+  type SourceResource,
 } from './runtimes.ts'
 import {
   installCanvasHelper,
@@ -746,4 +748,21 @@ process.on('SIGTERM',()=>{ for(const socket of sockets) socket.destroy(); for(co
     )
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('a listing carries the progress its open windows report, and only theirs', () => {
+  const window = (id: string) => ({ id, name: id, status: 'unknown' as const, panes: [] })
+  const resource: SourceResource = {
+    id: 'source',
+    name: 'Source',
+    status: 'online',
+    spaces: [{ id: 'space', name: 'Space', windows: [window('open'), window('closed')] }],
+  }
+  assert.equal(withProgress(resource, new Map()), resource)
+  const listed = withProgress(resource, new Map([['open', { state: 'normal', value: 40 }]]))
+  assert.deepEqual(
+    listed.spaces[0]!.windows.map((item) => item.progress),
+    [{ state: 'normal', value: 40 }, undefined],
+  )
+  assert.equal(resource.spaces[0]!.windows[0]!.progress, undefined, 'the listing is not changed')
 })

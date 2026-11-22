@@ -4,6 +4,7 @@ import type { Source } from './state.ts'
 import type { WindowTransport } from './transport.ts'
 import type { CompletionToken } from '../shared/completion.ts'
 import { type ProgramStatus } from '../shared/status.ts'
+import type { WindowProgress } from '../shared/window-metadata.ts'
 import { validateSource } from './source-command.ts'
 import { closeRuntimeConnections, holding } from './source-connections.ts'
 import { coreRuntime } from './core/runtime.ts'
@@ -25,6 +26,8 @@ export interface WindowResource {
   name: string
   status: ProgramStatus
   panes: PaneResource[]
+  /** A program's progress report (OSC 9;4), while the window is open in a browser. */
+  progress?: WindowProgress
 }
 export interface SpaceResource {
   id: string
@@ -94,6 +97,27 @@ export async function listResources(source: Source): Promise<SourceResource> {
     result.error = error instanceof Error ? error.message : 'Connection failed'
   }
   return result
+}
+
+/**
+ * The source's windows with the progress their open terminals report. The runtime's listing has
+ * none, and a browser takes this listing over the progress it was last sent.
+ */
+export function withProgress(
+  resource: SourceResource,
+  progress: ReadonlyMap<string, WindowProgress>,
+): SourceResource {
+  if (!progress.size) return resource
+  return {
+    ...resource,
+    spaces: resource.spaces.map((space) => ({
+      ...space,
+      windows: space.windows.map((window) => {
+        const value = progress.get(window.id)
+        return value ? { ...window, progress: value } : window
+      }),
+    })),
+  }
 }
 
 async function requireResource(

@@ -65,7 +65,7 @@ import type { Subscribable } from './channels.ts'
 import { NotificationIntake } from './notification-intake.ts'
 import type { FrameData } from './herdr/wire.ts'
 import { GridEncoder } from './cell-grid.ts'
-import type { WindowMetadata } from '../shared/window-metadata.ts'
+import type { WindowMetadata, WindowProgress } from '../shared/window-metadata.ts'
 import type { CanvasNotification } from '../shared/notification.ts'
 import { bracketedPaste, type PasteSegment } from '../shared/paste.ts'
 import type { CaptureDescriptor, CaptureState } from '../shared/capture.ts'
@@ -236,6 +236,10 @@ export class LiveTerminal {
       }),
     )
     owned.use(proc.exit.subscribe((event) => void this.close(event.reason)))
+  }
+  /** The progress the window's programs report, as its terminal last published it. */
+  get progress() {
+    return this.rawMetadata?.progress
   }
   /** Whether an agent reports its state in the pane, or in any pane when none is named. */
   agentReports(paneId?: string) {
@@ -726,6 +730,14 @@ export class TerminalManager {
   /** Native and program notifications to show, each once. */
   get notifications(): Subscribable<CanvasNotification> {
     return this.intake.notifications
+  }
+  /** The progress of the source's open windows, by window. */
+  progress(sourceId: string): Map<string, WindowProgress> {
+    const result = new Map<string, WindowProgress>()
+    for (const terminal of this.live)
+      if (!terminal.closed && terminal.sourceId === sourceId && terminal.progress)
+        result.set(terminal.windowId, terminal.progress)
+    return result
   }
   /** The source's open window that takes in its notices and completion state. */
   private owner(source: Source) {
