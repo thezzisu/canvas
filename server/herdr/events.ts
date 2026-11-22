@@ -9,8 +9,11 @@ export interface HerdrEventHandlers {
   /** The subscription holds: what changes from now on is announced. */
   started(): void
   event(name: string, data: Record<string, unknown>): void
-  /** It ended without `close`: what changed since may have gone unannounced. */
-  ended(error: Error): void
+  /**
+   * It ended without `close`: what changed since may have gone unannounced. `lost` says herdr
+   * ended it for events it could not deliver, over a socket that still works.
+   */
+  ended(error: Error, lost: boolean): void
 }
 
 export function subscribeHerdrEvents(
@@ -30,10 +33,10 @@ export function subscribeHerdrEvents(
     clearTimeout(timer)
     socket.destroy()
   }
-  const end = (reason: string) => {
+  const end = (reason: string, lost = false) => {
     if (done) return
     close()
-    handlers.ended(new Error(reason))
+    handlers.ended(new Error(reason), lost)
   }
   const timer = setTimeout(
     () => end('Herdr did not start the event subscription'),
@@ -62,7 +65,7 @@ export function subscribeHerdrEvents(
       if (message?.id === id) {
         // After the start this is how herdr says that events were lost.
         if (started || message.error || message.result?.type !== 'subscription_started') {
-          end(`Herdr ended the event subscription: ${message.error?.code || 'refused'}`)
+          end(`Herdr ended the event subscription: ${message.error?.code || 'refused'}`, started)
           return
         }
         started = true

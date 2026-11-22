@@ -124,14 +124,27 @@ export function watchHerdr(
     followStatuses(agentPanes(result))
     handlers.snapshot(result, readAt)
   }, fail)
-  const events = subscribeHerdrEvents(api, CHANGES, {
-    started: () => void reread.now(),
-    event(name, data) {
-      if (name === 'pane_updated' && data.pane && typeof data.pane === 'object')
-        handlers.pane(data.pane as PaneRecord)
-      reread.schedule()
-    },
-    ended: fail,
-  })
+  let lostAt = -Infinity
+  const followChanges = (): { close(): void } =>
+    subscribeHerdrEvents(api, CHANGES, {
+      started: () => void reread.now(),
+      event(name, data) {
+        if (name === 'pane_updated' && data.pane && typeof data.pane === 'object')
+          handlers.pane(data.pane as PaneRecord)
+        reread.schedule()
+      },
+      // herdr dropped events it could not deliver, and its socket holds: follow again and read
+      // anew. Events lost again at once are taken for a break.
+      ended(error, lost) {
+        const now = performance.now()
+        if (!lost || now - lostAt < RETRY_MS || aborted.signal.aborted) {
+          fail(error)
+          return
+        }
+        lostAt = now
+        events = followChanges()
+      },
+    })
+  let events = followChanges()
   return { refresh: () => reread.schedule(), close }
 }

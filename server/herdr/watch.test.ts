@@ -159,13 +159,22 @@ test('a pane closing during its subscription does not end the watch', async (t) 
   assert.deepEqual(f.endings, [])
 })
 
-test('lost events end the watch, once, with all of its subscriptions', async (t) => {
+test('lost events are followed again and read anew; lost again at once, the watch ends', async (t) => {
   const f = await fixture(t)
   f.state.panes = [{ pane_id: 'a', agent: 'claude' }]
   f.start()
   await f.until(() => f.statuses().length === 1, 'both streams')
-  const stream = f.changes()
-  stream.socket.write(JSON.stringify({ id: stream.id, error: { code: 'events_lost' } }) + '\n')
+  const lose = () => {
+    const stream = f.changes()
+    stream.socket.write(JSON.stringify({ id: stream.id, error: { code: 'events_lost' } }) + '\n')
+    return stream
+  }
+  const reads = f.reads(),
+    lost = lose()
+  await f.until(() => !!f.changes() && f.changes() !== lost && f.reads() > reads, 'followed again')
+  assert.deepEqual(f.endings, [], 'a gap is no break: the source stays online')
+  assert.equal(f.statuses().length, 1)
+  lose()
   await f.until(() => !f.live.size, 'streams closed')
   assert.deepEqual(f.endings, ['Herdr ended the event subscription: events_lost'])
 })
