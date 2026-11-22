@@ -3,6 +3,8 @@ import { mkdtemp, lstat, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isLoopbackHost } from './loopback.ts'
+import { log, warn } from './log.ts'
+import { logIdentifier } from '../shared/log-line.ts'
 
 export interface SocketTunnel {
   sockets: Record<string, string>
@@ -298,11 +300,17 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
   if (request.signal?.aborted) aborted()
   try {
     await connect()
+    const tunnel = logIdentifier(request.sourceId)
+    log('source', 'tunnel', { tunnel, state: 'open' })
     reconnecting = (async () => {
-      let delay = 250
+      let delay = 250,
+        broken = false
       while (!stopped) {
         await currentDone
         if (stopped) break
+        // One warning for each break, however many attempts it takes to mend.
+        if (!broken) warn('CANVAS_TUNNEL', 'tunnel', { tunnel, state: 'close' })
+        broken = true
         await new Promise<void>((resolve) => {
           wakeRetry = resolve
           retry = setTimeout(resolve, delay)
@@ -313,6 +321,8 @@ async function startTunnel(request: TunnelRequest): Promise<ManagedTunnel> {
         try {
           await connect()
           delay = 250
+          broken = false
+          log('source', 'tunnel', { tunnel, state: 'open' })
         } catch {
           delay = Math.min(delay * 2, 5000)
         }

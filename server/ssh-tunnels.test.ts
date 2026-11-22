@@ -125,6 +125,11 @@ process.on('SIGTERM', () => {
 
 test('SSH socket forwarding shares an owner-only endpoint and reconnects without changing client paths', async () => {
   const setup = await fixture()
+  const breaks: string[] = []
+  const warned = (warning: Error & { code?: string }) => {
+    if (warning.code === 'CANVAS_TUNNEL') breaks.push(warning.message)
+  }
+  process.on('warning', warned)
   try {
     const [first, second] = await Promise.all([
       ensureSocketTunnel(setup.request),
@@ -151,11 +156,15 @@ test('SSH socket forwarding shares an owner-only endpoint and reconnects without
     )
     assert.equal(await ensureSocketTunnel(setup.request), first)
     assert.equal((await readFile(setup.log, 'utf8')).trim().split('\n').length, 2)
+    assert.equal(breaks.length, 1, 'a break is warned of once')
     await closeSocketTunnels(setup.request.sourceId)
     await assert.rejects(stat(dirname(first.sockets['herdr.sock']!)), {
       code: 'ENOENT',
     })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(breaks.length, 1, 'closing a tunnel is no break')
   } finally {
+    process.off('warning', warned)
     await setup.close()
   }
 })

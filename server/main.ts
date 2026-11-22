@@ -1,4 +1,5 @@
-import { createServer } from 'node:http'
+import { randomBytes } from 'node:crypto'
+import { createServer, type IncomingMessage } from 'node:http'
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -6,7 +7,7 @@ import { getRequestListener } from '@hono/node-server'
 import { fileURLToPath } from 'node:url'
 import { serveCanvasStatic } from './static.ts'
 import { Hono } from 'hono'
-import { WebSocketServer } from 'ws'
+import { WebSocketServer, type WebSocket } from 'ws'
 import { Store, sourceConnectionKey, type Source } from './state.ts'
 import { createApp } from './app.ts'
 import { AccountStore } from './account.ts'
@@ -33,6 +34,8 @@ import { captureAddress } from './capture-address.ts'
 import { SourcePreviewService } from './source-preview.ts'
 import { captureToolbarHeight } from '../shared/capture.ts'
 import { sendComposer } from './composer-send.ts'
+import { announceLogging, log, watchEventLoop } from './log.ts'
+import { logIdentifier } from '../shared/log-line.ts'
 const dataDir = process.env.CANVAS_DATA_DIR ?? join(homedir(), '.local/share/canvas')
 const accounts = new AccountStore(dataDir)
 const account = accounts.account
@@ -294,12 +297,24 @@ const upgrade = (
           return
         }
         socketSessions.set(ws, token)
+        logSocket(ws, request)
         serveTerminalChannels(ws, (channel, target) =>
           openWindowChannel(channel, target, token, captureBase),
         )
       },
     ),
   )
+}
+/** Logs a socket's life under an identifier of its own, with the address it came from. */
+function logSocket(ws: WebSocket, request: IncomingMessage) {
+  const socket = logIdentifier(randomBytes(4).toString('hex'))
+  // Behind a proxy the first forwarded hop is the browser. It is only ever logged.
+  const forwarded = String(request.headers['x-forwarded-for'] ?? '')
+    .split(',')[0]!
+    .trim()
+  const address = logIdentifier(forwarded || request.socket.remoteAddress || '')
+  log('link', 'socket', { socket, address, state: 'open' })
+  ws.once('close', (code) => log('link', 'socket', { socket, address, state: 'close', code }))
 }
 /** Attaches a window to a channel of an authenticated socket. */
 function openWindowChannel(
@@ -364,6 +379,8 @@ const hosts = [
   ),
 ]
 if (!hosts.length) throw new Error('CANVAS_HOST requires a listening address')
+announceLogging()
+const eventLoop = watchEventLoop()
 const port = Number(process.env.CANVAS_PORT ?? 3010)
 const servers = hosts.map((host) => {
   const server = createServer((request, response) => {
@@ -389,6 +406,7 @@ async function stop() {
   if (stopping) return
   stopping = true
   clearInterval(heartbeat)
+  eventLoop[Symbol.dispose]()
   windowContent.close()
   await captures.close()
   await sourcePreviews.close()

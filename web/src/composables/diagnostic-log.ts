@@ -1,15 +1,8 @@
 import { useLocalStorage } from '@vueuse/core'
 import { computed, shallowRef, watch } from 'vue'
 import { frontendBuild } from '../utils/build-info'
-import {
-  batchesToDrop,
-  logFileName,
-  logLine,
-  logTime,
-  setLogSink,
-  type LogEvent,
-  type LogFields,
-} from '../utils/diagnostics/log'
+import { logLine, logTime, type LogEvent, type LogFields } from '../../../shared/log-line'
+import { batchesToDrop, logFileName, setLogSink } from '../utils/diagnostics/log'
 import { developerMode, viewportPolicy } from './developer-mode'
 
 // The diagnostic log of this browser: what the page did and when, kept in IndexedDB so that it

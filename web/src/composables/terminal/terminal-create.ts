@@ -1,4 +1,4 @@
-import { logWindow } from '../../utils/diagnostics/log'
+import { logWindow } from '../../../../shared/log-line'
 import { CellMirror } from '../../../../shared/cell-wire'
 import { terminalTheme } from '../../../../shared/terminal-theme'
 import { isCurrentApi, uuid, type ApiContext } from '../../api/api'

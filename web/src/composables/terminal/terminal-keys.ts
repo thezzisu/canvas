@@ -1,4 +1,5 @@
-import { inputKind, log, logging } from '../../utils/diagnostics/log'
+import { inputKind } from '../../../../shared/log-line'
+import { log, logging } from '../../utils/diagnostics/log'
 import { clipboardBorrowingFocus } from '../../utils/clipboard'
 import { encodeFocus, encodePaste } from '../../utils/terminal/terminal-encoder'
 import {

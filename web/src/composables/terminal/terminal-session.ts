@@ -14,7 +14,8 @@ import type { bindDesktopInput } from './desktop-input'
 import type { bindMobileInput } from './mobile-input'
 import type { bindMobileKeyboard } from './mobile-keyboard'
 import type { TerminalConnection } from '../../utils/terminal/terminal-channels'
-import { log, logging, type WindowId } from '../../utils/diagnostics/log'
+import type { LogId } from '../../../../shared/log-line'
+import { log, logging } from '../../utils/diagnostics/log'
 import type { bindTerminalKeyboardLock } from './terminal-keyboard-lock'
 import type { bindTerminalMouse } from './terminal-mouse'
 import type { TerminalSelection } from './terminal-selection'
@@ -60,7 +61,7 @@ export interface CompletionFrame {
 export interface Session {
   resource: { sourceId: string; spaceId: string; windowId: string }
   /** The window's name in the diagnostic log. */
-  logId: WindowId
+  logId: LogId
   state: TerminalStatus
   listeners: Set<(state: TerminalStatus) => void>
   /** Runs after every state change. */
