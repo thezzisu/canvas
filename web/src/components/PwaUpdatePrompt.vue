@@ -33,6 +33,8 @@ watch(
       description: to && to !== from ? `${from} → ${to}` : undefined,
       color: 'neutral',
       duration: Infinity,
+      // It waits for a decision, so it has no time to count down.
+      progress: false,
       type: 'background',
       class: 'pwa-update-prompt',
       actions: [

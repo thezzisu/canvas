@@ -56,7 +56,6 @@ const touchTheme = {
         portal: notificationPortal || false,
         position: 'bottom-right',
         max: 4 + shell.pinnedToasts,
-        progress: false,
         ui: { viewport: 'canvas-notifications' },
       }"
     >

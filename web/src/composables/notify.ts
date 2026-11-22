@@ -3,9 +3,10 @@ import type { ButtonProps } from '@nuxt/ui'
 
 /**
  * How long a notice stays, by what the reader has to do with it. Every notice
- * leaves by itself; hovering or focusing a toast pauses its timer. Only a toast
- * that waits for a decision (an update prompt, an undo with its own deadline, a
- * terminal asking for attention) sets its own duration.
+ * leaves by itself, with a bar counting down its time; hovering or focusing a
+ * toast pauses its timer. Only a toast that waits for a decision (an update
+ * prompt, an undo with its own deadline, a terminal asking for attention) sets
+ * its own duration.
  */
 export const noticeDuration = {
   /** Confirms a gesture the reader just made, such as a copy. */

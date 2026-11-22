@@ -185,6 +185,7 @@ function show(event: CanvasNotification, focus?: PaneFocus) {
   const target = notificationTarget(event, props.resources)
   const heading = title(event),
     body = description(event)
+  const duration = focus ? 3000 : event.kind === 'attention' ? Infinity : important ? 15000 : 3500
   if (document.hasFocus() && !document.hidden)
     toast.add({
       id: `${toastPrefix}${event.id}`,
@@ -192,7 +193,9 @@ function show(event: CanvasNotification, focus?: PaneFocus) {
       description: focus ? undefined : body,
       color: event.kind === 'attention' ? 'error' : event.kind === 'done' ? 'success' : 'neutral',
       class: `notice-${event.kind}${focus ? ' notice-focused' : ''}`,
-      duration: focus ? 3000 : event.kind === 'attention' ? Infinity : important ? 15000 : 3500,
+      duration,
+      // A notice that waits for the reader has no time to count down.
+      progress: Number.isFinite(duration),
       type: important ? 'foreground' : 'background',
       actions:
         !focus && target
