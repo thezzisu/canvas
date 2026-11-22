@@ -32,6 +32,7 @@ function entry(manager: TerminalManager, connection = source) {
     async join(ws: TerminalChannel) {
       this.clients.add(ws)
     },
+    closeWhenUnwatched() {},
     async close() {
       this.closed = true
       this.clients.clear()

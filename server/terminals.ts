@@ -108,27 +108,55 @@ interface ViewRecord {
 }
 /** Views remembered beyond those connected; a forgotten one resumes as unknown. */
 const MAX_KNOWN_VIEWS = 256
-/** What one browser has been sent of the window's grid. */
+/** One browser on the window: what it reported, and what it has been sent. */
 interface View {
   record: ViewRecord
   encoder: GridEncoder
   /** The browser paints this window; otherwise it is owed a FRAME when it next does. */
   shown: boolean
+  /** The browser does not show the window at all. */
+  hidden: boolean
+  /** The window holds the browser's read focus. */
+  focused: boolean
   /** A cell message is still on its way out; the next one waits for it. */
   sending: boolean
+  /** Metadata is on its way out; `due` when newer came meanwhile, which follows it. */
+  metadata?: { due: boolean }
   /** The completion frame, then the presentation, follow the next cell message. */
   frameDue: boolean
   presentationDue: boolean
+  /** The completion frame it was last sent, which its reads refer to. */
+  sentFrame?: WindowMetadata
+  /** Its last completion fence, and the one still waiting for its frame. */
+  readGeneration: number
+  pendingFence?: number
 }
+/** What a live terminal is opened with. */
+export interface LiveTerminalOptions {
+  source: Source
+  target: TerminalTarget
+  handle: Awaited<ReturnType<typeof openTerminal>>
+  proc: WindowTransport
+  size: Size
+  reads?: CompletionReads
+  /** The window is closed and its connections released. */
+  onClose(): void
+  /** The window went away while a browser had it in front. */
+  onFocusedRemove?(): void
+  capture?(): CaptureDescriptor | null
+  /** A browser started reading the window. */
+  onReadFocus?(): void
+}
+/** How long a window no browser shows stays open, as its source's watch does. */
+const IDLE_MS = 20_000
+
 export class LiveTerminal {
-  clients = new Set<TerminalChannel>()
-  private views = new Map<TerminalChannel, View>()
+  /** Every browser channel on the window. */
+  readonly clients = new Map<TerminalChannel, View>()
   /** The grid the herdr client shows; absent until it shows one of the current size. */
   grid?: FrameData
   /** A count of the grids the client has shown. */
   private revision = 0
-  private hidden = new Set<TerminalChannel>()
-  private focused = new Set<TerminalChannel>()
   private readonly known = new Map<string, ViewRecord>()
   private maximized?: {
     owner: TerminalChannel
@@ -146,12 +174,8 @@ export class LiveTerminal {
   private bellQueued = false
   private rawMetadata?: WindowMetadata
   private frame?: WindowMetadata
-  private sentFrames = new WeakMap<TerminalChannel, WindowMetadata>()
-  private metadataSends = new WeakMap<TerminalChannel, { due: boolean }>()
   /** Where the window's programs take the mouse, as last sent. */
   private mouseAreas = '[]'
-  private readGenerations = new WeakMap<TerminalChannel, number>()
-  private pendingFences = new WeakMap<TerminalChannel, number>()
   /** The window's subscriptions, disposed when it closes. */
   private readonly owned = new DisposableStack()
   private outputWaiters = new Set<() => void>()
@@ -159,7 +183,7 @@ export class LiveTerminal {
   private pasting?: Promise<void>
   controller?: TerminalChannel
   private downloadController?: TerminalChannel
-  idle?: ReturnType<typeof setTimeout>
+  private idle?: ReturnType<typeof setTimeout>
   /** A view keeps its size over its channels, so the owner is the view. */
   geometry: GeometryController<ViewRecord>
   closing?: Promise<void>
@@ -167,23 +191,23 @@ export class LiveTerminal {
   cols: number
   rows: number
   private normalSize: Size
-  constructor(
-    readonly key: string,
-    readonly sourceId: string,
-    readonly connectionKey: string,
-    readonly spaceId: string,
-    readonly windowId: string,
-    readonly handle: Awaited<ReturnType<typeof openTerminal>>,
-    cols: number,
-    rows: number,
-    readonly onClose: () => void,
-    readonly proc: WindowTransport,
-    readonly source: Source,
-    readonly reads?: CompletionReads,
-    readonly onFocusedRemove?: () => void,
-    readonly capture: () => CaptureDescriptor | null = () => null,
-    readonly onReadFocus?: () => void,
-  ) {
+  readonly source: Source
+  readonly sourceId: string
+  readonly connectionKey: string
+  readonly spaceId: string
+  readonly windowId: string
+  readonly proc: WindowTransport
+  private readonly reads?: CompletionReads
+  constructor(private readonly options: LiveTerminalOptions) {
+    const { source, target, proc, reads } = options,
+      { cols, rows } = options.size
+    this.source = source
+    this.sourceId = source.id
+    this.connectionKey = sourceConnectionKey(source)
+    this.spaceId = target.spaceId
+    this.windowId = target.windowId
+    this.proc = proc
+    this.reads = reads
     this.cols = cols
     this.rows = rows
     this.normalSize = { cols, rows }
@@ -191,9 +215,9 @@ export class LiveTerminal {
       { cols, rows },
       (size) => this.adoptGeometry(size),
       (reason) => {
-        for (const ws of this.clients)
+        for (const ws of this.clients.keys())
           json(ws, {
-            ...this.geometry.state(this.views.get(ws)!.record),
+            ...this.geometry.state(this.clients.get(ws)!.record),
             ...(reason ? { reason } : {}),
           })
       },
@@ -207,7 +231,7 @@ export class LiveTerminal {
       proc.paneFocus.subscribe((paneId) => {
         if (this.focusedPaneId === paneId) return
         this.focusedPaneId = paneId
-        for (const ws of this.clients) json(ws, { type: 'pane-focus', paneId })
+        for (const ws of this.clients.keys()) json(ws, { type: 'pane-focus', paneId })
       }),
     )
     if (reads)
@@ -227,27 +251,28 @@ export class LiveTerminal {
         const areas = JSON.stringify(mouse)
         if (areas !== this.mouseAreas) {
           this.mouseAreas = areas
-          for (const ws of this.clients) this.sendMouseAreas(ws)
+          for (const ws of this.clients.keys()) this.sendMouseAreas(ws)
         }
         for (const waiter of this.outputWaiters) waiter()
         this.grid = grid
         this.revision++
-        for (const ws of this.clients) this.pump(ws)
+        for (const ws of this.clients.keys()) this.pump(ws)
       }),
     )
     owned.use(
       proc.painted.subscribe((frame) => {
         this.frame = frame
-        for (const ws of this.clients)
-          if (!this.pendingFences.has(ws) && this.canRender(ws)) {
-            this.views.get(ws)!.frameDue = true
+        for (const [ws, view] of this.clients)
+          if (view.pendingFence === undefined && this.canRender(ws)) {
+            view.frameDue = true
             this.pump(ws)
           }
       }),
     )
     owned.use(
       proc.copies.subscribe((data) => {
-        for (const ws of this.clients) if (this.canRender(ws)) json(ws, { type: 'clipboard', data })
+        for (const ws of this.clients.keys())
+          if (this.canRender(ws)) json(ws, { type: 'clipboard', data })
       }),
     )
     // An agent that reports its state says when it needs you; its bell would say it again. herdr
@@ -281,36 +306,34 @@ export class LiveTerminal {
     if (this.closed || !this.rawMetadata) return
     this.metadata = this.reads?.project(this.source, this.rawMetadata) || this.rawMetadata
     this.metadataAt = serverTime()
-    for (const ws of this.clients) this.sendMetadata(ws)
+    for (const ws of this.clients.keys()) this.sendMetadata(ws)
   }
   /**
    * Like cells, a browser has at most one metadata message in flight; the current metadata
    * follows it, so a slow socket skips the states in between.
    */
   private sendMetadata(ws: TerminalChannel) {
-    if (!this.metadata) return
-    const sending = this.metadataSends.get(ws)
-    if (sending) {
-      sending.due = true
+    const view = this.clients.get(ws)
+    if (!this.metadata || !view) return
+    if (view.metadata) {
+      view.metadata.due = true
       return
     }
-    const state = { due: false }
-    this.metadataSends.set(ws, state)
+    const sending = (view.metadata = { due: false })
     ws.send({ type: 'metadata', window: this.metadata, at: this.metadataAt }, () => {
-      this.metadataSends.delete(ws)
-      if (state.due && !this.closed) this.sendMetadata(ws)
+      view.metadata = undefined
+      if (sending.due && !this.closed) this.sendMetadata(ws)
     })
   }
   private sendMouseAreas(ws: TerminalChannel) {
     json(ws, { type: 'mouse-areas', areas: JSON.parse(this.mouseAreas) })
   }
-  private publishFrame(ws: TerminalChannel) {
-    if (!this.frame || this.pendingFences.has(ws)) return
-    const frame = this.reads?.project(this.source, this.frame) || this.frame
-    this.sentFrames.set(ws, frame)
+  private publishFrame(ws: TerminalChannel, view: View) {
+    if (!this.frame || view.pendingFence !== undefined) return
+    const frame = (view.sentFrame = this.reads?.project(this.source, this.frame) || this.frame)
     json(ws, {
       type: 'completion-frame',
-      generation: this.readGenerations.get(ws) || 0,
+      generation: view.readGeneration,
       focusedPaneId: frame.panes.find((pane) => pane.active)?.id,
       layout: frame.layout,
       panes: frame.panes.map((pane) => ({
@@ -324,7 +347,7 @@ export class LiveTerminal {
    * that message's completion runs this again, so a slow socket skips the grids in between.
    */
   private pump(ws: TerminalChannel) {
-    const view = this.views.get(ws)
+    const view = this.clients.get(ws)
     if (!view || view.sending || !this.grid || ws.readyState !== 1 || !this.canRender(ws)) return
     const message = view.encoder.encode(this.grid, this.revision)
     if (message) {
@@ -336,7 +359,7 @@ export class LiveTerminal {
     }
     if (view.frameDue) {
       view.frameDue = false
-      this.publishFrame(ws)
+      this.publishFrame(ws, view)
     }
     if (view.presentationDue) {
       view.presentationDue = false
@@ -344,16 +367,21 @@ export class LiveTerminal {
     }
   }
   private canRender(ws: TerminalChannel) {
+    const view = this.clients.get(ws)
     return (
-      !this.hidden.has(ws) &&
-      !!this.views.get(ws)?.shown &&
+      !!view &&
+      !view.hidden &&
+      view.shown &&
       (!this.maximized || (!this.maximized.releasing && this.maximized.owner === ws))
     )
   }
+  private get capture() {
+    return this.options.capture?.() ?? null
+  }
   publishCapture() {
     if (this.closed) return
-    const message: CaptureState = { type: 'capture', capture: this.capture() }
-    for (const ws of this.clients) json(ws, message)
+    const message: CaptureState = { type: 'capture', capture: this.capture }
+    for (const ws of this.clients.keys()) json(ws, message)
   }
   downloadRecipient(): TerminalChannel | undefined {
     const ws = this.downloadController
@@ -435,26 +463,26 @@ export class LiveTerminal {
     })
   }
   private snapshot(ws: TerminalChannel) {
-    if (this.closed || !this.clients.has(ws) || ws.readyState !== 1) return
+    const view = this.clients.get(ws)
+    if (this.closed || !view || ws.readyState !== 1) return
     json(ws, { type: 'pane-focus', paneId: this.focusedPaneId })
     if (
-      this.hidden.has(ws) ||
+      view.hidden ||
       (this.maximized && (this.maximized.releasing || this.maximized.owner !== ws))
     ) {
       this.pause(ws)
       this.presentation(ws)
       return
     }
-    const view = this.views.get(ws)!
     view.shown = true
-    this.sentFrames.delete(ws)
+    view.sentFrame = undefined
     view.frameDue = true
     view.presentationDue = true
     this.pump(ws)
   }
   /** Stops cell traffic to a browser and forgets what it was sent. */
   private pause(ws: TerminalChannel) {
-    const view = this.views.get(ws)
+    const view = this.clients.get(ws)
     if (!view) return
     view.shown = false
     view.frameDue = false
@@ -462,23 +490,23 @@ export class LiveTerminal {
     view.encoder.reset()
   }
   private resume() {
-    for (const ws of this.clients) if (!this.views.get(ws)!.shown) this.snapshot(ws)
+    for (const ws of this.clients.keys()) if (!this.clients.get(ws)!.shown) this.snapshot(ws)
   }
   private maximize(ws: TerminalChannel, token: string) {
     this.presentationRevision++
     this.maximized = {
       owner: ws,
-      view: this.views.get(ws)!.record,
+      view: this.clients.get(ws)!.record,
       token,
       lease: this.presentationRevision,
     }
     this.controller = ws
     this.downloadController = ws
-    for (const client of this.clients) {
+    for (const client of this.clients.keys()) {
       if (client !== ws) {
         this.pause(client)
         this.presentation(client)
-      } else if (this.views.get(client)!.shown) this.presentation(client)
+      } else if (this.clients.get(client)!.shown) this.presentation(client)
     }
     this.status()
     this.resume()
@@ -497,7 +525,7 @@ export class LiveTerminal {
     // Keep every view paused until viewport restoration completes.
     // A new owner can take over while it is queued; snapshots
     // re-check the current owner and never release a newer request.
-    for (const client of this.clients) this.pause(client)
+    for (const client of this.clients.keys()) this.pause(client)
     await this.geometry.end(current.view, current.token)
     if (this.maximized !== current) return
     this.maximized = undefined
@@ -550,19 +578,22 @@ export class LiveTerminal {
     }
     clearTimeout(this.idle)
     json(ws, { type: 'resume', taken: previous?.taken ?? null })
-    this.clients.add(ws)
-    this.views.set(ws, {
+    const view: View = {
       record,
       encoder: new GridEncoder(),
       shown: false,
+      hidden: false,
+      focused: false,
       sending: false,
       frameDue: false,
       presentationDue: false,
-    })
+      readGeneration: 0,
+    }
+    this.clients.set(ws, view)
     if (!this.controller) this.controller = ws
     this.sendMetadata(ws)
     if (this.mouseAreas !== '[]') this.sendMouseAreas(ws)
-    json(ws, { type: 'capture', capture: this.capture() } satisfies CaptureState)
+    json(ws, { type: 'capture', capture: this.capture } satisfies CaptureState)
     this.snapshot(ws)
     this.status()
     json(ws, this.geometry.state(record))
@@ -576,18 +607,14 @@ export class LiveTerminal {
         }
         if (msg.type === 'view-visible' && typeof msg.visible === 'boolean') {
           // A browser reports focused exactly while this window holds its read focus.
-          if (msg.visible && msg.focused === true && !this.focused.has(ws)) {
-            this.focused.add(ws)
-            this.onReadFocus?.()
-          } else if (!msg.visible || msg.focused === false) this.focused.delete(ws)
-          if (msg.visible === !this.hidden.has(ws)) return
-          if (msg.visible) {
-            this.hidden.delete(ws)
-            this.resume()
-          } else {
-            this.hidden.add(ws)
-            this.pause(ws)
-          }
+          if (msg.visible && msg.focused === true && !view.focused) {
+            view.focused = true
+            this.options.onReadFocus?.()
+          } else if (!msg.visible || msg.focused === false) view.focused = false
+          if (msg.visible === !view.hidden) return
+          view.hidden = !msg.visible
+          if (msg.visible) this.resume()
+          else this.pause(ws)
           return
         }
         if (msg.type === 'completion-fence') {
@@ -595,12 +622,11 @@ export class LiveTerminal {
           if (
             typeof generation !== 'number' ||
             !Number.isSafeInteger(generation) ||
-            generation <= (this.readGenerations.get(ws) || 0)
+            generation <= view.readGeneration
           )
             return
-          this.readGenerations.set(ws, generation)
-          this.pendingFences.set(ws, generation)
-          this.sentFrames.delete(ws)
+          view.readGeneration = view.pendingFence = generation
+          view.sentFrame = undefined
           void this.proc
             .completionFence()
             .then((frame) => {
@@ -608,13 +634,13 @@ export class LiveTerminal {
                 !frame ||
                 this.closed ||
                 !this.clients.has(ws) ||
-                this.pendingFences.get(ws) !== generation
+                view.pendingFence !== generation
               )
                 return
-              this.pendingFences.delete(ws)
+              view.pendingFence = undefined
               this.frame = frame
               if (this.canRender(ws)) {
-                this.views.get(ws)!.frameDue = true
+                view.frameDue = true
                 this.pump(ws)
               }
             })
@@ -622,13 +648,13 @@ export class LiveTerminal {
           return
         }
         if (msg.type === 'completion-read') {
-          const frame = this.sentFrames.get(ws)
+          const frame = view.sentFrame
           const pane = frame?.panes.find((pane) => pane.id === msg.paneId && pane.active)
           const completion = { bootId: msg.bootId, sequence: msg.sequence } as CompletionToken
           if (
             Number.isSafeInteger(msg.generation) &&
-            msg.generation === (this.readGenerations.get(ws) || 0) &&
-            !this.pendingFences.has(ws) &&
+            msg.generation === view.readGeneration &&
+            view.pendingFence === undefined &&
             this.canRender(ws) &&
             pane &&
             pane.id === this.focusedPaneId &&
@@ -663,7 +689,7 @@ export class LiveTerminal {
             // The lease passed to this channel: the browser names it anew, and nothing else changes.
             handed.handedOver = false
             handed.token = msg.token
-            if (this.views.get(ws)!.shown) this.presentation(ws)
+            if (this.clients.get(ws)!.shown) this.presentation(ws)
           } else this.maximize(ws, msg.token)
           this.geometry.begin(record, msg.token, size)
           return
@@ -689,7 +715,7 @@ export class LiveTerminal {
         if (msg.type === 'input' && typeof msg.data === 'string' && msg.data.length <= 64 * 1024) {
           // Outer window focus reports cannot change the native pane or pixels.
           if (msg.data !== '\x1b[I' && msg.data !== '\x1b[O' && !isTerminalHoverInput(msg.data))
-            this.sentFrames.delete(ws)
+            view.sentFrame = undefined
           if (this.pasting)
             this.holdInput(
               this.pasting.then(() => {
@@ -704,21 +730,22 @@ export class LiveTerminal {
     })
     ws.once('close', () => {
       this.clients.delete(ws)
-      this.views.delete(ws)
-      this.hidden.delete(ws)
-      this.focused.delete(ws)
       if (this.downloadController === ws) this.downloadController = undefined
       if (this.closed) return
       if (this.maximized?.owner === ws) void this.releaseMaximized(ws)
       // A superseded channel's view goes on, with its size.
       else if (record.channel === ws) void this.geometry.end(record)
-      if (this.controller === ws) this.controller = this.clients.values().next().value
+      if (this.controller === ws) this.controller = this.clients.keys().next().value
       this.status()
-      if (!this.clients.size) {
-        this.idle = setTimeout(() => void this.close(), 20_000)
-        this.idle.unref()
-      }
+      this.closeWhenUnwatched()
     })
+  }
+  /** A window no browser shows closes after a while, unless one comes back. */
+  closeWhenUnwatched() {
+    if (this.clients.size || this.closed) return
+    clearTimeout(this.idle)
+    this.idle = setTimeout(() => void this.close(), IDLE_MS)
+    this.idle.unref()
   }
   adoptGeometry(size: Size) {
     if (this.cols === size.cols && this.rows === size.rows) return
@@ -737,7 +764,7 @@ export class LiveTerminal {
     this.geometry.persistent(size)
   }
   status() {
-    for (const ws of this.clients)
+    for (const ws of this.clients.keys())
       json(ws, {
         type: 'status',
         status: 'connected',
@@ -748,40 +775,36 @@ export class LiveTerminal {
     if (this.closing) return this.closing
     const focused =
       reason === 'removed' &&
-      [...this.focused].some(
-        (ws) => ws.readyState === 1 && this.clients.has(ws) && this.canRender(ws),
+      [...this.clients].some(
+        ([ws, view]) => view.focused && ws.readyState === 1 && this.canRender(ws),
       )
     this.closed = true
     for (const waiter of this.outputWaiters) waiter()
     this.owned.dispose()
-    if (reason === 'removed')
-      this.reads?.removeWindow(this.source, this.key.slice(this.sourceId.length + 1))
-    if (focused) this.onFocusedRemove?.()
+    if (reason === 'removed') this.reads?.removeWindow(this.source, this.windowId)
+    if (focused) this.options.onFocusedRemove?.()
     clearTimeout(this.idle)
     // A native snapshot confirmed the tab is gone. Notify before asynchronous
     // viewport/tunnel cleanup so viewers never treat that cleanup as an outage.
     if (reason === 'removed')
-      for (const ws of this.clients) {
+      for (const ws of this.clients.keys()) {
         json(ws, { type: 'status', status: 'removed', at: serverTime() })
         ws.close()
       }
     this.closing = (async () => {
       // Restore the viewport before detaching this client.
       await this.geometry.close()
-      for (const ws of this.clients) {
+      for (const ws of this.clients.keys()) {
         if (reason !== 'removed') json(ws, { type: 'status', status: 'closed' })
         ws.close()
       }
       this.clients.clear()
-      this.views.clear()
-      this.hidden.clear()
-      this.focused.clear()
       this.maximized = undefined
       try {
         this.proc.kill()
       } catch {}
-      await this.handle.cleanup().catch(() => {})
-      this.onClose()
+      await this.options.handle.cleanup().catch(() => {})
+      this.options.onClose()
     })()
     return this.closing
   }
@@ -853,28 +876,23 @@ export class TerminalManager {
           transport = await handle.connect(cols, rows)
           if (this.stopped || this.closingSources.has(source.id))
             throw new Error('Terminal service is closing')
-          const terminal = new LiveTerminal(
-            key,
-            source.id,
-            sourceConnectionKey(source),
-            target.spaceId,
-            target.windowId,
+          const terminal = new LiveTerminal({
+            source,
+            target,
             handle,
-            cols,
-            rows,
-            () => {
+            proc: transport,
+            size: { cols, rows },
+            reads: this.reads,
+            onClose: () => {
               this.entries.delete(key)
               this.live.delete(terminal)
               this.intake.observe(source)
               this.listingChanges.emit(source.id)
             },
-            transport,
-            source,
-            this.reads,
-            () => this.onFocusedWindowRemoved?.(source, target.windowId),
-            () => this.capture(source.id, target.windowId),
-            () => this.onWindowRead?.(source, target.windowId),
-          )
+            onFocusedRemove: () => this.onFocusedWindowRemoved?.(source, target.windowId),
+            capture: () => this.capture(source.id, target.windowId),
+            onReadFocus: () => this.onWindowRead?.(source, target.windowId),
+          })
           this.live.add(terminal)
           // A card/font edit may have committed while the native socket opened.
           terminal.setNormalSize(this.normalSize(source.id, target.windowId))
@@ -908,10 +926,8 @@ export class TerminalManager {
     if (terminal.connectionKey !== sourceConnectionKey(source))
       throw new Error('Terminal connection changed')
     terminal.join(ws)
-    if (!terminal.clients.size && !terminal.closed) {
-      terminal.idle = setTimeout(() => void terminal.close(), 20_000)
-      terminal.idle.unref()
-    }
+    // A channel that could not join leaves the window as unwatched as before.
+    terminal.closeWhenUnwatched()
   }
   /** The window's live terminal, once it has opened; undefined if it is not open or failed. */
   private async entry(sourceId: string, windowId: string) {

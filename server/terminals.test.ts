@@ -11,7 +11,7 @@ import { CellMirror } from '../shared/cell-wire.ts'
 import { gridText, mirrorText } from './test-grid.ts'
 import { terminalInputChunks } from '../web/src/utils/terminal/terminal-input-chunks.ts'
 import { pressedKey } from '../web/src/utils/terminal/terminal-input.ts'
-import { Store, sourceConnectionKey, type Canvas, type TerminalNode } from './state.ts'
+import { Store, type Canvas, type TerminalNode } from './state.ts'
 import { CompletionReads } from './completion-reads.ts'
 import { CaptureService } from './capture.ts'
 import { LiveTerminal, PASTE_SETTLE_QUIET_MS, TerminalManager } from './terminals.ts'
@@ -1724,19 +1724,14 @@ function fakeWindow(cols = 8, rows = 2) {
     kill() {},
   }
   const source: Source = { id: 'fake', name: 'Fake', runtime: 'herdr', transport: 'local' }
-  const terminal = new LiveTerminal(
-    'fake/window',
-    source.id,
-    sourceConnectionKey(source),
-    'space',
-    'window',
-    { cleanup: async () => {} } as never,
-    cols,
-    rows,
-    () => {},
-    proc,
+  const terminal = new LiveTerminal({
     source,
-  )
+    target: { sourceId: source.id, spaceId: 'space', windowId: 'window' },
+    handle: { cleanup: async () => {} } as never,
+    proc,
+    size: { cols, rows },
+    onClose() {},
+  })
   const grid = (text: string, width = cols, height = rows): FrameData => ({
     width,
     height,
@@ -2103,7 +2098,7 @@ test('a later channel of a view replaces the one before, which can do nothing mo
   old.command({ type: 'input', data: 'late' })
   next.command({ type: 'input', data: 'now' })
   assert.deepEqual(written, ['now'])
-  assert.deepEqual([...f.terminal.clients], [peer.socket, next.socket])
+  assert.deepEqual([...f.terminal.clients.keys()], [peer.socket, next.socket])
   await f.terminal.close()
 })
 
