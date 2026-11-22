@@ -488,82 +488,86 @@ class CoreWindowClient implements WindowTransport {
     }
     if (typeof address !== 'string' || !this.state || (data !== null && typeof data !== 'object'))
       return
-    if (['created', 'removed', 'restarted', 'lost', 'finished'].includes(String(type))) {
-      const update = data as Record<string, unknown>,
-        terminals = this.state.terminals.slice()
-      if (!update || Array.isArray(update)) throw new Error('Invalid core terminal event')
-      const index = terminals.findIndex((terminal) => terminal.address === address)
-      if (type === 'created' || type === 'restarted') {
-        if (update.address !== address) throw new Error('Invalid core terminal event')
-        if (index < 0) terminals.push(update as CoreTerminal)
-        else terminals[index] = update as CoreTerminal
-        for (const [id, pane] of this.attached)
-          if (pane.address === address && type === 'restarted') {
-            this.disposePane(pane)
-            this.attached.delete(id)
-          }
-      } else if (index >= 0) {
-        if (type === 'removed') terminals.splice(index, 1)
-        else
-          terminals[index] = {
-            ...terminals[index]!,
-            ...update,
-            state: type === 'lost' ? 'live' : 'finished',
-            ...(type === 'lost' ? { pid: null } : {}),
-            foreground: null,
-          }
-      }
-      await this.refresh(() => this.options.layout.snapshot(terminals), true)
-      return
+    if (['created', 'removed', 'restarted', 'lost', 'finished'].includes(String(type)))
+      return this.lifecycle(this.state, String(type), address, data)
+    await this.enqueue(() => this.recordChange(String(type), address, data))
+  }
+  /** A terminal began, ended or came back: the snapshot is taken again around it. */
+  private async lifecycle(state: CoreSnapshot, type: string, address: string, data: unknown) {
+    const update = data as Record<string, unknown>,
+      terminals = state.terminals.slice()
+    if (!update || Array.isArray(update)) throw new Error('Invalid core terminal event')
+    const index = terminals.findIndex((terminal) => terminal.address === address)
+    if (type === 'created' || type === 'restarted') {
+      if (update.address !== address) throw new Error('Invalid core terminal event')
+      if (index < 0) terminals.push(update as CoreTerminal)
+      else terminals[index] = update as CoreTerminal
+      for (const [id, pane] of this.attached)
+        if (pane.address === address && type === 'restarted') {
+          this.disposePane(pane)
+          this.attached.delete(id)
+        }
+    } else if (index >= 0) {
+      if (type === 'removed') terminals.splice(index, 1)
+      else
+        terminals[index] = {
+          ...terminals[index]!,
+          ...update,
+          state: type === 'lost' ? 'live' : 'finished',
+          ...(type === 'lost' ? { pid: null } : {}),
+          foreground: null,
+        }
     }
-    await this.enqueue(() => {
-      const terminal = this.state?.terminals.find((terminal) => terminal.address === address)
-      if (!terminal) return
-      const before = terminal.status?.state,
-        priorTurn = terminal.turn
-      const update = data && typeof data === 'object' ? (data as Record<string, unknown>) : {}
-      if (type === 'status') {
-        terminal.status = update.status as CoreTerminal['status']
-        terminal.records = update.records
-        terminal.reported = update.reported
-      } else if (type === 'turn' && Number.isSafeInteger(update.turn))
-        terminal.turn = Number(update.turn)
-      else if (type === 'labels' && update.labels && typeof update.labels === 'object')
-        terminal.labels = update.labels as Record<string, string>
-      else if (type === 'title' && typeof update.title === 'string') terminal.title = update.title
-      else if (type === 'keep' && typeof update.keep === 'boolean') terminal.keep = update.keep
-      else if (type === 'foreground') terminal.foreground = data as CoreTerminal['foreground']
-      else if (type === 'size' && Number.isInteger(update.cols) && Number.isInteger(update.rows)) {
-        terminal.cols = Number(update.cols)
-        terminal.rows = Number(update.rows)
-        for (const pane of this.attached.values())
-          if (
-            pane.address === address &&
-            (pane.engine.cols !== terminal.cols || pane.engine.rows !== terminal.rows)
-          ) {
-            pane.engine.resize(terminal.cols, terminal.rows)
-            pane.revision++
-          }
-      }
-      this.revision++
-      this.updateMetadata()
-      this.render()
-      this.snapshots.set()
-      if (
-        this.initialized &&
-        type === 'status' &&
-        before !== terminal.status?.state &&
-        ['blocked', 'error'].includes(terminal.status?.state || '')
-      )
-        this.notify(terminal, 'attention')
-      if (
-        this.initialized &&
-        type === 'turn' &&
-        terminal.turn > priorTurn &&
-        !['working', 'blocked', 'error'].includes(terminal.status?.state || '')
-      )
-        this.notify(terminal, 'done')
-    })
+    await this.refresh(() => this.options.layout.snapshot(terminals), true)
+  }
+  /** A field of a terminal's record changed. */
+  private recordChange(type: string, address: string, data: unknown) {
+    const terminal = this.state?.terminals.find((terminal) => terminal.address === address)
+    if (!terminal) return
+    const before = terminal.status?.state,
+      priorTurn = terminal.turn
+    const update = data && typeof data === 'object' ? (data as Record<string, unknown>) : {}
+    if (type === 'status') {
+      terminal.status = update.status as CoreTerminal['status']
+      terminal.records = update.records
+      terminal.reported = update.reported
+    } else if (type === 'turn' && Number.isSafeInteger(update.turn))
+      terminal.turn = Number(update.turn)
+    else if (type === 'labels' && update.labels && typeof update.labels === 'object')
+      terminal.labels = update.labels as Record<string, string>
+    else if (type === 'title' && typeof update.title === 'string') terminal.title = update.title
+    else if (type === 'keep' && typeof update.keep === 'boolean') terminal.keep = update.keep
+    else if (type === 'foreground') terminal.foreground = data as CoreTerminal['foreground']
+    else if (type === 'size' && Number.isInteger(update.cols) && Number.isInteger(update.rows)) {
+      terminal.cols = Number(update.cols)
+      terminal.rows = Number(update.rows)
+      for (const pane of this.attached.values())
+        if (
+          pane.address === address &&
+          (pane.engine.cols !== terminal.cols || pane.engine.rows !== terminal.rows)
+        ) {
+          pane.engine.resize(terminal.cols, terminal.rows)
+          pane.revision++
+        }
+    }
+    this.revision++
+    this.updateMetadata()
+    this.render()
+    this.snapshots.set()
+    if (
+      this.initialized &&
+      type === 'status' &&
+      before !== terminal.status?.state &&
+      ['blocked', 'error'].includes(terminal.status?.state || '')
+    )
+      this.notify(terminal, 'attention')
+    if (
+      this.initialized &&
+      type === 'turn' &&
+      terminal.turn > priorTurn &&
+      !['working', 'blocked', 'error'].includes(terminal.status?.state || '')
+    )
+      this.notify(terminal, 'done')
   }
 
   private notify(terminal: CoreTerminal, kind: 'attention' | 'done') {
