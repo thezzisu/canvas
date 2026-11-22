@@ -62,7 +62,9 @@ absolute socket path.
 | Herdr Core / App | herdr-core 0.1.17 and herdr-app 0.1.12 layouts (config discovery needs Python 3.11+) |
 
 No TUI or desktop app process needs to stay open. Configure a separate SSH
-connection for each remote core.
+connection for each remote core. While a browser has Canvas open, and for 20
+seconds after, the server keeps one SSH connection to each remote connection and
+follows its changes; window lists are pushed, not polled.
 
 ## Terminal commands
 
@@ -77,6 +79,9 @@ canvas open http://localhost:5173/      # open a loopback URL of that machine
 canvas preview ./site                   # serve a static site in the card
 canvas capture npm run dev              # show a trusted web app in the card (experimental)
 ```
+
+In a terminal nested in both runtimes, `open`, `preview` and `capture` take
+`--runtime hc` or `--runtime herdr`.
 
 Pasted or dropped files are uploaded to `~/.local/share/canvas/inbox` on the
 terminal's machine and inserted as quoted paths, without pressing Enter. Mixed
@@ -102,6 +107,18 @@ apps must support the forwarded subpath.
 | `CANVAS_INIT_PASSWORD`   | Random                     | First-start password, at least 8 characters |
 | `CANVAS_PUBLIC_SSH_HOST` | Listen address or hostname | SSH host advertised for local VS Code links |
 | `CANVAS_PUBLIC_SSH_PORT` | `22`                       | SSH port advertised for local VS Code links |
+
+## Diagnostics
+
+- `NODE_DEBUG=canvas:link` logs sockets, channels, messages and acknowledgements;
+  `NODE_DEBUG=canvas:source` logs the connections kept to each source, and
+  `canvas:*` logs both. Lines go to stderr as JSON and carry types, sizes and
+  times, never what was typed or shown.
+- Problems (a held event loop, a broken tunnel, a replaced terminal socket) are
+  Node warnings of type `CanvasWarning`. Silence them with
+  `NODE_OPTIONS=--disable-warning=CanvasWarning`.
+- The browser's own log is under developer mode in the settings. It stays in
+  that browser until it is downloaded.
 
 ## Deployment
 
