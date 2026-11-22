@@ -290,6 +290,25 @@ test('a new channel first sends again the input that was not taken, and nothing 
   assert.deepEqual(b.log, [], "the handshake is not the session's to hear")
 })
 
+test('pointer input is not sent again: it names cells of a screen that may have changed', () => {
+  const f = linked()
+  f.connection.send({ type: 'input', data: '\x1b[<0;10;5M' })
+  f.connection.send({ type: 'input', data: '\x1b[<64;10;5M' })
+  f.connection.send({ type: 'input', data: '\x1b[200~pasted\x1b[201~' })
+  f.connection.send({ type: 'input', data: '\x1b[I' })
+  f.connection.send({ type: 'input', data: 'k' })
+  f.pass(STALL_MS + 10)
+  const next = fixture()
+  next.channels.open(window('a'), f.view, listener().events)
+  next.socket.accept()
+  next.socket.sent = []
+  next.socket.json({ type: 'resume', channel: 0, taken: 0, ack: 0 })
+  assert.deepEqual(next.socket.sent, [
+    { type: 'input', data: '\x1b[200~pasted\x1b[201~', channel: 0, seq: 3 },
+    { type: 'input', data: 'k', channel: 0, seq: 5 },
+  ])
+})
+
 test('input is not sent again to a window that forgot the view, or after the user left', () => {
   for (const forget of [false, true]) {
     const f = fixture(),

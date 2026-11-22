@@ -1,9 +1,16 @@
+import { inputKind } from '../../../../shared/log-line'
+
 interface Owed {
   seq: number
   at: number
-  /** Input, kept until it is taken so that it can be sent again. */
+  /** Keys and pastes, kept until taken so that they can be sent again. */
   input?: string
 }
+/**
+ * Pointer input names cells of the screen it was meant for, which may have changed by the time
+ * it could be sent again; focus reports are made afresh by the new channel.
+ */
+const resent = (data: string) => ['key', 'paste'].includes(inputKind(data))
 
 /**
  * One view of a window for as long as the page lives, over any number of connections. It numbers
@@ -32,7 +39,7 @@ export class TerminalView {
     this.owed.push({
       seq,
       at,
-      ...(type === 'input' && typeof data === 'string' ? { input: data } : {}),
+      ...(type === 'input' && typeof data === 'string' && resent(data) ? { input: data } : {}),
     })
     return seq
   }
