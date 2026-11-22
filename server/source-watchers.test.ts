@@ -101,3 +101,20 @@ test('an edited connection is watched anew; a renamed one keeps its watch', (t) 
   f.watchers.sync()
   assert.equal(f.follows[1]!.ended, true)
 })
+
+test('a listing a browser read for itself that differs from the push has the next reading sent', (t) => {
+  const f = fixture(t)
+  f.watchers.view()
+  const follow = f.follows[0]!
+  follow.listener.snapshot(listing('a'), 10)
+  const pushed = f.pushed.at(-1)!
+  const refreshed = follow.refreshed
+  f.watchers.answered({ ...pushed, readAt: 11 })
+  assert.equal(follow.refreshed, refreshed, 'a read that matches the push asks for nothing')
+  // The browser's own read failed and is later than the push, so the browser now shows it offline.
+  f.watchers.answered({ ...pushed, status: 'offline', error: 'timed out', readAt: 12, spaces: [] })
+  assert.equal(follow.refreshed, refreshed + 1)
+  follow.listener.snapshot(listing('a'), 13)
+  assert.equal(f.pushed.length, 2, 'the unchanged reading corrects the browser')
+  assert.equal(f.pushed.at(-1)!.status, 'online')
+})

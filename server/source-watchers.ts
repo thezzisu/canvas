@@ -9,6 +9,11 @@ import { sourceConnectionKey, type Source } from './state.ts'
 
 /** How long the watches outlast the last browser, as an open terminal does. */
 const GRACE_MS = 20_000
+// When it was read is no news by itself.
+const digestOf = (resource: SourceResource) =>
+  createHash('sha256')
+    .update(JSON.stringify({ ...resource, readAt: 0 }))
+    .digest('base64')
 
 interface Watched {
   source: Source
@@ -96,14 +101,21 @@ export class SourceWatchers implements Disposable {
   refresh(sourceId: string) {
     this.watched.get(sourceId)?.following?.refresh()
   }
+  /**
+   * A browser read this listing for itself. Read later than the last push, it is what that
+   * browser shows; if it differs from the push, the next reading is sent even when it matches.
+   */
+  answered(resource: SourceResource) {
+    const entry = this.watched.get(resource.id)
+    if (!entry || digestOf(resource) === entry.sent) return
+    entry.sent = undefined
+    entry.following?.refresh()
+  }
   private publish(entry: Watched, listed: Omit<SourceResource, 'id' | 'name'>) {
     if (this.watched.get(entry.source.id) !== entry) return
     const { source } = entry
     const resource = this.options.project(source, { id: source.id, name: source.name, ...listed })
-    // When it was read is no news by itself.
-    const digest = createHash('sha256')
-      .update(JSON.stringify({ ...resource, readAt: 0 }))
-      .digest('base64')
+    const digest = digestOf(resource)
     if (digest === entry.sent) return
     entry.sent = digest
     this.changes.emit(resource)
