@@ -21,6 +21,7 @@ import { log } from '../../utils/diagnostics/log'
 import UploadProgress from '../UploadProgress.vue'
 import CardLayoutControls from '../canvas/CardLayoutControls.vue'
 import { useLayoutCard } from '../../composables/canvas/layout-editing'
+import { useMicaCover } from '../../composables/canvas/mica'
 import { requestTrustedPreview } from '../../composables/files/trusted-preview'
 import { captureTrusted, trustCapture } from '../../composables/terminal/capture-trust'
 import { isMarkdownFile } from '../../utils/notes/markdown'
@@ -260,6 +261,11 @@ watchEffect(() => {
     loaded.value = true
 })
 const firstFrame = computed(() => !status.value.screenReady || !loaded.value)
+// Both covers show the wallpaper's material as it lies behind them.
+const transitionSurface = ref<HTMLElement>()
+const loadingCover = ref<HTMLElement>()
+useMicaCover(transitionSurface, () => covered.value)
+useMicaCover(loadingCover, () => firstFrame.value)
 const loading = computed(
   () =>
     !showApp.value &&
@@ -1011,7 +1017,7 @@ async function resized(event: { params: { width: number; height: number; x: numb
         @wheel.stop
         @dblclick.stop
       >
-        <div class="terminal-transition-surface" aria-hidden="true" />
+        <div ref="transitionSurface" class="terminal-transition-surface mica" aria-hidden="true" />
       </div>
       <Transition name="terminal-composer"
         ><TerminalComposer
@@ -1137,8 +1143,9 @@ async function resized(event: { params: { width: number; height: number; x: numb
       <Transition name="terminal-loading">
         <div
           v-if="loading"
+          ref="loadingCover"
           class="terminal-loading nodrag"
-          :class="{ 'terminal-loading-initial': firstFrame }"
+          :class="{ 'terminal-loading-initial mica': firstFrame }"
           role="status"
         >
           <span class="terminal-loading-label"
@@ -1269,7 +1276,6 @@ async function resized(event: { params: { width: number; height: number; x: numb
   pointer-events: none;
   visibility: hidden;
   opacity: 0;
-  background: var(--terminal-transition-background, var(--material));
   transition:
     opacity var(--duration) ease-out,
     visibility 0s var(--duration);
@@ -1311,7 +1317,6 @@ async function resized(event: { params: { width: number; height: number; x: numb
    two read as one cover. A load that is quick shows no label at all. */
 .terminal-loading-initial {
   z-index: 12;
-  background: var(--terminal-transition-background, var(--material));
 }
 .terminal-loading-label {
   display: inline-flex;

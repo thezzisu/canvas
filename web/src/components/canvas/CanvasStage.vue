@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, useTemplateRef } from 'vue'
+import { computed, ref, useTemplateRef, watch, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { VueFlow } from '@vue-flow/core'
+import { useResizeObserver } from '@vueuse/core'
 import UButton from '@nuxt/ui/components/Button.vue'
 import UEmpty from '@nuxt/ui/components/Empty.vue'
 import UIcon from '@nuxt/ui/components/Icon.vue'
@@ -11,6 +12,7 @@ import NoteNode from '../notes/NoteNode.vue'
 import { contentFontReady } from '../../composables/settings/content-font'
 import TerminalNode from '../terminal/TerminalNode.vue'
 import { useBackgroundUrl } from '../../composables/workspace/backgrounds'
+import { uiZoom } from '../../composables/ui-scale'
 import { needsAttention } from '../../utils/workspace/canvas-status'
 import { editSource } from '../../composables/workspace/dialogs'
 import CanvasFileDrop from './CanvasFileDrop.vue'
@@ -38,17 +40,35 @@ const background = computed(() =>
 const { url: backgroundUrl, material } = useBackgroundUrl(() => background.value?.url, {
   material: true,
 })
-/** What covers a terminal with no settled frame: the wallpaper as seen through the canvas. */
-const terminalMaterial = computed(() => {
-  const tint = `color-mix(in srgb, var(--material) ${(1 - (background.value?.opacity ?? 0)) * 100}%, transparent)`
-  return {
-    '--terminal-transition-background': material.value
-      ? `linear-gradient(${tint}, ${tint}), url("${material.value}") center / cover var(--material)`
-      : 'var(--material)',
-  }
+// What covers a card shows: the wallpaper as seen through the canvas, where the cover is.
+watchEffect(() => {
+  scene.mica.wallpaper.value = background.value
+    ? { material: material.value, opacity: background.value.opacity }
+    : undefined
 })
-// A maximized card is outside this stage and takes the material from here.
-defineExpose({ fileDrop, terminalMaterial })
+defineExpose({ fileDrop })
+
+// On a desktop the minimap stands on the bar at the bottom left, clear of the cards' header
+// actions and the notices at the bottom right: the toolbar, or while the layout is edited, its
+// bar. Both wrap and scale with the interface, so the minimap is placed where the bar is; with
+// neither, it takes the toolbar's place.
+const MINIMAP_GAP = 8
+const editBar = useTemplateRef('editBar')
+const minimapBase = computed(() => camera.toolbar.value || editBar.value || undefined)
+const minimapPlace = ref<Record<string, string>>({})
+function placeMinimap() {
+  const surface = navigation.surface.value,
+    base = minimapBase.value
+  if (!surface || !base) return void (minimapPlace.value = {})
+  const stage = surface.getBoundingClientRect(),
+    bar = base.getBoundingClientRect()
+  minimapPlace.value = {
+    '--minimap-left': `${bar.left - stage.left}px`,
+    '--minimap-bottom': `${stage.bottom - bar.top + MINIMAP_GAP}px`,
+  }
+}
+useResizeObserver(minimapBase, placeMinimap)
+watch([minimapBase, uiZoom], placeMinimap, { flush: 'post' })
 const status = computed(() =>
   workspace.pending ||
   (!contentFontReady.value && (nodes.value.length || focus.maximized.value)) ||
@@ -139,7 +159,8 @@ function minimapColor(node: Node) {
       morph.state.value && `canvas-morph-${morph.state.value.phase}`,
     ]"
     :style="[
-      terminalMaterial,
+      scene.mica.style.value,
+      minimapPlace,
       morph.state.value && { '--canvas-morph-shift': `${morph.state.value.shift}px` },
     ]"
     :data-page-window="paging.active.value ? paging.current.value?.id : undefined"
@@ -171,6 +192,7 @@ function minimapColor(node: Node) {
     <span id="canvas-card-move-help" hidden>{{ t('app.cardMoveHelp') }}</span>
     <div
       v-if="layout.editing.value"
+      ref="editBar"
       class="layout-edit-bar"
       role="toolbar"
       :aria-label="t('app.layoutEdit')"
@@ -235,7 +257,7 @@ function minimapColor(node: Node) {
           :aria-label="t('app.windowNavigation')"
           :width="shell.mobile ? 96 : 150"
           :height="shell.mobile ? 64 : 98"
-          :position="shell.mobile ? 'top-right' : 'bottom-right'"
+          :position="shell.mobile ? 'top-right' : 'bottom-left'"
           :node-class-name="minimapClass"
           :node-color="minimapColor"
           :node-stroke-width="0"

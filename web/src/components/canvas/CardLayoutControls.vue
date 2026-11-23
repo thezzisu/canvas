@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, inject } from 'vue'
+import { computed, inject, ref } from 'vue'
 import { useVueFlow } from '@vue-flow/core'
 import { NodeResizeControl } from '@vue-flow/node-resizer'
 import { useI18n } from 'vue-i18n'
 import UIcon from '@nuxt/ui/components/Icon.vue'
 import { layoutEditingKey } from '../../composables/canvas/layout-editing'
+import { useMicaCover } from '../../composables/canvas/mica'
 
 const props = defineProps<{
   id: string
@@ -18,6 +19,8 @@ const layout = inject(layoutEditingKey, undefined)
 const { viewport } = useVueFlow()
 const { t } = useI18n()
 const zoom = computed(() => viewport.value.zoom)
+const mask = ref<HTMLElement>()
+useMicaCover(mask, () => true)
 const selected = computed(() => layout?.selected.value === props.id)
 const handles = computed(() =>
   props.width * zoom.value >= 132 && props.height * zoom.value >= 132
@@ -35,7 +38,8 @@ const icons = {
 <template>
   <template v-if="layout?.active.value || waiting">
     <div
-      class="card-layout-mask outline-primary/25 -outline-offset-3 focus-visible:outline-3"
+      ref="mask"
+      class="card-layout-mask mica outline-primary/25 -outline-offset-3 focus-visible:outline-3"
       :class="{ 'layout-selected': selected, 'layout-waiting': !layout?.active.value }"
       :style="{ '--layout-pixel': `${1 / zoom}px` }"
       :role="layout?.active.value ? 'button' : 'status'"
@@ -103,7 +107,6 @@ const icons = {
   z-index: 30;
   display: grid;
   place-items: center;
-  background: var(--terminal-transition-background, var(--material));
   border-radius: calc(var(--ui-radius) * 2);
   touch-action: none;
   color: var(--ui-text-muted);

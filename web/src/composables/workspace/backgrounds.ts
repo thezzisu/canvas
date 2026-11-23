@@ -8,7 +8,7 @@ import {
   requireCurrentApi,
 } from '../../api/api'
 import { BackgroundCache } from '../../utils/workspace/background-cache'
-import { wallpaperMaterial } from '../../utils/workspace/wallpaper-material'
+import { wallpaperMaterial, type WallpaperMaterial } from '../../utils/workspace/wallpaper-material'
 import { t } from '../../plugins/i18n'
 
 const cache = new BackgroundCache(async (path, signal) => {
@@ -29,7 +29,7 @@ export function useBackgroundUrl(
   options: { material?: boolean } = {},
 ) {
   const url = ref(''),
-    material = ref(''),
+    material = ref<WallpaperMaterial>(),
     error = ref<unknown>()
   let serial = 0
   function load() {
@@ -37,7 +37,7 @@ export function useBackgroundUrl(
       current = ++serial,
       context = apiContext()
     error.value = undefined
-    material.value = ''
+    material.value = undefined
     url.value = value && context.token ? cache.peek(value) || '' : ''
     if (!value || !context.token) return
     void cache

@@ -28,6 +28,7 @@ import { useShellStore, type ScanTarget } from '../../../stores/shell'
 import { useViewStore } from '../../../stores/view'
 import { useWorkspaceStore } from '../../../stores/workspace'
 import { isTerminalNode } from '../../../api/types'
+import { useMica, type Mica } from '../mica'
 import { useCanvasCamera, type CanvasCamera } from './camera'
 import { useCardActions, type CardActions } from './cards'
 import { useCardFocus, type CardFocus } from './focus'
@@ -88,6 +89,7 @@ export interface CanvasScene extends ReturnType<typeof stores> {
   windows: CanvasWindows
   reveal: WindowReveal
   cards: CardActions
+  mica: Mica
   /** Open a canvas, saving what the current one has pending first. */
   visit(canvasId: string, target?: CanvasTarget): Promise<void>
 }
@@ -164,6 +166,19 @@ export function createCanvasScene(): CanvasScene {
   scene.cards = useCardActions(scene)
   scene.graph = useCanvasGraph(scene)
   scene.camera = useCanvasCamera(scene)
+  scene.mica = useMica(scene.surface, () => {
+    const { x, y, zoom } = scene.flow.viewport.value
+    return [x, y, zoom]
+      .concat(
+        scene.flow.getNodes.value.flatMap((node) => [
+          node.computedPosition.x,
+          node.computedPosition.y,
+          node.dimensions.width,
+          node.dimensions.height,
+        ]),
+      )
+      .join()
+  })
 
   scene.visit = async (canvasId, target) => {
     if (!scene.reveal.target(canvasId, false)) scene.reveal.cancel()

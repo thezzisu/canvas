@@ -2,7 +2,7 @@ interface Entry {
   controller: AbortController
   url?: string
   pending?: Promise<string>
-  material?: Promise<string>
+  material?: Promise<unknown>
 }
 
 /** Original image bytes live only for the current signed-in instance. */
@@ -34,7 +34,7 @@ export class BackgroundCache {
       })
     return entry.pending
   }
-  material(path: string, create: (url: string) => Promise<string>): Promise<string> {
+  material<T>(path: string, create: (url: string) => Promise<T>): Promise<T> {
     const loaded = this.get(path),
       entry = this.entries.get(path)!
     return (entry.material ??= loaded
@@ -47,7 +47,7 @@ export class BackgroundCache {
       .catch((error) => {
         entry.material = undefined
         throw error
-      }))
+      })) as Promise<T>
   }
   retain(paths: Iterable<string>) {
     const retained = new Set(paths)

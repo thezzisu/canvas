@@ -214,7 +214,9 @@ html {
   overflow: hidden;
 }
 .vue-flow__panel.vue-flow__minimap {
-  margin: 0 7px 9px 0;
+  /* On the bar at the bottom left (CanvasStage.vue), or in the toolbar's place without one. */
+  margin: 0 0 var(--minimap-bottom, calc(25px * var(--ui-zoom)))
+    var(--minimap-left, calc(27px * var(--ui-zoom)));
 }
 .vue-flow__minimap svg {
   display: block;
@@ -506,6 +508,12 @@ html {
 
 .graph-wrap.has-background {
   background-image: none;
+}
+/* A cover over a card in Mica: the wallpaper's material where the cover lies (mica.ts), or the
+   plain material. */
+.mica {
+  background: var(--mica-image, none) var(--mica-position, center) / var(--mica-size, cover)
+    no-repeat var(--material);
 }
 .canvas-background {
   position: absolute;

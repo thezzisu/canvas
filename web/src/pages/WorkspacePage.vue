@@ -102,7 +102,7 @@ watch(
         morph.state.value && `canvas-morph-${morph.state.value.phase}`,
       ]"
       :style="[
-        stage?.terminalMaterial,
+        scene.mica.style.value,
         morph.state.value && { '--canvas-morph-shift': `${morph.state.value.shift}px` },
       ]"
     >
