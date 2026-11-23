@@ -454,7 +454,7 @@ export async function connect(session: Session, probe: boolean) {
       watching: () =>
         !!session.reportedVisible &&
         !!session.metadata?.panes.some((pane) => pane.status === 'working'),
-      busy: () => session.uploads.hasPending,
+      busy: () => session.uploads.transferring,
       doubted: (on) => {
         if (session.connection !== connection || session.state.linkDoubt === on) return
         log('channel', { w: session.logId, state: on ? 'doubt' : 'clear' })

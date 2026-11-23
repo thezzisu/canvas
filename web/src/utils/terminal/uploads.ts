@@ -210,6 +210,10 @@ export class TerminalUploads {
   get hasPending() {
     return this.pending.length > 0
   }
+  /** A batch's files are going up from this browser, sharing the way up with the terminal. */
+  get transferring() {
+    return !!this.current?.running
+  }
 
   /** Every dropped batch reports to its sender; stored sends must learn they did not happen. */
   private dropPending(error: string) {

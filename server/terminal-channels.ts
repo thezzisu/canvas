@@ -11,8 +11,8 @@
 //                       { type: 'ack' }, when nothing else went out in time
 //                       { type: 'close', channel, ack }, the server ended the channel
 //                       binary: unsigned LEB128 integers, the channel, the ack, then `got`,
-//                       `since` and `quiet` (and `sentAt` when timed), then a cell message
-//                       every JSON message also carries `got`, `since` and `quiet`
+//                       `bytes` and `since` (and `sentAt` when timed), then a cell message
+//                       every JSON message also carries `got`, `bytes` and `since`
 //
 // The browser picks the channel number, a non-negative integer it has not used on this socket.
 // A channel is what a window's own socket would be: it opens with `status`, and its end, from
@@ -30,12 +30,13 @@
 // - `ack` is the view's last message taken, so it is cumulative. It rides on the channel's
 //   messages and lets the browser forget input it would otherwise send again (`resume`).
 //
-// Liveness (web/src/utils/terminal/link-watch.ts): everything sent on the socket says what the
-// server had received on it when it was sent. `got` counts its messages, the authentication
-// first; `since` is how many milliseconds ago the last of them arrived, and `quiet` how many ago
-// any byte did. The browser takes round trips from them, and tells bytes queued before its
-// message could have arrived from bytes sent after. A `{ type: 'ack' }` goes alone when nothing
-// else went out within ACK_DELAY_MS of a message arriving. Nothing acknowledges it.
+// Liveness (web/src/utils/terminal/link-watch.ts), as TCP acknowledges: everything sent on the
+// socket says what the server had received on it when it was sent. `got` counts its messages, the
+// authentication first, and `bytes` the bytes under them, so a long message shows its progress
+// while it arrives; `since` is how many milliseconds ago the last message arrived, which gives the
+// browser its round trips. A `{ type: 'ack' }` goes alone when nothing else went out within
+// ACK_DELAY_MS of bytes arriving. Nothing acknowledges it, and nothing is acknowledged before the
+// authentication.
 //
 // An `open` with `timed` is a browser keeping its diagnostic log: its channel's messages also
 // carry `sentAt`, the server's wall clock, which with `since` gives the clock offset.
@@ -65,8 +66,8 @@ function pushInteger(bytes: number[], value: number) {
 /** What the server has received on the socket, as each message it sends there says it. */
 interface Stamp {
   got: number
+  bytes: number
   since: number
-  quiet: number
 }
 /**
  * One browser's terminal socket, which stamps all it sends with what it has received. It must
@@ -74,34 +75,43 @@ interface Stamp {
  */
 export class TerminalSocket {
   private got = 0
+  private bytes = 0
   private messageAt = performance.now()
-  private byteAt = this.messageAt
   private owedAck?: ReturnType<typeof setTimeout>
   constructor(
     readonly ws: WebSocket,
     /** The stream under the socket, whose bytes say that the browser's way up moves. */
-    stream?: { on(event: 'data', listener: () => void): unknown },
+    stream?: {
+      prependListener(event: 'data', listener: (chunk: { length: number }) => void): unknown
+    },
   ) {
     ws.on('message', () => {
       this.got++
       this.messageAt = performance.now()
-      this.owedAck ??= setTimeout(() => this.send({ type: 'ack' }), ACK_DELAY_MS)
-      this.owedAck.unref()
+      this.oweAck()
     })
-    stream?.on('data', () => (this.byteAt = performance.now()))
+    // Counted before the socket reads them, so a message's own stamp includes its bytes.
+    stream?.prependListener('data', (chunk) => {
+      this.bytes += chunk.length
+      this.oweAck()
+    })
     ws.once('close', () => this.settleAck())
   }
   get open() {
     return this.ws.readyState === 1
   }
   private stamp(): Stamp {
-    const now = performance.now()
     return {
       got: this.got,
-      since: Math.round(now - this.messageAt),
-      // The bytes of the message arrive before it does.
-      quiet: Math.round(now - Math.max(this.byteAt, this.messageAt)),
+      bytes: this.bytes,
+      since: Math.round(performance.now() - this.messageAt),
     }
+  }
+  /** What arrived is acknowledged by the next thing sent, or alone after ACK_DELAY_MS. */
+  private oweAck() {
+    if (!this.open || !this.got) return
+    this.owedAck ??= setTimeout(() => this.send({ type: 'ack' }), ACK_DELAY_MS)
+    this.owedAck.unref()
   }
   private settleAck() {
     clearTimeout(this.owedAck)
@@ -116,13 +126,13 @@ export class TerminalSocket {
   sendCells(prefix: number[], suffix: number[], cells: Uint8Array, sent?: () => void) {
     this.settleAck()
     if (!this.open) return
-    const { got, since, quiet } = this.stamp()
+    const { got, bytes, since } = this.stamp()
     const head: number[] = []
-    for (const value of [...prefix, got, since, quiet, ...suffix]) pushInteger(head, value)
-    const bytes = new Uint8Array(head.length + cells.length)
-    bytes.set(head)
-    bytes.set(cells, head.length)
-    this.ws.send(bytes, sent)
+    for (const value of [...prefix, got, bytes, since, ...suffix]) pushInteger(head, value)
+    const message = new Uint8Array(head.length + cells.length)
+    message.set(head)
+    message.set(cells, head.length)
+    this.ws.send(message, sent)
   }
 }
 

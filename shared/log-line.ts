@@ -48,11 +48,10 @@ export type LogWord =
   | 'expired'
   | 'failed'
   | 'stalled'
-  // a link in doubt, and why
+  // a link in doubt, and why it was given up
   | 'doubt'
   | 'clear'
   | 'silent'
-  | 'held'
   | 'network'
   // who ended a channel
   | 'browser'

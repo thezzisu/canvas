@@ -13,42 +13,40 @@ test('the round trip is smoothed as RFC 6298 has it, and its timeout is at least
   const steady = new RoundTrip()
   for (let i = 0; i < 50; i++) steady.sample(20)
   assert.equal(steady.timeout, 1100, 'a fast steady link still waits the minimum')
-  assert(steady.spread < 2)
 })
 
-test('a message leaves when the buffer drains past it, and an answer to it is a round trip', () => {
+test('a higher count acknowledges what was sent up to it, and gives a round trip', () => {
   const box = new Outbox(0)
-  box.sent(10, 0, 10)
-  box.sent(20, 0, 30)
-  assert.equal(box.oldest!.left, undefined, 'still in the browser')
-  box.drain(20, 50)
-  assert.deepEqual([box.oldest!.left, box.movedAt], [50, 50])
-  box.drain(20, 60)
-  assert.equal(box.movedAt, 50, 'nothing more left')
-  box.drain(0, 70)
-  // Received 30 ms before the server sent this; 200 ms after the first left.
-  assert.deepEqual(box.stamped({ got: 1, since: 30, quiet: 30 }, 250, 10), {
-    progressed: true,
-    sample: 170,
+  box.sent(0)
+  box.sent(10)
+  // The server had received both 30 ms before it said so, 250 ms after the second left.
+  assert.deepEqual(box.stamped({ got: 2, bytes: 90, since: 30 }, 260), {
+    kind: 'progress',
+    rtt: 220,
   })
-  assert.equal(box.oldest!.index, 2)
-  assert.deepEqual(
-    box.stamped({ got: 9, since: 0, quiet: 0 }, 260, 10),
-    {},
+  assert.equal(box.oldest, undefined)
+  assert.equal(box.stamped({ got: 2, bytes: 90, since: 900 }, 1200), undefined, 'nothing new')
+  assert.equal(
+    box.stamped({ got: 9, bytes: 900, since: 0 }, 1300),
+    undefined,
     'never what was not sent',
   )
 })
 
-test('bytes sent before the next message could arrive are queued; after, without it, it is held', () => {
+test('bytes of the next message are progress; a stamp written before it could arrive is early', () => {
   const box = new Outbox(0)
-  box.sent(5, 100, 0) // message 1 leaves at once
-  box.stamped({ got: 1, since: 0, quiet: 0 }, 150, 50)
-  box.sent(5, 1000, 0) // message 2 leaves 900 ms after message 1
-  // The server sent this 600 ms after message 1 arrived: before message 2 could.
-  assert.deepEqual(box.stamped({ got: 1, since: 600, quiet: 600 }, 1100, 50), { queued: true })
-  // 1500 ms after: 600 ms after message 2 should have arrived, as message 1 did.
-  assert.deepEqual(box.stamped({ got: 1, since: 1500, quiet: 1500 }, 1200, 50), { held: true })
-  // A byte arrived since, so message 2 is on its way.
-  assert.deepEqual(box.stamped({ got: 1, since: 1600, quiet: 50 }, 1300, 50), { progressed: true })
-  assert.deepEqual(box.stamped({ got: 1, since: 1700, quiet: 150 }, 1400, 50), { held: true })
+  box.sent(100)
+  box.stamped({ got: 1, bytes: 40, since: 0 }, 110)
+  box.sent(1000)
+  // The server wrote this 600 ms after message 1 arrived: before message 2, 900 ms later, could.
+  assert.deepEqual(box.stamped({ got: 1, bytes: 40, since: 600 }, 1100), { kind: 'early' })
+  // Written 1500 ms after: message 2 should have arrived, and it says nothing of it. No verdict.
+  assert.equal(box.stamped({ got: 1, bytes: 40, since: 1500 }, 1200), undefined)
+  // Bytes of message 2 arrived: it is on its way.
+  assert.deepEqual(box.stamped({ got: 1, bytes: 60, since: 1600 }, 1300), { kind: 'progress' })
+  assert.equal(box.stamped({ got: 1, bytes: 60, since: 1700 }, 1400), undefined)
+  assert.deepEqual(box.stamped({ got: 2, bytes: 80, since: 0 }, 1500), {
+    kind: 'progress',
+    rtt: 500,
+  })
 })

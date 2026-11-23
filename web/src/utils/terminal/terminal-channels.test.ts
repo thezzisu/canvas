@@ -22,35 +22,31 @@ class FakeSocket {
   readonly OPEN = 1
   readyState = 0
   binaryType = ''
-  bufferedAmount = 0
   sent: Record<string, unknown>[] = []
   /** What the server has received, and whether the way up carries anything. */
   got = 0
+  bytes = 0
   up = true
-  /** Sent bytes wait in the browser's buffer until drained by hand. */
-  holding = false
-  /** Sent bytes leave the browser's buffer a moment after `send`, as a real socket's do. */
-  lagging = false
   onopen?: () => void
   onmessage?: (event: { data: unknown }) => void
   onerror?: () => void
   onclose?: () => void
   send(data: string) {
     this.sent.push(JSON.parse(data))
-    const length = new TextEncoder().encode(data).length
-    if (this.holding || this.lagging) this.bufferedAmount += length
-    if (this.lagging) setTimeout(() => (this.bufferedAmount -= length), 0)
     this.total++
-    if (this.up) this.got = this.total
+    this.totalBytes += data.length
+    if (this.up) this.thaw()
   }
   /** The way up carries again what it held. */
   thaw() {
     this.up = true
     this.got = this.total
+    this.bytes = this.totalBytes
   }
   private total = 0
+  private totalBytes = 0
   stamp() {
-    return { got: this.got, since: 0, quiet: 0 }
+    return { got: this.got, bytes: this.bytes, since: 0 }
   }
   close() {
     this.readyState = 3
@@ -64,8 +60,8 @@ class FakeSocket {
   }
   /** A cell message on `channel`, with the view's ack, the stamp and the cells. */
   cells(channel: number, ack: number, ...cells: number[]) {
-    const { got, since, quiet } = this.stamp()
-    this.raw(...leb128([channel, ack, got, since, quiet]), ...cells)
+    const { got, bytes, since } = this.stamp()
+    this.raw(...leb128([channel, ack, got, bytes, since]), ...cells)
   }
   raw(...bytes: number[]) {
     this.onmessage!({ data: Uint8Array.from(bytes).buffer })
@@ -226,14 +222,14 @@ test("a view's numbers go on over its channels, and every kind of message acknow
 })
 
 /** A window's channel that the server has joined, and a clock that moves the timers with it. */
-function linked(options: { watching?: boolean; busy?: boolean } = {}) {
+function linked(options: { watching?: boolean; busy?: boolean | (() => boolean) } = {}) {
   const f = fixture(),
     a = listener(),
     same = view()
   const connection = f.channels.open(window('a'), same, {
     ...a.events,
     watching: () => !!options.watching,
-    busy: () => !!options.busy,
+    busy: () => (typeof options.busy === 'function' ? options.busy() : !!options.busy),
   })
   f.socket.accept()
   f.socket.json({ type: 'resume', channel: 0, taken: null, ack: 0 })
@@ -272,15 +268,6 @@ test('a way up that holds what was sent is probed, then in doubt, then given up,
   assert.equal(f.socket.readyState, 3)
 })
 
-test("bytes leaving the buffer after they were sent, the probe's among them, are no answer", () => {
-  const f = linked()
-  f.socket.lagging = true
-  f.socket.up = false
-  f.connection.send({ type: 'input', data: 'x' })
-  f.pass(7 * TIMEOUT + 100)
-  assert.deepEqual(f.a.log, ['doubt', 'stalled'])
-})
-
 test('an answer clears the doubt and starts the count again', () => {
   const f = linked()
   f.socket.up = false
@@ -294,31 +281,89 @@ test('an answer clears the doubt and starts the count again', () => {
   assert.deepEqual(f.a.log, ['doubt', 'clear', 'status'], 'nothing is owed, so nothing is judged')
 })
 
-test('bytes the server sent before the input could reach it are waited through', () => {
+test('a stamp that reads late is no verdict: only a timeout without progress is', () => {
+  const f = linked()
+  f.socket.up = false
+  f.connection.send({ type: 'input', data: 'x' })
+  f.pass(200)
+  // Long after the server last received anything, and nothing since: TCP would wait, and so here.
+  f.socket.json({ type: 'status', channel: 0, ack: 0, since: 2000 })
+  for (let i = 0; i < 6; i++) {
+    f.pass(100)
+    f.socket.json({ type: 'status', channel: 0, ack: 0, since: 2000 + 100 * (i + 1) })
+  }
+  assert.deepEqual(
+    f.a.log.filter((entry) => entry !== 'status'),
+    [],
+    'no doubt yet',
+  )
+  f.pass(3 * TIMEOUT)
+  assert.deepEqual(
+    f.a.log.filter((entry) => entry !== 'status'),
+    ['doubt'],
+    'the timeouts are',
+  )
+})
+
+test('on a fast link with jitter, a scroll never raises doubt', () => {
+  // As the 2026-11-23 field log had it: wheel input every 17 ms and a server message every 27, a
+  // steady millisecond each way, and now and then an input that takes ten more, so that the
+  // server sends while it is still on its way.
+  const f = linked()
+  f.socket.up = false
+  const arrivals: number[] = [],
+    down: { at: number; got: number; since: number }[] = []
+  let inputs = 0
+  for (let ms = 0; ms < 10_000; ms++) {
+    if (ms % 17 === 0) {
+      f.connection.send({ type: 'input', data: '\x1b[<65;10;10M' })
+      const delay = ++inputs % 7 === 0 ? 12 : 1
+      arrivals.push(Math.max(ms + delay, arrivals.at(-1) ?? 0))
+    }
+    if (ms % 27 === 0) {
+      const got = arrivals.filter((at) => at <= ms).length
+      down.push({ at: ms + 1, got, since: got ? ms - arrivals[got - 1]! : ms })
+    }
+    while (down[0] && down[0].at <= ms) {
+      const { got, since } = down.shift()!
+      // The auth and the open were received before the first input.
+      f.socket.json({ type: 'ack', got: got + 2, bytes: 0, since })
+    }
+    f.page.time += 1
+    mock.timers.tick(1)
+  }
+  assert.deepEqual(f.a.log, [])
+})
+
+test('stamps written before the input could arrive, held back by a slow way down, are waited through', () => {
   const f = linked()
   f.pass(500)
   f.socket.up = false
   f.connection.send({ type: 'input', data: 'x' })
-  // A burst the server sent long before: it had last heard from the browser well before this.
+  // A backlog the server wrote long ago: each stamp says it had last received the resume.
   for (let i = 0; i < 6; i++) {
     f.pass(900)
-    f.socket.json({ type: 'status', channel: 0, ack: 0, got: f.socket.got, since: 0, quiet: 0 })
+    f.socket.json({ type: 'status', channel: 0, ack: 0, since: 400 })
   }
   assert.deepEqual(
     f.a.log.filter((entry) => entry !== 'status'),
     [],
     'no doubt, no stall',
   )
+  f.pass(3 * TIMEOUT)
+  assert.deepEqual(
+    f.a.log.filter((entry) => entry !== 'status'),
+    ['doubt'],
+    'once the backlog is through, the timeouts count',
+  )
 })
 
-test('bytes the server sent well after the input should have reached it, without it, put the link in doubt at once', () => {
-  const f = linked()
-  f.socket.up = false
-  f.connection.send({ type: 'input', data: 'x' })
-  f.pass(200)
-  // The server last received a message 2 s ago; the input left 200 ms ago.
-  f.socket.json({ type: 'status', channel: 0, ack: 0, got: f.socket.got, since: 2000, quiet: 2000 })
-  assert.deepEqual(f.a.log, ['doubt', 'status'])
+test('an upload sharing the way up holds the watch over an agent, without spinning', () => {
+  let checks = 0
+  const f = linked({ watching: true, busy: () => (checks++, true) })
+  f.pass(20 * TIMEOUT)
+  assert(checks <= 21, `asked ${checks} times in 20 timeouts`)
+  assert.deepEqual(f.socket.sent, [], 'nothing is probed while the upload goes')
 })
 
 test('each answer is a round trip, and a slow link waits longer before it probes', () => {
@@ -343,7 +388,7 @@ test('each answer is a round trip, and a slow link waits longer before it probes
   assert.deepEqual(f.socket.sent.at(-1), { type: 'ping' })
 })
 
-test('nothing is judged during an upload, nor while a long message still leaves the buffer', () => {
+test('nothing is judged during an upload, nor while a long message keeps arriving', () => {
   const f = linked({ busy: true })
   f.socket.up = false
   f.connection.send({ type: 'input', data: 'x' })
@@ -351,14 +396,14 @@ test('nothing is judged during an upload, nor while a long message still leaves 
   assert.deepEqual(f.a.log, [])
   const g = linked()
   g.socket.up = false
-  g.socket.holding = true
-  g.connection.send({ type: 'input', data: '中'.repeat(400_000) })
-  assert.equal(g.socket.bufferedAmount > 1_200_000, true)
-  for (let i = 0; i < 20; i++) {
-    g.socket.bufferedAmount -= 40_000
+  g.connection.send({ type: 'input', data: '中'.repeat(16_000) })
+  // On a slow way up the server receives the message's bytes for a long while, and says so.
+  const before = g.socket.bytes
+  for (let i = 1; i <= 20; i++) {
     g.pass(TIMEOUT)
+    g.socket.json({ type: 'ack', bytes: before + i * 2000, since: i * TIMEOUT })
   }
-  assert.deepEqual(g.a.log, [], 'a paste still draining is no stall')
+  assert.deepEqual(g.a.log, [], 'a long message still arriving is no stall')
   g.pass(8 * TIMEOUT)
   assert.deepEqual(g.a.log, ['doubt', 'stalled'], 'one that stopped is')
 })
@@ -475,7 +520,7 @@ test('the log names every message and ack, with times, and never what was typed'
   connection.send({ type: 'input', data: 'secret' })
   f.page.time += 80
   f.socket.thaw()
-  f.socket.json({ type: 'status', channel: 0, ack: 1, sentAt: Date.now(), since: 10, quiet: 10 })
+  f.socket.json({ type: 'status', channel: 0, ack: 1, sentAt: Date.now(), since: 10 })
   const events = lines.map((line) => line.event)
   for (const event of ['socket', 'resumed', 'send', 'receive', 'ack'])
     assert(events.includes(event), event)

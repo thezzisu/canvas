@@ -1815,6 +1815,42 @@ test('a browser starts from a frame, then takes patches at the revisions the win
   await f.terminal.close()
 })
 
+test('a redraw that changes nothing a completion frame says sends no frame again', async () => {
+  const f = fakeWindow(),
+    client = new Client()
+  f.show('zero')
+  f.paint('layout')
+  f.terminal.join(client.socket)
+  await tick()
+  const frames = () => kinds(client).filter((kind) => kind === 'completion-frame').length
+  assert.equal(frames(), 1)
+  for (const text of ['one', 'two', 'three']) {
+    f.show(text)
+    f.paint('layout')
+    await tick()
+  }
+  assert.equal(frames(), 1, 'the same frame, painted again, is not sent again')
+  client.command({ type: 'input', data: '\x1b[<64;1;1M' })
+  f.show('wheel')
+  f.paint('layout')
+  await tick()
+  assert.equal(frames(), 1, 'nor after input, which only makes reads wait for the next paint')
+  // A grid of another size goes as a FRAME, after which the browser holds no completion frame.
+  f.show('wide', 9, 2)
+  f.paint('layout')
+  await tick()
+  assert.deepEqual(kinds(client).slice(-2), ['FRAME', 'completion-frame'])
+  f.show('four')
+  f.paint('another')
+  await tick()
+  assert.equal(frames(), 3, 'a different one is')
+  client.command({ type: 'view-visible', visible: false })
+  client.command({ type: 'view-visible', visible: true })
+  await tick()
+  assert.equal(frames(), 4, 'a view shown again is sent the frame it forgot')
+  await f.terminal.close()
+})
+
 test('a socket that cannot drain is owed only the latest grid', async () => {
   const f = fakeWindow(),
     fast = new Client(),

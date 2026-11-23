@@ -27,20 +27,20 @@ function integers(bytes: Uint8Array, count: number) {
   }
   return { values, rest: [...bytes.subarray(at)] }
 }
-type Stamp = { got: number; since: number; quiet: number }
+type Stamp = { got: number; bytes: number; since: number }
 /** Splits what the server stamps on a message from the message. */
 function unstamp(data: string | Uint8Array): {
   message: Record<string, unknown> | number[]
   stamp: Stamp
 } {
   if (typeof data === 'string') {
-    const { got, since, quiet, ...message } = JSON.parse(data)
-    return { message, stamp: { got, since, quiet } }
+    const { got, bytes, since, ...message } = JSON.parse(data)
+    return { message, stamp: { got, bytes, since } }
   }
   // The channel and the ack, then the stamp.
   const { values, rest } = integers(data, 5)
-  const [channel, ack, got, since, quiet] = values as [number, number, number, number, number]
-  return { message: [channel, ack, ...rest], stamp: { got, since, quiet } }
+  const [channel, ack, got, bytes, since] = values as [number, number, number, number, number]
+  return { message: [channel, ack, ...rest], stamp: { got, bytes, since } }
 }
 class FakeSocket extends EventEmitter {
   readyState = 1
@@ -51,8 +51,11 @@ class FakeSocket extends EventEmitter {
     this.sent.push(message)
     this.stamps.push(stamp)
   }
+  /** A whole message: its bytes reach the stream, then the socket reads it. */
   say(message: object) {
-    this.emit('message', Buffer.from(JSON.stringify(message)), false)
+    const bytes = Buffer.from(JSON.stringify(message))
+    this.emit('data', bytes)
+    this.emit('message', bytes, false)
   }
 }
 function fixture() {
@@ -293,22 +296,47 @@ test("the view's ack rides on its channel, and the socket says alone what it got
   assert.equal(f.socket.stamps.splice(0)[0]!.got, 4)
   t.mock.timers.tick(ACK_DELAY_MS * 2)
   assert.deepEqual(f.socket.sent, [], 'an ack is not repeated')
+  // The bytes of a long message are acknowledged while they arrive, as TCP acknowledges them.
+  const before = f.socket.stamps.length ? 0 : JSON.stringify({ type: 'ping' }).length
+  const part = Buffer.from('{"type":"input","data":"')
+  f.socket.emit('data', part)
+  t.mock.timers.tick(ACK_DELAY_MS)
+  assert.deepEqual(f.socket.sent.splice(0), [{ type: 'ack' }])
+  const [stamp] = f.socket.stamps.splice(0)
+  assert.equal(stamp!.got, 4, 'the message itself has not arrived')
+  assert(stamp!.bytes > part.length + before, 'its bytes have')
 })
 
-test("a stamp says how long ago the last message arrived, and the last of anyone's bytes", async () => {
+test('nothing is acknowledged before the authentication, and a reply needs no ack of its own', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const socket = new FakeSocket(),
+    link = new TerminalSocket(socket as unknown as WebSocket, socket)
+  // Bytes of a first message that never completes.
+  socket.emit('data', Buffer.from('{"type":"au'))
+  t.mock.timers.tick(ACK_DELAY_MS * 3)
+  assert.deepEqual(socket.sent, [])
+  // Once a message has arrived, a reply sent at once carries its stamp, and no ack follows.
+  socket.say({ type: 'auth', token: 'x' })
+  link.send({ type: 'hello' })
+  t.mock.timers.tick(ACK_DELAY_MS * 3)
+  assert.deepEqual(socket.sent, [{ type: 'hello' }])
+  assert.equal(socket.stamps[0]!.got, 1)
+})
+
+test('a stamp says how long ago the last message arrived, and every byte that did', async () => {
   const f = fixture()
-  f.socket.say({ type: 'open', channel: 0, ...target('a') })
+  const open = JSON.stringify({ type: 'open', channel: 0, ...target('a') })
+  f.socket.say(JSON.parse(open))
   await sleep(40)
   f.opened[0]!.channel.send({ type: 'status' })
   const idle = f.socket.stamps.at(-1)!
-  assert(idle.since >= 35 && idle.quiet >= 35, JSON.stringify(idle))
+  assert(idle.since >= 35, JSON.stringify(idle))
+  assert.deepEqual([idle.got, idle.bytes], [1, open.length])
   // Bytes of the next message have arrived, though it has not yet.
   f.socket.emit('data', Buffer.from('{"type":'))
-  await sleep(20)
   f.opened[0]!.channel.send({ type: 'status' })
   const moving = f.socket.stamps.at(-1)!
-  assert.equal(moving.got, 1)
-  assert(moving.since >= 55 && moving.quiet < moving.since - 30, JSON.stringify(moving))
+  assert.deepEqual([moving.got, moving.bytes], [1, open.length + 8])
 })
 
 test('a browser that logs is told when each message left, and one that does not is not', () => {

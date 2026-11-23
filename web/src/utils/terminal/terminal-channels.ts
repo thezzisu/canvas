@@ -1,7 +1,7 @@
 import { inputKind, logIdentifier, logType, logWindow } from '../../../../shared/log-line'
 import type { LogId } from '../../../../shared/log-line'
 import { log, logging, sawServer } from '../diagnostics/log'
-import { LinkWatch, Outbox, type Stamp, type StallReason, type Verdict } from './link-watch'
+import { LinkWatch, Outbox, type Stamp, type StallReason } from './link-watch'
 import type { TerminalView } from './terminal-view'
 
 /**
@@ -58,25 +58,10 @@ export interface TerminalPage {
   onNetwork?(changed: () => void): () => void
 }
 
-/** A string's length in UTF-8, as `bufferedAmount` counts it. */
-function utf8Length(text: string) {
-  let bytes = text.length
-  for (let at = 0; at < text.length; at++) {
-    const code = text.charCodeAt(at)
-    if (code < 0x80) continue
-    if (code < 0x800) bytes += 1
-    else if (code >= 0xd800 && code < 0xdc00 && at + 1 < text.length) {
-      // A surrogate pair: two code units, four bytes.
-      bytes += 2
-      at++
-    } else bytes += 2
-  }
-  return bytes
-}
 const stampOf = (message: Record<string, unknown>): Stamp | undefined => {
-  const { got, since, quiet } = message
-  return [got, since, quiet].every((value) => Number.isSafeInteger(value) && Number(value) >= 0)
-    ? { got: got as number, since: since as number, quiet: quiet as number }
+  const { got, bytes, since } = message
+  return [got, bytes, since].every((value) => Number.isSafeInteger(value) && Number(value) >= 0)
+    ? { got: got as number, bytes: bytes as number, since: since as number }
     : undefined
 }
 
@@ -116,8 +101,6 @@ export class TerminalChannels {
   /** Channel numbers are never used twice on a socket. */
   private next = 0
   private readonly unfollow?: () => void
-  /** Looks at the send buffer until what was sent has left it, when its time starts. */
-  private draining?: ReturnType<typeof setTimeout>
 
   constructor(
     private readonly socket: WebSocket,
@@ -131,17 +114,13 @@ export class TerminalChannels {
   ) {
     this.watch = new LinkWatch(
       {
-        movedAt: () => {
-          this.outbox?.drain(this.socket.bufferedAmount, page.now())
-          return this.outbox?.movedAt ?? -Infinity
-        },
         oldest: () => this.outbox?.oldest,
         busy: () => [...this.channels.values()].some(({ events }) => events.busy?.()),
         visible: () => page.visible(),
         watching: () =>
           [...this.channels.values()].some(({ resumed, events }) => resumed && events.watching?.()),
         probe: () => this.write({ type: 'ping' }),
-        doubt: (on, reason) => this.doubt(on, reason),
+        doubt: (on) => this.doubt(on),
         stalled: (reason) => this.abandon(reason),
       },
       () => page.now(),
@@ -209,13 +188,12 @@ export class TerminalChannels {
     })
     target.view.stalledAt = undefined
     // A resumed view may watch an agent at work, so the socket's silence may now be questioned.
-    this.watch.received({})
+    this.watch.received()
   }
-  private doubt(on: boolean, reason?: StallReason) {
+  private doubt(on: boolean) {
     log('stall', {
       socket: this.name,
       state: on ? 'doubt' : 'clear',
-      reason,
       rtt: this.watch.rtt.smoothed,
       timeout: this.watch.timeout,
     })
@@ -271,20 +249,9 @@ export class TerminalChannels {
     })
   }
   private write(message: object) {
-    const text = JSON.stringify(message)
-    this.socket.send(text)
-    this.outbox?.sent(utf8Length(text), this.page.now(), this.socket.bufferedAmount)
-    this.followDrain()
+    this.socket.send(JSON.stringify(message))
+    this.outbox?.sent(this.page.now())
     this.watch.sent()
-  }
-  /** The socket says nothing when its buffer drains: it is looked at, less often the longer. */
-  private followDrain(delay = 1) {
-    if (this.draining !== undefined || !this.socket.bufferedAmount) return
-    this.draining = setTimeout(() => {
-      this.draining = undefined
-      this.outbox?.drain(this.socket.bufferedAmount, this.page.now())
-      this.followDrain(Math.min(delay * 2, 250))
-    }, delay)
   }
   private release(channel: number) {
     if (!this.channels.delete(channel)) return false
@@ -295,66 +262,59 @@ export class TerminalChannels {
     return true
   }
   private stop() {
-    clearTimeout(this.draining)
     this.watch.stop()
     this.unfollow?.()
     this.idle()
   }
-  /** Reads what the server says it received, which every message it sends carries. */
-  private stamped(stamp: Stamp | undefined, sentAt?: number): Verdict {
-    const now = this.page.now(),
-      outbox = this.outbox
-    if (!stamp || !outbox) return {}
-    outbox.drain(this.socket.bufferedAmount, now)
-    const verdict = outbox.stamped(stamp, now, this.watch.rtt.spread)
-    this.watch.received(verdict)
-    if (verdict.sample !== undefined && logging()) {
-      // As NTP: left here, received there, sent there, received here, each on its own clock.
-      const received = Date.now(),
-        left = received - verdict.sample - stamp.since
-      log('ack', {
-        socket: this.name,
-        got: stamp.got,
-        rtt: verdict.sample,
-        srtt: this.watch.rtt.smoothed,
-        offset:
-          sentAt === undefined
-            ? undefined
-            : (sentAt - stamp.since - left + (sentAt - received)) / 2,
-      })
-    }
-    return verdict
+  /** Reads what the server says it received, which everything it sends carries. */
+  private stamped(stamp: Stamp | undefined, sentAt?: number) {
+    if (!stamp || !this.outbox) return
+    const answer = this.outbox.stamped(stamp, this.page.now())
+    this.watch.received(answer)
+    if (answer?.kind !== 'progress' || answer.rtt === undefined || !logging()) return
+    // As NTP: left here, received there, sent there, received here, each on its own clock.
+    const received = Date.now(),
+      left = received - answer.rtt - stamp.since
+    log('ack', {
+      socket: this.name,
+      got: stamp.got,
+      rtt: answer.rtt,
+      srtt: this.watch.rtt.smoothed,
+      offset:
+        sentAt === undefined ? undefined : (sentAt - stamp.since - left + (sentAt - received)) / 2,
+    })
   }
   private receive(data: unknown) {
     if (data instanceof ArrayBuffer) {
       // Unsigned LEB128 integers precede the cell message: the channel, the view's ack, the
       // stamp, and the server's clock when the channel is timed.
-      const bytes = new Uint8Array(data)
+      const message = new Uint8Array(data)
       let at = 0
       const integer = () => {
         let value = 0
-        for (let shift = 0; shift < 8 && at < bytes.length; shift++) {
-          const byte = bytes[at++]!
+        for (let shift = 0; shift < 8 && at < message.length; shift++) {
+          const byte = message[at++]!
           value += (byte & 0x7f) * 2 ** (7 * shift)
           if (byte < 0x80) return value
         }
         return undefined
       }
-      const [channel, ack, got, since, quiet] = [
+      const [channel, ack, got, bytes, since] = [
         integer(),
         integer(),
         integer(),
         integer(),
         integer(),
       ]
-      if (quiet === undefined) return
+      if (since === undefined) return
       const target = this.channels.get(channel!)
       const sentAt = target?.timed ? integer() : undefined
-      this.stamped({ got: got!, since: since!, quiet }, sentAt)
+      this.stamped({ got: got!, bytes: bytes!, since }, sentAt)
       if (!target || (target.timed && sentAt === undefined)) return
-      if (logging()) log('receive', { socket: this.name, w: target.w, bytes: bytes.length, sentAt })
+      if (logging())
+        log('receive', { socket: this.name, w: target.w, bytes: message.length, sentAt })
       target.view.acknowledged(ack)
-      target.events.cells(bytes.subarray(at))
+      target.events.cells(message.subarray(at))
       return
     }
     let message: Record<string, unknown>
@@ -400,7 +360,6 @@ export class TerminalChannels {
     else if (this.release(channel)) target.events.closed('closed')
   }
   private ended(end: LinkEnd) {
-    clearTimeout(this.draining)
     this.watch.stop()
     this.unfollow?.()
     const open = [...this.channels.values()]

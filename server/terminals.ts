@@ -44,7 +44,7 @@
 //   mouse-areas       { areas }, where the window's programs take the mouse (MouseArea[]);
 //                     sent when it changes, and on joining when any program takes it
 //   completion-frame  { generation, focusedPaneId, layout, panes }; follows the cell message
-//                     that painted it
+//                     that painted it, when it differs from the one the browser holds
 //   capture           { capture }
 //   clipboard         { data }, base64 text copied by a pane or a selection
 //   bell              the window rang; sent only to the browser controlling its input
@@ -77,6 +77,7 @@ import { Events, type Subscribable } from './channels.ts'
 import { NotificationIntake } from './notification-intake.ts'
 import type { FrameData } from './herdr/wire.ts'
 import { GridEncoder } from './cell-grid.ts'
+import { isFrame } from '../shared/cell-wire.ts'
 import type { WindowMetadata, WindowProgress } from '../shared/window-metadata.ts'
 import type { CanvasNotification } from '../shared/notification.ts'
 import { bracketedPaste, type PasteSegment } from '../shared/paste.ts'
@@ -125,8 +126,10 @@ interface View {
   /** The completion frame, then the presentation, follow the next cell message. */
   frameDue: boolean
   presentationDue: boolean
-  /** The completion frame it was last sent, which its reads refer to. */
+  /** The completion frame its reads refer to, cleared when something may have changed it. */
   sentFrame?: WindowMetadata
+  /** The completion frame message the browser holds, which a FRAME makes it drop. */
+  heldFrame?: string
   /** Its last completion fence, and the one still waiting for its frame. */
   readGeneration: number
   pendingFence?: number
@@ -330,8 +333,8 @@ export class LiveTerminal {
   }
   private publishFrame(ws: TerminalChannel, view: View) {
     if (!this.frame || view.pendingFence !== undefined) return
-    const frame = (view.sentFrame = this.reads?.project(this.source, this.frame) || this.frame)
-    json(ws, {
+    const frame = this.reads?.project(this.source, this.frame) || this.frame
+    const message = {
       type: 'completion-frame',
       generation: view.readGeneration,
       focusedPaneId: frame.panes.find((pane) => pane.active)?.id,
@@ -340,7 +343,13 @@ export class LiveTerminal {
         id: pane.id,
         ...(pane.completion ? { completion: pane.completion } : {}),
       })),
-    })
+    }
+    // Each paint publishes a frame; one the browser already holds is not sent again.
+    view.sentFrame = frame
+    const text = JSON.stringify(message)
+    if (text === view.heldFrame) return
+    view.heldFrame = text
+    json(ws, message)
   }
   /**
    * Brings a browser up to the current grid unless a cell message is still going out to it;
@@ -351,6 +360,8 @@ export class LiveTerminal {
     if (!view || view.sending || !this.grid || ws.readyState !== 1 || !this.canRender(ws)) return
     const message = view.encoder.encode(this.grid, this.revision)
     if (message) {
+      // A FRAME starts the browser's screen afresh, without a completion frame.
+      if (isFrame(message)) view.heldFrame = undefined
       view.sending = true
       ws.send(message, () => {
         view.sending = false

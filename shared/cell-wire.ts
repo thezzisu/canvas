@@ -295,6 +295,8 @@ function writeUpdate(w: Writer, update: CellUpdate) {
   }
   return w.take()
 }
+/** Whether a cell message is a FRAME, which replaces all the browser had. */
+export const isFrame = (message: Uint8Array) => message[0] === FRAME
 export function encodeFrame(frame: CellFrame): Uint8Array {
   const w = new Writer()
   w.u8(FRAME)
