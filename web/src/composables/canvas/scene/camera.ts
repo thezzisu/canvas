@@ -19,7 +19,6 @@ import {
   type CanvasLocation,
 } from '../../../utils/canvas/canvas-location'
 import { pageViewport } from '../../../utils/canvas/overview-paging'
-import { useTerminalOverlays } from '../terminal-overlays'
 import { isCard, windowNode } from './graph'
 import { pageMotion } from './paging'
 import type { CanvasScene } from './scene'
@@ -28,18 +27,9 @@ const FIT = { padding: 0.14, maxZoom: 1 }
 
 /** Where the canvas is looking: restoring a view, following the user, and fitting cards. */
 export function useCanvasCamera(scene: CanvasScene) {
-  const { workspace, shell, session, view, flow } = scene
+  const { workspace, shell, session, flow } = scene
   const { t } = useI18n()
-  const {
-    nodes,
-    fitView,
-    zoomIn,
-    zoomOut,
-    setViewport,
-    getViewport,
-    getNodesInitialized,
-    findNode,
-  } = flow
+  const { nodes, fitView, zoomIn, zoomOut, setViewport, getViewport, getNodesInitialized } = flow
   const bounds = (node: Node) => ({
     ...node.position,
     width: node.data.width,
@@ -52,7 +42,7 @@ export function useCanvasCamera(scene: CanvasScene) {
   let resizeFrame = 0
 
   // --- Fit control: alternates between the focused card and the whole canvas. ---
-  const toolbar = ref<HTMLElement>()
+  const toolbar = scene.controls.toolbar
   const toolbarTarget = ref<string>()
   const fittedCard = ref(false)
   /** Keeps a navigation fit aligned while the terminal's first native grid settles.
@@ -400,34 +390,10 @@ export function useCanvasCamera(scene: CanvasScene) {
     },
   )
 
-  const minimap = ref<{ $el: HTMLElement }>()
-  const [toolbarOverlap, minimapOverlap] = useTerminalOverlays({
-    enabled: () => view.autoYieldControls,
-    surface: scene.surface,
-    controls: [toolbar, () => minimap.value?.$el],
-    geometry: () => {
-      const viewport = getViewport(),
-        id = scene.focus.activeElement.value?.closest<HTMLElement>('.vue-flow__node')?.dataset.id
-      const node = id ? findNode(id) : undefined
-      return [
-        uiZoom.value,
-        viewport.x,
-        viewport.y,
-        viewport.zoom,
-        node?.computedPosition.x,
-        node?.computedPosition.y,
-        node?.dimensions.width,
-        node?.dimensions.height,
-      ].join(',')
-    },
-  })
-
   return {
     navigation,
     toolbar,
-    minimap,
-    toolbarOverlap,
-    minimapOverlap,
+    minimap: scene.controls.minimap,
     fitsCard,
     preserveFitTarget,
     clearFit,

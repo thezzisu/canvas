@@ -28,6 +28,7 @@ import { useShellStore, type ScanTarget } from '../../../stores/shell'
 import { useViewStore } from '../../../stores/view'
 import { useWorkspaceStore } from '../../../stores/workspace'
 import { isTerminalNode } from '../../../api/types'
+import { useCanvasControls, type CanvasControls } from '../control-zone'
 import { useMica, type Mica } from '../mica'
 import { useCanvasCamera, type CanvasCamera } from './camera'
 import { useCardActions, type CardActions } from './cards'
@@ -90,6 +91,8 @@ export interface CanvasScene extends ReturnType<typeof stores> {
   reveal: WindowReveal
   cards: CardActions
   mica: Mica
+  /** The minimap and the toolbar, one zone for the pointer. */
+  controls: CanvasControls
   /** Open a canvas, saving what the current one has pending first. */
   visit(canvasId: string, target?: CanvasTarget): Promise<void>
 }
@@ -156,6 +159,8 @@ export function createCanvasScene(): CanvasScene {
     { immediate: true },
   )
 
+  // The controls' wake press is swallowed before any part below sees it.
+  scene.controls = useCanvasControls(scene)
   // State first; the parts below only read one another lazily.
   scene.focus = useCardFocus(scene)
   scene.layout = useCanvasLayout(scene)

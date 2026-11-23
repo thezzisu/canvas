@@ -164,6 +164,7 @@ function minimapColor(node: Node) {
       morph.state.value && { '--canvas-morph-shift': `${morph.state.value.shift}px` },
     ]"
     :data-page-window="paging.active.value ? paging.current.value?.id : undefined"
+    :data-controls="scene.controls.state.value"
     @focusout.capture="camera.preserveFitTarget"
     @mousedown.capture="camera.guardMiddleDrag"
     @wheel.capture="navigation.wheel"
@@ -253,7 +254,6 @@ function minimapColor(node: Node) {
         <CanvasMiniMap
           v-if="view.minimap"
           :ref="(element) => (camera.minimap.value = element as { $el: HTMLElement })"
-          :data-terminal-overlap="camera.minimapOverlap.value"
           :aria-label="t('app.windowNavigation')"
           :width="shell.mobile ? 96 : 150"
           :height="shell.mobile ? 64 : 98"

@@ -1142,28 +1142,30 @@ html {
   }
 }
 
-/* Yield only over a genuinely focused terminal; geometry never changes input ownership. */
-/* Opaque surfaces share one opacity channel, including keyboard interaction. */
+/* The minimap and the toolbar are one zone for the pointer (control-zone.ts), with one opacity:
+   at rest 80%; entered from outside a terminal, or holding keyboard focus, 100%; over a focused
+   terminal the pointer is on, 40%; entered from that terminal, 20%. Opaque surfaces share this
+   one channel. While dimmed they pass the pointer to the terminal; VueFlow's Panel owns an
+   inline pointer-events value, overridden only then. */
 .graph-wrap :is(.canvas-toolbar, .vue-flow__minimap) {
   opacity: 0.8;
   transition: opacity var(--duration) ease;
 }
-.graph-wrap :is(.canvas-toolbar, .vue-flow__minimap):is(:hover, :focus-within) {
+.graph-wrap[data-controls='engaged'] :is(.canvas-toolbar, .vue-flow__minimap),
+.graph-wrap:has(:is(.canvas-toolbar, .vue-flow__minimap):focus-within)
+  :is(.canvas-toolbar, .vue-flow__minimap) {
   opacity: 1;
 }
-/* Preserve a control entered from outside; yielding controls cannot acquire native hover.
-   VueFlow Panel owns an inline pointer-events value; override only while yielding. */
-.graph-wrap:has(.terminal-host[data-content-active='true'])
-  :is(.canvas-toolbar, .vue-flow__minimap)[data-terminal-overlap]:not(:hover) {
+.graph-wrap:is([data-controls='covering'], [data-controls='yielding'])
+  :is(.canvas-toolbar, .vue-flow__minimap) {
   opacity: 0.4;
   pointer-events: none !important;
 }
-.graph-wrap:has(.terminal-host[data-content-active='true'])
-  :is(.canvas-toolbar, .vue-flow__minimap)[data-terminal-overlap='pointer']:not(:hover) {
+.graph-wrap[data-controls='yielding'] :is(.canvas-toolbar, .vue-flow__minimap) {
   opacity: 0.2;
 }
-.graph-wrap:has(.terminal-host[data-content-active='true'])
-  :is(.canvas-toolbar, .vue-flow__minimap)[data-terminal-overlap]:not(:hover)
+.graph-wrap:is([data-controls='covering'], [data-controls='yielding'])
+  :is(.canvas-toolbar, .vue-flow__minimap)
   * {
   pointer-events: none;
 }

@@ -54,7 +54,6 @@ const control = (pressed?: boolean) => ({
     class="canvas-toolbar"
     role="toolbar"
     :aria-label="t('app.navigation')"
-    :data-terminal-overlap="camera.toolbarOverlap.value"
     :data-touch="shell.mobile || undefined"
   >
     <UButton
