@@ -2,11 +2,14 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   inZone,
-  nextZone,
+  leftZone,
+  movedZone,
+  restingZone,
   ZONE_EXIT_MARGIN,
+  zoneLook,
   zoneOf,
-  type ZoneState,
-  type ZoneStep,
+  type ZoneMemory,
+  type ZonePlace,
 } from './control-zone'
 
 // The desktop layout: the minimap standing 8px above the toolbar, at the bottom left.
@@ -38,63 +41,88 @@ test('the exit margin reaches past the zone by the gap', () => {
   assert(!inZone(zone, { x: 172 + ZONE_EXIT_MARGIN, y: 750 }, ZONE_EXIT_MARGIN))
 })
 
-const step = (overrides: Partial<ZoneStep>): ZoneStep => ({
-  inside: false,
-  near: false,
-  held: false,
-  fromTerminal: false,
-  yieldable: true,
-  ...overrides,
-})
-function walk(steps: Partial<ZoneStep>[], state: ZoneState = 'idle') {
-  return steps.map((overrides) => (state = nextZone(state, step(overrides))))
+// Places the pointer moves to.
+const canvas: ZonePlace = { inside: false, near: false, onTerminal: false, yieldable: true }
+const terminal: ZonePlace = { ...canvas, onTerminal: true }
+const control: ZonePlace = { ...canvas, inside: true, near: true }
+const edge: ZonePlace = { ...canvas, near: true }
+function walk(places: (ZonePlace | 'left')[], memory: ZoneMemory = restingZone, held = false) {
+  return places.map((place) => {
+    memory = place === 'left' ? leftZone(memory) : movedZone(memory, place, held)
+    return memory.state
+  })
 }
 
 test('where the pointer came from decides, and the decision holds across the zone', () => {
   // From the canvas into the minimap, across the gap, onto the toolbar: engaged throughout.
-  assert.deepEqual(
-    walk([
-      {},
-      { inside: true, near: true },
-      { inside: true, near: true },
-      { inside: true, near: true },
-    ]),
-    ['idle', 'engaged', 'engaged', 'engaged'],
-  )
+  assert.deepEqual(walk([canvas, control, control, control]), [
+    'idle',
+    'engaged',
+    'engaged',
+    'engaged',
+  ])
   // From the focused terminal: yielding, and still yielding where the zone leaves the terminal.
-  assert.deepEqual(
-    walk([
-      { inside: true, near: true, fromTerminal: true },
-      { inside: true, near: true },
-    ]),
-    ['yielding', 'yielding'],
-  )
+  assert.deepEqual(walk([terminal, control, control]), ['idle', 'yielding', 'yielding'])
 })
 
 test('a pointer leaves the zone only past its margin, or when a held button is released', () => {
-  // Trembling on the edge keeps the decision; past the margin it is gone.
-  assert.deepEqual(walk([{ near: true }, { inside: true, near: true }, {}], 'yielding'), [
+  assert.deepEqual(walk([terminal, control, edge, control, canvas]), [
+    'idle',
+    'yielding',
     'yielding',
     'yielding',
     'idle',
+  ])
+  // Out and back in from outside the terminal engages it.
+  assert.deepEqual(walk([terminal, control, canvas, control]), [
+    'idle',
+    'yielding',
+    'idle',
+    'engaged',
   ])
   // Dragging out of the zone keeps it engaged until the release.
-  assert.deepEqual(walk([{ held: true }, { held: true }, {}], 'engaged'), [
-    'engaged',
-    'engaged',
-    'idle',
-  ])
-  // Out and back in from outside the terminal wakes it.
-  assert.deepEqual(walk([{}, { inside: true, near: true }], 'yielding'), ['idle', 'engaged'])
+  const engaged = { state: 'engaged', fromTerminal: false } as const
+  assert.deepEqual(walk([canvas, canvas], engaged, true), ['engaged', 'engaged'])
+  assert.deepEqual(walk([canvas], engaged), ['idle'])
 })
 
 test("with nothing to yield to, the controls are the pointer's own", () => {
-  assert.equal(
-    nextZone('idle', step({ inside: true, near: true, fromTerminal: true, yieldable: false })),
-    'engaged',
-  )
-  assert.equal(
-    nextZone('yielding', step({ inside: true, near: true, yieldable: false })),
-    'engaged',
-  )
+  const clear = { ...control, yieldable: false }
+  assert.deepEqual(walk([terminal, clear]), ['idle', 'engaged'])
+  // The terminal lost focus under a yielding zone: the next move engages it.
+  assert.deepEqual(walk([terminal, control, clear]), ['idle', 'yielding', 'engaged'])
+})
+
+test('a window opening under a still pointer changes nothing shown', () => {
+  // An input method's candidates over the pointer report it leaving the page; they close and
+  // the browser reports the same place again.
+  for (const [before, at] of [
+    [[terminal], terminal],
+    [[terminal, control], control],
+    [[canvas, control], control],
+  ] as const) {
+    let memory = restingZone
+    for (const place of before) memory = movedZone(memory, place, false)
+    const shown = zoneLook(memory, at === terminal)
+    memory = leftZone(memory)
+    assert.equal(zoneLook(memory, at === terminal), shown, 'leaving changes nothing shown')
+    memory = movedZone(memory, at, false)
+    assert.equal(
+      zoneLook(memory, at === terminal),
+      shown,
+      'coming back to the same place changes nothing',
+    )
+  }
+})
+
+test('what comes in after leaving the page comes from outside', () => {
+  // On the terminal, out of the window, and back straight into the zone: engaged.
+  assert.deepEqual(walk([terminal, 'left', control]), ['idle', 'idle', 'engaged'])
+})
+
+test('how the controls look follows the zone, and at rest the pointer on a covered terminal', () => {
+  assert.equal(zoneLook(restingZone, false), undefined)
+  assert.equal(zoneLook(restingZone, true), 'covering')
+  assert.equal(zoneLook({ state: 'yielding', fromTerminal: false }, false), 'yielding')
+  assert.equal(zoneLook({ state: 'engaged', fromTerminal: false }, true), 'engaged')
 })

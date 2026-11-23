@@ -1,31 +1,25 @@
-import { computed, onScopeDispose, ref, watch, type Ref } from 'vue'
+import { computed, onScopeDispose, ref, shallowRef, watch, type Ref } from 'vue'
 import type { useVueFlow } from '@vue-flow/core'
 import { unrefElement, useEventListener, type MaybeComputedElementRef } from '@vueuse/core'
 import { uiZoom } from '../ui-scale'
 import { useDocumentFocus } from '../document-focus'
 import {
   inZone,
-  nextZone,
+  leftZone,
+  movedZone,
   overlaps,
+  restingZone,
   within,
   ZONE_EXIT_MARGIN,
+  zoneLook,
   zoneOf,
+  type ControlsLook,
   type Point,
   type Rect,
-  type ZoneState,
+  type ZonePlace,
 } from '../../utils/canvas/control-zone'
 
-/**
- * How the canvas controls at the bottom left look and take the pointer, as one zone
- * (utils/canvas/control-zone.ts). One value applies to every control, so the minimap and the
- * toolbar always share one opacity:
- * - `engaged`: the pointer came into the zone from outside a terminal. Opaque and usable.
- * - `yielding`: it came in from the focused terminal's content. Faint; it passes through.
- * - `covering`: the pointer is on the focused terminal, which a control lies over. Dimmed; it
- *   passes through.
- * - undefined: at rest.
- */
-export type ControlsYield = 'engaged' | 'yielding' | 'covering' | undefined
+export type { ControlsLook }
 
 const box = (element: Element): Rect => {
   const { left, top, right, bottom } = element.getBoundingClientRect()
@@ -33,7 +27,12 @@ const box = (element: Element): Rect => {
 }
 const mouse = (event: PointerEvent) => event.pointerType === 'mouse'
 
-/** The controls' zone, from where the pointer moves. */
+/**
+ * The controls' zone (utils/canvas/control-zone.ts): one look for all of them, so the minimap and
+ * the toolbar always share one opacity. Only the pointer moving, pressing or releasing changes
+ * what the zone does; focus and geometry only refresh whether the pointer is on the focused
+ * terminal under the zone.
+ */
 export function useControlZone(options: {
   enabled(): boolean
   surface: MaybeComputedElementRef<HTMLElement | undefined>
@@ -41,13 +40,14 @@ export function useControlZone(options: {
   /** Changes whenever the camera, the focused card or the interface scale does. */
   geometry(): unknown
 }) {
-  const { activeElement, windowFocused } = useDocumentFocus()
+  // The page's focus, not the window's: another application or a window over this one (an
+  // input method's candidates) takes the window's focus while the terminal keeps the page's.
+  const { activeElement } = useDocumentFocus()
   /** The focused terminal's content, which the controls yield to. */
   const host = computed(() => {
     if (!options.enabled()) return
     const active = activeElement.value
-    if (!windowFocused.value || !active?.matches('.terminal-desktop-input, .terminal-mobile-input'))
-      return
+    if (!active?.matches('.terminal-desktop-input, .terminal-mobile-input')) return
     const element = active.closest<HTMLElement>('.terminal-host')
     return element && unrefElement(options.surface)?.contains(element) ? element : undefined
   })
@@ -56,46 +56,43 @@ export function useControlZone(options: {
       .map((control) => unrefElement(control))
       .filter((element): element is HTMLElement => !!element && element.isConnected)
 
-  const state = ref<ZoneState>('idle')
+  const memory = shallowRef(restingZone)
   const covering = ref(false)
   let point: Point | undefined
   let held = false
-  /** The pointer's last place was the focused terminal's content, outside the zone. */
-  let fromTerminal = false
 
-  /** The pointer is on the focused terminal itself, not on a card or dialog above it. */
-  function onTerminal(at: Point, elements: HTMLElement[]) {
-    const element = host.value
-    if (!element || !within(box(element), at)) return false
-    const hit = document
-      .elementsFromPoint(at.x, at.y)
-      .find((item) => !elements.some((control) => control.contains(item)))
-    return !!hit && element.contains(hit)
-  }
-  function update() {
+  /** What the pointer is over at `at`, with the controls and the focused terminal as they are. */
+  function measure(at: Point): ZonePlace {
     const elements = controls(),
       rects = elements.map(box),
-      zone = zoneOf(rects)
-    const at = point
-    if (!at) {
-      covering.value = false
-      if (!held) state.value = 'idle'
-      return
-    }
-    const inside = inZone(zone, at),
-      terminal = onTerminal(at, elements),
-      area = host.value ? box(host.value) : undefined
-    // A control lies over the focused terminal, so there is something to yield to.
-    const yieldable = !!area && rects.some((rect) => overlaps(rect, area))
-    state.value = nextZone(state.value, {
+      zone = zoneOf(rects),
+      element = host.value,
+      area = element && box(element)
+    const inside = inZone(zone, at)
+    // On the terminal itself, not on a card or dialog above it.
+    const hit =
+      area && within(area, at)
+        ? document
+            .elementsFromPoint(at.x, at.y)
+            .find((item) => !elements.some((control) => control.contains(item)))
+        : undefined
+    return {
       inside,
       near: inZone(zone, at, ZONE_EXIT_MARGIN),
-      held,
-      fromTerminal,
-      yieldable,
-    })
-    fromTerminal = terminal && !inside
-    covering.value = terminal && yieldable
+      onTerminal: !inside && !!hit && !!element?.contains(hit),
+      yieldable: !!area && rects.some((rect) => overlaps(rect, area)),
+    }
+  }
+  /** Shows what the pointer's last place is over now; what the zone does stays. */
+  function refresh() {
+    const place = point && measure(point)
+    covering.value = !!place && place.onTerminal && place.yieldable
+  }
+  function moved(at: Point) {
+    point = at
+    const place = measure(at)
+    memory.value = movedZone(memory.value, place, held)
+    covering.value = place.onTerminal && place.yieldable
   }
 
   // Only a mouse has a hovering pointer; touch and pen leave the zone as it is.
@@ -103,30 +100,20 @@ export function useControlZone(options: {
     window,
     'pointermove',
     (event: PointerEvent) => {
-      if (!mouse(event)) return
-      point = { x: event.clientX, y: event.clientY }
-      update()
+      if (mouse(event)) moved({ x: event.clientX, y: event.clientY })
     },
     { capture: true, passive: true },
   )
-  // Leaving the window: what comes back in comes from outside.
+  // Reported leaving the page, as when a window opens under a still pointer: nothing shown
+  // changes, and what comes in next comes from outside.
   useEventListener(
     window,
     'pointerout',
     (event: PointerEvent) => {
-      if (!mouse(event) || event.relatedTarget) return
-      point = undefined
-      fromTerminal = false
-      update()
+      if (mouse(event) && !event.relatedTarget) memory.value = leftZone(memory.value)
     },
     { passive: true },
   )
-  useEventListener(window, 'blur', () => {
-    held = false
-    point = undefined
-    fromTerminal = false
-    update()
-  })
 
   // A press on the yielding zone where the focused terminal is not under it only wakes the zone:
   // the press, its release and its click are swallowed, so nothing under the controls is clicked
@@ -143,14 +130,15 @@ export function useControlZone(options: {
     (event: PointerEvent) => {
       if (!mouse(event)) return
       held = true
-      point = { x: event.clientX, y: event.clientY }
+      const at = { x: event.clientX, y: event.clientY }
+      moved(at)
       if (
-        state.value === 'yielding' &&
-        inZone(zoneOf(controls().map(box)), point) &&
+        memory.value.state === 'yielding' &&
+        inZone(zoneOf(controls().map(box)), at) &&
         !(event.target instanceof Node && host.value?.contains(event.target))
       ) {
         swallowing = true
-        state.value = 'engaged'
+        memory.value = { ...memory.value, state: 'engaged' }
       }
       swallow(event)
     },
@@ -162,7 +150,7 @@ export function useControlZone(options: {
     (event: PointerEvent) => {
       if (!mouse(event)) return
       held = false
-      update()
+      moved({ x: event.clientX, y: event.clientY })
       if (!swallowing) return
       swallow(event)
       // What the release brings in this task, its click among it, is swallowed too.
@@ -172,32 +160,31 @@ export function useControlZone(options: {
   )
   for (const type of ['mousedown', 'mouseup', 'click', 'auxclick', 'contextmenu'])
     useEventListener(window, type, swallow, { capture: true })
-  useEventListener(window, 'pointercancel', () => {
+  // A gesture's release may never come back to this window.
+  const endGesture = () => {
     held = false
     swallowing = false
-  })
+  }
+  useEventListener(window, ['pointercancel', 'blur'], endGesture)
 
-  // Cards, the camera and the controls move under a still pointer. VueFlow writes a card's
-  // transform after its own store update, so they are measured in the next frame.
+  // Cards, the camera, the controls and the focus move under a still pointer. VueFlow writes a
+  // card's transform after its own store update, so they are measured in the next frame.
   let frame = 0
   const later = () => {
     cancelAnimationFrame(frame)
-    frame = requestAnimationFrame(update)
+    frame = requestAnimationFrame(refresh)
   }
   watch([options.geometry, host, () => controls().length], later, { flush: 'post' })
   onScopeDispose(() => cancelAnimationFrame(frame))
 
-  return computed<ControlsYield>(() => {
-    if (state.value !== 'idle') return state.value
-    return covering.value ? 'covering' : undefined
-  })
+  return computed(() => zoneLook(memory.value, covering.value))
 }
 
 export interface CanvasControls {
   toolbar: Ref<HTMLElement | undefined>
   minimap: Ref<{ $el: HTMLElement } | undefined>
   /** What the zone of both does now; the stage carries it for both controls. */
-  state: Readonly<Ref<ControlsYield>>
+  state: Readonly<Ref<ControlsLook>>
 }
 /**
  * The canvas's minimap and toolbar, and their zone. Created before the rest of the canvas, so
