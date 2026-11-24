@@ -259,11 +259,7 @@ class CoreWindowClient implements WindowTransport {
           // Missing from a snapshot is not an exit: layout and native facts
           // have separate waterlines. Ask only whether the record is closed.
           try {
-            const result = await this.options.rpc.call('terminal.get', { terminal: pane.terminal })
-            const record =
-              result.terminal && typeof result.terminal === 'object'
-                ? (result.terminal as Record<string, unknown>)
-                : result
+            const record = await this.options.rpc.call('terminal.get', { terminal: pane.terminal })
             if (['exited', 'killed'].includes(String(record.reason)))
               ended.push({ id: pane.id, terminal: pane.terminal })
           } catch (error) {
@@ -727,6 +723,8 @@ class CoreWindowClient implements WindowTransport {
           ),
         }
       }),
+      // Agent status reaches Canvas through Core's own events, not this snapshot.
+      agents: [],
     }
   }
   /**

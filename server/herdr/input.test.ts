@@ -102,6 +102,7 @@ function fixture() {
       focused: pane.focused,
       right_click_passthrough: false,
     })),
+    agents: [],
   }
   const messages: ClientMessage[] = [],
     requests: Array<{ method: string; params: Record<string, unknown> }> = [],

@@ -10,7 +10,6 @@ interface ReadRecord {
   connection: string
   bootId: string
   read: Record<string, number>
-  completed: Record<string, number>
 }
 const kind = 'completion-read'
 /** What is known of one source's windows, over the connection it was learnt on. */
@@ -96,12 +95,9 @@ export class CompletionReads {
     if (record) {
       // Panes can move between windows; only a full source snapshot proves removal.
       const panes = new Set(windows.flatMap((window) => window.panes.map((pane) => pane.id)))
-      const removed = Object.keys(record.completed).filter((id) => !panes.has(id))
+      const removed = Object.keys(record.read).filter((id) => !panes.has(id))
       if (removed.length) {
-        for (const id of removed) {
-          delete record.completed[id]
-          delete record.read[id]
-        }
+        for (const id of removed) delete record.read[id]
         this.store.put(kind, record)
       }
     }
@@ -116,8 +112,8 @@ export class CompletionReads {
     // A server that started again knows none of the windows before.
     const boot = windows.values().next().value?.bootId
     if (boot && boot !== metadata.bootId) windows.clear()
-    let record = this.record(source, metadata.bootId)
-    if (!record && this.store.get(kind, source.id)) this.store.remove(kind, source.id)
+    if (!this.record(source, metadata.bootId) && this.store.get(kind, source.id))
+      this.store.remove(kind, source.id)
     const old = windows.get(metadata.id)
     if (old?.bootId === metadata.bootId)
       metadata = {
@@ -131,20 +127,6 @@ export class CompletionReads {
             : pane
         }),
       }
-    let changed = false
-    for (const pane of metadata.panes)
-      if (pane.completion && record?.completed[pane.id] !== pane.completion.sequence) {
-        record ||= {
-          id: source.id,
-          connection: sourceConnectionKey(source),
-          bootId: metadata.bootId!,
-          read: {},
-          completed: {},
-        }
-        record.completed[pane.id] = pane.completion.sequence
-        changed = true
-      }
-    if (changed) this.store.put(kind, record!)
     metadata = this.project(source, metadata)
     windows.set(metadata.id, metadata)
     return metadata
@@ -153,24 +135,15 @@ export class CompletionReads {
     if (metadata.readAuthority === 'native') return metadata
     const record = metadata.bootId && this.record(source, metadata.bootId)
     const panes = metadata.panes.map((pane) => {
-      if (pane.status !== 'done' && pane.status !== 'idle') return pane
-      const completion =
-        pane.completion ||
-        (record &&
-        pane.stateSequence !== undefined &&
-        record.completed[pane.id] === pane.stateSequence
-          ? { bootId: record.bootId, sequence: pane.stateSequence }
-          : undefined)
-      return completion
-        ? {
-            ...pane,
-            completion,
-            status:
-              record && (record.read[pane.id] ?? -1) >= completion.sequence
-                ? ('idle' as const)
-                : ('done' as const),
-          }
-        : pane
+      const completion = pane.completion
+      if ((pane.status !== 'done' && pane.status !== 'idle') || !completion) return pane
+      return {
+        ...pane,
+        status:
+          record && (record.read[pane.id] ?? -1) >= completion.sequence
+            ? ('idle' as const)
+            : ('done' as const),
+      }
     })
     return {
       ...metadata,
@@ -201,7 +174,6 @@ export class CompletionReads {
       connection: sourceConnectionKey(source),
       bootId: token.bootId,
       read: {},
-      completed: { [paneId]: token.sequence },
     }
     record.read[paneId] = token.sequence
     this.store.put(kind, record)

@@ -65,7 +65,7 @@ export function eventRoutes({ app, store, account, terminals, options }: RouteCo
       if (closed || !checkSession()) return
       const snapshot = store.snapshot()
       // Keep only the latest snapshot when a browser is temporarily slow.
-      pending = `event: state\nid: ${snapshot.instanceId}:${snapshot.revision}\ndata: ${JSON.stringify(snapshot)}\n\n`
+      pending = `event: state\ndata: ${JSON.stringify(snapshot)}\n\n`
       flush()
     }
     const stopped = () => close()

@@ -56,7 +56,13 @@ export function herdrSocketPaths(
 
 export async function localHerdrSockets(location: HerdrLocation): Promise<HerdrSockets> {
   const paths = herdrSocketPaths(location)
-  const [api, client] = await Promise.all([realpath(paths.api), realpath(paths.client)])
+  const found = (path: string) =>
+    realpath(path).catch((error: NodeJS.ErrnoException) => {
+      throw error.code === 'ENOENT'
+        ? new Error(`Herdr is not running: no socket at ${path}`)
+        : error
+    })
+  const [api, client] = await Promise.all([found(paths.api), found(paths.client)])
   if (!(await stat(api)).isSocket() || !(await stat(client)).isSocket())
     throw new Error('Herdr endpoint is not a Unix socket')
   return { api, client }
@@ -72,7 +78,8 @@ client=api.with_name(api.stem+'-client.sock')
 result={}
 for key,path in [('api',api),('client',client)]:
  if not path.is_absolute(): raise SystemExit('Herdr configuration directory must be absolute')
- path=path.resolve(strict=True)
+ try: path=path.resolve(strict=True)
+ except FileNotFoundError: raise SystemExit('Herdr is not running: no socket at '+str(path))
  if not stat.S_ISSOCK(path.stat().st_mode): raise SystemExit('Herdr endpoint is not a Unix socket')
  result[key]=str(path)
 print(json.dumps(result))`

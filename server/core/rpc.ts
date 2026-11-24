@@ -282,8 +282,6 @@ export class CoreRpc {
     if (this.closed) return Promise.reject(this.failure || new Error('Core connection closed'))
     if (options.signal?.aborted)
       return Promise.reject(new DOMException('Core request cancelled', 'AbortError'))
-    if (!this.hello.methods.includes(method))
-      return Promise.reject(new Error(`Core method unavailable: ${method}`))
     if (this.pending.size >= 64) return Promise.reject(new Error('Too many pending core requests'))
     const id = this.nextId++
     return new Promise((resolve, reject) => {

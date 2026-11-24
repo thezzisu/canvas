@@ -211,6 +211,7 @@ function nativeFrame(): { surface: PaneSurfaceFrame; snapshot: ClientShellSnapsh
         cwd: '/hidden',
       },
     ],
+    agents: [],
   }
   return { surface, snapshot }
 }

@@ -135,11 +135,12 @@ test('concurrent layout edits preserve renames and cannot recreate deleted canva
     }
   }
   const route = `/api/canvases/${f.canvas.id}`
-  const layout = await beginRequest(route, 'PATCH', Buffer.from('{"nodes":[]}'))
+  const snapping = await beginRequest(route, 'PATCH', Buffer.from('{"snapToGrid":true}'))
   assert.equal((await f.request(route, 'PATCH', '{"name":"Concurrent rename"}')).status, 200)
-  layout.finish()
-  assert.equal((await layout.response).status, 200)
-  assert.equal(f.store.canvasView(f.store.get('canvas', f.canvas.id)!).name, 'Concurrent rename')
+  snapping.finish()
+  assert.equal((await snapping.response).status, 200)
+  const edited = f.store.canvasView(f.store.get('canvas', f.canvas.id)!)
+  assert.deepEqual([edited.name, edited.snapToGrid], ['Concurrent rename', true])
 
   const upload = await beginRequest(`${route}/background`, 'PUT', await png(), 'image/png')
   const pendingEdit = await beginRequest(route, 'PATCH', Buffer.from('{"name":"Stale edit"}'))
@@ -183,7 +184,7 @@ test('backgrounds persist separately, serve authenticated original-format images
   const changed = await f.request(
     `/api/canvases/${f.canvas.id}`,
     'PATCH',
-    JSON.stringify({ name: 'Renamed', nodes: [] }),
+    JSON.stringify({ name: 'Renamed' }),
   )
   assert.equal(changed.status, 200)
   assert.deepEqual(((await changed.json()) as CanvasView).background, created.background)

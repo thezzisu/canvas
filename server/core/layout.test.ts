@@ -54,7 +54,7 @@ class FixtureApi implements CoreApi {
   ): Promise<Record<string, unknown>> {
     this.calls.push({ method, params: copy(params) })
     if (method === 'server.status')
-      return { core: { id: 'fixture-core', name: 'fixture' }, version: '0.1.17' }
+      return { core: { id: 'fixture-core', name: 'fixture' }, version: '0.1.22' }
     if (method === 'terminal.list')
       return { terminals: copy(this.terminals), machines: [{ name: 'other', state: 'connected' }] }
     if (method === 'doc.get') {

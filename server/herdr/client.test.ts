@@ -94,6 +94,7 @@ async function fixture(
           right_click_passthrough: false,
         },
       ],
+      agents: [],
     })
   const removeTarget = (revision = 2, boot = 'boot') =>
     control('shell.snapshot.v1', {
@@ -104,6 +105,7 @@ async function fixture(
       focused_pane_id: null,
       tabs: [{ tab_id: 'other', workspace_id: 'space', focused: true }],
       panes: [],
+      agents: [],
     })
   const surface = (
     revision = 1,
@@ -614,6 +616,7 @@ test('stale missing-tab snapshots and pane-only changes never remove a surviving
     focused_pane_id: null,
     tabs: [{ tab_id: 'target', workspace_id: 'space', focused: true }],
     panes: [],
+    agents: [],
   })
   await delay(15)
   assert.deepEqual(exits, [], 'empty pane geometry is not proof that the tab was removed')
@@ -770,7 +773,7 @@ test('native metadata changes arrive independently of frames, deduplicate and re
           right_click_passthrough: false,
         },
       ],
-      agents: [{ pane_id: 'pane', agent_status: status, agent: 'codex' }],
+      agents: [{ pane_id: 'pane', agent_status: status, agent: 'codex', state_change_seq: 1 }],
     })
   snapshot(2, 'done')
   await until(() => updates.at(-1)?.status === 'done')
@@ -815,7 +818,13 @@ test('titles come from the API source: a title change alone republishes, the end
       },
     ],
     agents: [
-      { pane_id: 'pane', agent_status: 'working', agent: 'codex', terminal_title_stripped: 'Old' },
+      {
+        pane_id: 'pane',
+        agent_status: 'working',
+        agent: 'codex',
+        terminal_title_stripped: 'Old',
+        state_change_seq: 1,
+      },
     ],
   })
   await until(() => updates.at(-1)?.status === 'working')
@@ -905,29 +914,9 @@ test('completion companions identify idle work and frame fences follow the coher
   state(5, 10)
   await until(() => metadata.at(-1)?.panes[0]?.stateSequence === 10)
   assert.equal(
-    metadata.at(-1)?.panes[0]?.completion?.sequence,
-    10,
-    'observed work completion works without a companion-capable server',
-  )
-  state(6, 11, 'working')
-  await until(() => metadata.at(-1)?.panes[0]?.stateSequence === 11)
-  f.control('endpoint.agent-completions.v1', { boot_id: 'boot', revision: 7, completions: {} })
-  state(7, 12)
-  await until(() => metadata.at(-1)?.panes[0]?.stateSequence === 12)
-  assert.equal(
     metadata.at(-1)?.panes[0]?.completion,
     undefined,
-    'explicit completion evidence overrides observed-work fallback',
-  )
-  state(8, 13, 'done')
-  await until(() => metadata.at(-1)?.panes[0]?.completion?.sequence === 13)
-  state(9, 13, 'idle')
-  await until(() => metadata.at(-1)?.panes[0]?.stateSequence === 13)
-  await delay(10)
-  assert.equal(
-    metadata.at(-1)?.panes[0]?.completion?.sequence,
-    13,
-    'old-server seen projection cannot clear Canvas completion',
+    'an idle turn the server does not count as completed is not guessed',
   )
 })
 

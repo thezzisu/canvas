@@ -31,7 +31,17 @@ async function fixture(t: test.TestContext) {
       socket.end(
         JSON.stringify({
           id: request.id,
-          result: { snapshot: { version, protocol: 888, workspaces: [], tabs: [], panes: [] } },
+          result: {
+            snapshot: {
+              version,
+              protocol: 888,
+              workspaces: [],
+              tabs: [],
+              panes: [],
+              layouts: [],
+              agents: [],
+            },
+          },
         }) + '\n',
       )
     })

@@ -41,7 +41,7 @@ test(
   async (t) => {
     const binary = process.env.CANVAS_TEST_CORE_BINARY
     if (!binary) {
-      t.skip('Set CANVAS_TEST_CORE_BINARY to official isolated herdr-core 0.1.17+')
+      t.skip('Set CANVAS_TEST_CORE_BINARY to an official isolated herdr-core 0.1.22')
       return
     }
     const root = await mkdtemp(join(tmpdir(), 'cv-core-native-'))
@@ -254,8 +254,8 @@ test(
           .includes(Buffer.from('\x1b[<0;').toString('hex')),
       'native mouse input was not routed to the painted terminal',
     )
-    // Core 0.1.17 omits historical OSC 8 targets from first-paint serialization.
-    // Trigger actual live program output to verify the adapter preserves supplied targets.
+    // First-paint serialization omits historical OSC 8 targets: live program output carries them,
+    // so the adapter is checked on that.
     await writeFile(control, 'draw')
     await until(
       async () =>

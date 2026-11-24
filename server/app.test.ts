@@ -99,11 +99,15 @@ test('authentication, CSRF rejection and persistent canvas CRUD', async () => {
     assert.equal(created.status, 201)
     const canvas = (await created.json()) as { id: string }
     assert.equal(
-      (await call(`/api/canvases/${canvas.id}`, 'PATCH', { name: 'Renamed', nodes: [] }, token))
-        .status,
+      (await call(`/api/canvases/${canvas.id}`, 'PATCH', { name: 'Renamed' }, token)).status,
       200,
     )
     assert.equal(store.list<{ name: string }>('canvas')[0]!.name, 'Renamed')
+    assert.equal(
+      (await call(`/api/canvases/${canvas.id}`, 'PATCH', { nodes: [] }, token)).status,
+      400,
+      'cards change through their own routes',
+    )
     assert.equal(
       (
         await call(

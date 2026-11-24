@@ -1,6 +1,7 @@
 // Request bodies the API accepts.
 import { z } from 'zod'
 import {
+  canvasSchema,
   sourceSchema,
   itemSchema,
   nodeLayoutSchema,
@@ -10,6 +11,8 @@ import {
 import { layoutFields, type LayoutUpdate } from '../../shared/layout.ts'
 
 export const nameSchema = z.object({ name: z.string().trim().min(1).max(100) }).strict()
+/** What a canvas's own settings may change; its cards change through their own routes. */
+export const canvasPatchSchema = canvasSchema.pick({ name: true, snapToGrid: true }).partial()
 export const sourceProbeSchema = z
   .object(sourceSchema.shape)
   .omit({ id: true, name: true })

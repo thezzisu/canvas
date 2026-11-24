@@ -144,6 +144,7 @@ test("discovery selects each tab's remembered pane rather than global focus or t
         terminal_title_stripped: 'Foreground shell',
       },
     ],
+    agents: [],
   }
   const api = createServer((socket) => {
     let input = ''
@@ -555,6 +556,7 @@ test('SSH herdr discovers native sockets and shares direct API forwarding withou
                   terminal_title_stripped: ' \x1b\x07' + '中🙂'.repeat(600) + '\x9f ',
                 },
               ],
+              agents: [],
             },
           },
         }) + '\n',

@@ -56,10 +56,10 @@ Add local or SSH connections from the sidebar. SSH accepts an alias,
 `user@host` or `ssh://user@host:port`. Select the herdr session, or give an
 absolute socket path.
 
-| Runtime          | Supports                                                                             |
-| ---------------- | ------------------------------------------------------------------------------------ |
-| Herdr TUI        | herdr 0.9.x sessions                                                                 |
-| Herdr Core / App | herdr-core 0.1.17 and herdr-app 0.1.12 layouts (config discovery needs Python 3.11+) |
+| Runtime          | Supports                                                                     |
+| ---------------- | ---------------------------------------------------------------------------- |
+| Herdr TUI        | herdr 0.9.5                                                                  |
+| Herdr Core / App | herdr-core 0.1.22 and herdr-app 0.1.17 (config discovery needs Python 3.11+) |
 
 No TUI or desktop app process needs to stay open. Configure a separate SSH
 connection for each remote core. While a browser has Canvas open, and for 20

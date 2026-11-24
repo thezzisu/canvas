@@ -16,20 +16,13 @@ export function windowMetadata(
   titles?: Pick<PaneTitleSource, 'title'>,
 ): WindowMetadata {
   const tab = snapshot.tabs.find((tab) => tab.tab_id === tabId)!
-  const agents = new Map(
-    (Array.isArray(snapshot.agents) ? snapshot.agents : [])
-      .filter((agent): agent is Record<string, unknown> => !!agent && typeof agent === 'object')
-      .map((agent) => [agent.pane_id, agent]),
-  )
+  const agents = new Map(snapshot.agents.map((agent) => [agent.pane_id, agent]))
   const panes = snapshot.panes
     .filter((pane) => pane.tab_id === tabId)
     .map((pane, index) => {
       const agent = agents.get(pane.pane_id)
       const label = text(agent?.display_agent) || text(agent?.agent)
-      const sequence =
-        Number.isSafeInteger(agent?.state_change_seq) && (agent!.state_change_seq as number) >= 0
-          ? (agent!.state_change_seq as number)
-          : undefined
+      const sequence = agent?.state_change_seq
       const status = herdrStatus(agent?.agent_status)
       const completed =
         sequence !== undefined &&

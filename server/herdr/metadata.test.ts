@@ -25,14 +25,16 @@ test('native agent metadata joins pane IDs and applies the shared status order; 
         agent_status: 'done',
         agent: 'codex',
         terminal_title_stripped: '\x00 Finished\x1b ',
+        state_change_seq: 1,
       },
       {
         pane_id: 'busy',
         agent_status: 'working',
         display_agent: 'Claude',
         terminal_title_stripped: '',
+        state_change_seq: 2,
       },
-      { pane_id: 'unrelated', agent_status: 'blocked' },
+      { pane_id: 'unrelated', agent_status: 'blocked', state_change_seq: 3 },
     ],
   }
   const titles = new PaneTitles()
@@ -53,8 +55,8 @@ test('native agent metadata joins pane IDs and applies the shared status order; 
   )
   assert.equal(metadata.panes[0]!.active, true)
   snapshot.agents = [
-    { pane_id: 'complete', agent_status: 'blocked' },
-    { pane_id: 'busy', agent_status: 'done' },
+    { pane_id: 'complete', agent_status: 'blocked', state_change_seq: 4 },
+    { pane_id: 'busy', agent_status: 'done', state_change_seq: 5 },
   ]
   assert.equal(windowMetadata(snapshot, 'tab').status, 'attention')
 })

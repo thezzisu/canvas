@@ -5,10 +5,9 @@ export interface WriteMark {
 }
 const markPattern = /^([A-Za-z0-9_-]{1,64})\.([1-9]\d{0,14})$/
 
-/** Read a `Canvas-Write` header: `<page>.<sequence>`. A caller that sends none does not order its writes. */
-export function parseWriteMark(header: string | undefined): WriteMark | undefined {
-  if (header === undefined) return
-  const match = markPattern.exec(header)
+/** Read a `Canvas-Write` header: `<page>.<sequence>`. Every ordered write carries one. */
+export function parseWriteMark(header: string | undefined): WriteMark {
+  const match = markPattern.exec(header ?? '')
   if (!match) throw new Error('Invalid write order')
   return { page: match[1]!, sequence: Number(match[2]) }
 }
@@ -27,17 +26,15 @@ export class WriteOrder {
 
   /** The fields of `resource` that no newer write of the same page has stored. */
   fresh<Field extends string>(
-    mark: WriteMark | undefined,
+    mark: WriteMark,
     resource: string,
     fields: readonly Field[],
   ): Field[] {
-    if (!mark) return [...fields]
     const known = this.applied.get(key(mark, resource))
     return fields.filter((field) => (known?.get(field) ?? 0) < mark.sequence)
   }
   /** The write stored these fields. */
-  record(mark: WriteMark | undefined, resource: string, fields: readonly string[]) {
-    if (!mark) return
+  record(mark: WriteMark, resource: string, fields: readonly string[]) {
     const id = key(mark, resource),
       known = this.applied.get(id) ?? new Map<string, number>()
     for (const field of fields) known.set(field, Math.max(known.get(field) ?? 0, mark.sequence))

@@ -70,11 +70,20 @@ function parseSnapshot(data: string): ClientShellSnapshot {
     value.revision < 0 ||
     !Array.isArray(value.tabs) ||
     !Array.isArray(value.panes) ||
+    !Array.isArray(value.agents) ||
     value.tabs.some(
       (tab) => !tab || typeof tab.tab_id !== 'string' || typeof tab.workspace_id !== 'string',
     ) ||
     value.panes.some(
       (pane) => !pane || typeof pane.pane_id !== 'string' || typeof pane.tab_id !== 'string',
+    ) ||
+    value.agents.some(
+      (agent) =>
+        !agent ||
+        typeof agent.pane_id !== 'string' ||
+        typeof agent.agent_status !== 'string' ||
+        !Number.isSafeInteger(agent.state_change_seq) ||
+        agent.state_change_seq < 0,
     )
   )
     throw new Error('Invalid herdr shell snapshot')
@@ -98,8 +107,8 @@ class HerdrClient implements WindowTransport {
   readonly exit = new Latest<TransportExit>()
   private completions?: { bootId: string; revision: number; values: Map<string, number> }
   private snapshotWindows?: WindowMetadata[]
-  private completed = new Map<string, number>()
-  private working = new Set<string>()
+  /** The turns the server counts as completed, as of the current snapshot. */
+  private completed: ReadonlyMap<string, number> = new Map()
   private readonly requests = new Map<string, Request>()
   private requestLane: Promise<unknown> = Promise.resolve()
   private queuedRequests = 0
@@ -123,7 +132,6 @@ class HerdrClient implements WindowTransport {
   private inputFocusBarrier: Promise<void> = Promise.resolve()
   private inputFocusPending = false
   private inputFocusReady = false
-  private methods = new Set<string>()
   private cols: number
   private rows: number
   private readonly deadline: ReturnType<typeof setTimeout>
@@ -285,8 +293,8 @@ class HerdrClient implements WindowTransport {
   }
   private sendRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
     const snapshot = this.snapshot
-    if (this.closed || !snapshot || !this.methods.has(method))
-      return Promise.reject(new Error(`Herdr endpoint method is unavailable: ${method}`))
+    if (this.closed || !snapshot)
+      return Promise.reject(new Error(`Herdr endpoint is closed: ${method}`))
     if (this.requests.size >= 64)
       return Promise.reject(new Error('Too many pending herdr requests'))
     const id = randomUUID()
@@ -366,15 +374,9 @@ class HerdrClient implements WindowTransport {
       welcome.snapshot_codec !== 'shell.snapshot.v1' ||
       welcome.surface_codec !== 'shell.surface.v1' ||
       welcome.input_codec !== 'shell.input.semantic.v1' ||
-      welcome.blob_codec !== 'shell.blob.v1' ||
-      !Array.isArray(welcome.methods)
+      welcome.blob_codec !== 'shell.blob.v1'
     )
       throw new Error('Herdr server has no compatible endpoint generation 1 codecs')
-    this.methods = new Set(
-      welcome.methods.filter((method: unknown): method is string => typeof method === 'string'),
-    )
-    if (!this.methods.has('tab.focus'))
-      throw new Error('Herdr server cannot focus an independent tab client')
     this.welcomed = true
   }
   /** Which turns the server counts as completed, for the snapshot of the same revision. */
@@ -423,41 +425,13 @@ class HerdrClient implements WindowTransport {
       this.focusTab()
     this.render()
   }
-  /**
-   * Which panes' agents completed a turn: the server's own count when it sends one for this
-   * snapshot, otherwise a turn that was seen working and is now idle or done.
-   */
+  /** The server sends a snapshot's completions just before it, with the same revision. */
   private followCompletions(snapshot: ClientShellSnapshot) {
-    const companion =
+    this.completed =
       this.completions?.bootId === snapshot.boot_id &&
       this.completions.revision === snapshot.revision
         ? this.completions.values
-        : undefined
-    const present = new Set<string>()
-    for (const agent of Array.isArray(snapshot.agents) ? snapshot.agents : []) {
-      if (!agent || typeof agent.pane_id !== 'string') continue
-      const id = agent.pane_id,
-        sequence = agent.state_change_seq
-      present.add(id)
-      if (agent.agent_status === 'working') {
-        this.working.add(id)
-        this.completed.delete(id)
-        continue
-      }
-      const worked = this.working.delete(id)
-      if (
-        (agent.agent_status === 'idle' || agent.agent_status === 'done') &&
-        Number.isSafeInteger(sequence) &&
-        sequence >= 0 &&
-        (companion
-          ? companion.get(id) === sequence
-          : agent.agent_status === 'done' || worked || this.completed.get(id) === sequence)
-      )
-        this.completed.set(id, sequence)
-      else this.completed.delete(id)
-    }
-    for (const id of this.completed.keys()) if (!present.has(id)) this.completed.delete(id)
-    for (const id of this.working) if (!present.has(id)) this.working.delete(id)
+        : new Map()
   }
   /** Brings this window's tab to the front of its own client, which is what it shows. */
   private focusTab() {

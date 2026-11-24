@@ -144,7 +144,12 @@ test('local and SSH discovery agree on a named session without running a CLI', a
       ),
       paths,
     )
-    await assert.rejects(localHerdrSockets({ herdrSession: 'missing' }), /ENOENT/u)
+    await assert.rejects(
+      localHerdrSockets({ herdrSession: 'missing' }),
+      (error: Error) =>
+        /Herdr is not running: no socket at /u.test(error.message) &&
+        !error.message.includes('Traceback'),
+    )
   } finally {
     if (before === undefined) delete process.env.XDG_CONFIG_HOME
     else process.env.XDG_CONFIG_HOME = before
@@ -182,6 +187,8 @@ test('herdr runtime discovers sockets and performs resource CRUD without executa
       { tab_id: 'w1:t1', pane_id: 'w1:p1', agent_status: 'working', focused: true },
       { tab_id: 'w1:t1', pane_id: 'w1:p2', agent_status: 'done', focused: false },
     ],
+    layouts: [{ tab_id: 'w1:t1', focused_pane_id: 'w1:p1' }],
+    agents: [] as { pane_id: string; state_change_seq: number }[],
   }
   let malformedCreation = false,
     snapshotUnavailable = false
@@ -430,6 +437,8 @@ test('an endpoint that answered with an error is kept; one that cannot be reache
                     workspaces: [{ workspace_id: 'w1', label: name }],
                     tabs: [{ workspace_id: 'w1', tab_id: 'w1:t1', label: 'Window' }],
                     panes: [{ tab_id: 'w1:t1', pane_id: 'w1:p1', focused: true }],
+                    layouts: [{ tab_id: 'w1:t1', focused_pane_id: 'w1:p1' }],
+                    agents: [],
                   },
                 },
               }

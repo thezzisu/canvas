@@ -91,7 +91,9 @@ test('core discovery resolves socket aliases and rejects invalid endpoints', asy
   await assert.rejects(localCoreSocket({ herdrSocket: regular }), /not a Unix socket/u)
   await assert.rejects(
     localCoreSocket({ herdrSocket: join(root, 'missing.sock') }),
-    /discovery failed/u,
+    (error: Error) =>
+      /Core is not running: no socket at /u.test(error.message) &&
+      !error.message.includes('Traceback'),
   )
   for (const bad of ['relative', '/tmp/a:b', '/tmp/a\n'])
     assert.throws(() => validateCoreLocation({ herdrSocket: bad }))

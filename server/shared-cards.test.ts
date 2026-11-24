@@ -98,25 +98,18 @@ test('note references share content in one published transaction while layout an
   }
   assert.equal(noteIn(f.store, f.a.id, note.id).width, 320)
   assert.equal(noteIn(f.store, f.b.id, note.id).width, 720)
-  for (const [method, stale] of [
-    ['PUT', staleA],
-    ['PATCH', staleB],
-  ] as const) {
+  for (const stale of [staleA, staleB])
     assert.equal(
       (
-        await f.request(`/api/canvases/${stale.id}`, method, {
+        await f.request(`/api/canvases/${stale.id}`, 'PATCH', {
           ...stale,
           name: 'Rename with old body',
         })
       ).status,
-      200,
+      400,
+      'a canvas body cannot be written back whole',
     )
-    assert.equal(
-      noteIn(f.store, stale.id, note.id).content,
-      'Both browsers',
-      'a stale canvas body cannot replace shared content',
-    )
-  }
+  assert.equal(noteIn(f.store, f.a.id, note.id).content, 'Both browsers')
   await f.request(`/api/canvases/${f.b.id}/notes/${note.id}`, 'PATCH', { content: 'Edited from B' })
   assert.equal(noteIn(f.store, f.a.id, note.id).content, 'Edited from B')
   await f.request(`/api/canvases/${f.a.id}`, 'DELETE')

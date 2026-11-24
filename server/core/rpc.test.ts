@@ -8,7 +8,7 @@ import { CoreRpc, CoreRpcError, CORE_MAX_PAYLOAD } from './rpc.ts'
 
 const hello = {
   generation: 1,
-  version: '0.1.17',
+  version: '0.1.22',
   core: { id: 'core-fixture-1', name: 'fixture' },
   framed: true,
   methods: ['terminal.list', 'terminal.attach', 'events.subscribe', 'doc.get'],
@@ -254,7 +254,6 @@ test('core RPC retains error kinds, times out unanswered calls and cancels orpha
     (error) =>
       error instanceof CoreRpcError && error.kind === 'conflict' && error.hint === 'read again',
   )
-  await assert.rejects(rpc.call('missing.method'), /unavailable/u)
   await assert.rejects(rpc.call('doc.get', {}, { timeoutMs: 10 }), /timed out/u)
   const cancelled = new AbortController()
   cancelled.abort()

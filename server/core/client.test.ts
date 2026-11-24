@@ -69,9 +69,9 @@ function fixture(split = false, subscriptionSeq = 0) {
   } = { documentVersion: 1, listCalls: 0, documentWrites: 0 }
   const rpc = {
     connected: true,
-    hello: { core: { id: 'core', name: 'Fixture' }, version: '0.1.17' },
+    hello: { core: { id: 'core', name: 'Fixture' }, version: '0.1.22' },
     async call(method: string, params: Record<string, unknown>) {
-      if (method === 'server.status') return { core: { id: 'core' }, version: '0.1.17' }
+      if (method === 'server.status') return { core: { id: 'core' }, version: '0.1.22' }
       if (method === 'terminal.list') {
         controls.listCalls++
         return { terminals: structuredClone(terminals) }

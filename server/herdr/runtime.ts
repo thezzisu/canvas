@@ -100,11 +100,6 @@ const watch: StartWatch<RuntimeListing> = async (source, handlers, signal) => {
   }
 }
 
-function snapshotPanes(result: Record<string, unknown>): PaneRecord[] {
-  const panes = (result.snapshot as { panes?: unknown } | undefined)?.panes
-  return Array.isArray(panes) ? panes.filter((pane) => pane && typeof pane === 'object') : []
-}
-
 async function requestHerdr(
   source: Source,
   method: string,
@@ -138,75 +133,57 @@ async function resources(source: Source, signal?: AbortSignal): Promise<RuntimeL
 function listing(source: Source, response: Record<string, unknown>): RuntimeListing {
   const snapshot = response.snapshot as {
     version?: unknown
-    agents?: Array<{
-      pane_id: string
-      state_change_seq?: number
-      completion_seq?: number
-      agent_status?: string
-    }>
+    agents: Array<{ pane_id: string; state_change_seq: number }>
     workspaces: Array<{ workspace_id: string; label: string }>
     tabs: Array<{ workspace_id: string; tab_id: string; label: string; agent_status?: string }>
-    layouts?: Array<{ tab_id: string; focused_pane_id: string }>
-    panes?: Array<{
+    layouts: Array<{ tab_id: string; focused_pane_id: string }>
+    panes: Array<{
       tab_id: string
       pane_id: string
       label?: string
       display_agent?: string
       agent?: string
-      focused?: boolean
       agent_status?: string
       terminal_title_stripped?: string
     }>
   }
-  if (!snapshot || !Array.isArray(snapshot.workspaces) || !Array.isArray(snapshot.tabs))
+  if (
+    !snapshot ||
+    !['workspaces', 'tabs', 'layouts', 'panes', 'agents'].every((key) =>
+      Array.isArray(snapshot[key as keyof typeof snapshot]),
+    ) ||
+    snapshot.agents.some(
+      (agent) => !Number.isSafeInteger(agent?.state_change_seq) || agent.state_change_seq < 0,
+    )
+  )
     throw new Error('Unexpected herdr snapshot response')
   // A followed source's titles may be newer than this snapshot: per pane, the newer wins.
   const titles = followedTitles.get(source.id)
-  titles?.replace(snapshotPanes(response))
+  titles?.replace(snapshot.panes as PaneRecord[])
   // PaneInfo.focused is global; layouts retain each tab's selected pane.
   const focusedPanes = new Map(
-    (Array.isArray(snapshot.layouts) ? snapshot.layouts : []).map((layout) => [
-      layout.tab_id,
-      layout.focused_pane_id,
-    ]),
+    snapshot.layouts.map((layout) => [layout.tab_id, layout.focused_pane_id]),
   )
-  const spaces = snapshot.workspaces.map((workspace: { workspace_id: string; label: string }) => ({
+  const sequences = new Map(snapshot.agents.map((agent) => [agent.pane_id, agent.state_change_seq]))
+  const spaces = snapshot.workspaces.map((workspace) => ({
     id: workspace.workspace_id,
     name: workspace.label || workspace.workspace_id,
     windows: snapshot.tabs
-      .filter((tab: { workspace_id: string }) => tab.workspace_id === workspace.workspace_id)
-      .map((tab: { tab_id: string; label: string; agent_status?: string }) => {
-        const panes: PaneResource[] = (Array.isArray(snapshot.panes) ? snapshot.panes : [])
-          .filter((pane: { tab_id: string }) => pane.tab_id === tab.tab_id)
-          .map(
-            (
-              pane: {
-                pane_id: string
-                label?: string
-                display_agent?: string
-                agent?: string
-                focused?: boolean
-                agent_status?: string
-                terminal_title_stripped?: string
-              },
-              index: number,
-            ) => ({
-              id: pane.pane_id,
-              name: pane.label || pane.display_agent || pane.agent || String(index + 1),
-              active: focusedPanes.get(tab.tab_id) === pane.pane_id,
-              terminalTitle: titles?.title(pane.pane_id) ?? paneTitle(pane.terminal_title_stripped),
-              ...(pane.display_agent || pane.agent
-                ? { agent: pane.display_agent || pane.agent }
-                : {}),
-              status: herdrStatus(pane.agent_status),
-              ...(() => {
-                const seq = snapshot.agents?.find(
-                  (agent) => agent.pane_id === pane.pane_id,
-                )?.state_change_seq
-                return Number.isSafeInteger(seq) && seq! >= 0 ? { stateSequence: seq } : {}
-              })(),
-            }),
-          )
+      .filter((tab) => tab.workspace_id === workspace.workspace_id)
+      .map((tab) => {
+        const panes: PaneResource[] = snapshot.panes
+          .filter((pane) => pane.tab_id === tab.tab_id)
+          .map((pane, index) => ({
+            id: pane.pane_id,
+            name: pane.label || pane.display_agent || pane.agent || String(index + 1),
+            active: focusedPanes.get(tab.tab_id) === pane.pane_id,
+            terminalTitle: titles?.title(pane.pane_id) ?? paneTitle(pane.terminal_title_stripped),
+            ...(pane.display_agent || pane.agent
+              ? { agent: pane.display_agent || pane.agent }
+              : {}),
+            status: herdrStatus(pane.agent_status),
+            ...(sequences.has(pane.pane_id) ? { stateSequence: sequences.get(pane.pane_id) } : {}),
+          }))
         return {
           id: tab.tab_id,
           name: tab.label || tab.tab_id,

@@ -24,6 +24,7 @@ import {
   notePatchSchema,
   writtenFields,
   pick,
+  canvasPatchSchema,
 } from './schemas.ts'
 
 export function canvasRoutes({ app, store, order }: RouteContext) {
@@ -32,24 +33,13 @@ export function canvasRoutes({ app, store, order }: RouteContext) {
     if (value.id) return c.json({ error: 'ID is assigned by the server' }, 400)
     return c.json(store.canvasView(store.put('canvas', value)), 201)
   })
-  app.on(['PUT', 'PATCH'], '/api/canvases/:id', async (c) => {
+  app.patch('/api/canvases/:id', async (c) => {
     const id = c.req.param('id')
     if (isSystemCanvas(id)) return c.json({ error: 'System canvases are read-only' }, 403)
-    const patch = await c.req.json()
+    const patch = canvasPatchSchema.parse(await c.req.json())
     const canvas = store.get<Canvas>('canvas', id)
     if (!canvas) return c.json({ error: 'Canvas not found' }, 404)
-    return c.json(
-      store.canvasView(
-        store.put(
-          'canvas',
-          canvasSchema.parse({
-            ...canvas,
-            ...patch,
-            id,
-          }),
-        ),
-      ),
-    )
+    return c.json(store.canvasView(store.put('canvas', { ...canvas, ...patch })))
   })
   app.delete('/api/canvases/:id', (c) => {
     if (isSystemCanvas(c.req.param('id')))

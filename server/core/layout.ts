@@ -407,12 +407,9 @@ export function projectTab(
   return result
 }
 
-function rpcKind(error: unknown): string | undefined {
-  if (!object(error)) return
-  if (typeof error.kind === 'string') return error.kind
-  if (object(error.data) && typeof error.data.kind === 'string') return error.data.kind
-  if (object(error.error)) return rpcKind(error.error)
-}
+/** A failed call's kind, as CoreRpcError carries it. */
+const rpcKind = (error: unknown) =>
+  object(error) && typeof error.kind === 'string' ? error.kind : undefined
 function conflict(error: unknown): boolean {
   return rpcKind(error) === 'conflict'
 }
@@ -632,12 +629,7 @@ export class CoreLayout {
       wait: false,
       labels: { 'herdr.seen': '0' },
     })
-    const address =
-      typeof result.address === 'string'
-        ? result.address
-        : object(result.terminal)
-          ? result.terminal.address
-          : undefined
+    const address = result.address
     if (!validId(address)) throw new Error('Core did not return the created terminal address')
     return address
   }
@@ -826,8 +818,7 @@ export class CoreLayout {
       } catch {
         // An exit racing our kill is still a confirmed close. A lost reply alone is not.
         try {
-          const result = await this.rpc.call('terminal.get', { terminal: address })
-          const record = object(result.terminal) ? result.terminal : result
+          const record = await this.rpc.call('terminal.get', { terminal: address })
           if (record.state === 'live') failures.push(address)
         } catch (error) {
           if (rpcKind(error) !== 'not_found') failures.push(address)
@@ -958,8 +949,7 @@ export class CoreLayout {
 
   async markSeen(address: string, turn: number): Promise<void> {
     if (!Number.isSafeInteger(turn) || turn < 0) throw new Error('Invalid core turn')
-    const result = await this.rpc.call('terminal.get', { terminal: address })
-    const terminal = object(result.terminal) ? result.terminal : result
+    const terminal = await this.rpc.call('terminal.get', { terminal: address })
     if (terminal.turn !== turn) return
     const seen = object(terminal.labels) ? terminal.labels['herdr.seen'] : undefined
     if (typeof seen === 'string' && /^\d+$/u.test(seen) && Number(seen) >= turn) return

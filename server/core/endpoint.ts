@@ -50,7 +50,8 @@ if not chosen:
  chosen=pathlib.Path(run)/'herdr-core'/(session+'.sock') if run else state_home/'herdr-core'/session/(session+'.sock')
 path=pathlib.Path(chosen)
 if not path.is_absolute() or len(str(path))>1000 or any(ord(c)<32 or ord(c)==127 or c==':' for c in str(path)):raise SystemExit('Core socket must be an absolute Unix socket path')
-path=path.resolve(strict=True)
+try:path=path.resolve(strict=True)
+except FileNotFoundError:raise SystemExit('Core is not running: no socket at '+str(path))
 if not stat.S_ISSOCK(path.stat().st_mode):raise SystemExit('Core endpoint is not a Unix socket')
 print(json.dumps({'socket':str(path)}))`
 

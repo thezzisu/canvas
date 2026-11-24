@@ -60,6 +60,8 @@ async function fixture(t: TestContext) {
                 ],
                 tabs,
                 panes: [],
+                layouts: [],
+                agents: [],
               },
             },
           }) + '\n',

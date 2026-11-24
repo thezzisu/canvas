@@ -107,6 +107,14 @@ export interface ClientShellSnapshot {
     right_click_passthrough: boolean
     [key: string]: unknown
   }[]
+  agents: {
+    pane_id: string
+    agent_status: string
+    state_change_seq: number
+    display_agent?: string | null
+    agent?: string | null
+    [key: string]: unknown
+  }[]
   [key: string]: unknown
 }
 export type ClientKeyCode =
@@ -662,8 +670,6 @@ export function decodeServerMessage(payload: Buffer): ServerMessage {
     case 20:
       message = { type: 'control', kind: r.string(4096), data: r.string(MAX_FRAME_BYTES) }
       break
-    case 0:
-      throw new Error('Herdr server does not support the stable endpoint protocol')
     // These carry optional legacy notifications/graphics, never terminal text for a
     // client-owned surface. Frame length still bounds their complete payload.
     default:

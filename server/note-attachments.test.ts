@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { AssetStore } from './assets.ts'
-import { Store, type Canvas, type NoteNode } from './state.ts'
+import { Store, type Canvas, type NoteNode, type NoteNodeView } from './state.ts'
 import { createApp } from './app.ts'
 import { receiveCanvasFile } from './canvas-files.ts'
 import { CARD_REMOVAL_UNDO_MS } from '../shared/card-removal.ts'
@@ -63,7 +63,7 @@ test('upload associates an asset with a shared note without replacing its curren
     const canvas = f.store.get<Canvas>('canvas', id)!
     assert.equal(canvas.nodes.length, 1)
     assert.equal((canvas.nodes[0] as NoteNode).content, 'Typing while uploading')
-    const view = f.store.canvasView(canvas).nodes[0] as NoteNode
+    const view = f.store.canvasView(canvas).nodes[0] as NoteNodeView
     assert.equal(view.attachments?.[0]?.id, asset.id)
     assert.equal(f.store.fileAssetForCanvas(asset.id, id)?.id, asset.id)
   }

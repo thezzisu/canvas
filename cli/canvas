@@ -579,7 +579,7 @@ def bootstrap_file(filename, public_url, port):
     finally:
         if fd is not None:
             os.close(fd)
-    url = value.get("launchUrl", value.get("url")) if isinstance(value, dict) else None
+    url = value.get("launchUrl") if isinstance(value, dict) else None
     if not isinstance(url, str) or len(url.encode("utf-8")) > 16384 or any(ord(c) <= 32 or ord(c) == 127 for c in url):
         raise CanvasError("invalid application bootstrap URL")
     try:
@@ -871,7 +871,7 @@ def main():
         "Only --env values expand named variables; $$ means a literal $. Options must precede the command.")
     capture.add_argument("--port", type=int, help="use this loopback port instead of assigning PORT")
     capture.add_argument("--title", help="application title shown on the terminal")
-    capture.add_argument("--bootstrap-file", help="private auth/bootstrap JSON containing launchUrl or url (not a readiness probe)")
+    capture.add_argument("--bootstrap-file", help="private auth/bootstrap JSON containing launchUrl (not a readiness probe)")
     capture.add_argument("--ready", choices=["http", "tcp"], default="http", help="HTTP response (default) or TCP listener readiness")
     capture.add_argument("--probe", help="HTTP path that must return 2xx before capture, e.g. /health")
     capture.add_argument("--probe-command", help="explicit shell readiness command; exit 0 means ready, with PORT set to the selected port")

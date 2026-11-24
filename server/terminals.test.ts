@@ -1564,16 +1564,16 @@ test('shared completion reads follow native frame fences and persist without con
     ...token,
     sequence: token.sequence + 1,
   })
-  assert.deepEqual(
-    f.store!.get<{ read: unknown }>('completion-read', f.source.id)!.read,
-    {},
+  assert.equal(
+    f.store!.get<{ read: Record<string, number> }>('completion-read', f.source.id)?.read[paneId],
+    undefined,
     'a fabricated future sequence is rejected',
   )
   peer.command({ type: 'view-visible', visible: false })
   peer.command({ type: 'completion-read', generation: 0, paneId, ...token })
-  assert.deepEqual(
-    f.store!.get<{ read: unknown }>('completion-read', f.source.id)!.read,
-    {},
+  assert.equal(
+    f.store!.get<{ read: Record<string, number> }>('completion-read', f.source.id)?.read[paneId],
+    undefined,
     'hidden views cannot acknowledge',
   )
   peer.command({ type: 'view-visible', visible: true })
@@ -1647,9 +1647,11 @@ test('passive hover and browser focus reports leave the already-painted completi
         .at(-1)
       const token = frame.panes.find((pane: { id: string }) => pane.id === paneId).completion
       client.command({ type: 'input', data: input })
-      assert.deepEqual(
-        f.store!.get<{ read: unknown }>('completion-read', f.source.id)!.read,
-        {},
+      assert.equal(
+        f.store!.get<{ read: Record<string, number> }>('completion-read', f.source.id)?.read[
+          paneId
+        ],
+        undefined,
         `${name} itself does not mark work read`,
       )
       client.command({ type: 'completion-read', generation: frame.generation, paneId, ...token })

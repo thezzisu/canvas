@@ -87,30 +87,18 @@ export const terminalNodeSchema = nodeLayoutSchema
   })
   .strict()
 export const noteColorSchema = z.enum(['yellow', 'blue', 'green', 'pink', 'neutral'])
-export const fileAssetSchema = z
-  .object({
-    id: z.string().uuid(),
-    filename: z.string().min(1).max(255),
-    size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-    mime: z.string().max(100),
-    createdAt: z.number().int().nonnegative(),
-    sourcePreview: z.boolean().optional(),
-  })
-  .strict()
 export const noteNodeSchema = nodeLayoutSchema
   .extend({
     type: z.literal('note'),
     title: z.string().max(200).default(''),
     content: z.string().max(200_000).default(''),
     color: noteColorSchema.default('yellow'),
-    attachments: z.array(fileAssetSchema).optional(),
   })
   .strict()
 export const fileNodeSchema = nodeLayoutSchema
   .extend({
     type: z.literal('file'),
     assetId: z.string().uuid(),
-    asset: fileAssetSchema.optional(),
   })
   .strict()
 export const itemSchema = z.discriminatedUnion('type', [
@@ -137,6 +125,7 @@ export interface FileOrigin {
   path: string
 }
 export type FileNodeView = FileNode & { asset: FileAsset }
+export type NoteNodeView = NoteNode & { attachments: FileAsset[] }
 export type FileAssetContext = { canvasId?: string; origin?: FileOrigin } & (
   | { anchorId?: string; sourceId: string; windowId: string }
   | { position: { x: number; y: number } }
@@ -167,7 +156,7 @@ export const canvasSchema = z
 export type Canvas = z.infer<typeof canvasSchema> & { id: string }
 export type CanvasBackground = { url: string; opacity: number }
 export type CanvasView = Omit<Canvas, 'nodes'> & {
-  nodes: Array<Exclude<CanvasNode, FileNode> | FileNodeView>
+  nodes: Array<Exclude<CanvasNode, FileNode | NoteNode> | FileNodeView | NoteNodeView>
   background: CanvasBackground | null
 }
 export type WindowSize = { width: number; height: number }
@@ -210,7 +199,7 @@ export class Store extends EventEmitter {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.db = new DatabaseSync(path)
     this.db.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (kind TEXT, id TEXT, body TEXT, PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER); CREATE TABLE IF NOT EXISTS canvas_backgrounds (canvas_id TEXT PRIMARY KEY, image_id TEXT NOT NULL UNIQUE, opacity REAL NOT NULL CHECK(opacity >= 0 AND opacity <= 1), data BLOB NOT NULL, document_kind TEXT NOT NULL DEFAULT 'canvas' CHECK(document_kind = 'canvas'), FOREIGN KEY(document_kind, canvas_id) REFERENCES documents(kind, id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS canvas_files (id TEXT PRIMARY KEY, canvas_id TEXT NOT NULL, filename TEXT NOT NULL, size INTEGER NOT NULL CHECK(size >= 0), mime TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS note_files (note_id TEXT NOT NULL, asset_id TEXT NOT NULL REFERENCES canvas_files(id) ON DELETE CASCADE, PRIMARY KEY(note_id,asset_id)); CREATE INDEX IF NOT EXISTS note_files_asset ON note_files(asset_id);",
+      "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS documents (kind TEXT, id TEXT, body TEXT, PRIMARY KEY(kind,id)); CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires INTEGER); CREATE TABLE IF NOT EXISTS canvas_backgrounds (canvas_id TEXT PRIMARY KEY, image_id TEXT NOT NULL UNIQUE, opacity REAL NOT NULL CHECK(opacity >= 0 AND opacity <= 1), data BLOB NOT NULL, document_kind TEXT NOT NULL DEFAULT 'canvas' CHECK(document_kind = 'canvas'), FOREIGN KEY(document_kind, canvas_id) REFERENCES documents(kind, id) ON DELETE CASCADE); CREATE TABLE IF NOT EXISTS canvas_files (id TEXT PRIMARY KEY, filename TEXT NOT NULL, size INTEGER NOT NULL CHECK(size >= 0), created_at INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS note_files (note_id TEXT NOT NULL, asset_id TEXT NOT NULL REFERENCES canvas_files(id) ON DELETE CASCADE, PRIMARY KEY(note_id,asset_id)); CREATE INDEX IF NOT EXISTS note_files_asset ON note_files(asset_id);",
     )
     // A system canvas only owns its background. Its name and generated window
     // layout never enter the editable canvas collection.
@@ -640,15 +629,11 @@ export class Store extends EventEmitter {
     return nodes.map((node) => {
       if (node.type === 'note') {
         const current = notes.get(node.id)
-        const { attachments: _, ...stored } = node
         return current
-          ? { ...stored, title: current.title, content: current.content, color: current.color }
-          : stored
+          ? { ...node, title: current.title, content: current.content, color: current.color }
+          : node
       }
-      if (node.type === 'file') {
-        const { asset: _asset, ...stored } = node
-        return stored
-      }
+      if (node.type === 'file') return node
       return { ...node, ...this.windowSize(node.sourceId, node.windowId) }
     })
   }
@@ -735,10 +720,8 @@ export class Store extends EventEmitter {
       }
       const composer = this.ensureComposer(context.composer)
       this.db
-        .prepare(
-          'INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)',
-        )
-        .run(asset.id, '', asset.filename, asset.size, asset.mime, asset.createdAt)
+        .prepare('INSERT INTO canvas_files(id,filename,size,created_at) VALUES(?,?,?,?)')
+        .run(asset.id, asset.filename, asset.size, asset.createdAt)
       this.db
         .prepare('INSERT INTO note_files(note_id,asset_id) VALUES(?,?)')
         .run(composer.id, asset.id)
@@ -761,10 +744,8 @@ export class Store extends EventEmitter {
         return false
       }
       this.db
-        .prepare(
-          'INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)',
-        )
-        .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.createdAt)
+        .prepare('INSERT INTO canvas_files(id,filename,size,created_at) VALUES(?,?,?,?)')
+        .run(asset.id, asset.filename, asset.size, asset.createdAt)
       this.db
         .prepare('INSERT INTO note_files(note_id,asset_id) VALUES(?,?)')
         .run(context.noteId, asset.id)
@@ -791,10 +772,8 @@ export class Store extends EventEmitter {
       }
       if (canvas.nodes.length >= 500) throw new Error('Canvas contains too many items')
       this.db
-        .prepare(
-          'INSERT INTO canvas_files(id,canvas_id,filename,size,mime,created_at) VALUES(?,?,?,?,?,?)',
-        )
-        .run(asset.id, canvasId, asset.filename, asset.size, asset.mime, asset.createdAt)
+        .prepare('INSERT INTO canvas_files(id,filename,size,created_at) VALUES(?,?,?,?)')
+        .run(asset.id, asset.filename, asset.size, asset.createdAt)
       const node: FileNode = {
         id: randomUUID(),
         type: 'file',

@@ -163,10 +163,6 @@ test('only the full source snapshot prunes pane reads; window updates and renami
     store.get<{ read: Record<string, number> }>('completion-read', source.id)!.read,
     {},
   )
-  assert.deepEqual(
-    store.get<{ completed: Record<string, number> }>('completion-read', source.id)!.completed,
-    {},
-  )
   store.remove('source', source.id)
   assert.equal(store.get('completion-read', source.id), undefined)
 })
@@ -255,64 +251,6 @@ test('last endpoint disconnect retires live projection authority without deletin
     'done',
     'new boot cannot reuse old read authority',
   )
-})
-
-test('verified unread completions survive Canvas restart when an older herdr reports the same transition as Idle', (t) => {
-  const { reads, path } = fixture(t),
-    window = completed()
-  reads.observe(source, window)
-  reads.acknowledge(source, 'window', 'left', window.panes[0]!.completion)
-  const opened = new Store(path),
-    restored = new CompletionReads(opened)
-  try {
-    const idle = {
-      ...window,
-      status: 'idle' as const,
-      panes: window.panes.map(({ completion, ...pane }) => ({ ...pane, status: 'idle' as const })),
-    }
-    const projected = restored.observe(source, idle)
-    assert.equal(projected.panes[0]!.status, 'idle', 'read sibling stays read')
-    assert.equal(
-      projected.panes[1]!.status,
-      'done',
-      'verified unread result survives upstream seen projection',
-    )
-    assert.deepEqual(projected.panes[1]!.completion, window.panes[1]!.completion)
-    assert(restored.acknowledge(source, 'window', 'right', projected.panes[1]!.completion))
-    const revision = opened.revision
-    restored.observe(source, idle)
-    restored.observe(source, idle)
-    assert.equal(
-      opened.revision,
-      revision,
-      'unchanged snapshots do not rewrite durable completion evidence',
-    )
-    const newWork = {
-      ...idle,
-      panes: idle.panes.map((pane) => ({
-        ...pane,
-        status: 'working' as const,
-        stateSequence: pane.stateSequence! + 1,
-      })),
-    }
-    assert(
-      restored
-        .observe(source, newWork)
-        .panes.every((pane) => !pane.completion && pane.status === 'working'),
-    )
-    const newIdle = {
-      ...newWork,
-      panes: newWork.panes.map((pane) => ({ ...pane, status: 'idle' as const })),
-    }
-    assert(
-      restored
-        .observe(source, newIdle)
-        .panes.every((pane) => !pane.completion && pane.status === 'idle'),
-      'a different idle transition is not inferred from old evidence',
-    )
-  } finally {
-    opened.close()
-  }
 })
 
 test('initial idle without completion evidence is never guessed from its nonzero sequence', (t) => {
