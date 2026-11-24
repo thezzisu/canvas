@@ -94,7 +94,7 @@ test('live metadata updates every resource consumer while another source holds a
     const current = resources.value[0]!,
       window = current.spaces[0]!.windows[0]!
     assert.equal(windowVisualState(current, window, true).status, 'idle')
-    assert.equal(window.panes?.[0]?.terminalTitle, 'Live title')
+    assert.equal(window.panes[0]?.terminalTitle, 'Live title')
     assert.equal(canvasIndicators([], resources.value).overview?.status, 'idle')
     assert.deepEqual(overviewResources(resources.value, { statuses: ['done'] }, 'native'), [])
   }
@@ -120,7 +120,7 @@ test('live metadata never resurrects removed windows or sources and preserves ti
   delete value.panes[0]!.terminalTitle
   const live = new Map([['source/window', value]])
   assert.equal(
-    mergeLiveResources([source()], live)[0]!.spaces[0]!.windows[0]!.panes?.[0]?.terminalTitle,
+    mergeLiveResources([source()], live)[0]!.spaces[0]!.windows[0]!.panes[0]?.terminalTitle,
     'Old title',
   )
   assert.deepEqual(mergeLiveResources([], live), [])
@@ -152,9 +152,9 @@ test('a later listing can refresh fields not pushed by herdr while newer changes
   assert.equal(after.get('offline/window'), old)
   const refreshed = source()
   refreshed.spaces[0]!.windows[0]!.status = 'idle'
-  refreshed.spaces[0]!.windows[0]!.panes![0]!.terminalTitle = 'New API title'
+  refreshed.spaces[0]!.windows[0]!.panes[0]!.terminalTitle = 'New API title'
   assert.equal(
-    mergeLiveResources([refreshed], after)[0]!.spaces[0]!.windows[0]!.panes?.[0]?.terminalTitle,
+    mergeLiveResources([refreshed], after)[0]!.spaces[0]!.windows[0]!.panes[0]?.terminalTitle,
     'New API title',
   )
 })

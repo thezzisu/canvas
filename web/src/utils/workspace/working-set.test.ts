@@ -31,14 +31,25 @@ test('entries list each agent pane of read windows, latest read window first and
       {
         id: 'old',
         name: 'Old',
+        status: 'attention',
         panes: [
           pane('one', 'working', 'codex'),
           pane('shell', 'unknown'),
           pane('two', 'attention', 'claude'),
         ],
       },
-      { id: 'never', name: 'Never', panes: [pane('agent', 'attention', 'codex')] },
-      { id: 'new', name: 'New', panes: [pane('three', 'done'), pane('four', 'working', 'pi')] },
+      {
+        id: 'never',
+        name: 'Never',
+        status: 'attention',
+        panes: [pane('agent', 'attention', 'codex')],
+      },
+      {
+        id: 'new',
+        name: 'New',
+        status: 'done',
+        panes: [pane('three', 'done'), pane('four', 'working', 'pi')],
+      },
     ]),
   ]
   assert.deepEqual(ids(resources, { 'a/old': 1, 'a/new': 2 }), [
@@ -57,7 +68,9 @@ test('entries list each agent pane of read windows, latest read window first and
 })
 
 test('windows of offline or failing connections are left out and reads are scoped to their connection', () => {
-  const windows = [{ id: 'w', name: 'W', panes: [pane('p', 'working', 'codex')] }]
+  const windows = [
+    { id: 'w', name: 'W', status: 'working' as const, panes: [pane('p', 'working', 'codex')] },
+  ]
   const resources = [
     source('a', windows, 'offline'),
     { ...source('b', windows), error: 'Discovery failed' },
@@ -75,6 +88,7 @@ test('trailing idle and unknown agents are dropped while settled agents between 
       {
         id: 'first',
         name: 'First',
+        status: 'done',
         panes: [
           pane('idle-head', 'idle'),
           pane('done', 'done', 'codex'),
@@ -84,11 +98,13 @@ test('trailing idle and unknown agents are dropped while settled agents between 
       {
         id: 'second',
         name: 'Second',
+        status: 'working',
         panes: [pane('unknown', 'unknown', 'claude'), pane('working', 'working', 'pi')],
       },
       {
         id: 'third',
         name: 'Third',
+        status: 'idle',
         panes: [pane('idle', 'idle'), pane('labelled', 'unknown', 'codex')],
       },
     ]),
@@ -110,9 +126,14 @@ test('trailing idle and unknown agents are dropped while settled agents between 
 test('a settled tail stays while it was read within the last fifteen minutes', () => {
   const resources = [
     source('a', [
-      { id: 'active', name: 'Active', panes: [pane('agent', 'working', 'codex')] },
-      { id: 'recent', name: 'Recent', panes: [pane('idle', 'idle', 'claude')] },
-      { id: 'stale', name: 'Stale', panes: [pane('idle', 'idle', 'pi')] },
+      {
+        id: 'active',
+        name: 'Active',
+        status: 'working',
+        panes: [pane('agent', 'working', 'codex')],
+      },
+      { id: 'recent', name: 'Recent', status: 'idle', panes: [pane('idle', 'idle', 'claude')] },
+      { id: 'stale', name: 'Stale', status: 'idle', panes: [pane('idle', 'idle', 'pi')] },
     ]),
   ]
   const now = 100 * 60_000,

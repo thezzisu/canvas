@@ -30,7 +30,7 @@ const { t } = useI18n()
 const workspace = useWorkspaceStore()
 /** Live: a rename or new pane title shows while the menu is open. */
 const window = computed(
-  () => workspace.resourceFor(props.target).window || { name: t('app.window') },
+  () => workspace.resourceFor(props.target).window || { name: t('app.window'), panes: [] },
 )
 const emit = defineEmits<{ close: [value?: string] }>()
 let chosen: WindowMenuItem | undefined

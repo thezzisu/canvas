@@ -74,7 +74,7 @@ test('displayed completion survives read acknowledgement, but not a new task', (
     done = { ...event, completion }
   for (const status of ['done', 'idle', 'working', 'attention'] as const) {
     const current = structuredClone(resources)
-    const pane = current[0]!.spaces[0]!.windows[0]!.panes![1]!
+    const pane = current[0]!.spaces[0]!.windows[0]!.panes[1]!
     Object.assign(pane, { status, completion })
     assert.equal(
       notificationPresent(done, current),
@@ -116,7 +116,7 @@ test('displayed completion survives read acknowledgement, but not a new task', (
     false,
   )
   const newer = structuredClone(resources)
-  Object.assign(newer[0]!.spaces[0]!.windows[0]!.panes![1]!, {
+  Object.assign(newer[0]!.spaces[0]!.windows[0]!.panes[1]!, {
     status: 'done',
     completion: { ...completion, sequence: 2 },
   })

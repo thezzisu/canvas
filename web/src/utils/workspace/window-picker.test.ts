@@ -1,6 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { pickerChecked, pickerGroups, updatePickerSelection } from './window-picker.ts'
+import type { WindowResource } from '../../api/types.ts'
+
+const idle = (id: string, name: string): WindowResource => ({
+  id,
+  name,
+  status: 'idle',
+  panes: [{ id: `${id}-pane`, name: '1', active: true, status: 'idle' }],
+})
 
 test('window picker retains configured connection order and excludes added windows from group selection after space moves', () => {
   const sources = [
@@ -13,7 +21,7 @@ test('window picker retains configured connection order and excludes added windo
       name: 'First machine',
       status: 'connected',
       readAt: 0,
-      spaces: [{ id: 'space', name: 'Work', windows: [{ id: 'w', name: 'Agent' }] }],
+      spaces: [{ id: 'space', name: 'Work', windows: [idle('w', 'Agent')] }],
     },
     {
       id: 'b',
@@ -24,10 +32,7 @@ test('window picker retains configured connection order and excludes added windo
         {
           id: 'moved',
           name: 'Work',
-          windows: [
-            { id: 'existing', name: 'Editor' },
-            { id: 'new', name: 'Agent' },
-          ],
+          windows: [idle('existing', 'Editor'), idle('new', 'Agent')],
         },
       ],
     },
@@ -67,6 +72,7 @@ test('window search includes the displayed active terminal title and follows tit
   const window = {
     id: 'tab',
     name: '3',
+    status: 'working' as const,
     panes: [
       {
         id: 'first',

@@ -96,7 +96,7 @@ export const useSessionStore = defineStore('session', () => {
     const context = apiContext()
     staleInstanceBuild(context)
     try {
-      const session = await api<{ authenticated: boolean; username?: string; server: unknown }>(
+      const session = await api<unknown>(
         '/api/session',
         { signal: AbortSignal.timeout(15_000) },
         context,
@@ -107,7 +107,7 @@ export const useSessionStore = defineStore('session', () => {
       rememberInstance()
       if (!session.authenticated && context.token) setSessionToken('')
       authenticated.value = session.authenticated
-      username.value = session.username || activeInstance.value.username || ''
+      username.value = session.username
       if (authenticated.value) await workspace.load()
     } catch (reason) {
       if (current === activation && isCurrentApi(context)) {
@@ -133,12 +133,13 @@ export const useSessionStore = defineStore('session', () => {
     signingIn.value = true
     failure.value = undefined
     try {
-      const session = await api<{ token: string; username: string; server: unknown }>(
+      const session = await api<{ token: string }>(
         '/api/login',
         { method: 'POST', body: JSON.stringify({ username: username.value, password }) },
         context,
       )
       requireCurrentApi(context)
+      if (!isCanvasSession(session)) throw new Error('Invalid Canvas session')
       observeInstanceBuild(context, session.server)
       setSessionToken(session.token)
       username.value = session.username

@@ -1,5 +1,5 @@
 import { computed, ref, shallowRef, toValue, watch, type MaybeRefOrGetter } from 'vue'
-import { isBuildInfo, type BuildInfo } from '../../../../shared/build-info'
+import type { BuildInfo } from '../../../../shared/build-info'
 import {
   isCanvasSession,
   normalizeApiBase,
@@ -20,9 +20,7 @@ export async function probeInstance(
   if (!response.ok) throw new Error('instances.probeFailed')
   const value: unknown = await response.json()
   if (!isCanvasSession(value)) throw new Error('instances.probeFailed')
-  const server = (value as { server?: unknown }).server
-  if (!isBuildInfo(server)) throw new Error('instances.probeFailed')
-  return server
+  return value.server
 }
 
 /** Only the current normalized address can unlock a connection form. */

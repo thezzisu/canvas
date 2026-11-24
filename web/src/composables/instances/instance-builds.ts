@@ -1,5 +1,5 @@
 import { reactive } from 'vue'
-import { isBuildInfo, type BuildInfo } from '../../../../shared/build-info'
+import type { BuildInfo } from '../../../../shared/build-info'
 
 interface Instance {
   id: string
@@ -17,10 +17,8 @@ export function instanceBuild(instance: Instance): ObservedBuild | undefined {
   const value = observed.get(instance.id)
   return value?.base === instance.base ? value : undefined
 }
-export function observeInstanceBuild(instance: Instance, value: unknown) {
-  if (isBuildInfo(value))
-    observed.set(instance.id, { base: instance.base, build: { ...value }, fresh: true })
-  else observed.delete(instance.id)
+export function observeInstanceBuild(instance: Instance, build: BuildInfo) {
+  observed.set(instance.id, { base: instance.base, build: { ...build }, fresh: true })
 }
 export function staleInstanceBuild(instance: Instance) {
   const value = instanceBuild(instance)

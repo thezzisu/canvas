@@ -94,7 +94,7 @@ export async function api<T = unknown>(
   const headers = new Headers(init?.headers)
   if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   const response = await apiFetch(path, { ...init, headers }, context)
-  let body: { error?: string; message?: string } | undefined
+  let body: { error?: string } | undefined
   const text = await response.text()
   requireCurrentApi(context)
   try {
@@ -105,7 +105,7 @@ export async function api<T = unknown>(
   if (!response.ok) {
     throw new ApiError(
       response.status,
-      body?.error || body?.message || t('common.requestFailed', { status: response.status }),
+      body?.error || t('common.requestFailed', { status: response.status }),
     )
   }
   return body as T
@@ -143,9 +143,7 @@ export function apiUpload<T>(
         if (request.status < 200 || request.status >= 300)
           throw new ApiError(
             request.status,
-            request.response?.error ||
-              request.response?.message ||
-              t('common.requestFailed', { status: request.status }),
+            request.response?.error || t('common.requestFailed', { status: request.status }),
           )
         resolve(request.response as T)
       } catch (error) {

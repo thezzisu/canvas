@@ -47,5 +47,5 @@ test('duplicate, empty and absent terminal titles leave a single native name', (
   for (const terminalTitle of ['3', ' 3 ', '  ', undefined]) {
     assert.equal(windowLabel({ ...window, panes: [{ ...window.panes[1]!, terminalTitle }] }), '3')
   }
-  assert.equal(windowLabel({ name: 'Shell' }), 'Shell')
+  assert.equal(windowLabel({ name: 'Shell', panes: [] }), 'Shell')
 })

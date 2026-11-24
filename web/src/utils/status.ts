@@ -22,11 +22,11 @@ export function noteColor(color: NoteColor) {
   return noteColors[color] || noteColors.yellow
 }
 
-export function statusLabel(status?: ProgramStatus) {
-  return t(`terminal.status.${status || 'unknown'}`)
+export function statusLabel(status: ProgramStatus) {
+  return t(`terminal.status.${status}`)
 }
-export function statusColor(status?: ProgramStatus) {
-  return statusColors[status || 'unknown']
+export function statusColor(status: ProgramStatus) {
+  return statusColors[status]
 }
 export function paneLabel(pane: PaneResource) {
   return [...new Set([paneName(pane), pane.agent, statusLabel(pane.status)].filter(Boolean))].join(

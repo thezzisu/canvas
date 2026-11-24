@@ -50,7 +50,6 @@ test('instance retirement clears every owned view without touching auth, browser
     'canvas:view:b:one',
     'canvas:file-mode:ab:file',
     'canvas:last-canvas:b',
-    'canvas:notifications:delivered:a',
     `canvas:terminal-settings:${terminalIdentityKey('b', source, 'tab')}`,
   ]
   for (const key of [...retired, ...retained]) saved.setItem(key, 'value')
@@ -97,7 +96,6 @@ test('unregistered preference namespaces are retired without touching sessions o
     'canvas:view:navigation',
     'canvas:view:auto-yield-controls',
     'canvas:session:old-boot',
-    'canvas:notifications:delivered:old-boot',
     'unrelated',
     'canvas:language',
     'canvas:instances',
@@ -107,8 +105,6 @@ test('unregistered preference namespaces are retired without touching sessions o
   const retire = [
     'canvas:card-zoom:old-boot:note',
     'canvas:note-scroll:old-boot:c:note',
-    'canvas:overview:statuses',
-    'canvas:overview:order',
     'canvas:last-canvas:removed',
     `canvas:terminal-settings:${terminalIdentityKey('old-boot', source, 'tab')}`,
   ]

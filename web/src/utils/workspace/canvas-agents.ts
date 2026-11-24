@@ -31,7 +31,7 @@ export function canvasAgents(
     for (const space of source.spaces)
       for (const window of space.windows) {
         if (windows && !windows.has(`${source.id}/${window.id}`)) continue
-        for (const pane of window.panes || []) {
+        for (const pane of window.panes) {
           if (!pane.agent?.trim() && pane.status === 'unknown') continue
           const key = `${source.id}/${window.id}/${pane.id}`
           const available = source.status === 'online' && !source.error

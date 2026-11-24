@@ -24,7 +24,7 @@ function notificationLocation(event: CanvasNotification, resources: readonly Sou
   if (!source) return
   for (const space of source.spaces)
     for (const window of space.windows) {
-      const pane = event.paneId ? window.panes?.find((pane) => pane.id === event.paneId) : undefined
+      const pane = event.paneId ? window.panes.find((pane) => pane.id === event.paneId) : undefined
       if (event.paneId ? !!pane : event.windowId === window.id)
         return { source, space, window, pane }
     }
@@ -74,7 +74,7 @@ export function attentionSummary(resources: readonly SourceResource[]) {
     if (source.status !== 'online' || source.error) continue
     for (const space of source.spaces)
       for (const window of space.windows) {
-        const states = window.panes?.length
+        const states = window.panes.length
           ? window.panes.map((pane) => pane.status)
           : [window.status]
         const status = states.includes('attention')
@@ -102,9 +102,7 @@ export function faviconStatus(resources: readonly SourceResource[]): ProgramStat
     .flatMap((source) =>
       source.spaces.flatMap((space) =>
         space.windows.flatMap((window) =>
-          window.panes?.length
-            ? window.panes.map((pane) => pane.status)
-            : [window.status || 'unknown'],
+          window.panes.length ? window.panes.map((pane) => pane.status) : [window.status],
         ),
       ),
     )

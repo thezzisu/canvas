@@ -25,8 +25,7 @@ test('observed versions remain attached to the responding instance and address',
   assert.equal(instanceBuild(one), undefined)
 })
 
-test('missing or invalid version metadata is omitted without fabricating a server revision', () => {
-  const instance = { id: 'invalid', base: 'https://canvas.example/' }
+test('missing or invalid version metadata is rejected without fabricating a server revision', () => {
   const valid = { version: '0.1.0', revision: null, dirty: false }
   for (const value of [
     undefined,
@@ -35,12 +34,8 @@ test('missing or invalid version metadata is omitted without fabricating a serve
     { ...valid, revision: 'frontend-version' },
     { ...valid, dirty: 'false' },
     { ...valid, version: '' },
-  ]) {
-    observeInstanceBuild(instance, valid)
-    observeInstanceBuild(instance, value)
-    assert.equal(instanceBuild(instance), undefined)
+  ])
     assert.equal(isBuildInfo(value), false)
-  }
   assert.equal(buildLabel(valid), '0.1.0')
   assert.equal(buildLabel({ ...valid, revision: 'a'.repeat(40), dirty: true }), '0.1.0 · aaaaaaa *')
 })

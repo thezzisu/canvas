@@ -169,18 +169,22 @@ test('shared usernames are optional, bounded and unambiguous', () => {
 })
 
 test('session discovery rejects static SPA fallbacks and malformed API responses', () => {
+  const server = { version: '1.2.3', revision: 'a'.repeat(40), dirty: false }
   for (const value of [
     undefined,
     null,
     '<!doctype html>',
     [],
     {},
-    { authenticated: 'false' },
-    { authenticated: false, username: {} },
+    { authenticated: 'false', username: 'fixture', server },
+    { authenticated: false, username: {}, server },
+    { authenticated: false, server },
+    { authenticated: false, username: 'fixture' },
+    { authenticated: false, username: 'fixture', server: { ...server, revision: 'unknown' } },
   ])
     assert.equal(isCanvasSession(value), false)
-  assert.equal(isCanvasSession({ authenticated: false }), true)
-  assert.equal(isCanvasSession({ authenticated: true, username: 'fixture' }), true)
+  assert.equal(isCanvasSession({ authenticated: false, username: 'fixture', server }), true)
+  assert.equal(isCanvasSession({ authenticated: true, username: 'fixture', server }), true)
 })
 
 test('state streaming reads UTF-8 and SSE fields across arbitrary network chunk boundaries', async () => {

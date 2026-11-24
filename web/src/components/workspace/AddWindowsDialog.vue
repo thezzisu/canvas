@@ -68,7 +68,7 @@ async function submit() {
     canvas ||= await write<Canvas>('/api/canvases', 'POST', { name: t('app.myCanvas'), nodes: [] })
     // New cards go below the existing ones, three to a row.
     let x = 0,
-      y = canvas.nodes?.length
+      y = canvas.nodes.length
         ? Math.max(...canvas.nodes.map((node) => node.y + node.height)) + 24
         : 0,
       rowHeight = 0

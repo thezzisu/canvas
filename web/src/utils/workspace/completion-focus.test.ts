@@ -72,11 +72,11 @@ test('pane presentation changes only the attended pane and preserves sibling unr
   const source = resource('done')
   const viewed = focusedCompletionStatus(source, { ...focus, painted: token })
   const projected = projectFocusedResources(source, viewed)[0]!.spaces[0]!.windows[0]!
-  assert.equal(projected.panes![0]!.status, 'idle')
-  assert.equal(projected.panes![1]!.status, 'done')
+  assert.equal(projected.panes[0]!.status, 'idle')
+  assert.equal(projected.panes[1]!.status, 'done')
   assert.equal(projected.status, 'done')
   assert.equal(
-    source[0]!.spaces[0]!.windows[0]!.panes![0]!.status,
+    source[0]!.spaces[0]!.windows[0]!.panes[0]!.status,
     'done',
     'raw shared metadata is not mutated',
   )

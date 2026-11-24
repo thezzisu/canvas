@@ -14,8 +14,7 @@ export interface CanvasIndicator {
   count: number
   status: ProgramStatus | null
 }
-export const needsAttention = (status?: ProgramStatus) =>
-  status === 'attention' || status === 'done'
+export const needsAttention = (status: ProgramStatus) => status === 'attention' || status === 'done'
 
 /** Freshness gates attention animation; a background tab keeps its known status. */
 export function windowVisualState(
@@ -25,7 +24,7 @@ export function windowVisualState(
 ): WindowVisualState {
   const available = !!window && source?.status === 'online' && !source.error
   const current = fresh && available
-  const status = available && window.status && window.status !== 'error' ? window.status : 'unknown'
+  const status = available && window.status !== 'error' ? window.status : 'unknown'
   return { status, fresh: current }
 }
 

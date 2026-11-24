@@ -142,7 +142,18 @@ test('confirmed native closure removes its overrides; offline discovery and othe
       name: source.name,
       status,
       readAt: 0,
-      spaces: [{ id: 'space', name: 'Space', windows: ids.map((id) => ({ id, name: id })) }],
+      spaces: [
+        {
+          id: 'space',
+          name: 'Space',
+          windows: ids.map((id) => ({
+            id,
+            name: id,
+            status: 'idle' as const,
+            panes: [{ id: `${id}-pane`, name: '1', active: true, status: 'idle' as const }],
+          })),
+        },
+      ],
     },
   ]
   pruneTerminalPreferences('backend', [source], resources('offline', []), store)

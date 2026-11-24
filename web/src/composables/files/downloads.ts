@@ -17,7 +17,7 @@ export interface DownloadPreview {
   id: string
   filename: string
   size: number
-  mime?: string
+  mime: string
   sourcePreview?: boolean
   preview: Exclude<FilePreview, 'file'>
   url: string
@@ -102,7 +102,14 @@ export function receiveDownload(
     void prepare(connection, path, context)
     return true
   }
-  if (typeof message.url !== 'string' || typeof message.filename !== 'string') return true
+  if (
+    typeof message.url !== 'string' ||
+    typeof message.filename !== 'string' ||
+    !Number.isSafeInteger(message.size) ||
+    (message.size as number) < 0 ||
+    typeof message.mime !== 'string'
+  )
+    return true
   let url: URL
   try {
     url = apiUrl(message.url)
@@ -111,18 +118,14 @@ export function receiveDownload(
   }
   if (url.href !== apiUrl(path).href || url.search) return true
   if (!firstMessage(connection, message.type, message.id)) return true
-  if (Number.isSafeInteger(message.size) && (message.size as number) >= 0) {
-    void presentDownload({
-      id: message.id,
-      filename: message.filename,
-      size: message.size as number,
-      mime: typeof message.mime === 'string' ? message.mime : undefined,
-      sourcePreview: message.sourcePreview === true,
-      url: path,
-    }).catch(reportDownloadError)
-    return true
-  }
-  void downloadMedia(url.href, message.filename).catch(reportDownloadError)
+  void presentDownload({
+    id: message.id,
+    filename: message.filename,
+    size: message.size as number,
+    mime: message.mime,
+    sourcePreview: message.sourcePreview === true,
+    url: path,
+  }).catch(reportDownloadError)
   return true
 }
 

@@ -33,7 +33,7 @@ export function focusedCompletionStatus(
   const pane = source?.spaces
     .flatMap((space) => space.windows)
     .find((window) => window.id === focus.windowId)
-    ?.panes?.find((pane) => pane.id === focus.paneId)
+    ?.panes.find((pane) => pane.id === focus.paneId)
   if (!pane) return
   let status = pane.status
   if (status === 'done' && pane.completion) {
@@ -57,7 +57,7 @@ export function projectFocusedResources(
           spaces: source.spaces.map((space) => ({
             ...space,
             windows: space.windows.map((window) =>
-              window.id !== focus.windowId || !window.panes?.length
+              window.id !== focus.windowId || !window.panes.length
                 ? window
                 : {
                     ...window,

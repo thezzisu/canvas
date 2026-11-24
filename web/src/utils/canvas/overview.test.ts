@@ -6,12 +6,13 @@ import {
   overviewSpaceLayout,
   overviewStatuses,
 } from './overview.ts'
-import type { SourceResource, WindowResource } from '../../api/types.ts'
+import type { ProgramStatus, SourceResource, WindowResource } from '../../api/types.ts'
 
-const window = (id: string, status?: WindowResource['status']): WindowResource => ({
+const window = (id: string, status: ProgramStatus): WindowResource => ({
   id,
   name: id,
   status,
+  panes: [{ id: `${id}-pane`, name: '1', active: true, status }],
 })
 const fixture = (): SourceResource[] => [
   {
@@ -30,7 +31,7 @@ const fixture = (): SourceResource[] => [
           window('attention', 'attention'),
           window('done-2', 'done'),
           window('idle', 'idle'),
-          window('unknown'),
+          window('unknown', 'unknown'),
         ],
       },
       {

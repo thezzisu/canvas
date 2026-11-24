@@ -65,7 +65,7 @@ export function mergeLiveResources(
               // A pane the server has no title for yet keeps the listed one.
               terminalTitle:
                 pane.terminalTitle ??
-                window.panes?.find((previous) => previous.id === pane.id)?.terminalTitle,
+                window.panes.find((previous) => previous.id === pane.id)?.terminalTitle,
             })),
           }
         }),

@@ -1,3 +1,5 @@
+import { isBuildInfo, type BuildInfo } from '../../../../shared/build-info'
+
 export function normalizeApiBase(value: string): string {
   const url = new URL(value.trim())
   if (
@@ -65,12 +67,13 @@ export function parseInstanceLink(
 
 export function isCanvasSession(
   value: unknown,
-): value is { authenticated: boolean; username?: string } {
+): value is { authenticated: boolean; username: string; server: BuildInfo } {
   if (!value || typeof value !== 'object') return false
-  const session = value as { authenticated?: unknown; username?: unknown }
+  const session = value as { authenticated?: unknown; username?: unknown; server?: unknown }
   return (
     typeof session.authenticated === 'boolean' &&
-    (session.username === undefined || typeof session.username === 'string')
+    typeof session.username === 'string' &&
+    isBuildInfo(session.server)
   )
 }
 

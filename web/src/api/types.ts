@@ -30,10 +30,10 @@ export interface PaneResource {
 export interface WindowResource {
   id: string
   name: string
-  status?: ProgramStatus
+  status: ProgramStatus
   /** A program's progress report (OSC 9;4), while the window is open in a browser. */
   progress?: WindowProgress
-  panes?: PaneResource[]
+  panes: PaneResource[]
 }
 export interface SpaceResource {
   id: string
@@ -115,7 +115,7 @@ export interface SharedState {
   sources: Source[]
   canvases: Canvas[]
   overviewBackground: Canvas['background']
-  workingSetBackground?: Canvas['background']
+  workingSetBackground: Canvas['background']
   windowSizes: Record<string, WindowSize>
   composers: Record<string, ComposerView>
   windowReads: Record<string, number>

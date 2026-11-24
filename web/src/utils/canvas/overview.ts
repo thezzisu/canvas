@@ -28,14 +28,11 @@ export function overviewResources(
     const spaces = source.spaces.flatMap((space) => {
       const windows = space.windows.filter(
         (window) =>
-          (selected.has(window.status || 'unknown') &&
-            !filter.excluded?.has(`${source.id}/${window.id}`)) ||
+          (selected.has(window.status) && !filter.excluded?.has(`${source.id}/${window.id}`)) ||
           (source.id === interacting?.sourceId && window.id === interacting.windowId),
       )
       if (order === 'status')
-        windows.sort(
-          (a, b) => statusPriority[b.status || 'unknown'] - statusPriority[a.status || 'unknown'],
-        )
+        windows.sort((a, b) => statusPriority[b.status] - statusPriority[a.status])
       return windows.length ? [{ ...space, windows }] : []
     })
     return spaces.length ? [{ ...source, spaces }] : []

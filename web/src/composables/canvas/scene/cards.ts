@@ -22,7 +22,7 @@ export function useCardActions(scene: CanvasScene) {
       sourceId: node.sourceId,
       spaceId,
       windowId: node.windowId,
-      name: windowLabel(window || { name: t('app.window') }),
+      name: window ? windowLabel(window) : t('app.window'),
     })
   }
   /** Add this window to another canvas; Overview windows may start a new one. */

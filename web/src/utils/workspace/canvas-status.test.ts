@@ -6,7 +6,20 @@ import {
   connectionIndicator,
   windowVisualState,
 } from './canvas-status.ts'
-import type { Canvas, CanvasNode, SourceResource } from '../../api/types.ts'
+import type {
+  Canvas,
+  CanvasNode,
+  ProgramStatus,
+  SourceResource,
+  WindowResource,
+} from '../../api/types.ts'
+
+const window = (id: string, name: string, status: ProgramStatus): WindowResource => ({
+  id,
+  name,
+  status,
+  panes: [{ id: `${id}-pane`, name: '1', active: true, status }],
+})
 
 const resources: SourceResource[] = [
   {
@@ -19,9 +32,9 @@ const resources: SourceResource[] = [
         id: 'space',
         name: 'Space',
         windows: [
-          { id: 'working', name: 'Working', status: 'working' },
-          { id: 'done', name: 'Done', status: 'done' },
-          { id: 'attention', name: 'Attention', status: 'attention' },
+          window('working', 'Working', 'working'),
+          window('done', 'Done', 'done'),
+          window('attention', 'Attention', 'attention'),
         ],
       },
     ],
@@ -118,7 +131,7 @@ test('an offline source cannot override live work in another source or leak stat
       {
         id: 's',
         name: 'S',
-        windows: [{ id: 'attention', name: 'Busy', status: 'working' as const }],
+        windows: [window('attention', 'Busy', 'working')],
       },
     ],
   }
@@ -137,7 +150,7 @@ test('online connections count every window across spaces; unavailable ones keep
     readAt: 0,
     spaces: [
       ...resources[0]!.spaces,
-      { id: 'other', name: 'Other', windows: [{ id: 'idle', name: 'Idle', status: 'idle' }] },
+      { id: 'other', name: 'Other', windows: [window('idle', 'Idle', 'idle')] },
     ],
   }
   assert.deepEqual(connectionIndicator(source, 'Connecting'), {

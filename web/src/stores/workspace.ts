@@ -273,7 +273,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const noteDrafts = edits.noteDrafts(snapshot.canvases)
     canvases.value = snapshot.canvases.map((canvas) => ({
       ...canvas,
-      nodes: (canvas.nodes || []).map((node) => ({
+      nodes: canvas.nodes.map((node) => ({
         ...node,
         ...edits.pendingLayouts.get(canvas.id)?.get(node.id),
         ...(node.type === 'note' ? noteDrafts.get(node.id) : {}),

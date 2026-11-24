@@ -24,13 +24,19 @@ const resources: SourceResource[] = [
           {
             id: 'w',
             name: 'Work',
+            status: 'done',
             panes: [
               pane('one', 'working', 'codex'),
               pane('two', 'done', 'codex'),
               pane('shell', 'unknown'),
             ],
           },
-          { id: 'other', name: 'Other', panes: [pane('attention', 'attention', 'claude')] },
+          {
+            id: 'other',
+            name: 'Other',
+            status: 'attention',
+            panes: [pane('attention', 'attention', 'claude')],
+          },
         ],
       },
     ],
@@ -102,6 +108,7 @@ test('agent labels include unknown states, explicit agent states need no label, 
             {
               id: 'w',
               name: 'Work',
+              status: 'idle',
               panes: [
                 pane('labelled', 'unknown', 'codex'),
                 pane('explicit', 'idle'),
@@ -117,7 +124,7 @@ test('agent labels include unknown states, explicit agent states need no label, 
     canvasAgents(undefined, input).map((item) => item.pane.id),
     ['labelled', 'explicit'],
   )
-  input[0]!.spaces[0]!.windows[0]!.panes![1]!.status = 'done'
+  input[0]!.spaces[0]!.windows[0]!.panes[1]!.status = 'done'
   assert.equal(
     canvasAgents(undefined, input)[1]!.status,
     'done',
